@@ -70,6 +70,10 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   coup sur coup : `RedditRssAdapter.request_delay = 5.0` espace les requêtes.
   Le blocage est par IP, pas par subreddit.
 - Resident Advisor n'a plus de flux RSS public (`ra.co/xml/rss.xml` → 404).
+- X/Apify : l'actor `apidojo~tweet-scraper` INTERDIT l'usage API sur le plan
+  Apify gratuit (runs "SUCCEEDED" mais items `{"noResults": true}` + message
+  dans les logs du run). Il faut un plan payant (~39 $/mois) — les sources X
+  sont désactivées en base tant que l'utilisateur n'a pas tranché.
 - Depuis les runners GitHub Actions (IP datacenter Azure), certaines sources
   bloquent par intermittence : Mixmag (403 Cloudflare), Reddit (429). L'IP du
   runner change à chaque run → les blocages se rattrapent naturellement sur les
