@@ -18,8 +18,11 @@ def _strip_html(text: str) -> str:
 class RssAdapter(SourceAdapter):
     """Adapter générique pour flux RSS/Atom (feedparser)."""
 
-    # ASCII uniquement : les headers HTTP n'acceptent pas les accents
-    user_agent = "music-news-radar/0.1 (music news aggregator)"
+    # ASCII uniquement : les headers HTTP n'acceptent pas les accents.
+    # Format "Mozilla/5.0 (compatible; ...)" : convention des bots légitimes,
+    # mieux acceptée par les règles Cloudflare que les UA exotiques.
+    user_agent = ("Mozilla/5.0 (compatible; music-news-radar/0.1; "
+                  "+https://github.com/Hooriiiii/music-news-radar)")
     timeout = 20.0
     # Attente avant chaque requête, en secondes -- pour les hôtes qui rate-limitent
     request_delay = 0.0

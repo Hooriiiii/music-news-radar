@@ -1,4 +1,5 @@
 import logging
+import random
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -54,9 +55,17 @@ def ingest_source(db: Session, source: Source, adapter: SourceAdapter | None = N
     return stats
 
 
-def run_ingest(db: Session, get_adapter=default_get_adapter) -> list[IngestStats]:
-    """Ingère toutes les sources actives. Une source qui casse n'arrête pas le run."""
-    sources = db.scalars(select(Source).where(Source.active)).all()
+def run_ingest(
+    db: Session, get_adapter=default_get_adapter, shuffle=random.shuffle
+) -> list[IngestStats]:
+    """Ingère toutes les sources actives. Une source qui casse n'arrête pas le run.
+
+    L'ordre est mélangé à chaque run : certains hôtes (Reddit) ne laissent passer
+    qu'une requête par IP de datacenter, et un ordre fixe sacrifierait toujours
+    les mêmes sources.
+    """
+    sources = list(db.scalars(select(Source).where(Source.active)))
+    shuffle(sources)
     results = []
     for source in sources:
         try:

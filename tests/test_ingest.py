@@ -86,3 +86,22 @@ def test_run_ingest_skips_inactive_sources(db_session):
     make_source(db_session, "off", active=False)
     all_stats = run_ingest(db_session, get_adapter=lambda s: FakeAdapter(s, [make_item()]))
     assert all_stats == []
+
+
+def test_run_ingest_order_is_injectable_for_fairness(db_session):
+    # Depuis les IP datacenter, Reddit ne laisse passer qu'une requête par run :
+    # l'ordre des sources est mélangé à chaque run pour que la même source ne
+    # soit pas systématiquement sacrifiée.
+    make_source(db_session, "premier")
+    make_source(db_session, "second")
+    order = []
+
+    def tracking_adapter(source):
+        return FakeAdapter(source, [])
+
+    def reverse_shuffle(sources):
+        sources.reverse()
+        order.extend(s.name for s in sources)
+
+    run_ingest(db_session, get_adapter=tracking_adapter, shuffle=reverse_shuffle)
+    assert order == ["second", "premier"]
