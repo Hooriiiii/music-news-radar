@@ -67,6 +67,11 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   coup sur coup : `RedditRssAdapter.request_delay = 5.0` espace les requêtes.
   Le blocage est par IP, pas par subreddit.
 - Resident Advisor n'a plus de flux RSS public (`ra.co/xml/rss.xml` → 404).
+- Depuis les runners GitHub Actions (IP datacenter Azure), certaines sources
+  bloquent par intermittence : Mixmag (403 Cloudflare), Reddit (429). L'IP du
+  runner change à chaque run → les blocages se rattrapent naturellement sur les
+  48 runs quotidiens. Si un blocage devient systématique : passer Reddit sur son
+  API officielle OAuth (fiable depuis les datacenters), remplacer la source RSS.
 - Postgres local : auth en `trust` (pas de mot de passe), user `postgres`.
 
 ## Conventions
