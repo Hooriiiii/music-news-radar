@@ -79,7 +79,14 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   tags de format (#DJset, #TrackID, #FrontRow) et les combos format x genre
   renvoient 0-2 likes / spam — la recherche API v2 expose le flux récent d'un
   hashtag, jamais sa traîne virale, et n'a pas d'opérateur min likes. Le viral
-  X ne s'attrape QUE via des timelines de comptes curateurs.
+  X s'attrape via des timelines de comptes curateurs, OU via le mode UGC :
+  recherche par NOMS D'ARTISTES en texte libre (pas de hashtags) + has:videos,
+  préfixe "ugc:" sur l'url de la source -> sélection = engagement suffisant ET
+  compte modeste (<= x_ugc_max_followers ; un gros compte = agrégateur, exclu
+  même viral). L'utilisateur veut du brut filmé par des fans, PAS les clips
+  léchés des médias — le prompt de scoring valorise ces clips UGC (60-80) au
+  lieu de les classer en bruit perso. Source calme en semaine, productive les
+  soirs d'events — c'est normal.
 - X passe par l'API OFFICIELLE v2 pay-per-use (`app/sources/x_api.py`,
   ~0,005 $/tweet lu, since_id natif dans sources.state) — nécessite la
   facturation activée sur developer.x.com, sinon 402 Payment Required.
