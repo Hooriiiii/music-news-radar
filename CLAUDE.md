@@ -22,7 +22,7 @@ hotness >= 80 pour l'alerte Discord.
   (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
 - Alertes Discord : `uv run python -m scripts.send_hot_alerts`
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
-- Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 30 min,
+- Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 2 h,
   digest à 06:30 UTC, CI à chaque push). Secrets requis côté repo : DATABASE_URL
   (Neon), ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, SMTP_*, DIGEST_TO, APIFY_TOKEN.
   Cron GitHub = UTC et best-effort (retards de quelques minutes possibles).
