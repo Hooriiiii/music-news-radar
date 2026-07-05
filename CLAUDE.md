@@ -75,7 +75,11 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   recherche hashtag+is:verified ne produit quasi rien) ; la recherche hashtags
   sert au contenu VIRAL (vidéos d'events, has:videos + seuils d'engagement).
   Les hashtags de genre bruts = ~100 % d'autopromo, toujours passer par la
-  sélection popularité/vérifié.
+  sélection popularité/vérifié. Vérifié par 5 sondes (2026-07-06) : même les
+  tags de format (#DJset, #TrackID, #FrontRow) et les combos format x genre
+  renvoient 0-2 likes / spam — la recherche API v2 expose le flux récent d'un
+  hashtag, jamais sa traîne virale, et n'a pas d'opérateur min likes. Le viral
+  X ne s'attrape QUE via des timelines de comptes curateurs.
 - X passe par l'API OFFICIELLE v2 pay-per-use (`app/sources/x_api.py`,
   ~0,005 $/tweet lu, since_id natif dans sources.state) — nécessite la
   facturation activée sur developer.x.com, sinon 402 Payment Required.
