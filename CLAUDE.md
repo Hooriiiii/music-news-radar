@@ -23,8 +23,11 @@ hotness >= 80 pour l'alerte Discord.
 - Alertes Discord : `uv run python -m scripts.send_hot_alerts`
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 2 h,
-  digest à 06:30 UTC, CI à chaque push). Secrets requis côté repo : DATABASE_URL
-  (Neon), ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, SMTP_*, DIGEST_TO, APIFY_TOKEN.
+  CI à chaque push). Secrets requis côté repo : DATABASE_URL (Neon),
+  ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, APIFY_TOKEN.
+  Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
+  planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
+  restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
   Cron GitHub = UTC et best-effort (retards de quelques minutes possibles).
   Ancienne alternative locale : agents launchd dans `deploy/`
   (`bash deploy/install_launchd.sh` / `launchctl bootout gui/$(id -u)/com.musicnewsradar.{pipeline,digest}`)
