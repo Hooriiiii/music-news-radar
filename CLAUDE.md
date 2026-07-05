@@ -22,10 +22,12 @@ hotness >= 80 pour l'alerte Discord.
   (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
 - Alertes Discord : `uv run python -m scripts.send_hot_alerts`
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
-- Scheduler : agents launchd installés via `bash deploy/install_launchd.sh`
-  (pipeline toutes les 30 min, digest à 8h30 ; logs dans
-  `~/Library/Logs/music-news-radar/` ; désinstaller :
-  `launchctl bootout gui/$(id -u)/com.musicnewsradar.{pipeline,digest}`)
+- Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 30 min,
+  digest à 06:30 UTC, CI à chaque push). Secrets requis côté repo : DATABASE_URL
+  (Neon), ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, SMTP_*, DIGEST_TO, APIFY_TOKEN.
+  Cron GitHub = UTC et best-effort (retards de quelques minutes possibles).
+  Ancienne alternative locale : agents launchd dans `deploy/`
+  (`bash deploy/install_launchd.sh` / `launchctl bootout gui/$(id -u)/com.musicnewsradar.{pipeline,digest}`)
 - Tests : `uv run pytest` (un seul test : `uv run pytest tests/test_api.py::test_health`)
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
