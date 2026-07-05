@@ -70,6 +70,12 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   coup sur coup : `RedditRssAdapter.request_delay = 5.0` espace les requêtes.
   Le blocage est par IP, pas par subreddit.
 - Resident Advisor n'a plus de flux RSS public (`ra.co/xml/rss.xml` → 404).
+- Stratégie X validée sur données (2026-07-06) : les ACTUS viennent des
+  timelines de comptes curatés (les médias vérifiés ne hashtagent pas — une
+  recherche hashtag+is:verified ne produit quasi rien) ; la recherche hashtags
+  sert au contenu VIRAL (vidéos d'events, has:videos + seuils d'engagement).
+  Les hashtags de genre bruts = ~100 % d'autopromo, toujours passer par la
+  sélection popularité/vérifié.
 - X passe par l'API OFFICIELLE v2 pay-per-use (`app/sources/x_api.py`,
   ~0,005 $/tweet lu, since_id natif dans sources.state) — nécessite la
   facturation activée sur developer.x.com, sinon 402 Payment Required.
