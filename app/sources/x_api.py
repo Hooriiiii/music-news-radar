@@ -90,20 +90,25 @@ class XApiAdapter(SourceAdapter):
         params = {
             "query": self.build_search_query(),
             "max_results": settings.x_search_max_results,
-            "tweet.fields": "created_at",
+            # relevancy : le classement engagement de X -- les max_results tweets
+            # qu'on paye sont les plus pertinents de la fenêtre, pas les derniers
+            "sort_order": "relevancy",
+            "tweet.fields": "created_at,public_metrics",
             "expansions": "attachments.media_keys,author_id",
             "media.fields": "url,preview_image_url",
-            "user.fields": "username",
+            "user.fields": "username,verified",
         }
         if state.get("since_id"):
             params["since_id"] = state["since_id"]
         return params
 
     def parse_search(self, payload: dict) -> list[RawItem]:
-        """Comme parse(), mais multi-auteurs et média strictement obligatoire."""
+        """Comme parse(), mais multi-auteurs, média strictement obligatoire et
+        sélection par popularité : compte vérifié OU engagement suffisant."""
         users = {
-            user["id"]: user.get("username")
+            user["id"]: user
             for user in (payload.get("includes") or {}).get("users", [])
+            if user.get("id")
         }
         media_by_key = {
             media["media_key"]: media
@@ -125,9 +130,12 @@ class XApiAdapter(SourceAdapter):
                         media_urls.append(url)
             if not media_urls:
                 continue  # média obligatoire en mode recherche
-            author = users.get(tweet.get("author_id")) or "i"  # x.com/i/status/ marche toujours
+            author = users.get(tweet.get("author_id")) or {}
+            if not self._passes_popularity(tweet, author):
+                continue
+            username = author.get("username") or "i"  # x.com/i/status/ marche toujours
             single_line = " ".join(text.split())
-            title = f"@{author}: {single_line}"
+            title = f"@{username}: {single_line}"
             if len(title) > 200:
                 title = title[:197] + "..."
             published_at = None
@@ -137,14 +145,33 @@ class XApiAdapter(SourceAdapter):
                 )
             items.append(
                 RawItem(
-                    url=f"https://x.com/{author}/status/{tweet_id}",
+                    url=f"https://x.com/{username}/status/{tweet_id}",
                     title=title,
-                    summary=text,
+                    summary=self._summary_with_metrics(text, tweet, author),
                     published_at=published_at,
                     media_urls=media_urls,
                 )
             )
         return items
+
+    def _passes_popularity(self, tweet: dict, author: dict) -> bool:
+        if author.get("verified"):
+            return True
+        metrics = tweet.get("public_metrics") or {}
+        return (
+            metrics.get("like_count", 0) >= settings.x_search_min_likes
+            or metrics.get("reply_count", 0) >= settings.x_search_min_replies
+        )
+
+    def _summary_with_metrics(self, text: str, tweet: dict, author: dict) -> str:
+        """Les métriques sont données à voir au scoring Claude (elles nourrissent
+        le jugement de hotness) puis remplacées par son résumé éditorial."""
+        metrics = tweet.get("public_metrics") or {}
+        parts = [f"{metrics.get('like_count', 0)} likes",
+                 f"{metrics.get('reply_count', 0)} réponses",
+                 f"{metrics.get('retweet_count', 0)} reposts"]
+        badge = "compte vérifié" if author.get("verified") else "compte non vérifié"
+        return f"{text}\n\n[X : {' · '.join(parts)} · {badge}]"
 
     def _recently_fetched(self, state: dict) -> bool:
         last_run = state.get("last_run_at")

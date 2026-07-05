@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # (borne API : 10-100) + throttle x_min_fetch_interval_hours appliqué.
     # Plafond de coût = max_results x runs/jour x 0,005 $
     x_search_max_results: int = 10
+    # Sélection par popularité en mode recherche : un tweet passe s'il vient
+    # d'un compte vérifié OU s'il atteint l'un de ces seuils d'engagement
+    x_search_min_likes: int = 100  # niveau "ça décolle" pour les vidéos d'events
+    x_search_min_replies: int = 20
 
     # Alternative Apify (nécessite un plan Apify payant -- non utilisée par défaut)
     apify_token: str | None = None

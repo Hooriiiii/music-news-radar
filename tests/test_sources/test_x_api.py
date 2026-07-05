@@ -138,6 +138,7 @@ SEARCH_PAYLOAD = {
             "created_at": "2026-07-06T08:00:00.000Z",
             "author_id": "111",
             "attachments": {"media_keys": ["3_aaa"]},
+            "public_metrics": {"like_count": 340, "reply_count": 25, "retweet_count": 40},
         },
         {
             # pas de média -> exclu en mode recherche (a priori impossible avec
@@ -149,12 +150,31 @@ SEARCH_PAYLOAD = {
         },
     ],
     "includes": {
-        "users": [{"id": "111", "username": "technofan"}],
+        "users": [{"id": "111", "username": "technofan", "verified": False}],
         "media": [{"media_key": "3_aaa", "type": "photo",
                    "url": "https://pbs.twimg.com/media/aaa.jpg"}],
     },
     "meta": {"newest_id": "1900000000000000001", "result_count": 2},
 }
+
+
+def make_search_payload(*, verified, likes, replies=0):
+    return {
+        "data": [{
+            "id": "1900000000000000009",
+            "text": "clip de la mainstage #rave",
+            "created_at": "2026-07-06T08:00:00.000Z",
+            "author_id": "42",
+            "attachments": {"media_keys": ["m1"]},
+            "public_metrics": {"like_count": likes, "reply_count": replies},
+        }],
+        "includes": {
+            "users": [{"id": "42", "username": "raver", "verified": verified}],
+            "media": [{"media_key": "m1", "type": "video",
+                       "preview_image_url": "https://pbs.twimg.com/vid_thumb.jpg"}],
+        },
+        "meta": {"newest_id": "1900000000000000009", "result_count": 1},
+    }
 
 
 def test_search_mode_detection(x_config):
@@ -202,3 +222,43 @@ def test_search_fetch_is_throttled(x_config, monkeypatch):
     monkeypatch.setattr(adapter, "_get", lambda path, params: calls.append(path))
     assert adapter.fetch() == []
     assert calls == []  # aucune lecture payante pendant la fenêtre de throttle
+
+
+# --- Sélection par popularité : vérifié OU engagement suffisant ---
+
+
+def test_search_params_request_metrics_and_relevancy_sort(x_config):
+    params = make_adapter("#techno").build_search_params({})
+    assert "public_metrics" in params["tweet.fields"]
+    assert "verified" in params["user.fields"]
+    assert params["sort_order"] == "relevancy"
+
+
+def test_popularity_keeps_verified_even_without_engagement(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 20)
+    payload = make_search_payload(verified=True, likes=2)
+    assert len(make_adapter("#rave").parse_search(payload)) == 1
+
+
+def test_popularity_keeps_viral_unverified(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 20)
+    payload = make_search_payload(verified=False, likes=250)
+    items = make_adapter("#rave").parse_search(payload)
+    assert len(items) == 1
+    # la vignette de la vidéo est bien récupérée comme média
+    assert items[0].media_urls == ["https://pbs.twimg.com/vid_thumb.jpg"]
+
+
+def test_popularity_drops_unverified_low_engagement(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 20)
+    monkeypatch.setattr(settings, "x_search_min_replies", 5)
+    payload = make_search_payload(verified=False, likes=3, replies=1)
+    assert make_adapter("#rave").parse_search(payload) == []
+
+
+def test_metrics_are_exposed_to_scoring_via_summary(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 20)
+    payload = make_search_payload(verified=False, likes=250, replies=30)
+    item = make_adapter("#rave").parse_search(payload)[0]
+    assert "250 likes" in item.summary
+    assert "30 réponses" in item.summary
