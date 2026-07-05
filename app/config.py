@@ -1,0 +1,36 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    database_url: str = "postgresql+psycopg://localhost:5432/music_news_radar"
+    sql_echo: bool = False
+
+    # Scoring Claude (étape 4)
+    anthropic_api_key: str | None = None
+    scoring_model: str = "claude-haiku-4-5"
+    # Seuils du design doc
+    digest_relevance_threshold: int = 60
+    alert_hotness_threshold: int = 80
+
+    # X via Apify (étape 7) -- source payante, trois garde-fous de coût :
+    # plafond par run, nombre max d'items, intervalle minimum entre deux fetchs
+    apify_token: str | None = None
+    apify_actor_id: str = "apidojo~tweet-scraper"
+    apify_max_charge_usd: float = 0.25
+    x_max_items: int = 50  # minimum de facturation de l'actor
+    x_min_fetch_interval_hours: int = 6
+
+    # Livraison (étape 5)
+    discord_webhook_url: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    digest_to: str | None = None
+    digest_from: str | None = None  # défaut : smtp_user
+    digest_max_articles: int = 25
+
+
+settings = Settings()

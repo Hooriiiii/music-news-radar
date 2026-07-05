@@ -1,0 +1,35 @@
+{% macro item(a) -%}
+<table role="presentation" width="100%" style="border-collapse:collapse;margin:0 0 14px;">
+  <tr><td style="background:#ffffff;border:1px solid #e4e4ec;border-radius:10px;padding:14px 16px;">
+    <a href="{{ a.url }}" style="font-size:15px;font-weight:600;color:#1a1a2e;text-decoration:none;">{{ a.title }}</a>
+    <div style="font-size:12px;color:#8a8a99;margin-top:4px;">
+      {{ a.source.name if a.source else "" }}{% if a.category %} · {{ a.category }}{% endif %}{% if a.imprint %} · {{ a.imprint }}{% endif %}
+      · pertinence {{ a.relevance_score }} · hot {{ a.hotness_score }}
+    </div>
+    {% if a.summary %}<p style="font-size:13px;color:#44444f;line-height:1.5;margin:8px 0 0;">{{ a.summary }}</p>{% endif %}
+  </td></tr>
+</table>
+{%- endmacro -%}
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Music News Radar — {{ date_label }}</title></head>
+<body style="margin:0;padding:0;background:#f2f2f7;">
+  <div style="max-width:620px;margin:0 auto;padding:28px 16px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <h1 style="font-size:22px;color:#1a1a2e;margin:0;">🎧 Music News Radar</h1>
+    <p style="font-size:13px;color:#8a8a99;margin:6px 0 22px;">
+      Digest du {{ date_label }} — {{ total }} actu{{ "s" if total > 1 else "" }} sélectionnée{{ "s" if total > 1 else "" }}
+    </p>
+    {% if hot_articles %}
+    <h2 style="font-size:15px;color:#d63031;margin:0 0 10px;">🔥 À chaud</h2>
+    {% for a in hot_articles %}{{ item(a) }}{% endfor %}
+    {% endif %}
+    {% if other_articles %}
+    <h2 style="font-size:15px;color:#1a1a2e;margin:18px 0 10px;">📰 L'essentiel</h2>
+    {% for a in other_articles %}{{ item(a) }}{% endfor %}
+    {% endif %}
+    <p style="font-size:11px;color:#b0b0bd;margin-top:24px;">
+      Généré par music-news-radar · seuil de pertinence {{ threshold }}
+    </p>
+  </div>
+</body>
+</html>

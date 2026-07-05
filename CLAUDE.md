@@ -1,0 +1,102 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Projet
+
+Veille automatisée sur l'actu musique électronique pour alimenter un compte Instagram.
+Pipeline : sources → dédup (hash url_norm + titre) → scoring Claude → Postgres → digest
+mail quotidien + alertes Discord temps réel. Seuils : pertinence >= 60 pour le digest,
+hotness >= 80 pour l'alerte Discord.
+
+## Commandes
+
+- Installer / synchroniser les deps : `uv sync` (groupe dev inclus par défaut)
+- Lancer l'API : `uv run uvicorn app.main:app --reload`
+- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
+- Lancer une ingestion : `uv run python -m scripts.run_ingest`
+- Scorer les articles : `uv run python -m scripts.score_articles [--limit N]`
+  (nécessite `ANTHROPIC_API_KEY` dans `.env` ; modèle : `SCORING_MODEL`,
+  défaut `claude-haiku-4-5` — choix validé par l'utilisateur pour le coût)
+- Digest mail : `uv run python -m scripts.send_digest [--dry-run] [--date YYYY-MM-DD]`
+  (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
+- Alertes Discord : `uv run python -m scripts.send_hot_alerts`
+- Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
+- Scheduler : agents launchd installés via `bash deploy/install_launchd.sh`
+  (pipeline toutes les 30 min, digest à 8h30 ; logs dans
+  `~/Library/Logs/music-news-radar/` ; désinstaller :
+  `launchctl bootout gui/$(id -u)/com.musicnewsradar.{pipeline,digest}`)
+- Tests : `uv run pytest` (un seul test : `uv run pytest tests/test_api.py::test_health`)
+- Lint : `uv run ruff check .`
+- Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
+- Parité modèles ↔ migrations : `uv run alembic check` (nécessite une base à jour)
+
+La config vient de `.env` (voir `.env.example`) via `app/config.py` (pydantic-settings).
+`alembic/env.py` lit `DATABASE_URL` depuis cette config — ne jamais mettre l'URL dans
+`alembic.ini`. Postgres local (EDB, port 5432) protégé par mot de passe : pour vérifier
+une migration sans toucher l'instance de l'utilisateur, créer un cluster jetable avec
+`/Library/PostgreSQL/15/bin/initdb` sur un autre port.
+
+## Architecture
+
+Le principe central : la couche `app/sources/` est PLUGGABLE (un adapter par source,
+contrat défini dans `sources/base.py` : `fetch() -> list[RawItem]`), tout le reste du
+pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
+`sources/__init__.py` mappe le champ `sources.type` en base (`rss`, `reddit_rss`,
+`bluesky`, `x`) vers la classe adapter.
+
+- `app/models.py` — les 3 tables (Source, Article, Digest). Enums stockés en VARCHAR +
+  CHECK (`native_enum=False`), pas d'enum natif Postgres. JSONB via `JSONVariant`
+  (JSON générique sur SQLite pour les tests, JSONB sur Postgres).
+- `app/pipeline/` — ingestion : dédup, scoring Claude, orchestration. Sync (pas d'async),
+  volumes faibles.
+- `app/delivery/` — restitution : digest (Jinja2 + SMTP), alertes Discord (webhook).
+  Communique avec le pipeline uniquement via la base.
+- `app/api/` — endpoints REST (`/articles`, `/digests`) pour une future UI web.
+- `scripts/` — points d'entrée cron : `run_ingest.py` (fréquent, déclenche aussi les
+  alertes hot au moment de l'ingestion), `send_digest.py` (quotidien).
+- Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de `get_db`).
+
+## Contraintes apprises sur le terrain
+
+- Les headers HTTP (User-Agent) doivent être ASCII pur — pas d'accents, httpx
+  plante avant d'envoyer la requête.
+- Reddit renvoie des 429 persistants (plusieurs minutes) si deux fetchs arrivent
+  coup sur coup : `RedditRssAdapter.request_delay = 5.0` espace les requêtes.
+  Le blocage est par IP, pas par subreddit.
+- Resident Advisor n'a plus de flux RSS public (`ra.co/xml/rss.xml` → 404).
+- Postgres local : auth en `trust` (pas de mot de passe), user `postgres`.
+
+## Conventions
+
+- SQLAlchemy 2.0 style (`Mapped` / `mapped_column`), naming convention des contraintes
+  définie dans `app/db.py`. Dans les migrations écrites à la main, entourer les noms de
+  contraintes CHECK avec `op.f()` sinon la convention double le préfixe.
+- Source X/Apify : adapter séparé avec `since_id` et plafond `maxTotalChargeUsd` —
+  à implémenter en dernier (source payante).
+
+## Roadmap (validée)
+
+1. ~~Structure de dossiers~~ ✓
+2. ~~Scaffold FastAPI + Postgres + 3 tables + migration~~ ✓
+3. ~~Adapters gratuits : RSS générique (feedparser) + Reddit RSS, dédup par hash~~ ✓
+4. ~~Scoring Claude (JSON strict : pertinence, hotness, catégorie, imprint, résumé)~~ ✓
+   (`app/pipeline/scoring.py` : structured outputs via `messages.parse()`, seuils dans
+   `app/config.py`, commit par article pour ne pas perdre les appels payés)
+5. ~~Digest mail (Jinja2) + webhook Discord~~ ✓
+   (`app/delivery/` — digest idempotent par date, fenêtre depuis le digest précédent
+   avec exclusion de ses articles ; `articles.alerted_at` (migration 0002) garantit
+   qu'un article hot n'est alerté qu'une fois, posé seulement après envoi réussi.
+   Limitation connue : la dédup par hash ne fusionne pas la même actu couverte par
+   deux sources différentes — amélioration possible en V2.)
+6. ~~Scheduler (digest quotidien, ingestion fréquente)~~ ✓
+   (launchd plutôt que cron — natif macOS, rattrape les jobs manqués à la sortie
+   de veille. Plists dans `deploy/`. Sur un futur VPS Linux : équivalents crontab
+   `*/30 * * * *` pour le pipeline et `30 8 * * *` pour le digest.)
+7. ~~Adapter X via Apify~~ ✓ — V1 complète.
+   (`app/sources/x_apify.py`, actor `apidojo~tweet-scraper` ~0,40 $/1000 tweets avec
+   **minimum 50 tweets facturés par requête** — d'où trois garde-fous de coût :
+   `maxTotalChargeUsd` par run, `maxItems`, et un throttle de 6 h entre fetchs par
+   source (état dans `sources.state` JSONB, migration 0003, avec le `since` qui
+   évite de re-payer les tweets déjà vus). Réassigner `source.state` en entier,
+   jamais de mutation in place, sinon SQLAlchemy ne persiste pas.)
