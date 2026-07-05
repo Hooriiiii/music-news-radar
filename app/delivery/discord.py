@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -63,10 +63,15 @@ def send_hot_alerts(db: Session, poster=post_alert) -> AlertStats:
     alerted_at n'est posé qu'après un envoi réussi : un webhook qui échoue
     sera retenté au run suivant.
     """
+    freshness_floor = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+        hours=settings.alert_max_age_hours
+    )
     stmt = (
         select(Article)
         .where(Article.hotness_score >= settings.alert_hotness_threshold)
         .where(Article.alerted_at.is_(None))
+        # Garde-fou back-fill : du "breaking" d'il y a des jours n'est plus une alerte
+        .where(or_(Article.published_at.is_(None), Article.published_at >= freshness_floor))
         .order_by(Article.hotness_score.desc())
     )
     stats = AlertStats()

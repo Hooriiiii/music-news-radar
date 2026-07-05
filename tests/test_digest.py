@@ -113,3 +113,19 @@ def test_render_digest_contains_titles_links_and_hot_section(db_session, source)
     assert "https://example.com/hot" in html
     assert "chaud" in html.lower()  # section hot présente
     assert "05/07/2026" in html
+
+
+def test_digest_excludes_freshly_fetched_but_old_content(db_session, source):
+    # Une source nouvellement ajoutée peut back-fill de vieux articles :
+    # fetchés aujourd'hui mais publiés il y a longtemps -> pas dans le digest
+    old = add_article(db_session, source, slug="vieux", relevance=90)
+    old.published_at = dt.datetime(2016, 8, 13, tzinfo=UTC)
+    undated = add_article(db_session, source, slug="sansdate", relevance=70)
+    undated.published_at = None
+    db_session.commit()
+    since = dt.datetime(2026, 7, 4, 0, 0, tzinfo=UTC)
+
+    picked = select_digest_articles(db_session, since=since)
+    slugs = [a.url.rsplit("/", 1)[1] for a in picked]
+    assert "vieux" not in slugs
+    assert "sansdate" in slugs  # les flux sans dates restent éligibles

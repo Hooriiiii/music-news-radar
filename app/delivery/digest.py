@@ -2,7 +2,7 @@ import datetime as dt
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -25,6 +25,9 @@ def select_digest_articles(
         select(Article)
         .where(Article.relevance_score >= settings.digest_relevance_threshold)
         .where(Article.fetched_at > since)
+        # Garde-fou back-fill : une source nouvellement ajoutée peut ingérer de
+        # vieux articles -- le digest est de l'actu, pas de l'archive
+        .where(or_(Article.published_at.is_(None), Article.published_at >= since))
         .order_by(
             Article.relevance_score.desc(),
             Article.hotness_score.desc().nulls_last(),

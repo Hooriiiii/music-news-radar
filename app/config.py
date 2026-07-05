@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     # Seuils du design doc
     digest_relevance_threshold: int = 60
     alert_hotness_threshold: int = 80
+    # Un article "hot" publié il y a plus longtemps que ça n'est plus une alerte
+    alert_max_age_hours: int = 48
 
     # X via Apify (étape 7) -- source payante, trois garde-fous de coût :
     # plafond par run, nombre max d'items, intervalle minimum entre deux fetchs

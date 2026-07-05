@@ -69,3 +69,19 @@ def test_send_hot_alerts_isolates_errors_and_retries_later(db_session):
     db_session.refresh(good)
     assert bad.alerted_at is None  # sera retenté au prochain run
     assert good.alerted_at is not None
+
+
+def test_send_hot_alerts_skips_stale_news(db_session):
+    # Un article "breaking" publié il y a des jours n'est plus une alerte
+    stale = add_article(db_session, slug="stale")
+    stale.published_at = dt.datetime.now(UTC) - dt.timedelta(days=10)
+    fresh = add_article(db_session, slug="fresh")
+    fresh.published_at = dt.datetime.now(UTC) - dt.timedelta(hours=2)
+    undated = add_article(db_session, slug="undated")
+    undated.published_at = None
+    db_session.commit()
+
+    posted = []
+    send_hot_alerts(db_session, poster=lambda a: posted.append(a.url.rsplit("/", 1)[1]))
+    assert "stale" not in posted
+    assert {"fresh", "undated"} <= set(posted)
