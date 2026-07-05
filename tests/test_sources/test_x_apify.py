@@ -4,7 +4,7 @@ import pytest
 
 from app.config import settings
 from app.models import Source, SourceType
-from app.sources.x_apify import XApifyAdapter
+from app.sources.x_apify import XApifyAdapter  # noqa: F401 -- alternative testée
 
 UTC = dt.timezone.utc
 
@@ -122,11 +122,5 @@ def test_fetch_runs_when_stale_and_updates_state(apify_config, monkeypatch):
     assert adapter.source.state["last_run_at"] > stale.isoformat()
 
 
-# --- Registry ---
-
-
-def test_registry_maps_x_to_apify_adapter():
-    from app.sources import get_adapter
-
-    source = Source(id=1, name="x", type=SourceType.X, url="https://x.com/user")
-    assert type(get_adapter(source)) is XApifyAdapter
+# (le registry pointe désormais sur XApiAdapter -- voir test_x_api.py ;
+# cet adapter Apify reste testé comme alternative)

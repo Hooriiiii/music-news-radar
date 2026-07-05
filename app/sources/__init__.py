@@ -2,14 +2,17 @@ from app.models import Source, SourceType
 from app.sources.base import RawItem, SourceAdapter
 from app.sources.reddit_rss import RedditRssAdapter
 from app.sources.rss import RssAdapter
+from app.sources.x_api import XApiAdapter
 from app.sources.x_apify import XApifyAdapter
 
 # Registry : le champ sources.type en base pointe vers la classe adapter.
 # Ajouter une source d'un type déjà supporté = un simple INSERT en base.
+# X passe par l'API officielle (pay-per-use) ; l'adapter Apify reste disponible
+# comme alternative si un plan Apify payant est souscrit un jour.
 ADAPTERS: dict[SourceType, type[SourceAdapter]] = {
     SourceType.RSS: RssAdapter,
     SourceType.REDDIT_RSS: RedditRssAdapter,
-    SourceType.X: XApifyAdapter,
+    SourceType.X: XApiAdapter,
 }
 
 

@@ -16,12 +16,14 @@ class Settings(BaseSettings):
     # Un article "hot" publié il y a plus longtemps que ça n'est plus une alerte
     alert_max_age_hours: int = 48
 
-    # X via Apify (étape 7) -- source payante, trois garde-fous de coût :
-    # plafond par run, nombre max d'items, intervalle minimum entre deux fetchs
+    # X via l'API officielle v2, pay-per-use (~0,005 $/tweet lu, since_id natif)
+    x_bearer_token: str | None = None
+    x_max_items: int = 50  # max_results par requête (borne API : 5-100)
+
+    # Alternative Apify (nécessite un plan Apify payant -- non utilisée par défaut)
     apify_token: str | None = None
     apify_actor_id: str = "apidojo~tweet-scraper"
     apify_max_charge_usd: float = 0.25
-    x_max_items: int = 50  # minimum de facturation de l'actor
     x_min_fetch_interval_hours: int = 6
 
     # Livraison (étape 5)
