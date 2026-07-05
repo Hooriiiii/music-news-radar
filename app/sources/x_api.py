@@ -33,14 +33,20 @@ class XApiAdapter(SourceAdapter):
         """La source est-elle une recherche (hashtags) plutôt qu'un profil ?
 
         Profil : URL x.com/twitter.com, @handle ou handle nu.
-        Recherche : préfixe "search:", ou présence de # / d'espaces.
+        Recherche : préfixe "search:"/"ugc:", ou présence de # / d'espaces.
         """
         url = self.source.url.strip()
-        if url.lower().startswith("search:"):
+        if url.lower().startswith(("search:", "ugc:")):
             return True
         if "://" in url or url.startswith("@"):
             return False
         return "#" in url or " " in url
+
+    @property
+    def is_ugc(self) -> bool:
+        """Mode UGC : on veut du contenu brut filmé par des fans, pas des clips
+        d'agrégateurs -- la sélection exige un compte de taille modeste."""
+        return self.source.url.strip().lower().startswith("ugc:")
 
     def fetch(self) -> list[RawItem]:
         if not settings.x_bearer_token:
@@ -78,8 +84,10 @@ class XApiAdapter(SourceAdapter):
         chaque actu doit être exploitable en template photo/vidéo) et le bruit
         exclu — le filtrage se fait côté X, on ne paye pas les tweets écartés."""
         query = self.source.url.strip()
-        if query.lower().startswith("search:"):
-            query = query[len("search:"):].strip()
+        for prefix in ("search:", "ugc:"):
+            if query.lower().startswith(prefix):
+                query = query[len(prefix):].strip()
+                break
         base = f"({query})" if " OR " in query and not query.startswith("(") else query
         for operator in ("has:media", "-is:retweet", "-is:reply"):
             if operator not in base:
@@ -96,7 +104,7 @@ class XApiAdapter(SourceAdapter):
             "tweet.fields": "created_at,public_metrics",
             "expansions": "attachments.media_keys,author_id",
             "media.fields": "url,preview_image_url",
-            "user.fields": "username,verified",
+            "user.fields": "username,verified,public_metrics",
         }
         if state.get("since_id"):
             params["since_id"] = state["since_id"]
@@ -155,13 +163,17 @@ class XApiAdapter(SourceAdapter):
         return items
 
     def _passes_popularity(self, tweet: dict, author: dict) -> bool:
-        if author.get("verified"):
-            return True
         metrics = tweet.get("public_metrics") or {}
-        return (
+        engaged = (
             metrics.get("like_count", 0) >= settings.x_search_min_likes
             or metrics.get("reply_count", 0) >= settings.x_search_min_replies
         )
+        if self.is_ugc:
+            # UGC : moment qui décolle organiquement, posté par un compte
+            # modeste (un gros compte = média/agrégateur, même viral)
+            followers = (author.get("public_metrics") or {}).get("followers_count", 0)
+            return engaged and followers <= settings.x_ugc_max_followers
+        return bool(author.get("verified")) or engaged
 
     def _summary_with_metrics(self, text: str, tweet: dict, author: dict) -> str:
         """Les métriques sont données à voir au scoring Claude (elles nourrissent
@@ -170,8 +182,12 @@ class XApiAdapter(SourceAdapter):
         parts = [f"{metrics.get('like_count', 0)} likes",
                  f"{metrics.get('reply_count', 0)} réponses",
                  f"{metrics.get('retweet_count', 0)} reposts"]
+        followers = (author.get("public_metrics") or {}).get("followers_count")
+        if followers is not None:
+            parts.append(f"{followers} abonnés")
         badge = "compte vérifié" if author.get("verified") else "compte non vérifié"
-        return f"{text}\n\n[X : {' · '.join(parts)} · {badge}]"
+        kind = " · clip UGC filmé par un fan" if self.is_ugc else ""
+        return f"{text}\n\n[X : {' · '.join(parts)} · {badge}{kind}]"
 
     def _recently_fetched(self, state: dict) -> bool:
         last_run = state.get("last_run_at")

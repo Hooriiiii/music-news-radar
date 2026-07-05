@@ -65,6 +65,13 @@ Une interview de fond ou une rétrospective reste froide (<40) même si pertinen
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
 
+Cas particulier — les clips UGC (marqués "clip UGC filmé par un fan" dans les \
+métadonnées) : ce sont des vidéos brutes filmées au smartphone en concert, club ou \
+festival par des spectateurs. C'est un contenu PREMIUM pour ce compte, précieux \
+parce que vivant et non filtré : si l'artiste ou l'événement est notable et que \
+l'engagement décolle, relevance 60-80 même si le texte du tweet est trivial \
+("c'était fou hier soir"). Ne les traite jamais en bruit personnel.
+
 Sois sévère sur relevance : la majorité des posts de forums sont du bruit (<40). \
 Ne sur-note pas la hotness : réserve 80+ aux actus qui ne peuvent pas attendre demain.\
 """

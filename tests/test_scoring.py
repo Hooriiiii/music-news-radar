@@ -188,3 +188,10 @@ def test_system_prompt_encodes_editorial_line():
     assert "pop" in SYSTEM_PROMPT.lower()
     # les genres hors ligne doivent être explicitement dépriorisés
     assert "hip-hop" in SYSTEM_PROMPT.lower() or "rap" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_values_ugc_live_clips():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "ugc" in lowered or "filmé" in lowered  # les clips de fans sont du contenu premium

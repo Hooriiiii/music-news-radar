@@ -262,3 +262,71 @@ def test_metrics_are_exposed_to_scoring_via_summary(x_config, monkeypatch):
     item = make_adapter("#rave").parse_search(payload)[0]
     assert "250 likes" in item.summary
     assert "30 réponses" in item.summary
+
+
+# --- Mode UGC : l'authenticité se détecte par la taille du compte ---
+
+
+def make_ugc_payload(*, followers, likes, verified=False):
+    return {
+        "data": [{
+            "id": "1900000000000000042",
+            "text": "GUETTA C'ETAIT FOU HIER SOIR 😭🔥",
+            "created_at": "2026-07-06T02:00:00.000Z",
+            "author_id": "77",
+            "attachments": {"media_keys": ["m7"]},
+            "public_metrics": {"like_count": likes, "reply_count": 3},
+        }],
+        "includes": {
+            "users": [{"id": "77", "username": "clubber_33", "verified": verified,
+                       "public_metrics": {"followers_count": followers}}],
+            "media": [{"media_key": "m7", "type": "video",
+                       "preview_image_url": "https://pbs.twimg.com/vid7.jpg"}],
+        },
+        "meta": {"newest_id": "1900000000000000042", "result_count": 1},
+    }
+
+
+def test_ugc_prefix_detection_and_query_strip(x_config):
+    adapter = make_adapter("ugc:(\"david guetta\") has:videos")
+    assert adapter.is_search
+    assert adapter.is_ugc
+    assert not adapter.build_search_query().startswith("ugc:")
+    assert not make_adapter("#techno").is_ugc
+
+
+def test_ugc_keeps_viral_clip_from_small_account(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 50)
+    monkeypatch.setattr(settings, "x_ugc_max_followers", 25000)
+    adapter = make_adapter('ugc:("david guetta") has:videos')
+    items = adapter.parse_search(make_ugc_payload(followers=420, likes=800))
+    assert len(items) == 1
+
+
+def test_ugc_rejects_big_media_account_even_if_viral(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_ugc_max_followers", 25000)
+    adapter = make_adapter('ugc:("david guetta") has:videos')
+    items = adapter.parse_search(make_ugc_payload(followers=300000, likes=5000))
+    assert items == []  # agrégateur/média : pas de l'UGC
+
+
+def test_ugc_rejects_small_account_without_engagement(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 50)
+    adapter = make_adapter('ugc:("david guetta") has:videos')
+    assert adapter.parse_search(make_ugc_payload(followers=420, likes=4)) == []
+
+
+def test_ugc_verified_small_account_still_passes(x_config, monkeypatch):
+    # un fan abonné Premium reste un fan : verified n'exclut pas
+    monkeypatch.setattr(settings, "x_search_min_likes", 50)
+    monkeypatch.setattr(settings, "x_ugc_max_followers", 25000)
+    adapter = make_adapter('ugc:("david guetta") has:videos')
+    items = adapter.parse_search(make_ugc_payload(followers=900, likes=200, verified=True))
+    assert len(items) == 1
+
+
+def test_followers_count_exposed_to_scoring(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_min_likes", 50)
+    adapter = make_adapter('ugc:("david guetta") has:videos')
+    item = adapter.parse_search(make_ugc_payload(followers=420, likes=800))[0]
+    assert "420 abonnés" in item.summary

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # propre, 50 attrape les clips qui décollent sans reprendre le bruit
     x_search_min_likes: int = 50
     x_search_min_replies: int = 20
+    # Mode UGC (préfixe "ugc:" dans l'url de la source) : au-delà de ce nombre
+    # d'abonnés, un compte est considéré média/agrégateur -- pas de l'UGC
+    x_ugc_max_followers: int = 25000
 
     # Alternative Apify (nécessite un plan Apify payant -- non utilisée par défaut)
     apify_token: str | None = None
