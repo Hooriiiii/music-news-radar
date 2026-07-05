@@ -28,28 +28,134 @@ class XApiAdapter(SourceAdapter):
         handle = url.rsplit("/", 1)[-1] if "/" in url else url
         return handle.lstrip("@")
 
+    @property
+    def is_search(self) -> bool:
+        """La source est-elle une recherche (hashtags) plutôt qu'un profil ?
+
+        Profil : URL x.com/twitter.com, @handle ou handle nu.
+        Recherche : préfixe "search:", ou présence de # / d'espaces.
+        """
+        url = self.source.url.strip()
+        if url.lower().startswith("search:"):
+            return True
+        if "://" in url or url.startswith("@"):
+            return False
+        return "#" in url or " " in url
+
     def fetch(self) -> list[RawItem]:
         if not settings.x_bearer_token:
             raise RuntimeError(
                 "X_BEARER_TOKEN manquante dans .env — token à créer sur developer.x.com"
             )
         state = dict(self.source.state or {})
-        user_id = state.get("user_id") or self._lookup_user_id()
 
-        payload = self._get(f"/users/{user_id}/tweets", params=self.build_params(state))
-        items = self.parse(payload)
+        if self.is_search:
+            # Volume potentiellement énorme sur un hashtag populaire : throttle
+            # pour plafonner le coût, quel que soit le rythme du pipeline
+            if self._recently_fetched(state):
+                logger.info("Recherche X %s sautée (fetch < %dh)", self.source.name,
+                            settings.x_min_fetch_interval_hours)
+                return []
+            payload = self._get("/tweets/search/recent", params=self.build_search_params(state))
+            items = self.parse_search(payload)
+            new_state = {**state}
+        else:
+            user_id = state.get("user_id") or self._lookup_user_id()
+            payload = self._get(f"/users/{user_id}/tweets", params=self.build_params(state))
+            items = self.parse(payload)
+            new_state = {**state, "user_id": user_id}
 
-        new_state = {
-            **state,
-            "user_id": user_id,
-            "last_run_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        }
+        new_state["last_run_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         newest_id = (payload.get("meta") or {}).get("newest_id")
         if newest_id:
             new_state["since_id"] = newest_id
         # réassignation complète : nécessaire pour que SQLAlchemy détecte le changement
         self.source.state = new_state
         return items
+
+    def build_search_query(self) -> str:
+        """Query de recherche avec le média OBLIGATOIRE (exigence éditoriale :
+        chaque actu doit être exploitable en template photo/vidéo) et le bruit
+        exclu — le filtrage se fait côté X, on ne paye pas les tweets écartés."""
+        query = self.source.url.strip()
+        if query.lower().startswith("search:"):
+            query = query[len("search:"):].strip()
+        base = f"({query})" if " OR " in query and not query.startswith("(") else query
+        for operator in ("has:media", "-is:retweet", "-is:reply"):
+            if operator not in base:
+                base += f" {operator}"
+        return base
+
+    def build_search_params(self, state: dict) -> dict:
+        params = {
+            "query": self.build_search_query(),
+            "max_results": settings.x_search_max_results,
+            "tweet.fields": "created_at",
+            "expansions": "attachments.media_keys,author_id",
+            "media.fields": "url,preview_image_url",
+            "user.fields": "username",
+        }
+        if state.get("since_id"):
+            params["since_id"] = state["since_id"]
+        return params
+
+    def parse_search(self, payload: dict) -> list[RawItem]:
+        """Comme parse(), mais multi-auteurs et média strictement obligatoire."""
+        users = {
+            user["id"]: user.get("username")
+            for user in (payload.get("includes") or {}).get("users", [])
+        }
+        media_by_key = {
+            media["media_key"]: media
+            for media in (payload.get("includes") or {}).get("media", [])
+            if media.get("media_key")
+        }
+        items = []
+        for tweet in payload.get("data") or []:
+            tweet_id = tweet.get("id")
+            text = (tweet.get("text") or "").strip()
+            if not tweet_id or not text:
+                continue
+            media_urls = []
+            for key in (tweet.get("attachments") or {}).get("media_keys", []):
+                media = media_by_key.get(key)
+                if media:
+                    url = media.get("url") or media.get("preview_image_url")
+                    if url:
+                        media_urls.append(url)
+            if not media_urls:
+                continue  # média obligatoire en mode recherche
+            author = users.get(tweet.get("author_id")) or "i"  # x.com/i/status/ marche toujours
+            single_line = " ".join(text.split())
+            title = f"@{author}: {single_line}"
+            if len(title) > 200:
+                title = title[:197] + "..."
+            published_at = None
+            if tweet.get("created_at"):
+                published_at = dt.datetime.fromisoformat(
+                    tweet["created_at"].replace("Z", "+00:00")
+                )
+            items.append(
+                RawItem(
+                    url=f"https://x.com/{author}/status/{tweet_id}",
+                    title=title,
+                    summary=text,
+                    published_at=published_at,
+                    media_urls=media_urls,
+                )
+            )
+        return items
+
+    def _recently_fetched(self, state: dict) -> bool:
+        last_run = state.get("last_run_at")
+        if not last_run:
+            return False
+        try:
+            last_run_at = dt.datetime.fromisoformat(last_run)
+        except ValueError:
+            return False
+        interval = dt.timedelta(hours=settings.x_min_fetch_interval_hours)
+        return dt.datetime.now(dt.timezone.utc) - last_run_at < interval
 
     def build_params(self, state: dict) -> dict:
         params = {

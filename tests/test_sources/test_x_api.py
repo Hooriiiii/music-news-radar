@@ -126,3 +126,79 @@ def test_registry_maps_x_to_official_api_adapter():
 
     source = Source(id=1, name="x", type=SourceType.X, url="https://x.com/user")
     assert type(get_adapter(source)) is XApiAdapter
+
+
+# --- Mode recherche (hashtags) : média obligatoire, throttle, multi-auteurs ---
+
+SEARCH_PAYLOAD = {
+    "data": [
+        {
+            "id": "1900000000000000001",
+            "text": "Nouveau set techno au Berghain #techno",
+            "created_at": "2026-07-06T08:00:00.000Z",
+            "author_id": "111",
+            "attachments": {"media_keys": ["3_aaa"]},
+        },
+        {
+            # pas de média -> exclu en mode recherche (a priori impossible avec
+            # has:media, ceinture et bretelles)
+            "id": "1900000000000000002",
+            "text": "tweet texte #techno",
+            "created_at": "2026-07-06T07:00:00.000Z",
+            "author_id": "222",
+        },
+    ],
+    "includes": {
+        "users": [{"id": "111", "username": "technofan"}],
+        "media": [{"media_key": "3_aaa", "type": "photo",
+                   "url": "https://pbs.twimg.com/media/aaa.jpg"}],
+    },
+    "meta": {"newest_id": "1900000000000000001", "result_count": 2},
+}
+
+
+def test_search_mode_detection(x_config):
+    assert make_adapter("#techno OR #housemusic").is_search
+    assert make_adapter("search: berghain lineup").is_search
+    assert not make_adapter("https://x.com/residentadvisor").is_search
+    assert not make_adapter("@boilerroomtv").is_search
+    assert not make_adapter("boilerroomtv").is_search
+
+
+def test_search_query_enforces_media_and_excludes_noise(x_config):
+    query = make_adapter("#techno OR #rave").build_search_query()
+    assert "#techno OR #rave" in query
+    assert "has:media" in query
+    assert "-is:retweet" in query
+
+
+def test_search_query_does_not_duplicate_operators(x_config):
+    query = make_adapter("#techno has:media -is:retweet").build_search_query()
+    assert query.count("has:media") == 1
+
+
+def test_search_params_use_dedicated_cap_and_since_id(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_search_max_results", 10)
+    params = make_adapter("#techno").build_search_params({"since_id": "42"})
+    assert params["max_results"] == 10
+    assert params["since_id"] == "42"
+    assert "author_id" in params["expansions"]
+
+
+def test_parse_search_requires_media_and_resolves_authors(x_config):
+    items = make_adapter("#techno").parse_search(SEARCH_PAYLOAD)
+    assert len(items) == 1  # le tweet sans média est écarté
+    tweet = items[0]
+    assert tweet.url == "https://x.com/technofan/status/1900000000000000001"
+    assert tweet.title.startswith("@technofan:")
+    assert tweet.media_urls == ["https://pbs.twimg.com/media/aaa.jpg"]
+
+
+def test_search_fetch_is_throttled(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_min_fetch_interval_hours", 6)
+    recent = dt.datetime.now(UTC) - dt.timedelta(hours=1)
+    adapter = make_adapter("#techno", state={"last_run_at": recent.isoformat()})
+    calls = []
+    monkeypatch.setattr(adapter, "_get", lambda path, params: calls.append(path))
+    assert adapter.fetch() == []
+    assert calls == []  # aucune lecture payante pendant la fenêtre de throttle
