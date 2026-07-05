@@ -129,3 +129,30 @@ def test_digest_excludes_freshly_fetched_but_old_content(db_session, source):
     slugs = [a.url.rsplit("/", 1)[1] for a in picked]
     assert "vieux" not in slugs
     assert "sansdate" in slugs  # les flux sans dates restent éligibles
+
+
+def test_digest_caps_articles_per_source(db_session, source, monkeypatch):
+    # Une source prolifique (type Mixmag) ne doit pas monopoliser le digest
+    monkeypatch.setattr(settings, "digest_max_per_source", 2)
+    other = Source(name="Autre", type=SourceType.RSS, url="https://example.com/o")
+    db_session.add(other)
+    db_session.commit()
+    for i, rel in enumerate((95, 94, 93, 92)):
+        add_article(db_session, source, slug=f"m{i}", relevance=rel)
+    weaker = Article(
+        source_id=other.id, url="https://example.com/autre", title="Autre source",
+        summary="x", raw_hash="o" * 64, relevance_score=70,
+        fetched_at=dt.datetime(2026, 7, 5, 8, 0, tzinfo=UTC),
+        published_at=dt.datetime(2026, 7, 5, 7, 0, tzinfo=UTC),
+    )
+    db_session.add(weaker)
+    db_session.commit()
+    since = dt.datetime(2026, 7, 4, 0, 0, tzinfo=UTC)
+
+    picked = select_digest_articles(db_session, since=since)
+    by_source = [a.source_id for a in picked]
+    assert by_source.count(source.id) == 2  # plafonné
+    assert other.id in by_source  # la petite source entre malgré ses 70
+    # l'ordre global reste par pertinence décroissante
+    assert [a.relevance_score for a in picked] == sorted(
+        [a.relevance_score for a in picked], reverse=True)

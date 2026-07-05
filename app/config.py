@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     x_search_max_results: int = 10
     # Sélection par popularité en mode recherche : un tweet passe s'il vient
     # d'un compte vérifié OU s'il atteint l'un de ces seuils d'engagement
-    x_search_min_likes: int = 100  # niveau "ça décolle" pour les vidéos d'events
+    # Calibré sur sonde réelle (2026-07-06) : le flux "noms d'artistes" est
+    # propre, 50 attrape les clips qui décollent sans reprendre le bruit
+    x_search_min_likes: int = 50
     x_search_min_replies: int = 20
 
     # Alternative Apify (nécessite un plan Apify payant -- non utilisée par défaut)
@@ -43,6 +45,8 @@ class Settings(BaseSettings):
     digest_to: str | None = None
     digest_from: str | None = None  # défaut : smtp_user
     digest_max_articles: int = 25
+    # Anti-monopole : une source prolifique ne peut pas écraser les autres
+    digest_max_per_source: int = 6
 
 
 settings = Settings()

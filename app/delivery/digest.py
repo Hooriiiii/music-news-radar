@@ -33,11 +33,23 @@ def select_digest_articles(
             Article.hotness_score.desc().nulls_last(),
             Article.id,
         )
-        .limit(limit or settings.digest_max_articles)
     )
     if exclude_ids:
         stmt = stmt.where(Article.id.not_in(exclude_ids))
-    return list(db.scalars(stmt))
+
+    # Plafond par source appliqué en Python : on parcourt par pertinence
+    # décroissante et on saute les articles d'une source déjà pleine
+    limit = limit or settings.digest_max_articles
+    picked: list[Article] = []
+    per_source: dict[int, int] = {}
+    for article in db.scalars(stmt.limit(limit * 10)):
+        if per_source.get(article.source_id, 0) >= settings.digest_max_per_source:
+            continue
+        picked.append(article)
+        per_source[article.source_id] = per_source.get(article.source_id, 0) + 1
+        if len(picked) >= limit:
+            break
+    return picked
 
 
 def build_digest(
