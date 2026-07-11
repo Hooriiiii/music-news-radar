@@ -330,3 +330,69 @@ def test_followers_count_exposed_to_scoring(x_config, monkeypatch):
     adapter = make_adapter('ugc:("david guetta") has:videos')
     item = adapter.parse_search(make_ugc_payload(followers=420, likes=800))[0]
     assert "420 abonnés" in item.summary
+
+
+# --- Radar maison : source X dynamique pilotée par les artistes du moment ---
+
+
+def test_radar_detection(x_config):
+    adapter = make_adapter("radar:")
+    assert adapter.is_radar
+    assert adapter.is_search
+    assert not make_adapter("#techno").is_radar
+    assert not make_adapter("https://x.com/residentadvisor").is_radar
+
+
+def test_radar_query_built_from_artists(x_config):
+    adapter = make_adapter("radar:")
+    adapter.radar_artists = ["Fred again..", "Peggy Gou"]
+    query = adapter.build_search_query()
+    assert '"Fred again.."' in query
+    assert '"Peggy Gou"' in query
+    assert " OR " in query
+    assert "has:videos" in query
+    assert "-is:retweet" in query
+
+
+def test_radar_empty_artists_yields_empty_query(x_config):
+    adapter = make_adapter("radar:")
+    adapter.radar_artists = []
+    assert adapter.build_search_query() == ""
+
+
+def test_radar_fetch_skips_api_when_cold_start(x_config, monkeypatch):
+    adapter = make_adapter("radar:")
+    adapter.radar_artists = []
+    calls = []
+    monkeypatch.setattr(adapter, "_get", lambda path, params: calls.append(path) or {})
+    assert adapter.fetch() == []
+    assert calls == []  # aucun appel payant au démarrage à froid
+
+
+def test_radar_default_artists_empty(x_config):
+    assert make_adapter("radar:").radar_artists == []
+
+
+def test_radar_requires_artist_in_text(x_config):
+    # Un tweet viral qui matche la requête mais ne mentionne pas l'artiste
+    # (spam) doit être écarté, même avec de l'engagement
+    adapter = make_adapter("radar:")
+    adapter.radar_artists = ["Dom Dolla"]
+    payload = {
+        "data": [
+            {"id": "1", "text": "Dom Dolla incroyable au festival hier", "created_at": "2026-07-06T10:00:00.000Z",
+             "author_id": "1", "attachments": {"media_keys": ["m1"]},
+             "public_metrics": {"like_count": 200}},
+            {"id": "2", "text": "check my onlyfans link in bio 🔥", "created_at": "2026-07-06T10:00:00.000Z",
+             "author_id": "2", "attachments": {"media_keys": ["m2"]},
+             "public_metrics": {"like_count": 5000}},
+        ],
+        "includes": {
+            "users": [{"id": "1", "username": "fan"}, {"id": "2", "username": "spam"}],
+            "media": [{"media_key": "m1", "type": "video", "preview_image_url": "https://p/1.jpg"},
+                      {"media_key": "m2", "type": "video", "preview_image_url": "https://p/2.jpg"}],
+        },
+    }
+    items = adapter.parse_search(payload)
+    assert len(items) == 1
+    assert "Dom Dolla" in items[0].summary

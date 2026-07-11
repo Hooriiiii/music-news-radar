@@ -22,6 +22,12 @@ class XApiAdapter(SourceAdapter):
 
     timeout = 30.0
 
+    def __init__(self, source):
+        super().__init__(source)
+        # Peuplé par le pipeline (run_ingest) pour les sources radar : la liste
+        # des artistes du moment. L'adapter reste agnostique de la base.
+        self.radar_artists: list[str] = []
+
     @property
     def handle(self) -> str:
         url = self.source.url.strip().rstrip("/")
@@ -36,11 +42,17 @@ class XApiAdapter(SourceAdapter):
         Recherche : préfixe "search:"/"ugc:", ou présence de # / d'espaces.
         """
         url = self.source.url.strip()
-        if url.lower().startswith(("search:", "ugc:")):
+        if url.lower().startswith(("search:", "ugc:", "radar:")):
             return True
         if "://" in url or url.startswith("@"):
             return False
         return "#" in url or " " in url
+
+    @property
+    def is_radar(self) -> bool:
+        """Source radar : la requête est construite dynamiquement à partir des
+        artistes du moment (self.radar_artists), pas d'une url figée."""
+        return self.source.url.strip().lower().startswith("radar:")
 
     @property
     def is_ugc(self) -> bool:
@@ -56,6 +68,11 @@ class XApiAdapter(SourceAdapter):
         state = dict(self.source.state or {})
 
         if self.is_search:
+            # Radar sans artiste (démarrage à froid) : aucune requête à lancer,
+            # on ne paye rien
+            if self.is_radar and not self.build_search_query():
+                logger.info("Radar X %s sauté (aucun artiste du moment)", self.source.name)
+                return []
             # Volume potentiellement énorme sur un hashtag populaire : throttle
             # pour plafonner le coût, quel que soit le rythme du pipeline
             if self._recently_fetched(state):
@@ -82,7 +99,19 @@ class XApiAdapter(SourceAdapter):
     def build_search_query(self) -> str:
         """Query de recherche avec le média OBLIGATOIRE (exigence éditoriale :
         chaque actu doit être exploitable en template photo/vidéo) et le bruit
-        exclu — le filtrage se fait côté X, on ne paye pas les tweets écartés."""
+        exclu — le filtrage se fait côté X, on ne paye pas les tweets écartés.
+
+        Radar : la query est construite à partir des artistes du moment, avec
+        has:videos (on cherche des vidéos live). Sans artiste -> query vide."""
+        if self.is_radar:
+            if not self.radar_artists:
+                return ""
+            names = " OR ".join(f'"{a}"' for a in self.radar_artists)
+            base = f"({names})"
+            for operator in ("has:videos", "-is:retweet", "-is:reply"):
+                base += f" {operator}"
+            return base
+
         query = self.source.url.strip()
         for prefix in ("search:", "ugc:"):
             if query.lower().startswith(prefix):
@@ -138,6 +167,8 @@ class XApiAdapter(SourceAdapter):
                         media_urls.append(url)
             if not media_urls:
                 continue  # média obligatoire en mode recherche
+            if self.is_radar and not self._mentions_radar_artist(text):
+                continue  # anti-spam : la vidéo doit vraiment parler de l'artiste
             author = users.get(tweet.get("author_id")) or {}
             if not self._passes_popularity(tweet, author):
                 continue
@@ -161,6 +192,10 @@ class XApiAdapter(SourceAdapter):
                 )
             )
         return items
+
+    def _mentions_radar_artist(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(artist.lower() in lowered for artist in self.radar_artists)
 
     def _passes_popularity(self, tweet: dict, author: dict) -> bool:
         metrics = tweet.get("public_metrics") or {}

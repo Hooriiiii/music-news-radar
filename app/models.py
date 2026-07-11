@@ -90,6 +90,8 @@ class Article(Base):
     # Horodatage de l'alerte Discord envoyée (null = jamais alerté) -- garantit
     # l'idempotence des runs fréquents de détection du hot
     alerted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Artistes mentionnés, extraits par le scoring -- alimentent le radar maison
+    mentioned_artists: Mapped[list | None] = mapped_column(JSONVariant)
 
     source: Mapped[Source] = relationship(back_populates="articles")
 

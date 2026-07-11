@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import Article, Source
 from app.pipeline.dedup import compute_raw_hash
+from app.pipeline.radar import top_artists
 from app.sources import get_adapter as default_get_adapter
 from app.sources.base import SourceAdapter
 
@@ -69,7 +71,17 @@ def run_ingest(
     results = []
     for source in sources:
         try:
-            results.append(ingest_source(db, source, adapter=get_adapter(source)))
+            adapter = get_adapter(source)
+            # Radar : injecter les artistes du moment (l'adapter reste agnostique
+            # de la base, c'est le pipeline qui calcule et fournit la liste)
+            if getattr(adapter, "is_radar", False):
+                adapter.radar_artists = top_artists(
+                    db,
+                    window_days=settings.radar_window_days,
+                    min_relevance=settings.radar_min_relevance,
+                    limit=settings.radar_max_artists,
+                )
+            results.append(ingest_source(db, source, adapter=adapter))
         except Exception as exc:
             logger.exception("Ingestion échouée pour la source %s", source.name)
             db.rollback()

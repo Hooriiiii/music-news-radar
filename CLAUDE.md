@@ -102,6 +102,18 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   léchés des médias — le prompt de scoring valorise ces clips UGC (60-80) au
   lieu de les classer en bruit perso. Source calme en semaine, productive les
   soirs d'events — c'est normal.
+- Radar maison (`app/pipeline/radar.py` + source X `url="radar:"`) : les artistes
+  pop/électro extraits par le scoring (`mentioned_artists`) sont agrégés (top N sur
+  7j, pertinence >= 60) et injectés dynamiquement dans une recherche X `has:videos`
+  pour chasser les vidéos live. Deux garde-fous appris à l'usage : (1) GATE PAR
+  GENRE DE SOURCE — seules les sources pop/électro alimentent le radar, car les
+  sources festivals sont multi-genres et le modèle ne filtre pas le genre de façon
+  fiable (Haiku listait Ultra Vomit/Dan ar Braz) ; (2) ANTI-SPAM — le tweet doit
+  vraiment mentionner l'artiste (le filtre engagement seul laissait passer du spam
+  viral). Rendement réaliste : brille quand un artiste suivi a un moment live viral,
+  calme sinon — ce n'est pas un firehose. Seuil `X_SEARCH_MIN_LIKES` ajustable.
+- Spotify/Beatport écartés (2026 : API fermées/gated) — le "radar maison" les
+  remplace : notre propre flux scoré EST le signal "artistes du moment".
 - X passe par l'API OFFICIELLE v2 pay-per-use (`app/sources/x_api.py`,
   ~0,005 $/tweet lu, since_id natif dans sources.state) — nécessite la
   facturation activée sur developer.x.com, sinon 402 Payment Required.

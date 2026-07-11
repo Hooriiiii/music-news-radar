@@ -205,3 +205,32 @@ def test_system_prompt_covers_extended_editorial_line():
     assert "bretagne" in lowered or "local" in lowered
     assert "positive" in lowered or "positif" in lowered
     assert "écolog" in lowered or "environnement" in lowered
+
+
+# --- Radar maison : extraction d'artistes ---
+
+
+def test_article_score_accepts_artists():
+    assert make_score(artists=["Fred again..", "Skrillex"]).artists == ["Fred again..", "Skrillex"]
+
+
+def test_article_score_artists_defaults_empty():
+    assert make_score().artists == []
+
+
+def test_apply_score_stores_mentioned_artists():
+    article = make_article()
+    apply_score(article, make_score(artists=["Peggy Gou"]))
+    assert article.mentioned_artists == ["Peggy Gou"]
+
+
+def test_apply_score_empty_artists_stored_as_none():
+    article = make_article()
+    apply_score(article, make_score(artists=[]))
+    assert article.mentioned_artists is None
+
+
+def test_system_prompt_asks_for_artists():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    assert "artist" in SYSTEM_PROMPT.lower()

@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     # d'abonnés, un compte est considéré média/agrégateur -- pas de l'UGC
     x_ugc_max_followers: int = 25000
 
+    # Radar maison (source X avec url "radar:") : les artistes du moment sont
+    # dérivés du flux scoré et injectés dans la recherche X has:videos
+    radar_window_days: int = 7
+    radar_min_relevance: int = 60
+    radar_max_artists: int = 10
+    # Seuls les artistes issus de ces genres de source alimentent le radar :
+    # les sources festivals (multi-genres) ne doivent pas y injecter du metal/folk.
+    # Le modèle ne filtre pas le genre de façon fiable -> gate déterministe ici.
+    radar_source_genres: str = "electronic,pop,new_music,music"
+
     # Alternative Apify (nécessite un plan Apify payant -- non utilisée par défaut)
     apify_token: str | None = None
     apify_actor_id: str = "apidojo~tweet-scraper"

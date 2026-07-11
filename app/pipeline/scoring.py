@@ -34,6 +34,7 @@ class ArticleScore(BaseModel):
     category: Category
     imprint: str | None = None
     summary: str
+    artists: list[str] = Field(default_factory=list)
 
 
 SYSTEM_PROMPT = """\
@@ -76,6 +77,11 @@ Une interview de fond ou une rétrospective reste froide (<40) même si pertinen
 - category : le type d'actu.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
+- artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \
+exact, sans @ ni #). N'inclus QUE les artistes pop ou électro — ignore ceux d'autres \
+genres (metal, rock, folk, rap...) même s'ils sont cités (ex. sur une affiche de \
+festival multi-genres, ne garde que le headliner électro/pop). Liste vide si aucun. \
+Sert à repérer les artistes pop/électro du moment pour chasser leurs vidéos live.
 
 Cas particulier — les clips UGC (marqués "clip UGC filmé par un fan" dans les \
 métadonnées) : ce sont des vidéos brutes filmées au smartphone en concert, club ou \
@@ -136,6 +142,7 @@ def apply_score(article: Article, score: ArticleScore) -> None:
     article.imprint = score.imprint
     # Le résumé éditorial de Claude remplace l'extrait brut du flux
     article.summary = score.summary
+    article.mentioned_artists = score.artists or None
 
 
 @dataclass
