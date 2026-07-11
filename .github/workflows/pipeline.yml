@@ -2,7 +2,11 @@ name: pipeline
 
 on:
   schedule:
+    # Cadence 2 h. Le cron GitHub est best-effort (~25 % de créneaux sautés) :
+    # un 2e horaire 30 min après chaque créneau sert de rattrapage dans la même
+    # fenêtre. Si les deux passent, le 2e est quasi gratuit (since_id -> 0 lecture)
     - cron: "0 */2 * * *"
+    - cron: "30 */2 * * *"
   workflow_dispatch:
 
 # Jamais deux pipelines en même temps (un run lent + le cron suivant)
