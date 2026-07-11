@@ -44,6 +44,27 @@
     color: var(--text); border-radius: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
   .actions button:hover { border-color: var(--accent); }
   #empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
+  .chip.right { margin-left: auto; }
+  #sources-panel { max-width: 820px; margin: 0 auto; padding: 20px; }
+  .src-form { display: grid; grid-template-columns: 1fr 160px; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .src-form input, .src-form select { background: #0c0c10; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .src-form .full { grid-column: 1/-1; }
+  .src-form .hint { grid-column: 1/-1; color: var(--muted); font-size: 11.5px; margin-top: -4px; }
+  .src-form button { grid-column: 1/-1; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; padding: 9px 0; cursor: pointer; font-weight: 600; }
+  .src-list { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+  .src-row { display: flex; align-items: center; gap: 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+  .src-row.off { opacity: .5; }
+  .src-row .nm { font-weight: 600; }
+  .src-row .u { color: var(--muted); font-size: 11.5px; word-break: break-all; }
+  .src-row .grow { flex: 1; min-width: 0; }
+  .src-row .tag { font-size: 10.5px; background: #23232d; color: var(--muted);
+    border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  .src-row .toggle { border: 1px solid var(--border); background: #20202a; color: var(--text);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -69,9 +90,26 @@
       <option value="relevance">Tri : pertinence</option>
       <option value="date">Tri : plus récent</option>
     </select>
+    <button class="chip right" data-preset="sources">⚙️ Sources</button>
   </div>
 </header>
 <main id="grid"><div id="empty">Chargement…</div></main>
+
+<section id="sources-panel" hidden>
+  <form class="src-form" id="src-form">
+    <input id="s-name" class="full" placeholder="Nom (ex. Fred Again — compte fan)" required>
+    <select id="s-type">
+      <option value="x">X / Twitter</option>
+      <option value="rss">Flux RSS</option>
+      <option value="reddit_rss">Subreddit</option>
+    </select>
+    <input id="s-genre" placeholder="Genre (electronic, pop…)">
+    <input id="s-url" class="full" placeholder="URL / requête" required>
+    <div class="hint" id="s-hint"></div>
+    <button type="submit">Ajouter la source</button>
+  </form>
+  <div class="src-list" id="src-list"></div>
+</section>
 
 <script>
 const PRESETS = {
@@ -144,14 +182,84 @@ async function load() {
 let sourceNames = {};
 function sourceName(id) { return sourceNames[id] || "?"; }
 
+const gridEl = document.getElementById("grid");
+const panelEl = document.getElementById("sources-panel");
+
 document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
   chip.classList.add("on");
   preset = chip.dataset.preset;
-  load();
+  if (preset === "sources") {
+    gridEl.hidden = true; panelEl.hidden = false;
+    document.getElementById("count").textContent = "";
+    loadSourcesPanel();
+  } else {
+    panelEl.hidden = true; gridEl.hidden = false;
+    load();
+  }
 });
 for (const id of ["category", "source", "sort"])
   document.getElementById(id).onchange = load;
+
+// --- Panneau Sources ---
+
+const HINTS = {
+  x: 'Compte : https://x.com/pseudo · Recherche : #tag OR #tag2 · Clips fans : ugc:("Artiste") has:videos · Radar auto : radar:',
+  rss: "L'URL du flux RSS/Atom (souvent /feed ou /rss.xml).",
+  reddit_rss: "L'URL du subreddit, ex. https://www.reddit.com/r/electronicmusic",
+};
+const typeSel = document.getElementById("s-type");
+const hintEl = document.getElementById("s-hint");
+const updateHint = () => { hintEl.textContent = HINTS[typeSel.value]; };
+typeSel.onchange = updateHint;
+updateHint();
+
+async function loadSourcesPanel() {
+  const sources = await (await fetch("/sources")).json();
+  const list = document.getElementById("src-list");
+  list.innerHTML = "";
+  for (const s of sources.sort((a, b) => b.active - a.active || a.name.localeCompare(b.name))) {
+    const row = document.createElement("div");
+    row.className = "src-row" + (s.active ? "" : " off");
+    row.innerHTML = `
+      <div class="grow">
+        <div class="nm"></div>
+        <div class="u"></div>
+      </div>
+      <span class="tag">${s.type}</span>
+      ${s.genre ? `<span class="tag">${s.genre}</span>` : ""}
+      <button class="toggle">${s.active ? "⏸ Désactiver" : "▶ Activer"}</button>`;
+    row.querySelector(".nm").textContent = s.name;
+    row.querySelector(".u").textContent = s.url;
+    row.querySelector(".toggle").onclick = async () => {
+      await fetch(`/sources/${s.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !s.active }),
+      });
+      loadSourcesPanel();
+    };
+    list.appendChild(row);
+  }
+}
+
+document.getElementById("src-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const payload = {
+    name: document.getElementById("s-name").value.trim(),
+    type: typeSel.value,
+    url: document.getElementById("s-url").value.trim(),
+    genre: document.getElementById("s-genre").value.trim() || null,
+  };
+  const res = await fetch("/sources", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    e.target.reset(); updateHint(); loadSourcesPanel();
+  } else {
+    alert("Erreur : vérifie le nom, le type et l'URL.");
+  }
+};
 
 (async () => {
   const sources = await (await fetch("/sources")).json();

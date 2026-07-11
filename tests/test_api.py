@@ -143,3 +143,44 @@ def test_dashboard_served_at_root(client):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Music News Radar" in response.text
+
+
+# --- Gestion des sources depuis le dashboard ---
+
+
+def test_create_source(client, db_session):
+    from sqlalchemy import select
+
+    from app.models import Source
+
+    response = client.post("/sources", json={
+        "name": "Fred Again — fan", "type": "x",
+        "url": "https://x.com/fredagainfan", "genre": "electronic"})
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "Fred Again — fan"
+    assert body["active"] is True
+    assert db_session.scalar(select(Source).where(Source.id == body["id"])) is not None
+
+
+def test_create_source_rejects_invalid_type(client):
+    response = client.post("/sources", json={
+        "name": "x", "type": "tiktok", "url": "https://tiktok.com/x"})
+    assert response.status_code == 422
+
+
+def test_create_source_requires_name_and_url(client):
+    assert client.post("/sources", json={"type": "rss"}).status_code == 422
+
+
+def test_toggle_source_active(client, db_session):
+    source = make_source(db_session)
+    response = client.patch(f"/sources/{source.id}", json={"active": False})
+    assert response.status_code == 200
+    assert response.json()["active"] is False
+    db_session.refresh(source)
+    assert source.active is False
+
+
+def test_patch_source_404(client):
+    assert client.patch("/sources/9999", json={"active": False}).status_code == 404

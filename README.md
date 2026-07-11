@@ -72,20 +72,28 @@ uv run python -m scripts.send_digest --dry-run # aperçu du digest dans /tmp/dig
 
 ## Gérer les sources
 
-```bash
-# Ajouter une source
-uv run python -m scripts.add_source --name "Nom" --type rss --url "https://..." --genre electronic
+Le plus simple : **depuis le dashboard**, bouton **⚙️ Sources**. Tu y ajoutes un
+compte / hashtag / subreddit / flux, et tu actives/désactives ce qui existe. Les
+formats d'URL par type sont rappelés sous le formulaire.
 
-# Types disponibles : rss, reddit_rss, x
-#   - rss        : n'importe quel flux RSS/Atom
-#   - reddit_rss : un subreddit (url = https://www.reddit.com/r/xxx)
-#   - x          : compte X (url = https://x.com/compte), recherche (url = "#hashtag OR ..."),
-#                  UGC (url = "ugc:..."), ou radar maison (url = "radar:")
+Formats d'URL selon le type :
+- **rss** : l'URL du flux RSS/Atom (souvent `/feed` ou `/rss.xml`)
+- **reddit_rss** : l'URL du subreddit, ex. `https://www.reddit.com/r/electronicmusic`
+- **x** :
+  - compte : `https://x.com/pseudo`
+  - recherche : `#hashtag OR #autre`
+  - clips de fans (UGC) : `ugc:("Nom Artiste") has:videos`
+  - radar automatique (artistes du moment) : `radar:`
+
+En ligne de commande, l'équivalent reste disponible :
+
+```bash
+uv run python -m scripts.add_source --name "Nom" --type x --url "https://x.com/compte" --genre electronic
 ```
 
-Pour activer/désactiver une source sans la supprimer, passe `active` à `false` en base
-(via le dashboard Neon ou DataGrip) — l'ingestion l'ignore, les articles déjà récoltés
-restent.
+Désactiver une source (via le dashboard ou en base) la retire de l'ingestion sans
+supprimer les articles déjà récoltés. Une nouvelle source est prise en compte au
+prochain run du pipeline (dans les 2 h côté cloud).
 
 ---
 

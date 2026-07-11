@@ -16,6 +16,19 @@ class SourceOut(BaseModel):
     active: bool
 
 
+class SourceCreate(BaseModel):
+    name: str
+    type: SourceType
+    url: str
+    genre: str | None = None
+
+
+class SourceUpdate(BaseModel):
+    name: str | None = None
+    genre: str | None = None
+    active: bool | None = None
+
+
 class ArticleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
