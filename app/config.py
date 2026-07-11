@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://localhost:5432/music_news_radar"
     sql_echo: bool = False
 
+    # Rétention : on ne garde en base que les articles publiés dans les N derniers
+    # jours (par date de POST, pas d'ajout) -- le reste est purgé à chaque run
+    retention_days: int = 14
+
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
     scoring_model: str = "claude-haiku-4-5"
@@ -21,7 +25,7 @@ class Settings(BaseSettings):
     x_max_items: int = 50  # max_results par requête timeline (borne API : 5-100)
     # Au tout premier fetch (pas encore de since_id), ne lire que les tweets des
     # N derniers jours -> pas de backfill payant sur du vieux (borne API : < 7 j)
-    x_backfill_days: int = 3
+    x_backfill_days: int = 2
     # Mode recherche (hashtags) : volume potentiellement énorme -> cap serré
     # (borne API : 10-100) + throttle x_min_fetch_interval_hours appliqué.
     # Plafond de coût = max_results x runs/jour x 0,005 $

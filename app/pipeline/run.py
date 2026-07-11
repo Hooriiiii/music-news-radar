@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.delivery.discord import send_hot_alerts
 from app.pipeline.ingest import IngestStats, run_ingest
+from app.pipeline.retention import purge_old_articles
 from app.pipeline.scoring import ScoringStats, score_pending
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ class PipelineReport:
     alerts_sent: int = 0
     alerts_errors: int = 0
     alerts_skipped_reason: str | None = None
+    purged: int = 0
 
 
 def run_pipeline(
@@ -26,8 +28,9 @@ def run_pipeline(
     ingest=run_ingest,
     score=score_pending,
     alert=send_hot_alerts,
+    purge=purge_old_articles,
 ) -> PipelineReport:
-    """Le run fréquent : ingestion -> scoring des nouveaux -> alertes hot.
+    """Le run fréquent : ingestion -> scoring des nouveaux -> alertes hot -> purge.
 
     Chaque étape est optionnelle selon la config (pas de clé API = pas de
     scoring, pas de webhook = pas d'alertes) pour que le pipeline reste
@@ -49,5 +52,8 @@ def run_pipeline(
     else:
         report.alerts_skipped_reason = "DISCORD_WEBHOOK_URL absente"
         logger.warning("Alertes sautées : %s", report.alerts_skipped_reason)
+
+    # Rétention : on ne garde que les articles récents (par date de post)
+    report.purged = purge(db, settings.retention_days)
 
     return report

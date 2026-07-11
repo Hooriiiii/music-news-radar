@@ -28,11 +28,12 @@ def make_source(db, name="Feed", active=True):
 
 
 def make_item(slug="a", title="Titre"):
+    # date relative récente : sinon les tests vieilliraient hors fenêtre de rétention
     return RawItem(
         url=f"https://example.com/{slug}",
         title=title,
         summary="résumé",
-        published_at=dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc),
+        published_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1),
         media_urls=["https://example.com/img.jpg"],
     )
 
@@ -105,3 +106,20 @@ def test_run_ingest_order_is_injectable_for_fairness(db_session):
 
     run_ingest(db_session, get_adapter=tracking_adapter, shuffle=reverse_shuffle)
     assert order == ["second", "premier"]
+
+
+def test_ingest_skips_articles_older_than_retention(db_session):
+    source = make_source(db_session)
+    now = dt.datetime.now(dt.timezone.utc)
+    items = [
+        RawItem(url="https://example.com/vieux", title="Vieux",
+                published_at=now - dt.timedelta(days=20)),   # hors fenêtre -> ignoré
+        RawItem(url="https://example.com/recent", title="Récent",
+                published_at=now - dt.timedelta(days=2)),    # dans la fenêtre -> inséré
+        RawItem(url="https://example.com/sansdate", title="Sans date",
+                published_at=None),                          # non daté -> inséré
+    ]
+    stats = ingest_source(db_session, source, adapter=FakeAdapter(source, items))
+    assert stats.new == 2
+    titles = {a.title for a in db_session.scalars(select(Article)).all()}
+    assert titles == {"Récent", "Sans date"}

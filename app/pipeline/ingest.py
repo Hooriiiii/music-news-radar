@@ -9,6 +9,7 @@ from app.config import settings
 from app.models import Article, Source
 from app.pipeline.dedup import compute_raw_hash
 from app.pipeline.radar import top_artists
+from app.pipeline.retention import _within_retention
 from app.sources import get_adapter as default_get_adapter
 from app.sources.base import SourceAdapter
 
@@ -31,6 +32,9 @@ def ingest_source(db: Session, source: Source, adapter: SourceAdapter | None = N
     stats = IngestStats(source_id=source.id, source_name=source.name)
     items = adapter.fetch()
     stats.fetched = len(items)
+    # On n'ingère (ni ne score) pas ce qui est déjà hors fenêtre de rétention :
+    # inutile de payer le scoring d'un article qui serait purgé aussitôt
+    items = [i for i in items if _within_retention(i.published_at, settings.retention_days)]
     if not items:
         return stats
 

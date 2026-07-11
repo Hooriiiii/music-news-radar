@@ -56,3 +56,14 @@ def test_run_pipeline_skips_scoring_without_api_key(db_session, full_config, mon
     assert calls == []
     assert report.scoring is None
     assert report.scoring_skipped_reason is not None
+
+
+def test_run_pipeline_purges_and_reports_count(db_session, full_config):
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: [],
+        score=lambda db: ScoringStats(),
+        alert=lambda db: FakeAlertStats(),
+        purge=lambda db, days: 7,
+    )
+    assert report.purged == 7

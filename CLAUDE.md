@@ -77,6 +77,14 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   alertes hot au moment de l'ingestion), `send_digest.py` (quotidien).
 - Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de `get_db`).
 
+## Rétention
+
+On ne garde en base que les articles publiés dans les `retention_days` (14) derniers
+jours, par DATE DE POST (`published_at`), pas date d'ajout — `app/pipeline/retention.py`.
+Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hors fenêtre).
+Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
+Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.env`.
+
 ## Contraintes apprises sur le terrain
 
 - Les headers HTTP (User-Agent) doivent être ASCII pur — pas d'accents, httpx

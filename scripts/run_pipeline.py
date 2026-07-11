@@ -7,6 +7,7 @@ Usage :
 import datetime as dt
 import logging
 
+from app.config import settings
 from app.db import SessionLocal
 from app.pipeline.run import run_pipeline
 
@@ -31,6 +32,7 @@ def main() -> None:
         print(f"  alertes : {report.alerts_sent} envoyées, {report.alerts_errors} erreurs")
     else:
         print(f"  alertes sautées : {report.alerts_skipped_reason}")
+    print(f"  rétention : {report.purged} articles purgés (> {settings.retention_days} j)")
 
 
 if __name__ == "__main__":
