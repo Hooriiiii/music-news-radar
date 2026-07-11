@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music News Radar</title>
+<style>
+  :root {
+    --bg: #101014; --panel: #18181f; --border: #2a2a35;
+    --text: #e8e8ee; --muted: #8a8a99; --accent: #7c5cff; --hot: #ff4d4d;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(16,16,20,.94);
+           backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
+           padding: 14px 20px; }
+  h1 { font-size: 17px; letter-spacing: .3px; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .chip { border: 1px solid var(--border); background: var(--panel); color: var(--text);
+          border-radius: 999px; padding: 5px 13px; cursor: pointer; font-size: 12.5px; }
+  .chip.on { border-color: var(--accent); background: #241f3d; }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+           border-radius: 8px; padding: 5px 8px; font-size: 12.5px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 60px;
+         display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+          overflow: hidden; display: flex; flex-direction: column; }
+  .card.st-used { opacity: .45; }
+  .card.st-reviewed { border-color: #3d5c3d; }
+  .thumb { width: 100%; height: 165px; object-fit: cover; background: #0c0c10; display: block; }
+  .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .scores { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+  .badge { border-radius: 6px; padding: 2px 7px; background: #23232d; color: var(--muted); }
+  .badge.rel { background: #241f3d; color: #b9a6ff; }
+  .badge.hot-high { background: #3d1f1f; color: #ff8a8a; }
+  a.title { color: var(--text); text-decoration: none; font-weight: 600; font-size: 14.5px; }
+  a.title:hover { color: #b9a6ff; }
+  .summary { color: var(--muted); font-size: 12.5px; }
+  .meta { color: #6a6a78; font-size: 11px; margin-top: auto; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .actions button { flex: 1; border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
+  .actions button:hover { border-color: var(--accent); }
+  #empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎧 Music News Radar <small id="count"></small></h1>
+  <div class="bar">
+    <button class="chip on" data-preset="fresh">🔎 À traiter</button>
+    <button class="chip" data-preset="digest">📰 Pertinents (≥60)</button>
+    <button class="chip" data-preset="hot">🔥 Hot (≥80)</button>
+    <button class="chip" data-preset="media">🖼 Avec média</button>
+    <button class="chip" data-preset="reviewed">✓ Vus</button>
+    <button class="chip" data-preset="used">📸 Postés</button>
+    <select id="category">
+      <option value="">Toutes catégories</option>
+      <option value="new_release">Release</option><option value="announcement">Annonce</option>
+      <option value="event_festival">Event/Festival</option><option value="industry">Industrie</option>
+      <option value="drama">Drama</option><option value="rip">RIP</option>
+      <option value="gear_tech">Gear/Tech</option><option value="culture">Culture</option>
+      <option value="other">Autre</option>
+    </select>
+    <select id="source"><option value="">Toutes sources</option></select>
+    <select id="sort">
+      <option value="relevance">Tri : pertinence</option>
+      <option value="date">Tri : plus récent</option>
+    </select>
+  </div>
+</header>
+<main id="grid"><div id="empty">Chargement…</div></main>
+
+<script>
+const PRESETS = {
+  fresh:    { status: "new", min_relevance: 40 },
+  digest:   { min_relevance: 60 },
+  hot:      { min_hotness: 80 },
+  media:    { has_media: true, min_relevance: 40 },
+  reviewed: { status: "reviewed" },
+  used:     { status: "used" },
+};
+let preset = "fresh";
+
+const grid = document.getElementById("grid");
+const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
+  { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+
+async function load() {
+  const params = new URLSearchParams({ limit: 100, sort: document.getElementById("sort").value });
+  for (const [k, v] of Object.entries(PRESETS[preset])) params.set(k, v);
+  const category = document.getElementById("category").value;
+  const source = document.getElementById("source").value;
+  if (category) params.set("category", category);
+  if (source) params.set("source_id", source);
+
+  const articles = await (await fetch(`/articles?${params}`)).json();
+  document.getElementById("count").textContent = `${articles.length} article${articles.length > 1 ? "s" : ""}`;
+  grid.innerHTML = articles.length ? "" : '<div id="empty">Rien ici — change de filtre ou attends le prochain run (toutes les 2 h).</div>';
+
+  for (const a of articles) {
+    const card = document.createElement("div");
+    card.className = `card st-${a.status}`;
+    const img = (a.media_urls || [])[0];
+    const hotClass = a.hotness_score >= 80 ? "hot-high" : "";
+    card.innerHTML = `
+      ${img ? `<img class="thumb" src="${img}" loading="lazy" onerror="this.remove()">` : ""}
+      <div class="body">
+        <div class="scores">
+          <span class="badge rel">pertinence ${a.relevance_score ?? "—"}</span>
+          <span class="badge ${hotClass}">hot ${a.hotness_score ?? "—"}</span>
+          ${a.category ? `<span class="badge">${a.category}</span>` : ""}
+          ${a.imprint ? `<span class="badge">${a.imprint}</span>` : ""}
+        </div>
+        <a class="title" href="${a.url}" target="_blank" rel="noopener"></a>
+        <div class="summary"></div>
+        <div class="meta"></div>
+        <div class="actions">
+          <button data-status="reviewed">✓ Vu</button>
+          <button data-status="used">📸 Posté</button>
+          <button data-status="new">↩</button>
+        </div>
+      </div>`;
+    card.querySelector(".title").textContent = a.title;
+    card.querySelector(".summary").textContent = a.summary || "";
+    card.querySelector(".meta").textContent =
+      `${sourceName(a.source_id)} · publié ${fmtDate(a.published_at) || "?"}`;
+    for (const btn of card.querySelectorAll(".actions button")) {
+      btn.onclick = async () => {
+        await fetch(`/articles/${a.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: btn.dataset.status }),
+        });
+        load();
+      };
+    }
+    grid.appendChild(card);
+  }
+}
+
+let sourceNames = {};
+function sourceName(id) { return sourceNames[id] || "?"; }
+
+document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
+  document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
+  chip.classList.add("on");
+  preset = chip.dataset.preset;
+  load();
+});
+for (const id of ["category", "source", "sort"])
+  document.getElementById(id).onchange = load;
+
+(async () => {
+  const sources = await (await fetch("/sources")).json();
+  const sel = document.getElementById("source");
+  for (const s of sources) {
+    sourceNames[s.id] = s.name;
+    const opt = document.createElement("option");
+    opt.value = s.id; opt.textContent = (s.active ? "" : "⏸ ") + s.name;
+    sel.appendChild(opt);
+  }
+  load();
+})();
+</script>
+</body>
+</html>

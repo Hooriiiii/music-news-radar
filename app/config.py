@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
+    # Mention ajoutée aux alertes pour déclencher une vraie notification
+    # (les webhooks sans mention ne pingent pas avec le réglage Discord par
+    # défaut "Mentions @ uniquement"). Mettre vide pour désactiver.
+    discord_mention: str | None = "@here"
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_user: str | None = None

@@ -71,3 +71,75 @@ def test_list_digests_empty(client):
     response = client.get("/digests")
     assert response.status_code == 200
     assert response.json() == []
+
+
+# --- Extensions pour le dashboard ---
+
+
+def test_patch_article_status(client, db_session):
+    source = make_source(db_session)
+    article = make_article(db_session, source, title="À traiter", raw_hash="patch1")
+
+    response = client.patch(f"/articles/{article.id}", json={"status": "used"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "used"
+    db_session.refresh(article)
+    assert article.status == ArticleStatus.USED
+
+
+def test_patch_article_rejects_unknown_status(client, db_session):
+    source = make_source(db_session)
+    article = make_article(db_session, source, title="X", raw_hash="patch2")
+    response = client.patch(f"/articles/{article.id}", json={"status": "publié"})
+    assert response.status_code == 422
+
+
+def test_patch_article_404(client):
+    assert client.patch("/articles/99999", json={"status": "used"}).status_code == 404
+
+
+def test_filter_articles_with_media_only(client, db_session):
+    source = make_source(db_session)
+    make_article(db_session, source, title="Avec image", raw_hash="med1")
+    without = make_article(db_session, source, title="Sans image", raw_hash="med2")
+    without.media_urls = None
+    db_session.commit()
+
+    titles = [a["title"] for a in client.get("/articles", params={"has_media": True}).json()]
+    assert titles == ["Avec image"]
+
+
+def test_filter_articles_by_category(client, db_session):
+    source = make_source(db_session)
+    a = make_article(db_session, source, title="Release", raw_hash="cat1")
+    a.category = "new_release"
+    b = make_article(db_session, source, title="Drame", raw_hash="cat2")
+    b.category = "drama"
+    db_session.commit()
+
+    titles = [x["title"] for x in client.get("/articles", params={"category": "drama"}).json()]
+    assert titles == ["Drame"]
+
+
+def test_sort_articles_by_relevance(client, db_session):
+    source = make_source(db_session)
+    make_article(db_session, source, title="Moyen", raw_hash="s1", relevance=50)
+    make_article(db_session, source, title="Fort", raw_hash="s2", relevance=90)
+    make_article(db_session, source, title="Faible", raw_hash="s3", relevance=10)
+
+    titles = [a["title"] for a in client.get("/articles", params={"sort": "relevance"}).json()]
+    assert titles == ["Fort", "Moyen", "Faible"]
+
+
+def test_list_sources(client, db_session):
+    make_source(db_session)
+    response = client.get("/sources")
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "Test Feed"
+
+
+def test_dashboard_served_at_root(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Music News Radar" in response.text

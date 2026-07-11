@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
-Veille automatisée sur l'actu musique électronique pour alimenter un compte Instagram.
+Veille automatisée sur l'actu musique électronique ET pop. Objectif long terme de
+l'utilisateur : créer un MÉDIA (Instagram d'abord) — posts d'actu (description +
+image) et reels (vidéos live UGC des derniers shows, actus, interviews). L'outil
+doit à terme alimenter la création de contenu, pas seulement la veille.
+Agent-Reach (github.com/Panniantong/Agent-Reach) est installé en LOCAL comme banc
+d'essai : sonder hashtags/comptes/réseaux gratuitement avant d'engager des crédits
+API X — jamais dans le pipeline cron (fragile, sessions connectées, ToS).
 Pipeline : sources → dédup (hash url_norm + titre) → scoring Claude → Postgres → digest
 mail quotidien + alertes Discord temps réel. Seuils : pertinence >= 60 pour le digest,
 hotness >= 80 pour l'alerte Discord.
@@ -12,7 +18,9 @@ hotness >= 80 pour l'alerte Discord.
 ## Commandes
 
 - Installer / synchroniser les deps : `uv sync` (groupe dev inclus par défaut)
-- Lancer l'API : `uv run uvicorn app.main:app --reload`
+- Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
+  (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
+  vu/posté = workflow éditorial via PATCH /articles/{id})
 - Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
 - Scorer les articles : `uv run python -m scripts.score_articles [--limit N]`

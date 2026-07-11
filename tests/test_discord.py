@@ -85,3 +85,22 @@ def test_send_hot_alerts_skips_stale_news(db_session):
     send_hot_alerts(db_session, poster=lambda a: posted.append(a.url.rsplit("/", 1)[1]))
     assert "stale" not in posted
     assert {"fresh", "undated"} <= set(posted)
+
+
+def test_alert_payload_pings_with_configured_mention(db_session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "discord_mention", "@here")
+    article = add_article(db_session, slug="ping")
+    payload = build_alert_payload(article)
+    assert payload["content"].startswith("@here")
+    assert "everyone" in payload["allowed_mentions"]["parse"]
+
+
+def test_alert_payload_silent_when_mention_disabled(db_session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "discord_mention", None)
+    article = add_article(db_session, slug="silencieux")
+    payload = build_alert_payload(article)
+    assert "content" not in payload

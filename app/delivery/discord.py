@@ -25,7 +25,12 @@ def build_alert_payload(article: Article) -> dict:
     description = article.summary or ""
     if meta:
         description = f"{description}\n\n{meta}" if description else meta
+    payload: dict = {}
+    if settings.discord_mention:
+        payload["content"] = f"{settings.discord_mention} 🔥 Actu chaude"
+        payload["allowed_mentions"] = {"parse": ["everyone"]}
     return {
+        **payload,
         "embeds": [
             {
                 "title": article.title[:256],

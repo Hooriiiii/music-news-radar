@@ -18,8 +18,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
-# JSONB en prod (Postgres), JSON générique pour les tests SQLite
-JSONVariant = JSON().with_variant(JSONB(), "postgresql")
+# JSONB en prod (Postgres), JSON générique pour les tests SQLite.
+# none_as_null : sans lui, un None Python devient la VALEUR json 'null'
+# (pas un NULL SQL) et les filtres IS NOT NULL ne filtrent plus rien
+JSONVariant = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 class SourceType(str, enum.Enum):
