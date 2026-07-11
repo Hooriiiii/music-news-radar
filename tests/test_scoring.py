@@ -195,3 +195,13 @@ def test_system_prompt_values_ugc_live_clips():
 
     lowered = SYSTEM_PROMPT.lower()
     assert "ugc" in lowered or "filmé" in lowered  # les clips de fans sont du contenu premium
+
+
+def test_system_prompt_covers_extended_editorial_line():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "festival" in lowered
+    assert "bretagne" in lowered or "local" in lowered
+    assert "positive" in lowered or "positif" in lowered
+    assert "écolog" in lowered or "environnement" in lowered

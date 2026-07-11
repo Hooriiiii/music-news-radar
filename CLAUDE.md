@@ -4,6 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
+Ligne éditoriale (prompt scoring `app/pipeline/scoring.py`) : cœur électro + grosses
+actus pop, PLUS quatre axes transversaux valorisés — festivals à toutes les échelles
+(local Bretagne, national FR, international), infos positives/feel-good, musique ×
+écologie/environnement, grosses actus musicales générales. Sources FR pour la
+couverture locale : Tsugi (RSS) + Google News ciblés (festivals Bretagne, festivals
+électro FR, musique×climat) — la source écologie est la plus bruyante (rel_moy ~49).
+
 Veille automatisée sur l'actu musique électronique ET pop. Objectif long terme de
 l'utilisateur : créer un MÉDIA (Instagram d'abord) — posts d'actu (description +
 image) et reels (vidéos live UGC des derniers shows, actus, interviews). L'outil
