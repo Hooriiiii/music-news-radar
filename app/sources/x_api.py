@@ -137,6 +137,8 @@ class XApiAdapter(SourceAdapter):
         }
         if state.get("since_id"):
             params["since_id"] = state["since_id"]
+        else:
+            params["start_time"] = self._backfill_start()
         return params
 
     def parse_search(self, payload: dict) -> list[RawItem]:
@@ -235,6 +237,11 @@ class XApiAdapter(SourceAdapter):
         interval = dt.timedelta(hours=settings.x_min_fetch_interval_hours)
         return dt.datetime.now(dt.timezone.utc) - last_run_at < interval
 
+    def _backfill_start(self) -> str:
+        """Borne RFC3339 du premier fetch : maintenant moins x_backfill_days."""
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=settings.x_backfill_days)
+        return since.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def build_params(self, state: dict) -> dict:
         params = {
             "max_results": settings.x_max_items,
@@ -244,7 +251,9 @@ class XApiAdapter(SourceAdapter):
             "media.fields": "url,preview_image_url",
         }
         if state.get("since_id"):
-            params["since_id"] = state["since_id"]
+            params["since_id"] = state["since_id"]  # incrémental : depuis le dernier vu
+        else:
+            params["start_time"] = self._backfill_start()  # 1er fetch : derniers jours only
         return params
 
     def parse(self, payload: dict) -> list[RawItem]:

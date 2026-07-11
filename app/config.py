@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # X via l'API officielle v2, pay-per-use (~0,005 $/tweet lu, since_id natif)
     x_bearer_token: str | None = None
     x_max_items: int = 50  # max_results par requête timeline (borne API : 5-100)
+    # Au tout premier fetch (pas encore de since_id), ne lire que les tweets des
+    # N derniers jours -> pas de backfill payant sur du vieux (borne API : < 7 j)
+    x_backfill_days: int = 3
     # Mode recherche (hashtags) : volume potentiellement énorme -> cap serré
     # (borne API : 10-100) + throttle x_min_fetch_interval_hours appliqué.
     # Plafond de coût = max_results x runs/jour x 0,005 $

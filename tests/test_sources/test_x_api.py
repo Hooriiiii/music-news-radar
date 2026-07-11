@@ -396,3 +396,33 @@ def test_radar_requires_artist_in_text(x_config):
     items = adapter.parse_search(payload)
     assert len(items) == 1
     assert "Dom Dolla" in items[0].summary
+
+
+# --- Backfill borné : on ne lit (paie) que les derniers jours au premier fetch ---
+
+
+def test_timeline_first_fetch_bounded_by_start_time(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_backfill_days", 3)
+    params = make_adapter().build_params({})
+    assert "start_time" in params
+    assert params["start_time"].endswith("Z")
+    assert "since_id" not in params
+
+
+def test_timeline_incremental_uses_since_id_not_start_time(x_config):
+    params = make_adapter().build_params({"since_id": "123"})
+    assert params["since_id"] == "123"
+    assert "start_time" not in params  # incrémental : since_id suffit
+
+
+def test_search_first_fetch_bounded_by_start_time(x_config, monkeypatch):
+    monkeypatch.setattr(settings, "x_backfill_days", 3)
+    params = make_adapter("#techno").build_search_params({})
+    assert "start_time" in params
+    assert "since_id" not in params
+
+
+def test_search_incremental_uses_since_id_not_start_time(x_config):
+    params = make_adapter("#techno").build_search_params({"since_id": "99"})
+    assert params["since_id"] == "99"
+    assert "start_time" not in params
