@@ -77,6 +77,19 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   alertes hot au moment de l'ingestion), `send_digest.py` (quotidien).
 - Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de `get_db`).
 
+## Philosophie de sourcing (source-level, pas aggregator)
+
+Les gros comptes d'actu Insta/X (Pop Crave, Proximity, AllTime EDM, chart-trackers)
+sont des REPOSTEURS en aval : ils repackagent les comptes d'artistes + la presse. Payer
+pour les lire (API X), c'est payer un repost de ce que les sources primaires donnent
+déjà, avec latence et doublons. La stratégie : taper AU NIVEAU DE LA SOURCE —
+- primaire : comptes d'artistes/labels, organisateurs de festivals ;
+- presse qui *break* l'actu : Mixmag, RA, Pitchfork, Tsugi, DJ Mag (électro),
+  Music Business Worldwide + CMU + Billboard (business/pop) — flux RSS gratuits ;
+- social brut : X UGC/radar, Reddit.
+Corollaire coût : Billboard RSS (gratuit) rend les comptes X @billboard/@billboardcharts/
+@chartdata redondants -> candidats à couper.
+
 ## Rétention
 
 On ne garde en base que les articles publiés dans les `retention_days` (14) derniers
