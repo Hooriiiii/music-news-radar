@@ -234,3 +234,9 @@ def test_system_prompt_asks_for_artists():
     from app.pipeline.scoring import SYSTEM_PROMPT
 
     assert "artist" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_includes_kpop():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    assert "k-pop" in SYSTEM_PROMPT.lower() or "kpop" in SYSTEM_PROMPT.lower()
