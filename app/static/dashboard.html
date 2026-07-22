@@ -356,7 +356,17 @@ async function loadPostsPanel() {
   const params = new URLSearchParams({ limit: 100 });
   const status = document.getElementById("post-status").value;
   if (status) params.set("status", status);
-  const posts = await (await fetch(`/posts?${params}`)).json();
+  let posts;
+  try {
+    const reponse = await fetch(`/posts?${params}`);
+    if (!reponse.ok) throw new Error(await reponse.text());
+    posts = await reponse.json();
+  } catch (erreur) {
+    alert('Échec du chargement des posts : ' + erreur.message);
+    list.innerHTML = '<div id="empty">Échec du chargement des posts.</div>';
+    document.getElementById("count").textContent = "";
+    return;
+  }
   document.getElementById("count").textContent = `${posts.length} post${posts.length > 1 ? "s" : ""}`;
   if (!posts.length) {
     list.innerHTML = '<div id="empty">Aucun post pour ce filtre.</div>';
