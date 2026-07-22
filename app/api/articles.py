@@ -18,6 +18,7 @@ def list_articles(
     status: ArticleStatus | None = None,
     min_relevance: int | None = Query(None, ge=0, le=100),
     min_hotness: int | None = Query(None, ge=0, le=100),
+    min_emergence: int | None = Query(None, ge=0, le=100),
     source_id: int | None = None,
     category: str | None = None,
     has_media: bool | None = None,
@@ -25,7 +26,7 @@ def list_articles(
     # Par défaut on ne montre que le représentant de chaque actu : les reprises
     # de la même info par d'autres sources sont masquées (cf. pipeline/cluster.py)
     include_duplicates: bool = False,
-    sort: Literal["date", "relevance"] = "date",
+    sort: Literal["date", "relevance", "emergence"] = "date",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -37,6 +38,8 @@ def list_articles(
         stmt = stmt.where(Article.relevance_score >= min_relevance)
     if min_hotness is not None:
         stmt = stmt.where(Article.hotness_score >= min_hotness)
+    if min_emergence is not None:
+        stmt = stmt.where(Article.emergence_score >= min_emergence)
     if source_id is not None:
         stmt = stmt.where(Article.source_id == source_id)
     if category is not None:
@@ -49,7 +52,10 @@ def list_articles(
         stmt = stmt.where(Article.published_at >= since)
     if not include_duplicates:
         stmt = stmt.where(Article.duplicate_of_id.is_(None))
-    if sort == "relevance":
+    if sort == "emergence":
+        # La vue A&R : les jeunes artistes à suivre, indépendamment de l'actu
+        stmt = stmt.order_by(Article.emergence_score.desc().nulls_last(), Article.id.desc())
+    elif sort == "relevance":
         stmt = stmt.order_by(
             Article.relevance_score.desc().nulls_last(),
             Article.hotness_score.desc().nulls_last(),

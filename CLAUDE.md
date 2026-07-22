@@ -4,7 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
-Le média s'appelle **KINDA**. Positionnement arrêté avec l'utilisateur (2026-07-22) :
+**KINDA est une structure d'accompagnement de jeunes artistes**, pas seulement un
+média. Trois briques, dans cet ordre de construction :
+1. des **plugins** accessibles aux jeunes créateurs (outils de production) ;
+2. le **compte d'actu** (cette app) : grosses actus électro ET pop d'un côté,
+   mise en avant d'artistes locaux/émergents de l'autre — sur le même compte ;
+3. une fois 1 et 2 installés, un **label de lancement** d'artistes, avec interviews
+   croisées sur le compte, création de covers, push playlist.
+
+Conséquence architecturale majeure : le compte d'actu est à la fois l'organe de
+DISTRIBUTION (il fait connaître plugins et label) et l'organe de DÉTECTION (le flux
+scoré est le deal-flow du label). D'où l'axe `emergence` et les tables `artists` /
+`artist_mentions` — voir « Deux axes de scoring » et « Mémoire A&R » plus bas.
+
+Le label sera électro, mais **le compte ne se ferme PAS à la pop** : les grosses
+actus pop et K-pop gardent leurs scores hauts (règle écrite explicitement dans le
+prompt, sinon le modèle les déprioris tout seul vu le poids de l'électro ailleurs).
+
+Positionnement du compte arrêté avec l'utilisateur (2026-07-22) :
 compte Instagram **français NATIONAL** (toute la scène FR : Paris, Lyon, Marseille,
 Bordeaux, Lille, Toulouse, Nantes, Rennes, Brest), cœur électro + festivals, avec la
 **Bretagne en bonus de départage** — un angle récurrent, jamais le sujet principal.
@@ -108,6 +125,36 @@ déjà, avec latence et doublons. La stratégie : taper AU NIVEAU DE LA SOURCE �
 - social brut : X UGC/radar, Reddit.
 Corollaire coût : Billboard RSS (gratuit) rend les comptes X @billboard/@billboardcharts/
 @chartdata redondants -> candidats à couper.
+
+## Deux axes de scoring (relevance / emergence)
+
+Le scoring rend DEUX notes indépendantes, qui ne se compensent jamais :
+- `relevance` — intérêt pour le feed Instagram (pilier « grosses actus ») ;
+- `emergence` — intérêt A&R : « cet artiste mérite-t-il d'être suivi par Kinda ? »
+  (pilier « artistes locaux/émergents »).
+
+Le cas qui justifie tout : un inconnu qui sort un premier EP est du bruit pour le
+feed (relevance 20) et un signal fort pour le label (emergence 75). L'ancien prompt
+notait « autopromo d'inconnu » sous 40 et **détruisait donc exactement le signal dont
+le label a besoin** — ne jamais revenir à un axe unique. Priorité explicite aux
+artistes français / à la scène locale sur l'axe emergence.
+API : `GET /articles?sort=emergence&min_emergence=...`.
+
+## Mémoire A&R : tables `artists` / `artist_mentions`
+
+Les articles sont purgés à 14 jours ; **les artistes et leurs citations, jamais**.
+Ce qui intéresse un label n'est pas « qui est cité aujourd'hui » mais « depuis quand,
+à quelle fréquence, est-ce que ça accélère » — cette courbe est l'actif de Kinda.
+`app/pipeline/artists.py` : `record_mentions()` (idempotent, tourne après le scoring
+dans `run_pipeline`) et `rising_artists()` (shortlist A&R). Les mentions sont
+DÉNORMALISÉES (titre, url, scores) et le FK vers l'article est `ON DELETE SET NULL` :
+la purge casse le lien, jamais l'historique. API : `GET /artists`,
+`GET /artists/{id}/mentions`, `PATCH /artists/{id}` (suivi manuel `tracked`).
+
+Positionnement vs le marché : inutile de concurrencer Chartmetric/Viberate/Soundcharts
+sur les signaux plateformes (vélocité TikTok, ajouts playlist). Le signal propre de
+Kinda est AMONT : de qui la presse électro FR, Reddit et l'UGC parlent avant que les
+chiffres de streaming ne bougent.
 
 ## Dédup à deux étages
 

@@ -73,6 +73,8 @@ class Article(Base):
     )
     relevance_score: Mapped[int | None] = mapped_column(Integer)
     hotness_score: Mapped[int | None] = mapped_column(Integer)
+    # Axe A&R : intérêt "jeune artiste à suivre", indépendant de relevance
+    emergence_score: Mapped[int | None] = mapped_column(Integer, index=True)
     category: Mapped[str | None] = mapped_column(String(100))
     imprint: Mapped[str | None] = mapped_column(String(200))
     genre: Mapped[str | None] = mapped_column(String(100))
@@ -100,6 +102,54 @@ class Article(Base):
     )
 
     source: Mapped[Source] = relationship(back_populates="articles")
+
+
+class Artist(Base):
+    """Un artiste repéré dans le flux. C'est l'ACTIF DURABLE de Kinda : les articles
+    sont purgés à 14 jours, les artistes et leurs mentions ne le sont jamais. La
+    courbe de citation d'un artiste dans le temps est le deal-flow du label."""
+
+    __tablename__ = "artists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    # Forme normalisée (minuscules, sans accents) : la clé d'unicité, pour que
+    # "Peggy Gou" et "peggy gou" ne fassent pas deux fiches
+    slug: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    first_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    mentions_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Meilleur score d'émergence jamais vu : un artiste repéré une fois comme très
+    # prometteur le reste, même si les mentions suivantes sont anodines
+    max_emergence: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Suivi manuel : l'artiste est entré dans le radar A&R de Kinda
+    tracked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    mentions: Mapped[list["ArtistMention"]] = relationship(back_populates="artist")
+
+
+class ArtistMention(Base):
+    """Une citation d'un artiste dans un article, à une date donnée.
+
+    Les champs sont DÉNORMALISÉS (titre, url, scores) exprès : l'article sera purgé,
+    la mention doit rester lisible sans lui.
+    """
+
+    __tablename__ = "artist_mentions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    artist_id: Mapped[int] = mapped_column(ForeignKey("artists.id"), index=True)
+    article_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), index=True
+    )
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"))
+    mentioned_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    relevance_score: Mapped[int | None] = mapped_column(Integer)
+    emergence_score: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(String(2000))
+
+    artist: Mapped[Artist] = relationship(back_populates="mentions")
 
 
 class Digest(Base):

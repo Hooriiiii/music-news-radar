@@ -31,6 +31,9 @@ class ArticleScore(BaseModel):
 
     relevance: int = Field(ge=0, le=100)
     hotness: int = Field(ge=0, le=100)
+    # Axe A&R, volontairement INDÉPENDANT de relevance : un inconnu qui sort un
+    # premier EP est du bruit pour le feed et un signal fort pour le label.
+    emergence: int = Field(ge=0, le=100)
     category: Category
     imprint: str | None = None
     summary: str
@@ -45,6 +48,24 @@ Kinda s'adresse à un public francophone NATIONAL (toute la France) : la scène 
 électro française dans son ensemble — Paris, Lyon, Marseille, Bordeaux, Lille, \
 Toulouse, Nantes, Rennes, Brest... — au même titre que l'actu internationale. \
 Ce n'est PAS un compte régional.
+
+Le compte tient sur DEUX PILIERS, et tu notes chaque contenu sur les deux :
+  A. LES GROSSES ACTUS de la musique électronique ET de la POP : c'est ce qui \
+fait l'audience. -> axe `relevance`.
+  B. LA MISE EN AVANT D'ARTISTES LOCAUX, ÉMERGENTS ET UNDERGROUND : c'est la \
+mission de Kinda, une structure qui aide les jeunes artistes prometteurs à se \
+lancer. -> axe `emergence`.
+
+ATTENTION, règle explicite : Kinda montera un label de musique ÉLECTRONIQUE, mais \
+le COMPTE, lui, ne se ferme pas à la pop. Les grosses actus pop (et K-pop) gardent \
+toute leur place et leurs scores hauts — ne les déprioris JAMAIS au prétexte que \
+l'électro est le cœur de ligne ou que le label sera électro.
+
+Ces deux axes sont INDÉPENDANTS et ne se compensent jamais. Un producteur inconnu \
+qui sort un premier EP auto-produit n'intéresse pas le feed d'actu (relevance 20) \
+mais c'est un signal précieux à suivre (emergence 75). À l'inverse, une tournée \
+mondiale de David Guetta est une grosse actu (relevance 85) sans aucun intérêt \
+d'émergence (emergence 0).
 
 1. Cœur de ligne : la MUSIQUE ÉLECTRONIQUE (house, techno, drum & bass, EDM, dance, \
 expérimental, clubbing, festivals, labels et artistes électro).
@@ -81,8 +102,22 @@ connu, gros festival, fermeture de club emblématique, actu pop massive).
   60-79 : actu électro intéressante ; actu pop notable ; annonce de festival ou \
 d'événement français ; info positive marquante ; angle musique-écologie.
   40-59 : actu électro mineure, actu pop moyenne, festival très confidentiel.
-  <40 : bruit (question perso, autopromo d'inconnu, meme, discussion sans info) \
-OU actu hors ligne ne relevant d'aucun axe prioritaire.
+  <40 : bruit (question perso, meme, discussion sans info) OU actu hors ligne ne \
+relevant d'aucun axe prioritaire. La sortie d'un artiste inconnu tombe souvent ici \
+— c'est normal, elle sera rattrapée par l'axe `emergence` ci-dessous.
+- emergence (0-100) : intérêt A&R. « Cet artiste mérite-t-il d'être suivi, mis en \
+avant, voire accompagné par Kinda ? » Rien à voir avec la taille de l'actu.
+  80+ : artiste local/émergent avec un vrai signal (premier EP remarqué, passage \
+en club reconnu, soutien d'un label ou d'un DJ établi, engouement inhabituel).
+  50-79 : artiste peu connu qui apparaît dans un média ou une programmation \
+sérieuse ; scène underground française ; jeune producteur qui sort quelque chose.
+  20-49 : artiste en milieu de carrière, déjà installé mais pas mainstream.
+  <20 : artiste déjà établi ou star confirmée, contenu sans artiste identifiable.
+  L'AUTOPROMO d'un inconnu n'est PAS du bruit sur cet axe : si le morceau ou le \
+projet a l'air sérieux (sortie réelle, label, retours positifs), note 50+. Reste \
+lucide en revanche sur le spam pur (lien nu, message répété, contenu vide).
+  Priorité aux artistes FRANÇAIS et à la scène locale : à signal comparable, un \
+producteur français ou breton passe devant un artiste étranger.
 - hotness (0-100) : urgence et potentiel viral, indépendamment de relevance.
   80+ : breaking news à poster dans l'heure (décès, annonce surprise, drama chaud, \
 séparation/reformation) — et uniquement si l'actu est dans la ligne éditoriale. \
@@ -151,6 +186,7 @@ def make_claude_scorer(client: anthropic.Anthropic | None = None):
 def apply_score(article: Article, score: ArticleScore) -> None:
     article.relevance_score = score.relevance
     article.hotness_score = score.hotness
+    article.emergence_score = score.emergence
     article.category = score.category.value
     article.imprint = score.imprint
     # Le résumé éditorial de Claude remplace l'extrait brut du flux

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.delivery.discord import send_hot_alerts
+from app.pipeline.artists import record_mentions
 from app.pipeline.cluster import link_duplicates
 from app.pipeline.ingest import IngestStats, run_ingest
 from app.pipeline.retention import purge_old_articles
@@ -18,6 +19,7 @@ class PipelineReport:
     ingest: list[IngestStats] = field(default_factory=list)
     duplicates_linked: int = 0
     scoring: ScoringStats | None = None
+    mentions_recorded: int = 0
     scoring_skipped_reason: str | None = None
     alerts_sent: int = 0
     alerts_errors: int = 0
@@ -30,6 +32,7 @@ def run_pipeline(
     ingest=run_ingest,
     cluster=link_duplicates,
     score=score_pending,
+    record=record_mentions,
     alert=send_hot_alerts,
     purge=purge_old_articles,
 ) -> PipelineReport:
@@ -51,6 +54,10 @@ def run_pipeline(
     else:
         report.scoring_skipped_reason = "ANTHROPIC_API_KEY absente"
         logger.warning("Scoring sauté : %s", report.scoring_skipped_reason)
+
+    # Après le scoring, avant la purge : les artistes cités sont archivés pour de
+    # bon, même quand les articles qui les mentionnaient seront supprimés
+    report.mentions_recorded = record(db)
 
     if settings.discord_webhook_url:
         stats = alert(db)

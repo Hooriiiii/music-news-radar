@@ -41,11 +41,39 @@ class ArticleOut(BaseModel):
     fetched_at: dt.datetime
     relevance_score: int | None
     hotness_score: int | None
+    emergence_score: int | None
     category: str | None
     imprint: str | None
     genre: str | None
     status: ArticleStatus
     media_urls: list[str] | None
+
+
+class ArtistOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    slug: str
+    first_seen_at: dt.datetime
+    last_seen_at: dt.datetime
+    mentions_count: int
+    max_emergence: int | None
+    tracked: bool
+
+
+class ArtistMentionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    artist_id: int
+    article_id: int | None
+    source_id: int | None
+    mentioned_at: dt.datetime
+    relevance_score: int | None
+    emergence_score: int | None
+    title: str
+    url: str
 
 
 class DigestOut(BaseModel):

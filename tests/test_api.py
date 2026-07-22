@@ -184,3 +184,59 @@ def test_toggle_source_active(client, db_session):
 
 def test_patch_source_404(client):
     assert client.patch("/sources/9999", json={"active": False}).status_code == 404
+
+
+# --- Endpoints A&R : la shortlist artistes ---
+
+
+def _seed_artist(db, *, name, mentions=1, emergence=70, days_ago=1):
+    import datetime as dt
+
+    from app.models import Artist, ArtistMention
+
+    now = dt.datetime.now(dt.timezone.utc)
+    artist = Artist(
+        name=name, slug=name.lower(), first_seen_at=now - dt.timedelta(days=days_ago),
+        last_seen_at=now, mentions_count=mentions, max_emergence=emergence,
+    )
+    db.add(artist)
+    db.commit()
+    for i in range(mentions):
+        db.add(ArtistMention(
+            artist_id=artist.id, article_id=None, source_id=None,
+            mentioned_at=now - dt.timedelta(days=days_ago),
+            relevance_score=50, emergence_score=emergence,
+            title=f"Mention {i}", url=f"https://example.com/{name}/{i}",
+        ))
+    db.commit()
+    return artist
+
+
+def test_list_rising_artists(client, db_session):
+    _seed_artist(db_session, name="Montant", mentions=3)
+    _seed_artist(db_session, name="Discret", mentions=1)
+    body = client.get("/artists").json()
+    assert [a["name"] for a in body] == ["Montant", "Discret"]
+
+
+def test_list_rising_artists_filters_on_emergence(client, db_session):
+    _seed_artist(db_session, name="Jeune", emergence=80)
+    _seed_artist(db_session, name="Star", emergence=10)
+    body = client.get("/artists", params={"min_emergence": 50}).json()
+    assert [a["name"] for a in body] == ["Jeune"]
+
+
+def test_artist_mentions_history(client, db_session):
+    artist = _seed_artist(db_session, name="Suivi", mentions=2)
+    body = client.get(f"/artists/{artist.id}/mentions").json()
+    assert len(body) == 2
+
+
+def test_artist_mentions_404(client):
+    assert client.get("/artists/999/mentions").status_code == 404
+
+
+def test_track_artist(client, db_session):
+    artist = _seed_artist(db_session, name="Pepite")
+    body = client.patch(f"/artists/{artist.id}", json={"tracked": True}).json()
+    assert body["tracked"] is True

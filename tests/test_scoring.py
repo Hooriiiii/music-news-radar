@@ -20,6 +20,7 @@ def make_score(**overrides):
     defaults = dict(
         relevance=70,
         hotness=50,
+        emergence=30,
         category=Category.NEW_RELEASE,
         imprint="Warp Records",
         summary="Aphex Twin annonce un nouvel album pour septembre.",
@@ -240,3 +241,46 @@ def test_system_prompt_includes_kpop():
     from app.pipeline.scoring import SYSTEM_PROMPT
 
     assert "k-pop" in SYSTEM_PROMPT.lower() or "kpop" in SYSTEM_PROMPT.lower()
+
+
+# --- Axe émergence : le signal A&R, indépendant de l'intérêt pour le feed ---
+
+
+def test_article_score_rejects_out_of_range_emergence():
+    with pytest.raises(ValidationError):
+        make_score(emergence=101)
+    with pytest.raises(ValidationError):
+        make_score(emergence=-1)
+
+
+def test_apply_score_writes_emergence(db_session):
+    article = make_article()
+    apply_score(article, make_score(emergence=75))
+    assert article.emergence_score == 75
+
+
+def test_emergence_is_independent_from_relevance():
+    """Le cas qui justifie l'axe : un inconnu qui sort un EP est du bruit pour le
+    feed (relevance basse) mais un signal A&R fort (émergence haute)."""
+    score = make_score(relevance=20, emergence=80)
+    assert score.relevance == 20
+    assert score.emergence == 80
+
+
+def test_system_prompt_asks_for_emergence_and_local_artists():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "emergence" in lowered or "émergence" in lowered
+    assert "underground" in lowered
+    assert "local" in lowered
+
+
+def test_system_prompt_keeps_pop_despite_electronic_label():
+    """Le label sera électro, le compte reste ouvert à la pop : la règle doit être
+    écrite noir sur blanc, sinon le modèle déprioris la pop tout seul."""
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "ne se ferme pas à la pop" in lowered
+    assert "jamais" in lowered
