@@ -73,8 +73,16 @@ def _logo_data_uri() -> str:
     return _data_uri((ASSETS_DIR / "logo.png").read_bytes(), "image/png")
 
 
-def _render_one(page, template, css, logo_uri, image_uri, headline: str) -> bytes:
-    """Rend une slide, en reduisant la police tant que l'accroche deborde."""
+def _render_one(
+    page, template, css, logo_uri, image_uri, headline: str, scale_log: list[float] | None = None
+) -> bytes:
+    """Rend une slide, en reduisant la police tant que l'accroche deborde.
+
+    `scale_log`, si fourni, recoit l'echelle retenue -- utilise par les tests
+    pour prouver que la boucle de reduction s'est bien declenchee : la taille
+    du PNG produit est fixee par le viewport Playwright et ne temoigne de rien
+    sur l'echelle appliquee a l'accroche.
+    """
     for scale in SCALE_STEPS:
         document = template.render(
             css=css,
@@ -91,11 +99,15 @@ def _render_one(page, template, css, logo_uri, image_uri, headline: str) -> byte
         if height <= MAX_HEADLINE_HEIGHT or scale == SCALE_STEPS[-1]:
             if height > MAX_HEADLINE_HEIGHT:
                 logger.warning("accroche encore trop longue apres reduction : %r", headline)
+            if scale_log is not None:
+                scale_log.append(scale)
             return page.screenshot(type="png")
     raise RuntimeError("boucle de reduction sortie sans capture")  # pragma: no cover
 
 
-def render_post(slides: list[dict], template: str = "kinda_post") -> list[bytes]:
+def render_post(
+    slides: list[dict], template: str = "kinda_post", scale_log: list[float] | None = None
+) -> list[bytes]:
     """Rend chaque slide en PNG 1080x1440. Un seul Chromium pour tout le post."""
     env = Environment(
         loader=FileSystemLoader(TEMPLATES_DIR),
@@ -116,7 +128,15 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[bytes]
             for slide in slides:
                 image_uri = fetch_image_data_uri(slide.get("image_url"))
                 rendus.append(
-                    _render_one(page, jinja_template, css, logo_uri, image_uri, slide["headline"])
+                    _render_one(
+                        page,
+                        jinja_template,
+                        css,
+                        logo_uri,
+                        image_uri,
+                        slide["headline"],
+                        scale_log,
+                    )
                 )
         finally:
             browser.close()
