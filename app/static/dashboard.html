@@ -25,6 +25,7 @@
            border-radius: 8px; padding: 5px 8px; font-size: 12.5px; }
   main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 60px;
          display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+  main[hidden] { display: none; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
           overflow: hidden; display: flex; flex-direction: column; }
   .card.st-used { opacity: .45; }
@@ -65,6 +66,51 @@
     border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
   .src-row .toggle { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+
+  /* --- Panneau Posts --- */
+  #posts-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .posts-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+  .post-row { display: flex; align-items: center; gap: 12px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  .post-row:hover { border-color: var(--accent); }
+  .post-row .grow { flex: 1; min-width: 0; }
+  .post-row .hl { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .post-row .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .status-pill { font-size: 10.5px; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+  .status-pill.draft { background: #23232d; color: var(--muted); }
+  .status-pill.approved { background: #241f3d; color: #b9a6ff; }
+  .status-pill.published { background: #1f3d2a; color: #7fe0a0; }
+
+  /* --- Détail d'un post (overlay) --- */
+  #post-detail { position: fixed; inset: 0; background: rgba(8,8,10,.7); z-index: 20;
+    display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 30px 16px; }
+  #post-detail[hidden] { display: none; }
+  #post-detail .sheet { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    max-width: 960px; width: 100%; padding: 20px 22px 26px; }
+  #post-detail .sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  #post-detail .sheet-head h2 { font-size: 15.5px; flex: 1; }
+  #post-detail .close-btn { border: 1px solid var(--border); background: #20202a; color: var(--text);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
+  .slides-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
+    margin-bottom: 16px; }
+  .slide-edit { background: #0c0c10; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .slide-edit img { width: 100%; aspect-ratio: 1080 / 1440; object-fit: cover; border-radius: 8px;
+    background: #16161c; display: block; margin-bottom: 8px; }
+  .slide-edit label { display: block; font-size: 11px; color: var(--muted); margin: 6px 0 3px; }
+  .slide-edit input, .slide-edit textarea, #post-detail textarea { width: 100%; background: #0c0c10;
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12.5px;
+    font-family: inherit; resize: vertical; }
+  .hl-hint { color: var(--muted); font-size: 11px; margin: 10px 0 12px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field textarea { min-height: 70px; }
+  .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .detail-actions button, .detail-actions a { border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 12.5px;
+    text-decoration: none; }
+  .detail-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .detail-actions button:hover, .detail-actions a:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -90,6 +136,7 @@
       <option value="relevance">Tri : pertinence</option>
       <option value="date">Tri : plus récent</option>
     </select>
+    <button class="chip" data-preset="posts">🖼 Posts</button>
     <button class="chip right" data-preset="sources">⚙️ Sources</button>
   </div>
 </header>
@@ -110,6 +157,20 @@
   </form>
   <div class="src-list" id="src-list"></div>
 </section>
+
+<section id="posts-panel" hidden>
+  <div class="posts-bar">
+    <select id="post-status">
+      <option value="">Tous statuts</option>
+      <option value="draft">Brouillon</option>
+      <option value="approved">Validé</option>
+      <option value="published">Publié</option>
+    </select>
+  </div>
+  <div id="posts-list"></div>
+</section>
+
+<div id="post-detail" hidden></div>
 
 <script>
 const PRESETS = {
@@ -159,13 +220,14 @@ async function load() {
           <button data-status="reviewed">✓ Vu</button>
           <button data-status="used">📸 Posté</button>
           <button data-status="new">↩</button>
+          <button class="gen-post">Générer le post</button>
         </div>
       </div>`;
     card.querySelector(".title").textContent = a.title;
     card.querySelector(".summary").textContent = a.summary || "";
     card.querySelector(".meta").textContent =
       `${sourceName(a.source_id)} · publié ${fmtDate(a.published_at) || "?"}`;
-    for (const btn of card.querySelectorAll(".actions button")) {
+    for (const btn of card.querySelectorAll(".actions button[data-status]")) {
       btn.onclick = async () => {
         await fetch(`/articles/${a.id}`, {
           method: "PATCH",
@@ -175,6 +237,7 @@ async function load() {
         load();
       };
     }
+    card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target);
     grid.appendChild(card);
   }
 }
@@ -184,17 +247,22 @@ function sourceName(id) { return sourceNames[id] || "?"; }
 
 const gridEl = document.getElementById("grid");
 const panelEl = document.getElementById("sources-panel");
+const postsPanelEl = document.getElementById("posts-panel");
 
 document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
   chip.classList.add("on");
   preset = chip.dataset.preset;
+  gridEl.hidden = true; panelEl.hidden = true; postsPanelEl.hidden = true;
+  document.getElementById("count").textContent = "";
   if (preset === "sources") {
-    gridEl.hidden = true; panelEl.hidden = false;
-    document.getElementById("count").textContent = "";
+    panelEl.hidden = false;
     loadSourcesPanel();
+  } else if (preset === "posts") {
+    postsPanelEl.hidden = false;
+    loadPostsPanel();
   } else {
-    panelEl.hidden = true; gridEl.hidden = false;
+    gridEl.hidden = false;
     load();
   }
 });
@@ -260,6 +328,159 @@ document.getElementById("src-form").onsubmit = async (e) => {
     alert("Erreur : vérifie le nom, le type et l'URL.");
   }
 };
+
+// --- Génération et file éditoriale des posts ---
+
+async function genererPost(articleId, bouton) {
+  bouton.disabled = true;
+  bouton.textContent = 'Génération…';
+  try {
+    const reponse = await fetch(`/articles/${articleId}/posts`, { method: 'POST' });
+    if (!reponse.ok) throw new Error(await reponse.text());
+    const post = await reponse.json();
+    ouvrirPost(post.id);
+  } catch (erreur) {
+    alert('Échec de la génération : ' + erreur.message);
+    bouton.disabled = false;
+    bouton.textContent = 'Générer le post';
+  }
+}
+
+const STATUS_LABELS = { draft: "Brouillon", approved: "Validé", published: "Publié" };
+
+document.getElementById("post-status").onchange = loadPostsPanel;
+
+async function loadPostsPanel() {
+  const list = document.getElementById("posts-list");
+  list.innerHTML = "Chargement…";
+  const params = new URLSearchParams({ limit: 100 });
+  const status = document.getElementById("post-status").value;
+  if (status) params.set("status", status);
+  const posts = await (await fetch(`/posts?${params}`)).json();
+  document.getElementById("count").textContent = `${posts.length} post${posts.length > 1 ? "s" : ""}`;
+  if (!posts.length) {
+    list.innerHTML = '<div id="empty">Aucun post pour ce filtre.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const p of posts) {
+    const row = document.createElement("div");
+    row.className = "post-row";
+    const headline = (p.slides || [])[0]?.headline || "(sans accroche)";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="hl"></div>
+        <div class="sub"></div>
+      </div>
+      <span class="status-pill ${p.status}">${STATUS_LABELS[p.status] || p.status}</span>`;
+    row.querySelector(".hl").textContent = headline.replace(/\*\*/g, "");
+    row.querySelector(".sub").textContent = `${p.source_name || "?"} · ${fmtDate(p.created_at)}`;
+    row.onclick = () => ouvrirPost(p.id);
+    list.appendChild(row);
+  }
+}
+
+async function enregistrerPost(postId, donnees) {
+  const reponse = await fetch(`/posts/${postId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(donnees),
+  });
+  if (!reponse.ok) throw new Error(await reponse.text());
+  return reponse.json();
+}
+
+const detailEl = document.getElementById("post-detail");
+
+async function ouvrirPost(postId) {
+  let post;
+  try {
+    post = await (await fetch(`/posts/${postId}`)).json();
+  } catch (erreur) {
+    alert("Échec du chargement du post : " + erreur.message);
+    return;
+  }
+  renderPostDetail(post);
+}
+
+function renderPostDetail(post) {
+  const cacheBust = Date.now();
+  const slidesHtml = (post.slides || []).map((s, i) => `
+    <div class="slide-edit" data-index="${i}">
+      <img src="/posts/${post.id}/slides/${i + 1}.png?v=${cacheBust}" loading="lazy" onerror="this.style.opacity=0.2">
+      <label>Accroche</label>
+      <textarea class="slide-headline" rows="2">${escapeHtml(s.headline || "")}</textarea>
+      <label>URL de l'image</label>
+      <input class="slide-image" type="text" value="${escapeHtml(s.image_url || "")}">
+    </div>`).join("");
+
+  detailEl.innerHTML = `
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2></h2>
+        <span class="status-pill ${post.status}">${STATUS_LABELS[post.status] || post.status}</span>
+        <button class="close-btn">✕ Fermer</button>
+      </div>
+      <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
+      <div class="slides-grid">${slidesHtml}</div>
+      <div class="field">
+        <label>Légende</label>
+        <textarea id="edit-caption">${escapeHtml(post.caption || "")}</textarea>
+      </div>
+      <div class="field">
+        <label>Hashtags (séparés par des espaces)</label>
+        <textarea id="edit-hashtags" rows="2">${escapeHtml((post.hashtags || []).join(" "))}</textarea>
+      </div>
+      <div class="detail-actions">
+        <button class="primary" id="btn-save">Enregistrer</button>
+        <button id="btn-approve">Valider</button>
+        <button id="btn-publish">Marquer comme publié</button>
+        <a href="/posts/${post.id}/export.zip">⬇ Télécharger</a>
+      </div>
+    </div>`;
+  detailEl.querySelector("h2").textContent = post.article_title || "Post";
+  detailEl.querySelector(".close-btn").onclick = () => { detailEl.hidden = true; detailEl.innerHTML = ""; };
+
+  detailEl.querySelector("#btn-save").onclick = async () => {
+    const slides = [...detailEl.querySelectorAll(".slide-edit")].map((el) => ({
+      headline: el.querySelector(".slide-headline").value,
+      image_url: el.querySelector(".slide-image").value || null,
+    }));
+    const caption = detailEl.querySelector("#edit-caption").value;
+    const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
+    try {
+      const updated = await enregistrerPost(post.id, { slides, caption, hashtags });
+      renderPostDetail(updated);
+    } catch (erreur) {
+      alert("Échec de l'enregistrement : " + erreur.message);
+    }
+  };
+  detailEl.querySelector("#btn-approve").onclick = async () => {
+    try {
+      const updated = await enregistrerPost(post.id, { status: "approved" });
+      renderPostDetail(updated);
+      if (!postsPanelEl.hidden) loadPostsPanel();
+    } catch (erreur) {
+      alert("Échec de la validation : " + erreur.message);
+    }
+  };
+  detailEl.querySelector("#btn-publish").onclick = async () => {
+    try {
+      const updated = await enregistrerPost(post.id, { status: "published" });
+      renderPostDetail(updated);
+      if (!postsPanelEl.hidden) loadPostsPanel();
+    } catch (erreur) {
+      alert("Échec de la publication : " + erreur.message);
+    }
+  };
+
+  detailEl.hidden = false;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 (async () => {
   const sources = await (await fetch("/sources")).json();
