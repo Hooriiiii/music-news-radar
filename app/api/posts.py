@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content.compose import create_post, make_claude_composer
+from app.content.compose import CompositionError, create_post, make_claude_composer
 from app.content.render import render_post
 from app.db import get_db
 from app.models import Article, ArticleStatus, Post, PostStatus
@@ -23,7 +23,11 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     composer = make_claude_composer()
-    draft = composer(article)
+    try:
+        draft = composer(article)
+    except CompositionError as exc:
+        # Erreur amont (Claude) : une reponse HTTP lisible, pas un 500 avec trace.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return create_post(db, article, draft)
 
 
@@ -60,8 +64,9 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
     if payload.hashtags is not None:
         post.hashtags = payload.hashtags
     if payload.slides is not None:
-        # Reassignation ENTIERE : une mutation in place ne serait pas persistee
-        post.slides = payload.slides
+        # Reassignation ENTIERE (liste de dicts simples, pas les modeles Pydantic) :
+        # une mutation in place ne serait pas persistee sur la colonne JSON
+        post.slides = [slide.model_dump() for slide in payload.slides]
     if payload.status is not None:
         post.status = payload.status
         if payload.status is PostStatus.PUBLISHED:

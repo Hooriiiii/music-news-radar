@@ -68,6 +68,27 @@ def test_creer_un_post_sur_un_article_inexistant(client):
     assert client.post("/articles/9999/posts").status_code == 404
 
 
+def test_creer_un_post_composition_echouee_rend_une_erreur_lisible(client, db_session, monkeypatch):
+    """Une composition qui echoue systematiquement doit rendre un 502 exploitable,
+    pas un 500 avec stacktrace brute."""
+    article = _article(db_session)
+
+    def faux_composeur():
+        def composer(_article):
+            from app.content.compose import CompositionError
+
+            raise CompositionError("composition impossible pour l'article")
+
+        return composer
+
+    monkeypatch.setattr("app.api.posts.make_claude_composer", faux_composeur)
+
+    response = client.post(f"/articles/{article.id}/posts")
+
+    assert response.status_code == 502
+    assert "detail" in response.json()
+
+
 def test_lister_les_posts_par_statut(client, db_session):
     article = _article(db_session)
     _post(db_session, article, status=PostStatus.DRAFT)
@@ -112,6 +133,39 @@ def test_publier_un_post_marque_l_article_comme_poste(client, db_session):
 
 def test_editer_un_post_inexistant(client):
     assert client.patch("/posts/9999", json={"caption": "x"}).status_code == 404
+
+
+def test_editer_une_slide_sans_headline_est_refuse(client, db_session):
+    """`render_post` fait `slide["headline"]` sans filet : une slide sans headline
+    ne doit jamais atteindre la base."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"image_url": "https://x/y.jpg"}]},
+    )
+
+    assert response.status_code == 422
+
+
+def test_editer_une_slide_au_balisage_invalide_est_refuse(client, db_session):
+    """Meme invariant qu'a la composition : un `**` orphelin ou une accroche sans
+    segment surligne ne doit pas pouvoir s'imprimer tel quel sur le PNG."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    sans_surlignage = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"headline": "Une accroche plate sans surlignage"}]},
+    )
+    assert sans_surlignage.status_code == 422
+
+    marqueurs_impairs = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"headline": "Une accroche **mal fermee"}]},
+    )
+    assert marqueurs_impairs.status_code == 422
 
 
 def test_slide_hors_bornes(client, db_session):

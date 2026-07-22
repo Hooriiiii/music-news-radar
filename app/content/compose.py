@@ -1,14 +1,21 @@
 """Article score -> post carrousel Instagram (slides + legende).
 
 Meme forme que `app/pipeline/scoring.py` : structured outputs via `messages.parse()`,
-schema Pydantic re-valide en sortie. Les bornes vivent dans le SCHEMA et pas dans le
-prompt : si le modele produit huit slides ou une accroche trop longue, la validation
-echoue et l'appel est retente.
+schema Pydantic re-valide en sortie. Les bornes numeriques (nombre de slides,
+longueur d'accroche) vivent dans le SCHEMA JSON et sont donc contraintes cote API ;
+la regle de balisage (`_balisage_valide`, au moins un segment surligne) n'est,
+elle, verifiee que par Pydantic APRES coup -- c'est precisement la contrainte que
+le modele peut rater. `client.messages.parse()` leve alors une `pydantic.
+ValidationError` que le SDK NE retente PAS (son `max_retries` ne couvre que les
+erreurs HTTP -- 429, 5xx -- pas les echecs de schema) : `make_claude_composer`
+retente donc lui-meme, jusqu'a `max_attempts` fois, et leve `CompositionError`
+si aucune tentative n'aboutit.
 """
 
 import logging
 
 import anthropic
+import pydantic
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -19,6 +26,17 @@ from app.models import Article, Post
 logger = logging.getLogger(__name__)
 
 HEADLINE_MAX = 110
+# Budget genereux : sur Sonnet 5, omettre `thinking` active un raisonnement adaptatif
+# par defaut, et max_tokens plafonne le TOTAL raisonnement + sortie -- un carrousel a
+# 6 slides + legende de 2000 caracteres + 12 hashtags peut depasser un budget serre,
+# ce qui tronque le JSON et retombe sur le defaut n°1 (validation ratee).
+COMPOSER_MAX_TOKENS = 8000
+# Bornee : au-dela, le probleme n'est pas la chance mais le prompt ou l'article.
+COMPOSER_MAX_ATTEMPTS = 3
+
+
+class CompositionError(RuntimeError):
+    """Levee quand aucune tentative de composition n'a produit un brouillon valide."""
 
 
 class Slide(BaseModel):
@@ -98,20 +116,44 @@ def build_user_prompt(article: Article) -> str:
     return "\n".join(parts)
 
 
-def make_claude_composer(client: anthropic.Anthropic | None = None):
-    """Compositeur par defaut : un appel API par post, sortie structuree validee."""
+def make_claude_composer(
+    client: anthropic.Anthropic | None = None,
+    max_attempts: int = COMPOSER_MAX_ATTEMPTS,
+):
+    """Compositeur par defaut : un appel API par post, sortie structuree validee.
+
+    Boucle bornee de tentatives : un echec de VALIDATION (pas un echec HTTP, deja
+    couvert par le `max_retries` du SDK) relance l'appel jusqu'a `max_attempts`
+    fois avant de lever `CompositionError`.
+    """
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     def composer(article: Article) -> PostDraft:
-        response = client.messages.parse(
-            model=settings.composer_model,
-            max_tokens=2000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(article)}],
-            output_format=PostDraft,
-        )
-        return response.parsed_output
+        derniere_erreur: Exception | None = None
+        for tentative in range(1, max_attempts + 1):
+            try:
+                response = client.messages.parse(
+                    model=settings.composer_model,
+                    max_tokens=COMPOSER_MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_user_prompt(article)}],
+                    output_format=PostDraft,
+                )
+                return response.parsed_output
+            except (pydantic.ValidationError, ValueError) as exc:
+                derniere_erreur = exc
+                logger.warning(
+                    "composition invalide pour l'article %s (tentative %s/%s) : %s",
+                    article.id,
+                    tentative,
+                    max_attempts,
+                    exc,
+                )
+        raise CompositionError(
+            f"composition impossible pour l'article {article.id} "
+            f"apres {max_attempts} tentatives"
+        ) from derniere_erreur
 
     return composer
 

@@ -1,7 +1,8 @@
 import datetime as dt
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.content.highlight import validate_headline
 from app.models import ArticleStatus, PostStatus, SourceType
 
 
@@ -85,6 +86,22 @@ class DigestOut(BaseModel):
     article_ids: list[int]
 
 
+class SlideIn(BaseModel):
+    """Une slide telle qu'exposee/acceptee par l'API. Meme regle qu'a la composition
+    (`app.content.compose.Slide`) : `render_post` fait `slide["headline"]` sans
+    filet, donc `headline` doit rester obligatoire et balise -- un `**` orphelin
+    saisi a la main dans le dashboard ne doit pas s'imprimer tel quel sur le PNG."""
+
+    headline: str
+    image_url: str | None = None
+
+    @field_validator("headline")
+    @classmethod
+    def _balisage_valide(cls, value: str) -> str:
+        validate_headline(value)
+        return value
+
+
 class PostOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -97,7 +114,7 @@ class PostOut(BaseModel):
     template: str
     caption: str
     hashtags: list[str] | None
-    slides: list[dict]
+    slides: list[SlideIn]
     created_at: dt.datetime
     published_at: dt.datetime | None
 
@@ -105,5 +122,5 @@ class PostOut(BaseModel):
 class PostUpdate(BaseModel):
     caption: str | None = None
     hashtags: list[str] | None = None
-    slides: list[dict] | None = None
+    slides: list[SlideIn] | None = None
     status: PostStatus | None = None
