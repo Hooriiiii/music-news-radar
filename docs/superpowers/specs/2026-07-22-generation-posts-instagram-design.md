@@ -115,15 +115,9 @@ via `messages.parse()`, modèle configurable dans `.env`.
 Schéma de sortie (Pydantic), qui est le contrat central :
 
 ```python
-class SlideKind(str, Enum):
-    COVER = "cover"
-    CONTENT = "content"
-    CTA = "cta"
-
 class Slide(BaseModel):
-    kind: SlideKind
-    headline: str = Field(max_length=60)
-    body: str | None = Field(default=None, max_length=180)
+    # Accroche, avec balisage **...** pour les segments surlignés en rose
+    headline: str = Field(max_length=110)
     image_url: str | None = None
 
 class PostDraft(BaseModel):
@@ -132,13 +126,27 @@ class PostDraft(BaseModel):
     hashtags: list[str] = Field(max_length=15)
 ```
 
-Deux invariants sont validés en plus des bornes de champs : la première slide est
-de type `cover`, la dernière de type `cta`. Un validateur de modèle les impose.
+Le schéma est volontairement plat : le template ne comporte **qu'une seule zone de
+texte par slide**, donc pas de corps de texte, et toutes les slides partagent le
+même gabarit, donc pas de type de slide. Ajouter ces champs reviendrait à modéliser
+une mise en page qui n'existe pas.
+
+Le **balisage `**...**`** dans `headline` est le seul élément de structure. Il
+transcrit la signature visuelle de Kinda : certains segments de l'accroche sont
+surlignés en rose. Un validateur vérifie que les marqueurs sont appariés et qu'au
+moins un segment est surligné (sinon la slide perd son identité). Le prompt
+explique quoi mettre en avant : le nom d'artiste, le lieu, la date — l'information
+qui accroche.
 
 Les bornes vivent dans le schéma, pas dans le prompt. Si le modèle produit huit
-slides ou une accroche de 120 caractères, la validation échoue et l'appel est
-retenté — c'est ce qui empêche la dérive sur les brèves, où un modèle non contraint
-invente du contenu pour remplir des slides.
+slides ou une accroche trop longue, la validation échoue et l'appel est retenté —
+c'est ce qui empêche la dérive sur les brèves, où un modèle non contraint invente
+du contenu pour remplir des slides.
+
+La borne de 110 caractères est calibrée sur l'accroche de référence du template
+(« Nico Moreno, Mosimann, Cassius, le collectif PACT… et c'est ce week-end aux
+Vieilles Charrues », 93 caractères sur trois lignes). Elle est approximative par
+nature : la vraie contrainte est le débordement visuel, traité côté rendu.
 
 Le prompt porte la ligne éditoriale de Kinda (FR national, cœur électro et
 festivals, ton du compte), écrite au même endroit et sous la même forme que le
@@ -150,12 +158,35 @@ du template (voir « Questions ouvertes »).
 
 ## Le rendu
 
+### Le template, tel qu'il est
+
+Fichier `kAqCOUyZgvR025RuICJuPW` (« Kinda design »), frame `234:8` nommée
+`TEMPLATE`. Format **1080×1440** (3:4), pas 1080×1350.
+
+De l'arrière vers l'avant : une photo en plein cadre, un dégradé sombre couvrant le
+bas pour la lisibilité, le logo `KINDA news` en haut à droite, et l'accroche en bas.
+Le calque `Guideline` (masqué) fixe les marges : 77 px sur les côtés, 85 px en haut
+et en bas.
+
+Le fichier contient aussi un template Reels, qui sera l'entrée de la brique vidéo —
+hors périmètre ici.
+
+**Le surlignage rose.** Dans Figma, ce sont des rectangles positionnés à la main
+derrière des segments de texte. En HTML c'est un `<span>` avec fond, `padding` et
+`box-decoration-break: clone` pour que le fond suive correctement le retour à la
+ligne. Le rendu HTML est ici **plus robuste que l'original** : le surlignage suit le
+texte quand celui-ci se réajuste, alors que dans Figma tout changement de longueur
+d'accroche oblige à repositionner les rectangles.
+
+Aucune variable Figma n'est définie dans le fichier : les couleurs, la typo et le
+dégradé sont en dur et seront relevés à l'extraction.
+
 ### Extraction du template Figma
 
 Geste ponctuel, effectué une fois par template puis à chaque refonte du design :
 
 1. lire le fichier Figma via les outils Figma disponibles ;
-2. en tirer un `style.css` partagé et un gabarit Jinja par type de slide ;
+2. en tirer un `style.css` et le gabarit Jinja unique de la slide ;
 3. **boucler sur un diff visuel** : exporter la frame de référence en PNG depuis
    Figma, rendre la même avec des textes identiques, comparer, corriger jusqu'à
    convergence.
@@ -170,9 +201,7 @@ app/content/
   compose.py
   render.py
   templates/<nom>/
-    cover.html.j2
-    content.html.j2
-    cta.html.j2
+    slide.html.j2
     style.css
   assets/
     fonts/*.woff2
@@ -183,9 +212,16 @@ app/content/
 
 Playwright en API synchrone (cohérent avec le reste du projet, qui n'est pas
 async), un Chromium lancé une fois pour toutes les slides d'un post, viewport
-1080×1350, une capture par slide.
+1080×1440, une capture par slide. Un seul gabarit sert toutes les slides.
 
-Deux pièges traités par construction :
+Trois pièges traités par construction :
+
+**Le débordement du texte.** L'accroche est de longueur variable et la borne de
+caractères ne la garantit qu'approximativement — une accroche courte avec des mots
+longs peut déborder. Après le rendu, on mesure la hauteur réelle du bloc de texte
+via `page.evaluate()` ; si elle dépasse la zone allouée, on réduit la taille de
+police d'un cran et on refait la capture, dans une boucle bornée à trois essais.
+C'est peu de code et cela supprime la classe entière des posts illisibles.
 
 **Les fontes** sont embarquées en `.woff2` dans `assets/fonts/` et déclarées en
 `@font-face`. Se reposer sur les fontes système fait diverger le rendu
@@ -228,10 +264,13 @@ l'utilisateur suffit et évite d'introduire un stockage de fichiers.
 Sur SQLite in-memory, fixtures de `tests/conftest.py`, comme le reste du projet.
 
 - **Composition** (Claude mocké) : les bornes 2-6 slides sont imposées ; une
-  première slide qui n'est pas `cover` est rejetée ; une accroche trop longue est
-  rejetée ; le post créé dénormalise bien titre, url et source.
+  accroche trop longue est rejetée ; des marqueurs `**` non appariés sont rejetés ;
+  une accroche sans aucun segment surligné est rejetée ; le post créé dénormalise
+  bien titre, url et source.
 - **Rendu** (`skipif` si Chromium absent, pour ne pas casser la CI) : un post
-  fixture produit N images non vides aux dimensions 1080×1350.
+  fixture produit N images non vides aux dimensions 1080×1440 ; une accroche à la
+  longueur maximale autorisée ne déborde pas de sa zone (test de la boucle de
+  réduction de police).
 - **API** : création, listing filtré par statut, édition, passage en `published` qui
   bascule l'article en `USED`.
 - **Rétention** : purger un article laisse son post intact avec `article_id` à
@@ -246,10 +285,11 @@ Sur SQLite in-memory, fixtures de `tests/conftest.py`, comme le reste du projet.
 
 ## Questions ouvertes
 
-1. **Forme exacte de `Slide`** — le nombre de zones de texte par slide dépend du
-   template Figma, qui n'a pas encore été inspecté. Le schéma ci-dessus
-   (`headline` + `body` optionnel + image optionnelle) est un provisoire
-   raisonnable. L'ajustement est un changement de schéma, pas d'architecture.
-2. **Licence de la fonte** — l'embarquement en `.woff2` dans le repo suppose que la
+1. **Licence de la fonte** — l'embarquement en `.woff2` dans le repo suppose que la
    licence de la fonte du template l'autorise. À vérifier s'il s'agit d'une fonte
-   commerciale.
+   commerciale. Sans quoi il faudra soit une fonte libre approchante, soit un
+   rendu du texte en image depuis un poste disposant de la licence.
+2. **Droits des photos** — la reprise automatique de l'image d'un article place le
+   post en zone grise. Le crédit de la source dans la légende est un garde-fou
+   d'usage, pas une autorisation ; le remplacement manuel de l'image existe pour
+   les cas où la photo d'origine ne peut pas être reprise.
