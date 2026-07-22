@@ -3,7 +3,7 @@ import datetime as dt
 from sqlalchemy import delete, or_
 from sqlalchemy.orm import Session
 
-from app.models import Article
+from app.models import Article, ArticleStatus
 
 
 def purge_old_articles(db: Session, retention_days: int) -> int:
@@ -12,14 +12,20 @@ def purge_old_articles(db: Session, retention_days: int) -> int:
     Les articles sans date de publication n'ont pas de date de post exploitable :
     pour eux seulement, on retombe sur la date d'ajout comme filet, sinon ils
     s'accumuleraient indéfiniment.
+
+    Exception : les articles marqués USED (= postés sur le compte) sont conservés
+    indéfiniment. C'est l'archive éditoriale -- elle sert à ne pas reposter deux
+    fois la même actu et à mesurer ce qui a été publié. Le statut REVIEWED n'est
+    que du tri, il ne protège pas de la purge.
     """
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
     result = db.execute(
         delete(Article).where(
+            Article.status != ArticleStatus.USED,
             or_(
                 Article.published_at < cutoff,
                 (Article.published_at.is_(None)) & (Article.fetched_at < cutoff),
-            )
+            ),
         )
     )
     db.commit()

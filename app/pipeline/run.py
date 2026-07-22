@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.delivery.discord import send_hot_alerts
+from app.pipeline.cluster import link_duplicates
 from app.pipeline.ingest import IngestStats, run_ingest
 from app.pipeline.retention import purge_old_articles
 from app.pipeline.scoring import ScoringStats, score_pending
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PipelineReport:
     ingest: list[IngestStats] = field(default_factory=list)
+    duplicates_linked: int = 0
     scoring: ScoringStats | None = None
     scoring_skipped_reason: str | None = None
     alerts_sent: int = 0
@@ -26,11 +28,15 @@ class PipelineReport:
 def run_pipeline(
     db: Session,
     ingest=run_ingest,
+    cluster=link_duplicates,
     score=score_pending,
     alert=send_hot_alerts,
     purge=purge_old_articles,
 ) -> PipelineReport:
-    """Le run fréquent : ingestion -> scoring des nouveaux -> alertes hot -> purge.
+    """Le run fréquent : ingestion -> dédup entre sources -> scoring -> alertes -> purge.
+
+    Le regroupement des doublons passe AVANT le scoring : un doublon repéré à ce
+    moment-là n'est jamais scoré, donc jamais payé.
 
     Chaque étape est optionnelle selon la config (pas de clé API = pas de
     scoring, pas de webhook = pas d'alertes) pour que le pipeline reste
@@ -38,6 +44,7 @@ def run_pipeline(
     """
     report = PipelineReport()
     report.ingest = ingest(db)
+    report.duplicates_linked = cluster(db)
 
     if settings.anthropic_api_key:
         report.scoring = score(db)

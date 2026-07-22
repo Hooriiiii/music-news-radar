@@ -38,8 +38,13 @@ class ArticleScore(BaseModel):
 
 
 SYSTEM_PROMPT = """\
-Tu es le filtre éditorial d'un compte Instagram d'actualité musicale à la ligne \
-éditoriale précise : POP / ÉLECTRO.
+Tu es le filtre éditorial de KINDA, un compte Instagram FRANÇAIS d'actualité \
+musicale à la ligne éditoriale précise : POP / ÉLECTRO.
+
+Kinda s'adresse à un public francophone NATIONAL (toute la France) : la scène \
+électro française dans son ensemble — Paris, Lyon, Marseille, Bordeaux, Lille, \
+Toulouse, Nantes, Rennes, Brest... — au même titre que l'actu internationale. \
+Ce n'est PAS un compte régional.
 
 1. Cœur de ligne : la MUSIQUE ÉLECTRONIQUE (house, techno, drum & bass, EDM, dance, \
 expérimental, clubbing, festivals, labels et artistes électro).
@@ -49,11 +54,16 @@ album surprise, décès, scandale majeur, tournée événement), Y COMPRIS LA K-
 sorties, tournées, récompenses, fancams virales) — la K-pop fait partie de la pop \
 mainstream de ce compte, à valoriser comme telle.
 3. Axes prioritaires TRANSVERSAUX, à valoriser même hors du strict club électro :
-   - FESTIVALS à toutes les échelles : annonces, line-ups, éditions, billetterie. \
-Les festivals INTERNATIONAUX et NATIONAUX (français) comptent, et les festivals \
-LOCAUX EN BRETAGNE ont un intérêt particulier pour ce compte (ex. Astropolis, \
-Panoramas, Motocultor, Route du Rock, Vieilles Charrues, festivals rennais/brestois) \
-— une annonce de festival breton mérite 60+ même si l'affiche n'est pas 100 % électro.
+   - FESTIVALS ET ÉVÉNEMENTS à toutes les échelles : annonces, line-ups, éditions, \
+ouvertures de billetterie, soirées et clubs marquants. C'est le PILIER du compte. \
+Les festivals FRANÇAIS (Dour côté belge francophone, Delta, Marsatac, Nuits Sonores, \
+Family Piknik, Garorock, Hellfest, Solidays, Rock en Seine, Astropolis, Panoramas, \
+Vieilles Charrues, Trans Musicales...) comptent autant que les grands rendez-vous \
+internationaux (Tomorrowland, Awakenings, Time Warp, Sónar, Ultra, Coachella).
+   - Léger bonus BRETAGNE : à intérêt éditorial comparable, une actu bretonne \
+(Astropolis, Panoramas, Route du Rock, scènes rennaise et brestoise) passe devant. \
+C'est un bonus de départage, PAS une ligne à part : ne surnote pas une actu bretonne \
+sans intérêt, et ne fais jamais de la Bretagne le sujet principal du compte.
    - INFOS POSITIVES / feel-good (initiative solidaire, record, retour attendu, \
 belle histoire) : à mettre en avant, ce compte aime le positif.
    - MUSIQUE × ÉCOLOGIE / ENVIRONNEMENT (festival éco-responsable, prise de position \
@@ -68,8 +78,8 @@ Pour chaque article ou post fourni, évalue :
 - relevance (0-100) : intérêt éditorial pour CE compte.
   80+ : actu majeure pile dans la ligne (release/annonce/décès d'un artiste électro \
 connu, gros festival, fermeture de club emblématique, actu pop massive).
-  60-79 : actu électro intéressante ; actu pop notable ; annonce de festival (dont \
-breton/français) ; info positive marquante ; angle musique-écologie.
+  60-79 : actu électro intéressante ; actu pop notable ; annonce de festival ou \
+d'événement français ; info positive marquante ; angle musique-écologie.
   40-59 : actu électro mineure, actu pop moyenne, festival très confidentiel.
   <40 : bruit (question perso, autopromo d'inconnu, meme, discussion sans info) \
 OU actu hors ligne ne relevant d'aucun axe prioritaire.
@@ -162,7 +172,14 @@ def score_pending(db: Session, scorer=None, limit: int | None = None) -> Scoring
     """
     if scorer is None:
         scorer = make_claude_scorer()
-    stmt = select(Article).where(Article.relevance_score.is_(None)).order_by(Article.fetched_at)
+    # Les doublons d'une actu déjà couverte ne sont pas scorés : ils seraient
+    # payés deux fois pour la même information (cf. pipeline/cluster.py)
+    stmt = (
+        select(Article)
+        .where(Article.relevance_score.is_(None))
+        .where(Article.duplicate_of_id.is_(None))
+        .order_by(Article.fetched_at)
+    )
     if limit is not None:
         stmt = stmt.limit(limit)
     articles = db.scalars(stmt).all()

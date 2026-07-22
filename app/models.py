@@ -92,6 +92,12 @@ class Article(Base):
     alerted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     # Artistes mentionnés, extraits par le scoring -- alimentent le radar maison
     mentioned_artists: Mapped[list | None] = mapped_column(JSONVariant)
+    # Même actu déjà couverte par une autre source : pointe vers le représentant
+    # (l'article vu le plus tôt). Null = c'est lui, le représentant. Jamais de
+    # chaîne : un doublon pointe toujours vers un article dont ce champ est null.
+    duplicate_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), index=True
+    )
 
     source: Mapped[Source] = relationship(back_populates="articles")
 

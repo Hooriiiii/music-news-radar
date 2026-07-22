@@ -4,6 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
+Le média s'appelle **KINDA**. Positionnement arrêté avec l'utilisateur (2026-07-22) :
+compte Instagram **français NATIONAL** (toute la scène FR : Paris, Lyon, Marseille,
+Bordeaux, Lille, Toulouse, Nantes, Rennes, Brest), cœur électro + festivals, avec la
+**Bretagne en bonus de départage** — un angle récurrent, jamais le sujet principal.
+Ne pas dériver vers un compte régional.
+
+Concurrents directs identifiés (médias électro FR natifs-Instagram, centrés
+événements) : Electro News (~166K abonnés IG, existe depuis 2009, organise ses
+soirées, label EN records), Guettapen (~117K, app mobile, affiliation billetterie
+Shotgun + codes promo festivals, plusieurs articles/jour), Hands Up Électro (~12K,
+interviews + guestmix). Ce ne sont NI la presse magazine (Tsugi, 49K) NI les
+agrégateurs US (Pop Crave). Monétisation prouvée du segment : affiliation
+billetterie, codes promo, giveaways marques, puis événements/label en propre — pas
+la pub display ni les bonus Instagram (largement arrêtés). Leurs flux RSS sont
+ingérés comme sources de veille (ils sortent les annonces FR en premier) ; Kinda ne
+les reposte pas, il remonte à la source.
+
 Ligne éditoriale (prompt scoring `app/pipeline/scoring.py`) : cœur électro + grosses
 actus pop, PLUS quatre axes transversaux valorisés — festivals à toutes les échelles
 (local Bretagne, national FR, international), infos positives/feel-good, musique ×
@@ -29,6 +46,8 @@ hotness >= 80 pour l'alerte Discord.
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
 - Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
+- Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
+  (sans `--apply` : affiche le plan ; idempotent par URL)
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
 - Scorer les articles : `uv run python -m scripts.score_articles [--limit N]`
   (nécessite `ANTHROPIC_API_KEY` dans `.env` ; modèle : `SCORING_MODEL`,
@@ -90,7 +109,28 @@ déjà, avec latence et doublons. La stratégie : taper AU NIVEAU DE LA SOURCE �
 Corollaire coût : Billboard RSS (gratuit) rend les comptes X @billboard/@billboardcharts/
 @chartdata redondants -> candidats à couper.
 
+## Dédup à deux étages
+
+1. **Par hash** (`pipeline/dedup.py`) : même url normalisée + même titre → le même
+   lien vu deux fois n'entre qu'une fois. Attrape les re-fetchs, pas les reprises.
+2. **Par titre, ENTRE sources** (`pipeline/cluster.py`) : la même actu couverte par
+   Mixmag, DJ Mag et Tsugi produisait trois articles. On rapproche les titres
+   normalisés (accents, ponctuation, traits d'union recollés, mots vides FR+EN) par
+   **coefficient de recouvrement** des mots significatifs — pas Jaccard, qui
+   punirait le titre traduit ou suffixé du nom du média. Seuil 0.65, fenêtre 48 h,
+   minimum 2 mots partagés. Le représentant est l'article vu le plus tôt ; les liens
+   ne forment jamais de chaîne (un saut suffit toujours). Idempotent.
+
+   Conséquences câblées : `link_duplicates` tourne AVANT le scoring dans
+   `run_pipeline` (un doublon n'est jamais scoré, donc jamais payé), et l'API
+   `/articles` masque les doublons par défaut (`include_duplicates=true` pour les
+   voir).
+
 ## Rétention
+
+**Exception `USED`** : un article marqué posté n'est JAMAIS purgé — c'est l'archive
+éditoriale (savoir ce qui a été publié, ne pas le reposter). `REVIEWED` n'est que du
+tri et ne protège pas.
 
 On ne garde en base que les articles publiés dans les `retention_days` (14) derniers
 jours, par DATE DE POST (`published_at`), pas date d'ajout — `app/pipeline/retention.py`.

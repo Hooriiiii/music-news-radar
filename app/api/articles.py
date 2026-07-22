@@ -22,6 +22,9 @@ def list_articles(
     category: str | None = None,
     has_media: bool | None = None,
     since: dt.datetime | None = None,
+    # Par défaut on ne montre que le représentant de chaque actu : les reprises
+    # de la même info par d'autres sources sont masquées (cf. pipeline/cluster.py)
+    include_duplicates: bool = False,
     sort: Literal["date", "relevance"] = "date",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -44,6 +47,8 @@ def list_articles(
         )
     if since is not None:
         stmt = stmt.where(Article.published_at >= since)
+    if not include_duplicates:
+        stmt = stmt.where(Article.duplicate_of_id.is_(None))
     if sort == "relevance":
         stmt = stmt.order_by(
             Article.relevance_score.desc().nulls_last(),
