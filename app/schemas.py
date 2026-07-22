@@ -2,7 +2,7 @@ import datetime as dt
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models import ArticleStatus, SourceType
+from app.models import ArticleStatus, PostStatus, SourceType
 
 
 class SourceOut(BaseModel):
@@ -83,3 +83,27 @@ class DigestOut(BaseModel):
     date: dt.date
     sent_at: dt.datetime | None
     article_ids: list[int]
+
+
+class PostOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    article_id: int | None
+    article_title: str
+    article_url: str
+    source_name: str | None
+    status: PostStatus
+    template: str
+    caption: str
+    hashtags: list[str] | None
+    slides: list[dict]
+    created_at: dt.datetime
+    published_at: dt.datetime | None
+
+
+class PostUpdate(BaseModel):
+    caption: str | None = None
+    hashtags: list[str] | None = None
+    slides: list[dict] | None = None
+    status: PostStatus | None = None
