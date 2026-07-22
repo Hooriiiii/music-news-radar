@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
     scoring_model: str = "claude-haiku-4-5"
+    # Composition des posts : contrairement au scoring (volume eleve, Haiku pour
+    # le cout), la composition tourne quelques fois par jour a la demande et sa
+    # qualite se voit directement sur le feed -- on paie un modele plus fort.
+    composer_model: str = "claude-sonnet-5"
     # Seuils du design doc
     digest_relevance_threshold: int = 60
     alert_hotness_threshold: int = 80
