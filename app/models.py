@@ -37,6 +37,12 @@ class ArticleStatus(str, enum.Enum):
     USED = "used"
 
 
+class PostStatus(str, enum.Enum):
+    DRAFT = "draft"
+    APPROVED = "approved"
+    PUBLISHED = "published"
+
+
 def _values(enum_cls):
     return [m.value for m in enum_cls]
 
@@ -159,3 +165,46 @@ class Digest(Base):
     date: Mapped[dt.date] = mapped_column(Date, unique=True)
     sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     article_ids: Mapped[list] = mapped_column(JSONVariant, default=list)
+
+
+class Post(Base):
+    """Un post Instagram genere a partir d'un article.
+
+    Table separee et non colonnes sur `articles` pour deux raisons : un article
+    peut donner plusieurs tentatives de post, et surtout les articles sont purges
+    a 14 jours alors qu'un post publie est une archive permanente. Meme motif que
+    `artist_mentions` : FK en SET NULL et champs DENORMALISES, pour que le post
+    reste lisible apres la purge de son article.
+    """
+
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), index=True
+    )
+    # Denormalise : survit a la purge de l'article
+    article_title: Mapped[str] = mapped_column(Text)
+    article_url: Mapped[str] = mapped_column(String(2000))
+    source_name: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[PostStatus] = mapped_column(
+        Enum(
+            PostStatus, name="post_status", native_enum=False, length=20,
+            values_callable=_values,
+        ),
+        default=PostStatus.DRAFT,
+        server_default="draft",
+        index=True,
+    )
+    template: Mapped[str] = mapped_column(
+        String(100), default="kinda_post", server_default="kinda_post"
+    )
+    caption: Mapped[str] = mapped_column(Text)
+    hashtags: Mapped[list | None] = mapped_column(JSONVariant)
+    # Liste ordonnee : [{"headline": "... **surligne** ...", "image_url": "..."}]
+    # Reassigner la liste ENTIERE, jamais de mutation in place
+    slides: Mapped[list] = mapped_column(JSONVariant, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
