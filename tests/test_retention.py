@@ -81,3 +81,46 @@ def test_purge_returns_zero_when_all_recent(db_session):
     _art(db_session, src, n=1, published_days_ago=1)
     assert purge_old_articles(db_session, retention_days=14) == 0
     assert _remaining(db_session) == 1
+
+
+def test_les_posts_survivent_a_la_purge_des_articles(db_session):
+    """Le point de tout l'exercice : l'article est ephemere, le post publie est
+    l'archive editoriale. Les champs denormalises le rendent lisible sans lui.
+
+    Note SQLite : les cles etrangeres ne sont pas appliquees par defaut, donc on
+    verifie la SURVIE de la ligne et l'integrite des champs denormalises, pas la
+    mise a NULL de `article_id` (garantie par le ON DELETE SET NULL en Postgres).
+    """
+    from app.models import Post
+
+    src = Source(name="Tsugi", type=SourceType.RSS, url="https://tsugi.fr/feed")
+    db_session.add(src)
+    db_session.commit()
+    vieux = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=60)
+    article = Article(
+        source_id=src.id,
+        url="https://tsugi.fr/vieux",
+        title="Une vieille actu",
+        raw_hash="vieux",
+        published_at=vieux,
+    )
+    db_session.add(article)
+    db_session.commit()
+
+    post = Post(
+        article_id=article.id,
+        article_title=article.title,
+        article_url=article.url,
+        source_name=src.name,
+        caption="Legende archivee",
+        slides=[{"headline": "**Une** archive", "image_url": None}],
+    )
+    db_session.add(post)
+    db_session.commit()
+
+    purge_old_articles(db_session, retention_days=14)
+
+    assert db_session.query(Article).count() == 0
+    survivant = db_session.query(Post).one()
+    assert survivant.article_title == "Une vieille actu"
+    assert survivant.caption == "Legende archivee"

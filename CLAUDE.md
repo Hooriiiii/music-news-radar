@@ -72,6 +72,9 @@ hotness >= 80 pour l'alerte Discord.
 - Digest mail : `uv run python -m scripts.send_digest [--dry-run] [--date YYYY-MM-DD]`
   (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
 - Alertes Discord : `uv run python -m scripts.send_hot_alerts`
+- Rendu des posts : nécessite Chromium Playwright en local
+  (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
+  la génération est déclenchée à la main depuis le dashboard.
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 2 h,
   CI à chaque push). Secrets requis côté repo : DATABASE_URL (Neon),
@@ -155,6 +158,32 @@ Positionnement vs le marché : inutile de concurrencer Chartmetric/Viberate/Soun
 sur les signaux plateformes (vélocité TikTok, ajouts playlist). Le signal propre de
 Kinda est AMONT : de qui la presse électro FR, Reddit et l'UGC parlent avant que les
 chiffres de streaming ne bougent.
+
+## Génération de posts (`app/content/`)
+
+Le compte d'actu ne s'arrête plus au flux scoré : un article peut devenir un
+**carrousel Instagram** prêt à publier. Trois unités indépendantes —
+`compose.py` (article → slides + légende, via Claude), `render.py` (slides → PNG
+1080×1440, via Chromium headless), `api/posts.py` (file éditoriale).
+
+**Figma n'est jamais appelé à l'exécution.** Son API REST est en lecture seule sur
+le contenu d'un fichier ; l'écriture passe par l'API Plugin, qui n'existe que dans
+l'éditeur ouvert. Le template est donc extrait UNE FOIS en HTML/CSS dans
+`app/content/templates/kinda_post/` — voir le `REFERENCE.md` de ce dossier pour la
+procédure de ré-extraction après une refonte du design.
+
+Le **surlignage rose** est porté par le texte lui-même : `**segment**` dans une
+accroche devient un `<mark>` que le CSS reflow tout seul. Dans Figma ce sont des
+rectangles à repositionner à la main — le rendu HTML est ici plus robuste que
+l'original.
+
+Les posts ne sont **jamais purgés** (archive éditoriale, même motif que
+`artist_mentions`) et publier un post bascule son article en `USED`, ce qui le
+protège aussi.
+
+Le modèle de composition est `composer_model` (défaut `claude-sonnet-5`), plus fort
+que celui du scoring : la composition tourne quelques fois par jour et sa qualité
+se voit directement sur le feed.
 
 ## Dédup à deux étages
 

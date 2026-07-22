@@ -38,6 +38,32 @@ page), tu vois tout ce que le cloud a récolté, y compris pendant que ton Mac d
 
 ---
 
+## Générer un post Instagram depuis un article
+
+Le dashboard ne sert plus qu'à consulter le flux : il permet aussi de préparer un
+**carrousel Instagram** à partir de n'importe quel article scoré.
+
+1. Ouvre le dashboard et clique **« Générer le post »** sur l'article choisi.
+2. Claude propose des accroches et une légende ; relis-les et corrige-les si besoin.
+   Le surlignage rose se pilote directement dans le texte : entoure un passage de
+   `**deux astérisques**` pour le mettre en évidence sur le rendu final.
+3. Remplace l'image d'une slide si besoin (par URL — pas d'upload de fichier).
+4. Valide le post, puis télécharge le zip des visuels générés (PNG 1080×1440, un
+   par slide).
+5. Publie le zip à la main sur Instagram (aucune publication automatique n'est
+   prévue pour l'instant).
+
+Prérequis local pour le rendu (une seule fois) :
+
+```bash
+uv run playwright install chromium
+```
+
+Le pipeline cron (GitHub Actions) ne génère **aucun** post tout seul : la
+génération est toujours déclenchée à la main, depuis le dashboard.
+
+---
+
 ## Prérequis
 
 - [uv](https://docs.astral.sh/uv/) (gestionnaire de paquets Python)
