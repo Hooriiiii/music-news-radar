@@ -73,8 +73,36 @@ def _logo_data_uri() -> str:
     return _data_uri((ASSETS_DIR / "logo.png").read_bytes(), "image/png")
 
 
+def build_document(
+    headline: str, image_data_uri: str, scale: float = 1.0, template: str = "kinda_post"
+) -> str:
+    """Assemble le HTML autonome d'une slide (feuille et images inlinees).
+
+    Sortie par une fonction a part pour etre verifiable sans Chromium : c'est
+    ici que se joue l'echappement de la feuille de style, dont un ratage ne se
+    voit sur le PNG que si on connait deja la bonne police.
+    """
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    # Markup et non str : l'autoescape du gabarit transformerait les guillemets
+    # de la feuille en `&#34;`, ce qui casse SILENCIEUSEMENT `font-family:
+    # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
+    # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
+    # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
+    css = Markup((TEMPLATES_DIR / template / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{template}/slide.html.j2").render(
+        css=css,
+        logo_data_uri=_logo_data_uri(),
+        image_data_uri=image_data_uri,
+        headline_html=Markup(to_html(headline)),
+        headline_scale=scale,
+    )
+
+
 def _render_one(
-    page, template, css, logo_uri, image_uri, headline: str, scale_log: list[float] | None = None
+    page, template: str, image_uri: str, headline: str, scale_log: list[float] | None = None
 ) -> bytes:
     """Rend une slide, en reduisant la police tant que l'accroche deborde.
 
@@ -84,14 +112,7 @@ def _render_one(
     sur l'echelle appliquee a l'accroche.
     """
     for scale in SCALE_STEPS:
-        document = template.render(
-            css=css,
-            logo_data_uri=logo_uri,
-            image_data_uri=image_uri,
-            headline_html=Markup(to_html(headline)),
-            headline_scale=scale,
-        )
-        page.set_content(document, wait_until="load")
+        page.set_content(build_document(headline, image_uri, scale, template), wait_until="load")
         page.evaluate("document.fonts.ready")
         height = page.evaluate(
             "document.getElementById('headline').getBoundingClientRect().height"
@@ -109,14 +130,6 @@ def render_post(
     slides: list[dict], template: str = "kinda_post", scale_log: list[float] | None = None
 ) -> list[bytes]:
     """Rend chaque slide en PNG 1080x1440. Un seul Chromium pour tout le post."""
-    env = Environment(
-        loader=FileSystemLoader(TEMPLATES_DIR),
-        autoescape=select_autoescape(["html", "j2"]),
-    )
-    jinja_template = env.get_template(f"{template}/slide.html.j2")
-    css = (TEMPLATES_DIR / template / "style.css").read_text(encoding="utf-8")
-    logo_uri = _logo_data_uri()
-
     rendus: list[bytes] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -128,15 +141,7 @@ def render_post(
             for slide in slides:
                 image_uri = fetch_image_data_uri(slide.get("image_url"))
                 rendus.append(
-                    _render_one(
-                        page,
-                        jinja_template,
-                        css,
-                        logo_uri,
-                        image_uri,
-                        slide["headline"],
-                        scale_log,
-                    )
+                    _render_one(page, template, image_uri, slide["headline"], scale_log)
                 )
         finally:
             browser.close()

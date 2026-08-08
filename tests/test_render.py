@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 import app.content.render as render_module
-from app.content.render import SLIDE_HEIGHT, SLIDE_WIDTH, fetch_image_data_uri, render_post
+from app.content.render import (
+    SLIDE_HEIGHT,
+    SLIDE_WIDTH,
+    build_document,
+    fetch_image_data_uri,
+    render_post,
+)
 
 
 def _chromium_playwright_present() -> bool:
@@ -38,6 +44,61 @@ def test_fetch_image_data_uri_retombe_sur_le_fallback_si_url_cassee():
     """Une photo introuvable ne doit jamais faire echouer un post."""
     uri = fetch_image_data_uri("https://exemple.invalid/introuvable.jpg")
     assert uri.startswith("data:image/")
+
+
+def test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit():
+    """L'autoescape de Jinja s'applique aussi a `{{ css }}` dans <style>.
+
+    Il transforme les guillemets en `&#34;`, ce qui rend `font-family:
+    "KindaDisplay"` et `format("woff2")` invalides : l'@font-face n'est pas
+    enregistre, Chromium rend l'accroche dans son serif par defaut et coupe les
+    lignes ailleurs que le gabarit Figma. Aucune erreur, aucun test de taille de
+    PNG ne bronche -- d'ou cette verification sur le document lui-meme.
+    """
+    document = build_document("Une **accroche**", "data:image/jpeg;base64,AAA")
+
+    assert 'font-family: "KindaDisplay"' in document
+    assert 'format("woff2")' in document
+    assert "&#34;" not in document
+
+
+@chromium_absent
+def test_la_police_du_gabarit_est_bien_celle_qui_rend_laccroche():
+    """Preuve de bout en bout : la police embarquee est chargee ET utilisee.
+
+    Le test precedent lit le HTML ; celui-ci verifie ce que Chromium en fait --
+    face enregistree, chargee, et employee pour l'accroche. Un repli silencieux
+    sur le serif par defaut donnerait une face absente et une largeur de texte
+    differente.
+    """
+    from playwright.sync_api import sync_playwright
+
+    document = build_document("Vieilles Charrues", fetch_image_data_uri(None))
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": SLIDE_WIDTH, "height": SLIDE_HEIGHT})
+            page.set_content(document, wait_until="load")
+            page.evaluate("document.fonts.ready")
+            faces = page.evaluate("[...document.fonts].map(f => [f.family, f.status])")
+            largeur_kinda = page.evaluate(
+                "(() => {"
+                "  const r = document.createRange();"
+                "  r.selectNodeContents(document.getElementById('headline'));"
+                "  return r.getBoundingClientRect().width; })()"
+            )
+            largeur_repli = page.evaluate(
+                "(() => {"
+                "  document.getElementById('headline').style.fontFamily = 'serif';"
+                "  const r = document.createRange();"
+                "  r.selectNodeContents(document.getElementById('headline'));"
+                "  return r.getBoundingClientRect().width; })()"
+            )
+        finally:
+            browser.close()
+
+    assert faces == [["KindaDisplay", "loaded"]]
+    assert largeur_kinda != pytest.approx(largeur_repli, abs=1.0)
 
 
 @chromium_absent
