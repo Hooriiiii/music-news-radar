@@ -2247,3 +2247,67 @@ Aucun test n'est marqué `xfail` ni laissé rouge entre deux tâches : la tâche
 **Type consistency:** `Mesure(line_widths, height)` / `.lines` ; `Resultat(scale, lines, overflow)` ; `RenduSlide(png, scale, lines, overflow)` ; `render_post -> list[RenduSlide]` ; `build_document(gabarit, textes, image_data_uri, scale, scrim_height)`. Le champ `lines` est un `dict[str, int]` partout, y compris dans le JSON de `render_report`. La fonction `gabarit(nom)` et les variables locales `gabarit_` ne se marchent pas dessus (noté explicitement en tâche 3).
 
 **Point de vigilance pour l'exécutant :** la tâche 2 change la signature de `build_document` et supprime `SLIDE_WIDTH` / `SLIDE_HEIGHT` / `MAX_HEADLINE_HEIGHT` / `SCALE_STEPS`. `tests/test_render.py` doit être adapté dans la même tâche, sinon la suite est rouge entre deux commits.
+
+---
+
+# Suites à donner (relevé après exécution)
+
+Les huit tâches sont livrées : 249 tests verts, `ruff` clean, revue finale de branche passée.
+Ce qui suit a été **délibérément laissé de côté**, avec la raison. C'est la liste à
+reprendre avant d'ouvrir un chantier voisin, pas une liste de dettes honteuses.
+
+## Ce que la revue finale a fait corriger
+
+Cinq trouvailles Important, toutes closes dans `c3581a3` :
+
+1. **Fuite du driver Playwright.** `_ouvrir_chromium` entrait dans le contexte
+   (processus node + boucle asyncio) puis lançait le navigateur ; un échec du
+   lancement — le cas exact pour lequel la fonction existe — ne refermait jamais le
+   contexte. Régression introduite par la branche : le `with sync_playwright()`
+   d'avant garantissait la sortie. Fuite **par slide et par consultation** dans un
+   uvicorn permanent.
+2. **Le signal `overflow` n'avait aucun consommateur.** `render_report` n'était écrit
+   que par `POST /posts/{id}/render`, que rien n'appelait. La colonne serait restée
+   `NULL` indéfiniment : le livrable central de la branche n'était pas atteint de bout
+   en bout. Trou du plan (dashboard hors périmètre en tâche 6), pas de l'implémentation.
+3. **`render_report` n'était pas invalidé** quand les slides changeaient — faux feu
+   vert sur le seul signal censé empêcher une mauvaise publication.
+4. **Le câblage du voile n'était couvert par aucun test** : le supprimer laissait les
+   244 tests verts, le repli CSS masquant l'absence.
+5. **Pas de sentinelle « sans valeurs »** pour `kinda_reel/style.css`.
+
+## Points conservés sciemment
+
+| Point | Raison de le garder |
+|---|---|
+| Duplication reset/body/photo/logo + blob `@font-face` entre les deux feuilles | Conséquence directe du choix « feuille autonome par gabarit ». La duplication est inerte : aucune valeur, elles viennent de `variables_css`. |
+| `Zone.anchor` n'est pas consommé | L'ancrage vit dans les feuilles (`bottom:` pour le post, `top:` + `translateY` pour le reel). Champ descriptif ; le modifier ne fait rien. |
+| `--*-align`, `--*-offset`, `--headline-tilt` émis sans être consommés | Le reel écrit `text-align: center` en dur. Contrat plus large que la réalité. |
+| Le voile est calculé sur la **dernière mesure**, pas sur l'échelle retenue | La dichotomie finit souvent sur une échelle rejetée. Toujours ≥ la hauteur nécessaire (monotonie) et planchée par `VOILE_MINIMUM`, donc inoffensif — mais contredit le contrat documenté. |
+| `MARGE_INCLINAISON = 20` dans `_hauteurs_de_bande` | Laisse ~12 px d'angle mort près de la jointure pour ~8 px d'empiètement légitime. Un ordre de rôles cassé déclenche quand même l'autre branche du garde-fou. |
+| `mesurer_bandes` vit dans `app/content/` | Outil de calibration honnêtement documenté ; sa place serait plutôt `scripts/`. |
+| `-0.08em` d'interlettrage sur le sous-titre | Asymétrique face aux `-0.02em` du titre, mais épinglé numériquement par le test de largeur (753 px ± 25). |
+
+## Trous connus, à ouvrir quand le besoin viendra
+
+- **Le gabarit `kinda_reel` n'est pas atteignable par l'API.** `creer_post` force
+  `template="kinda_post"`, `PostUpdate` n'a pas de champ `template`, et `SlideIn` exige
+  `headline` — les slides `{title, subtitle}` d'un reel ne passeraient pas la
+  sérialisation. Le gabarit est une fondation, pas une fonctionnalité exposée. Un garde
+  de deux lignes validant `template ∈ GABARITS` à la création éviterait un 500 muet.
+- **Après validation ou publication**, `renderPostDetail(updated)` est appelé sans
+  rapport, donc le badge de débordement disparaît alors qu'il reste valable (ces deux
+  actions ne touchent pas aux slides).
+- **La sentinelle du reel ne bannit pas `42.9%`**, cette valeur étant légitimement
+  présente comme repli de `var(--block-center, 42.9%)` — même précédent que `817px`
+  côté post. Une vérification par expression régulière (« cette valeur n'apparaît
+  QUE dans ce `var()` ») fermerait l'angle mort d'une seconde occurrence en dur.
+- **Le garde-fou « Chromium absent » n'est pas testé contre un Chromium réellement
+  absent** (il est installé partout où les tests tournent). La correspondance de chaîne
+  est le seul lien avec le libellé réel de Playwright : une refonte de leurs messages
+  d'erreur le romprait en silence.
+- **Le changement de dashboard n'a pas été vérifié dans un vrai navigateur** (extension
+  indisponible). Vérifié autrement : backend de bout en bout sur une base SQLite
+  jetable, et le vrai `<script>` chargé dans Node avec un DOM bouchonné pour les trois
+  cas (propre, en défaut, rapport nul). Restent non couverts : le clic réel, le
+  `fetch` réel, et la lisibilité visuelle du badge.
