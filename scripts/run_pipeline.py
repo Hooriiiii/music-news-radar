@@ -8,12 +8,20 @@ import datetime as dt
 import logging
 
 from app.config import settings
-from app.db import SessionLocal
+from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.pipeline.run import run_pipeline
 
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    # Avant toute chose : ce script est lance par launchd, parfois au reveil du
+    # Mac avant que le DNS reponde.
+    try:
+        attendre_base()
+    except BaseInjoignable as exc:
+        print(f"[ERREUR] {exc}")
+        raise SystemExit(1) from exc
+
     started = dt.datetime.now()
     with SessionLocal() as db:
         report = run_pipeline(db)
