@@ -199,6 +199,13 @@ def test_variables_css_expose_la_recette_des_voiles():
 
     assert "--voile-noir: rgba(0, 0, 0, 0.8);" in css
     assert "--voile-haut-hauteur: 727px;" in css
+    assert "--voile-rose-debut: rgba(253, 139, 195, 0);" in css
+    # Geometrie du logo : fixe, identique sur tous les gabarits -- meme raison
+    # de passer par une variable que la recette des voiles (cf. style.css, qui
+    # ne doit declarer aucune valeur en dur derriere ces noms).
+    assert "--logo-right: 77px;" in css
+    assert "--logo-top: 87px;" in css
+    assert "--logo-width: 150px;" in css
 
 
 def test_ajustement_respecte_le_max_des_planchers_par_role():

@@ -66,6 +66,12 @@ def test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page():
     for valeur in ("80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195"):
         assert valeur not in corps, f"{valeur} est encore en dur dans style.css"
 
+    # Un bloc `:root` dans la feuille rouvrirait la porte : une valeur en dur
+    # derriere un nom de variable reste une valeur en dur, et le filtre de ce
+    # test ignore justement les lignes `--`. Toutes les variables viennent de
+    # Python, aucune n'est declaree ici.
+    assert ":root" not in css
+
 
 def test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit():
     """L'autoescape de Jinja s'applique aussi a `{{ css }}` dans <style>.

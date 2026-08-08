@@ -281,6 +281,15 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         "--voile-noir: rgba(0, 0, 0, 0.8);",
         "--voile-rose: rgba(253, 139, 195, 0.3);",
         "--voile-haut-hauteur: 727px;",
+        # Geometrie du logo : fixe, identique sur tous les gabarits (le reel de
+        # la tache 4 reprend le meme 77/87/150) -- meme raison de passer par une
+        # variable que la recette des voiles.
+        "--logo-right: 77px;",
+        "--logo-top: 87px;",
+        "--logo-width: 150px;",
+        # Point de depart transparent du degrade rose : complete `--voile-rose`,
+        # qui n'en porte que l'arrivee.
+        "--voile-rose-debut: rgba(253, 139, 195, 0);",
     ]
 
     for role, (typo, zone) in gabarit_.roles.items():

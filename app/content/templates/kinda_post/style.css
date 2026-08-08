@@ -17,11 +17,11 @@
 }
 
 /* --- Geometrie de la slide ------------------------------------------------ */
-/* Squelette sans valeurs : toutes les mesures viennent de `layout.py`, en
-   variables CSS injectees par `render.build_document()` (bloc `:root` a part,
-   voir `slide.html.j2`). Une valeur qui revient en dur ici est une regle qui
-   echappe a `layout.py`, donc aux tests -- cf. le test-sentinelle dans
-   `tests/test_render.py`. */
+/* Squelette sans valeurs : toutes les mesures viennent de `layout.py`, injectees
+   par `render.build_document()` dans un bloc de variables a part (voir
+   `slide.html.j2`) -- cette feuille n'en declare aucune elle-meme. Une valeur
+   qui revient en dur ici est une regle qui echappe a `layout.py`, donc aux
+   tests -- cf. le test-sentinelle dans `tests/test_render.py`. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -86,22 +86,12 @@ body {
     0 0;
 }
 
-/* --- Constantes locales ----------------------------------------------------
-   Fixes, independantes du texte -- donc hors du Gabarit -- mais passees par
-   des variables au meme titre que la recette des voiles injectee par Python,
-   pour que le test-sentinelle de style.css reste strict sur les valeurs de
-   MISE EN PAGE. `--voile-rose-debut` complete `--voile-rose` (le point
-   d'arrivee, lui, vient de layout.py) : meme teinte, alpha 0. */
-:root {
-  --logo-right: 77px;
-  --logo-top: 87px;
-  --logo-width: 150px;
-  --voile-rose-debut: rgba(253, 139, 195, 0);
-}
-
 /* --- Logo ----------------------------------------------------------------- */
 /* Figma 234:12 : conteneur large de 926, contenu aligne a DROITE ; le logo
-   lui-meme (234:13) fait 150 x 74.75. */
+   lui-meme (234:13) fait 150 x 74.75. Position fixe, independante du texte,
+   donc hors du Gabarit -- mais injectee par Python (`variables_css`) au meme
+   titre que la recette des voiles : aucune valeur ne se declare dans cette
+   feuille elle-meme, cf. le test-sentinelle de `tests/test_render.py`. */
 #logo {
   position: absolute;
   right: var(--logo-right);
