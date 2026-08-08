@@ -135,6 +135,42 @@ def test_la_police_du_gabarit_est_bien_celle_qui_rend_laccroche():
 
 
 @chromium_absent
+def test_le_voile_garde_la_geometrie_de_la_maquette_sans_scrim_height():
+    """Un `var()` sans repli n'echoue pas silencieusement -- il INVALIDE toute
+    la propriete au calcul, pas seulement le calque qui le porte.
+
+    Rien ne le signale a la lecture du HTML : pas d'erreur, pas de warning, et
+    aucune assertion de taille de PNG ne bronche (le viewport impose deja
+    1080x1440, quelle que soit la geometrie du voile a l'interieur). Seule la
+    valeur CALCULEE (`getComputedStyle`) le revele -- avant le repli, Chromium
+    rendait `background-size: auto, auto, auto` et le voile passait en plein
+    cadre au lieu des bandes localisees de la maquette. Cette tache (2) ne
+    fournit jamais `scrim_height` (cable par la tache 3) : c'est exactement le
+    cas que le repli doit couvrir dans le regime actuel.
+    """
+    from playwright.sync_api import sync_playwright
+
+    document = build_document(
+        GABARIT_POST, {"headline": "Vieilles Charrues"}, "data:image/jpeg;base64,AAA"
+    )
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(
+                viewport={"width": GABARIT_POST.width, "height": GABARIT_POST.height}
+            )
+            page.set_content(document, wait_until="load")
+            taille = page.evaluate(
+                "getComputedStyle(document.getElementById('scrim')).backgroundSize"
+            )
+        finally:
+            browser.close()
+
+    assert "auto" not in taille, f"le voile est en plein cadre (repli absent) : {taille!r}"
+    assert "817px" in taille
+
+
+@chromium_absent
 def test_render_post_produit_un_png_par_slide():
     slides = [
         {"headline": "**Vieilles Charrues** : le line-up", "image_url": None},

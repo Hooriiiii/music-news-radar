@@ -67,7 +67,13 @@ body {
    sombre, illisible sur une photo claire. Le voile HAUT, lui, ne depend pas du
    texte : sa hauteur (727px) et les trois couleurs des degrades restent une
    recette decorative fixe, exposee en variables (`--voile-*`) pour que le
-   test-sentinelle reste strict sur les valeurs de MISE EN PAGE. */
+   test-sentinelle reste strict sur les valeurs de MISE EN PAGE.
+
+   La valeur de repli 817px est celle de la maquette. Elle n'est pas un
+   provisoire : un `var()` sans repli invalide la propriete ENTIERE, pas
+   seulement son calque -- le voile passerait alors en plein cadre, sans
+   erreur ni test rouge. Le repli garantit que l'oubli degrade vers la
+   maquette et non vers n'importe quoi. */
 #scrim {
   position: absolute;
   inset: 0;
@@ -77,12 +83,12 @@ body {
     linear-gradient(to bottom, var(--voile-rose-debut), var(--voile-rose)),
     linear-gradient(to bottom, var(--voile-noir), rgba(0, 0, 0, 0));
   background-size:
-    var(--slide-width) var(--scrim-height),
-    var(--slide-width) var(--scrim-height),
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--scrim-height, 817px),
     var(--slide-width) var(--voile-haut-hauteur);
   background-position:
-    0 calc(var(--slide-height) - var(--scrim-height)),
-    0 calc(var(--slide-height) - var(--scrim-height)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
     0 0;
 }
 

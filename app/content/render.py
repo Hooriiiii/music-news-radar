@@ -60,7 +60,7 @@ def _logo_data_uri() -> str:
 
 
 def build_document(
-    gabarit: Gabarit,
+    gabarit_: Gabarit,
     textes: dict[str, str],
     image_data_uri: str,
     scale: float = 1.0,
@@ -81,13 +81,13 @@ def build_document(
     # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
     # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
     # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
-    css = Markup((TEMPLATES_DIR / gabarit.name / "style.css").read_text(encoding="utf-8"))
-    return env.get_template(f"{gabarit.name}/slide.html.j2").render(
+    css = Markup((TEMPLATES_DIR / gabarit_.name / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{gabarit_.name}/slide.html.j2").render(
         css=css,
-        variables=Markup(variables_css(gabarit, scale, scrim_height)),
+        variables=Markup(variables_css(gabarit_, scale, scrim_height)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
-        textes={role: Markup(to_html(textes[role])) for role in gabarit.roles},
+        textes={role: Markup(to_html(textes[role])) for role in gabarit_.roles},
     )
 
 
