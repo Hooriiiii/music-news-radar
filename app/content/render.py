@@ -10,13 +10,15 @@ Ce module ne connait ni la base ni Claude : il recoit une liste de dicts.
 
 import base64
 import logging
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, sync_playwright
 
 from app.content.highlight import to_html
 from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
@@ -43,23 +45,34 @@ def _signale_chromium_absent(exc: Exception) -> bool:
     return "Executable doesn't exist" in str(exc) or "playwright install" in str(exc)
 
 
-def _ouvrir_chromium():
+def _ouvrir_chromium() -> tuple[Any, Browser]:
     """Demarre Playwright et lance Chromium, ou leve `RenduIndisponible`.
 
-    Le `try` ne couvre QUE ce demarrage, pas la boucle de rendu qui suit chez
-    l'appelant : un bug de gabarit ou une erreur Jinja pendant le rendu ne doit
-    jamais pouvoir se faire passer pour un Chromium absent, meme par hasard de
-    message. Le contexte est ouvert a la main (`__enter__`/`__exit__`) plutot
-    qu'avec `with` pour pouvoir le refermer chez l'appelant, une fois le rendu
-    termine.
+    Deux echecs distincts a garder separes : `contexte.__enter__()` (demarre la
+    boucle asyncio et le process driver node) peut echouer independamment de
+    `chromium.launch()` (le cas nominal de cette fonction, Chromium absent). Si
+    le lancement echoue APRES un `__enter__()` reussi, il faut sortir du
+    contexte avant de lever -- sinon le process driver et la boucle asyncio
+    qu'il a ouverts ne sont jamais arretes (une fuite par appel echoue).
+    Le contexte est ouvert a la main (`__enter__`/`__exit__`) plutot qu'avec
+    `with` pour pouvoir le refermer chez l'appelant, une fois le rendu termine.
     """
+    contexte = sync_playwright()
     try:
-        contexte = sync_playwright()
         playwright = contexte.__enter__()
-        browser = playwright.chromium.launch()
-    except RenduIndisponible:
-        raise
     except Exception as exc:
+        if _signale_chromium_absent(exc):
+            raise RenduIndisponible(
+                "Chromium Playwright est absent : lancer `uv run playwright install chromium`"
+            ) from exc
+        raise
+    try:
+        browser = playwright.chromium.launch()
+    except Exception as exc:
+        # Le contexte est deja entre : sans cette sortie, le processus driver et
+        # la boucle asyncio survivent a l'echec -- une fuite par slide et par
+        # consultation, dans un uvicorn qui tourne en permanence.
+        contexte.__exit__(None, None, None)
         if _signale_chromium_absent(exc):
             raise RenduIndisponible(
                 "Chromium Playwright est absent : lancer `uv run playwright install chromium`"
@@ -245,7 +258,13 @@ def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[
     image_uri = fetch_image_data_uri(slide.get("image_url"))
     textes = {role: slide[role] for role in gabarit_.roles}
     contexte, browser = _ouvrir_chromium()
-    try:
+    # ExitStack et non deux `finally` empiles a la main : si `browser.close()`
+    # leve (navigateur deja crashe), la sortie du contexte Playwright doit quand
+    # meme avoir lieu -- sinon meme fuite que dans `_ouvrir_chromium`, sur un
+    # chemin plus rare mais pas moins reel.
+    with ExitStack() as pile:
+        pile.callback(contexte.__exit__, None, None, None)
+        pile.callback(browser.close)
         page = browser.new_page(
             viewport={"width": gabarit_.width, "height": gabarit_.height},
             device_scale_factor=1,
@@ -253,9 +272,6 @@ def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[
         page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
         page.evaluate("document.fonts.ready")
         return {role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles}
-    finally:
-        browser.close()
-        contexte.__exit__(None, None, None)
 
 
 def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
@@ -263,7 +279,9 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduS
     gabarit_ = gabarit(template)
     rendus: list[RenduSlide] = []
     contexte, browser = _ouvrir_chromium()
-    try:
+    with ExitStack() as pile:
+        pile.callback(contexte.__exit__, None, None, None)
+        pile.callback(browser.close)
         page = browser.new_page(
             viewport={"width": gabarit_.width, "height": gabarit_.height},
             device_scale_factor=1,
@@ -272,7 +290,4 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduS
             image_uri = fetch_image_data_uri(slide.get("image_url"))
             textes = {role: slide[role] for role in gabarit_.roles}
             rendus.append(_render_one(page, gabarit_, textes, image_uri))
-    finally:
-        browser.close()
-        contexte.__exit__(None, None, None)
     return rendus

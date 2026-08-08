@@ -1,5 +1,6 @@
 import io
 import math
+import re
 import struct
 from pathlib import Path
 
@@ -56,10 +57,33 @@ def test_le_document_porte_les_variables_du_gabarit():
     assert "<mark>accroche</mark>" in document
 
 
-def test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page():
+# Valeurs de mise en page interdites en dur, par gabarit. Le post a gagne cette
+# sentinelle apres une vraie regression (une valeur renommee en `--var` LOCALE
+# dans la feuille, que le filtre de ligne (`--`) laissait passer) ; le reel --
+# le plus manipule en iteration de design -- en avait besoin tout autant.
+#
+# Absente ici volontairement : "42.9%" pour le reel. Elle apparait UNE fois,
+# dans `var(--block-center, 42.9%)` -- le repli ajoute par la tache M5, exact
+# pendant du repli `var(--scrim-height, 817px)` du post (lui non plus jamais
+# entre dans la liste interdite du post, pour la meme raison) : la valeur qui
+# fait foi reste celle ecrite par `variables_css()` depuis `layout.py`
+# (`GABARIT_REEL.block_center = 0.429`), ce repli n'existe QUE pour degrader
+# proprement vers la geometrie de la maquette si la variable manquait -- il ne
+# cree pas de seconde source de verite.
+_VALEURS_INTERDITES = {
+    "kinda_post": ("80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195"),
+    "kinda_reel": (
+        "84.3px", "75.3px", "1.1", "-0.02em", "-0.08em",
+        "#FD8BC3", "#FFF7FA", "#1D1D1D", "77px", "-0.6deg",
+    ),
+}
+
+
+@pytest.mark.parametrize("gabarit_dir", sorted(_VALEURS_INTERDITES))
+def test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page(gabarit_dir):
     """Sentinelle du refactoring : une valeur qui revient en dur dans la feuille
     est une regle qui echappe a layout.py, donc aux tests."""
-    css = Path("app/content/templates/kinda_post/style.css").read_text(encoding="utf-8")
+    css = Path(f"app/content/templates/{gabarit_dir}/style.css").read_text(encoding="utf-8")
     # On ignore la police embarquee en base64 et les commentaires.
     corps = "\n".join(
         ligne
@@ -67,8 +91,8 @@ def test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page():
         if "base64" not in ligne and not ligne.strip().startswith(("/*", "*", "--"))
     )
 
-    for valeur in ("80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195"):
-        assert valeur not in corps, f"{valeur} est encore en dur dans style.css"
+    for valeur in _VALEURS_INTERDITES[gabarit_dir]:
+        assert valeur not in corps, f"{valeur} est encore en dur dans {gabarit_dir}/style.css"
 
     # Un bloc `:root` dans la feuille rouvrirait la porte : une valeur en dur
     # derriere un nom de variable reste une valeur en dur, et le filtre de ce
@@ -172,6 +196,49 @@ def test_le_voile_garde_la_geometrie_de_la_maquette_sans_scrim_height():
 
     assert "auto" not in taille, f"le voile est en plein cadre (repli absent) : {taille!r}"
     assert "817px" in taille
+
+
+@chromium_absent
+def test_render_one_cable_un_voile_plus_haut_que_la_maquette_pour_un_bloc_haut():
+    """`hauteur_voile` est juste (teste a part) et l'absence de la variable
+    degrade proprement (teste plus haut) -- mais rien ne prouvait jusqu'ici que
+    `_render_one` la CALCULE et la PASSE reellement. Supprimer le cablage
+    laisse les 244 tests verts : `variables_css` omet juste `--scrim-height`,
+    le CSS retombe sur son repli 817px, et aucune assertion de PNG ne bronche.
+    Le mode d'echec est precisement l'illisibilite que la fonctionnalite existe
+    pour eviter -- un bloc de 4-5 lignes assis au-dessus de la partie dense du
+    degrade sur une photo claire."""
+    from playwright.sync_api import sync_playwright
+
+    from app.content.render import _render_one
+
+    accroche = " ".join(["**Vieilles Charrues** Nico Moreno et Mosimann Cassius"] * 3)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(
+                viewport={"width": GABARIT_POST.width, "height": GABARIT_POST.height}
+            )
+            rendu = _render_one(
+                page, GABARIT_POST, {"headline": accroche}, fetch_image_data_uri(None)
+            )
+            # `_render_one` a laisse son DERNIER `set_content` (l'echelle retenue,
+            # voile inclus) charge sur la page : on peut donc lire la valeur
+            # CALCULEE directement dessus, sans reconstruire le document a la main.
+            taille = page.evaluate(
+                "getComputedStyle(document.getElementById('scrim')).backgroundSize"
+            )
+        finally:
+            browser.close()
+
+    assert rendu.lines["headline"] >= 4, "l'accroche de test ne force pas un bloc haut"
+    # `background-size` rend "LARGEURpx HAUTEURpx" par calque separe par des
+    # virgules : prendre TOUS les nombres confondrait la largeur (1080, toujours
+    # superieure a 817) avec la hauteur qu'on veut verifier. On ne garde que le
+    # second nombre du premier calque (le voile noir bas, cale sur `--scrim-height`).
+    premier_calque = taille.split(",")[0].strip()
+    hauteur = int(re.search(r"(\d+)px$", premier_calque).group(1))
+    assert hauteur > 817, f"le voile n'a pas grandi avec le bloc : {taille!r}"
 
 
 @chromium_absent
@@ -398,19 +465,90 @@ def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
     assert hauteurs["creme"] == pytest.approx(89, abs=8)
 
 
+@chromium_absent
+def test_le_bloc_du_reel_reste_centre_sans_scrim_height_ni_repli_casse():
+    """M5 : `#bandes { top: var(--block-center, 42.9%); }` a desormais un repli,
+    comme `--scrim-height` sur le post. Sans lui, un `--block-center` absent
+    ferait retomber `top` sur `auto` et deplacerait tout le bloc de texte --
+    aucun test de couleur/largeur de bande ne le verrait, ces tests reperent les
+    bandes par teinte, pas par position. On verifie ici la position reelle : le
+    centre vertical de la bande rose doit tomber pres de 42.9% x 1920 ~= 823px.
+    """
+    from app.content.layout import GABARIT_REEL
+
+    (rendu,) = render_post([{
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }], "kinda_reel")
+
+    image = np.asarray(Image.open(io.BytesIO(rendu.png)).convert("RGB")).astype(int)
+    r, g, b = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+    rose = (abs(r - 253) < 22) & (abs(g - 139) < 34) & (abs(b - 195) < 28)
+    ys_rose, _ = np.where(rose)
+    centre_rose = (float(ys_rose.min()) + float(ys_rose.max())) / 2
+
+    # Tolerance genereuse : ce test verifie une POSITION (le repli n'est pas
+    # casse), pas une calibration au pixel pres -- deja couverte ailleurs.
+    assert centre_rose == pytest.approx(GABARIT_REEL.block_center * GABARIT_REEL.height, abs=60)
+
+
 def test_chromium_absent_donne_une_erreur_lisible(monkeypatch):
     """Le rendu exige Chromium Playwright, que le dashboard n'installe pas. Une
     trace d'exception au fond de Playwright ne dit pas quoi faire ; ce message,
-    si."""
+    si.
+
+    Le faux echoue sur `__enter__()`, pas sur l'appel `sync_playwright()`
+    lui-meme : dans le vrai Playwright, c'est `__enter__()` qui demarre le
+    process driver et peut echouer -- `sync_playwright()` ne fait que
+    construire l'objet."""
     import app.content.render as render_module
 
-    def faux_playwright():
-        raise Exception("Executable doesn't exist at /path/chrome")
+    class FauxPlaywright:
+        def __enter__(self):
+            raise Exception("Executable doesn't exist at /path/chrome")
 
-    monkeypatch.setattr(render_module, "sync_playwright", faux_playwright)
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(render_module, "sync_playwright", lambda: FauxPlaywright())
 
     with pytest.raises(RenduIndisponible, match="playwright install chromium"):
         render_post([{"headline": "Une **accroche**", "image_url": None}])
+
+
+def test_echec_du_lancement_de_chromium_referme_le_contexte_playwright(monkeypatch):
+    """Regression cible : si `chromium.launch()` echoue APRES un `__enter__()`
+    reussi, le contexte Playwright (process driver node + boucle asyncio) doit
+    quand meme etre referme. Sans ca, un post ouvert sur une machine sans
+    Chromium fuit un processus par slide et par consultation dans un uvicorn qui
+    tourne en permanence -- exactement le cas que cette fonction existe pour
+    couvrir."""
+    import app.content.render as render_module
+
+    appels_exit = []
+
+    class FauxPlaywright:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            appels_exit.append(args)
+            return False
+
+        @property
+        def chromium(self):
+            return self
+
+        def launch(self):
+            raise Exception("Executable doesn't exist at /path/chrome")
+
+    monkeypatch.setattr(render_module, "sync_playwright", lambda: FauxPlaywright())
+
+    with pytest.raises(RenduIndisponible, match="playwright install chromium"):
+        render_post([{"headline": "Une **accroche**", "image_url": None}])
+
+    assert len(appels_exit) == 1, "le contexte Playwright n'a pas ete referme apres l'echec"
 
 
 def test_erreur_de_rendu_normale_n_est_pas_masquee(monkeypatch):

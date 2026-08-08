@@ -67,6 +67,12 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # Reassignation ENTIERE (liste de dicts simples, pas les modeles Pydantic) :
         # une mutation in place ne serait pas persistee sur la colonne JSON
         post.slides = [slide.model_dump() for slide in payload.slides]
+        # Un rapport de rendu parle d'un texte precis : une fois les slides
+        # changees (l'editeur de carrousel EST une surface d'edition
+        # d'accroche), un ancien rapport "overflow" ou "clean" ne veut plus rien
+        # dire -- et un ancien "clean" perime serait un faux feu vert sur le
+        # signal qui doit justement empecher une publication en defaut.
+        post.render_report = None
     if payload.status is not None:
         post.status = payload.status
         if payload.status is PostStatus.PUBLISHED:

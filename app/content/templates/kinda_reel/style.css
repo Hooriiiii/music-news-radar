@@ -66,7 +66,12 @@ body {
   position: absolute;
   left: var(--title-left);
   right: var(--title-right);
-  top: var(--block-center);
+  /* Repli a 42.9% (la valeur mesuree sur la maquette, cf. layout.py) : un
+     `var()` sans repli invalide la propriete ENTIERE au calcul, pas seulement
+     ce calque -- `top` retomberait alors sur `auto` et le bloc entier
+     migrerait, sans erreur ni test rouge (les tests pixel reperent les bandes
+     par couleur, pas par position). */
+  top: var(--block-center, 42.9%);
   transform: translateY(-50%);
 }
 

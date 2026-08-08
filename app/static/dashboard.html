@@ -102,6 +102,12 @@
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12.5px;
     font-family: inherit; resize: vertical; }
   .hl-hint { color: var(--muted); font-size: 11px; margin: 10px 0 12px; }
+  /* Meme palette que .badge.hot-high : le rouge est deja le langage "attention"
+     du dashboard, pas une nouvelle convention. */
+  .render-warning { background: #3d1f1f; color: #ff8a8a; border: 1px solid #5a2a2a;
+    border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 0 0 14px; }
+  .slide-edit.overflow { border-color: #ff8a8a; }
+  .slide-edit.overflow img { outline: 2px solid #ff8a8a; outline-offset: -2px; }
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .field textarea { min-height: 70px; }
@@ -410,19 +416,47 @@ async function ouvrirPost(postId) {
     alert("Échec du chargement du post : " + erreur.message);
     return;
   }
-  renderPostDetail(post);
+
+  // Le rendu est declenche ici, pas lu depuis le GET : c'est le seul moyen
+  // d'avoir un rapport a jour sur les slides ACTUELLES (le GET reste pur, cf.
+  // app/api/posts.py). Un echec de rendu (Chromium absent en local -> 503, ou
+  // toute autre erreur) ne doit jamais empecher l'ouverture du detail -- on
+  // degrade sans badge plutot que de bloquer l'edition.
+  let rapport = null;
+  try {
+    const reponse = await fetch(`/posts/${postId}/render`, { method: "POST" });
+    if (!reponse.ok) throw new Error(await reponse.text());
+    rapport = await reponse.json();
+  } catch (erreur) {
+    alert("Rendu indisponible pour l'aperçu : " + erreur.message);
+  }
+
+  renderPostDetail(post, rapport);
 }
 
-function renderPostDetail(post) {
+function renderPostDetail(post, rapport) {
   const cacheBust = Date.now();
+  const slidesEnDefaut = new Set(
+    (rapport && rapport.slides || [])
+      .map((s, i) => (s.overflow ? i : null))
+      .filter((i) => i !== null)
+  );
+
   const slidesHtml = (post.slides || []).map((s, i) => `
-    <div class="slide-edit" data-index="${i}">
+    <div class="slide-edit${slidesEnDefaut.has(i) ? " overflow" : ""}" data-index="${i}">
       <img src="/posts/${post.id}/slides/${i + 1}.png?v=${cacheBust}" loading="lazy" onerror="this.style.opacity=0.2">
       <label>Accroche</label>
       <textarea class="slide-headline" rows="2">${escapeHtml(s.headline || "")}</textarea>
       <label>URL de l'image</label>
       <input class="slide-image" type="text" value="${escapeHtml(s.image_url || "")}">
     </div>`).join("");
+
+  const numerosEnDefaut = [...slidesEnDefaut].map((i) => i + 1);
+  const avertissementHtml = numerosEnDefaut.length ? `
+      <div class="render-warning">
+        ⚠ Slide${numerosEnDefaut.length > 1 ? "s" : ""} ${numerosEnDefaut.join(", ")} :
+        texte trop long même à la taille minimale, image rognée -- à corriger avant publication.
+      </div>` : "";
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -431,6 +465,7 @@ function renderPostDetail(post) {
         <span class="status-pill ${post.status}">${STATUS_LABELS[post.status] || post.status}</span>
         <button class="close-btn">✕ Fermer</button>
       </div>
+      ${avertissementHtml}
       <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
       <div class="slides-grid">${slidesHtml}</div>
       <div class="field">

@@ -263,3 +263,25 @@ def test_render_persiste_le_rapport(client, db_session, monkeypatch):
 
 def test_render_sur_un_post_inconnu_rend_404(client):
     assert client.post("/posts/999/render").status_code == 404
+
+
+def test_editer_les_slides_invalide_le_rapport_de_rendu(client, db_session):
+    """Le rapport parle d'un texte precis. L'editeur de carrousel EST une
+    surface d'edition d'accroche : une fois les slides changees, un ancien
+    rapport (overflow ou pas) ne veut plus rien dire -- et un vieux "clean"
+    serait un faux feu vert sur le signal qui doit empecher une publication en
+    defaut."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+    post.render_report = {"slides": [{"scale": 1.0, "lines": {"headline": 3}, "overflow": False}]}
+    db_session.commit()
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"headline": "Une **nouvelle** accroche", "image_url": None}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["render_report"] is None
+    db_session.refresh(post)
+    assert post.render_report is None

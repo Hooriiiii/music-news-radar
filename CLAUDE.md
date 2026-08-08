@@ -162,14 +162,28 @@ chiffres de streaming ne bougent.
 ## Génération de posts (`app/content/`)
 
 Le compte d'actu ne s'arrête plus au flux scoré : un article peut devenir un
-**carrousel Instagram** prêt à publier. Trois unités indépendantes —
-`compose.py` (article → slides + légende, via Claude), `render.py` (slides → PNG
-1080×1440, via Chromium headless), `api/posts.py` (file éditoriale).
+**carrousel Instagram** prêt à publier, sur deux gabarits — `kinda_post`
+(1080×1440, carrousel de slides) et `kinda_reel` (1080×1920, cover de reel).
+Quatre unités indépendantes — `layout.py` (les valeurs de mise en page en
+Python pur : gabarits, zones, typographie, machine d'ajustement d'échelle),
+`compose.py` (article → slides + légende, via Claude), `render.py` (slides →
+PNG, via Chromium headless), `api/posts.py` (file éditoriale).
+
+`layout.py` porte TOUTES les valeurs de mise en page, `render.py` n'en déclare
+aucune : Chromium MESURE (lignes rendues, largeur de chacune), Python DÉCIDE
+(échelle à essayer, acceptation, abandon). Les feuilles de style des gabarits
+(`templates/*/style.css`) n'ont donc plus de nombres en dur non plus — tout
+passe par des variables CSS injectées par `variables_css()`, et un
+test-sentinelle par gabarit (`tests/test_render.py`) échoue si une valeur
+revient s'y nicher. Une accroche trop longue même à la taille de police
+minimale n'est PLUS rendue coupée en silence : le rendu est marqué `overflow`
+(retourné par `render_post`, persisté dans `posts.render_report` via
+`POST /posts/{id}/render`) plutôt que publié tel quel.
 
 **Figma n'est jamais appelé à l'exécution.** Son API REST est en lecture seule sur
 le contenu d'un fichier ; l'écriture passe par l'API Plugin, qui n'existe que dans
-l'éditeur ouvert. Le template est donc extrait UNE FOIS en HTML/CSS dans
-`app/content/templates/kinda_post/` — voir le `REFERENCE.md` de ce dossier pour la
+l'éditeur ouvert. Chaque gabarit est donc extrait UNE FOIS en HTML/CSS dans
+`app/content/templates/<gabarit>/` — voir le `REFERENCE.md` de ce dossier pour la
 procédure de ré-extraction après une refonte du design.
 
 Le **surlignage rose** est porté par le texte lui-même : `**segment**` dans une
