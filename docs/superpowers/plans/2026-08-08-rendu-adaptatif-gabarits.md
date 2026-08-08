@@ -396,7 +396,11 @@ class Ajustement:
 
     def __init__(self, gabarit: Gabarit) -> None:
         self._gabarit = gabarit
-        self._plancher = min(zone.min_scale for _, zone in gabarit.roles.values())
+        # max et non min : `min_scale` est un plancher PAR ROLE, et le plancher
+        # liant pour la slide est le plus RESTRICTIF des deux. Prendre le minimum
+        # autoriserait la dichotomie a descendre sous le plancher declare d'un
+        # role sans jamais lever `overflow`.
+        self._plancher = max(zone.min_scale for _, zone in gabarit.roles.values())
         self._etape = "maquette"
         self._essai: float | None = None
         self._bas = self._plancher          # borne basse : tient (a confirmer)
@@ -630,7 +634,9 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         if typo.mark_background is not None:
             lignes.append(f"--{role}-mark-background: {typo.mark_background};")
     if scrim_height is not None:
-        lignes.append(f"--scrim-height: {scrim_height}px;")
+        # round et non int : la hauteur vient d'une mesure Chromium fractionnaire
+        # des la tache 3, et tronquer 817.6 en 817 rognerait le voile d'un pixel.
+        lignes.append(f"--scrim-height: {round(scrim_height)}px;")
     return ":root {\n  " + "\n  ".join(lignes) + "\n}"
 ```
 
