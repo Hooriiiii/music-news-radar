@@ -1297,13 +1297,12 @@ Append to `tests/test_render.py`:
 
 ```python
 @chromium_absent
-def test_la_cover_reel_produit_deux_bandes_aux_largeurs_de_la_maquette():
-    """Les valeurs mesurees au pixel sur exemples/[PREVIEW] - Cover Reels.png :
-    bande rose 534 px, bande creme 753 px. La tolerance est large (25 px) parce
-    que la police est un substitut metriquement compatible d'Arial Narrow, pas
-    Arial Narrow elle-meme."""
+def test_la_cover_reel_rend_une_bande_par_role():
+    """La STRUCTURE du gabarit : deux roles, une bande chacun, aux dimensions de
+    la toile. Les LARGEURS de bande (534 / 753) sont verifiees a la tache 5,
+    apres calibration -- les asserter ici ferait echouer cette tache pour une
+    raison qui ne la concerne pas."""
     from app.content.layout import GABARIT_REEL
-    from app.content.render import mesurer_bandes
 
     slide = {
         "title": "**Gregoire Cliquet**",
@@ -1316,14 +1315,10 @@ def test_la_cover_reel_produit_deux_bandes_aux_largeurs_de_la_maquette():
     assert rendu.overflow is False
     assert _png_size(rendu.png) == (GABARIT_REEL.width, GABARIT_REEL.height)
 
-    largeurs = mesurer_bandes(slide, "kinda_reel")
-    assert largeurs["title"][0] == pytest.approx(534, abs=25)
-    assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
-
 
 @chromium_absent
 def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
-    """Le choix retenu : la police ne rétrecit pas, le titre passe sur une
+    """Le choix retenu : la police ne se reduit pas, le titre passe sur une
     deuxieme bande rose. L'empilement de bandes EST le langage du gabarit."""
     slide = {
         "title": "**Gregoire Cliquet** et Nico Moreno en cloture",
@@ -1625,11 +1620,22 @@ PY
 - [ ] **Step 8: Run the tests**
 
 Run: `uv run pytest -v && uv run ruff check .`
-Expected: the two reel tests may FAIL on the band widths (534 / 753) — that is the point of Task 5, calibration. If they fail **only** on `pytest.approx(..., abs=25)`, go to Step 9; if they fail on `rendu.lines` or on an exception, fix the template first.
+Expected: PASS. The two reel tests assert **structure only** (one band per role, PNG dimensions, second band on a long title) — not the band widths, which are calibrated in Task 5. If a reel test fails here, the template is wrong, not the calibration: fix it before committing.
 
-- [ ] **Step 9: Commit (with the calibration tests marked xfail if needed)**
+Record the current band widths for the next task (they are not asserted yet, only observed):
 
-If the widths are not yet within tolerance, mark the two assertions with a temporary `pytest.xfail("calibration tache 5")` **inside the test body, after the `lines` assertions**, so the structural part stays enforced. Then:
+```bash
+uv run python - <<'PY'
+from app.content.render import mesurer_bandes
+print(mesurer_bandes({
+    "title": "**Gregoire Cliquet**",
+    "subtitle": "au festival des **vieilles Charrues**",
+    "image_url": None,
+}))
+PY
+```
+
+- [ ] **Step 9: Commit**
 
 ```bash
 git add app/content/layout.py app/content/render.py app/content/templates/kinda_reel/ tests/
@@ -1639,7 +1645,7 @@ Second gabarit, et une logique de texte differente du post : deux bandes
 empilees qui epousent le texte, centrees, au lieu d'un bloc ancre en bas.
 Pas de voile -- le contraste vient des bandes.
 
-Un titre trop long ne rétrecit pas : il passe sur une deuxieme bande rose,
+Un titre trop long ne reduit pas sa police : il passe sur une deuxieme bande,
 via box-decoration-break: clone. L'empilement de bandes EST le langage du
 gabarit.
 
@@ -1658,7 +1664,7 @@ La seule tâche du plan qui n'est pas déterministe : on ajuste des nombres jusq
 **Files:**
 - Modify: `app/content/layout.py` (`GABARIT_REEL` : `font_size`, `letter_spacing`, `line_height`)
 - Modify: `app/content/templates/kinda_reel/style.css` (`padding` des bandes)
-- Test: `tests/test_render.py` (retirer les `xfail`)
+- Test: `tests/test_render.py` (ajouter le test de largeur de bande)
 
 **Interfaces:**
 - Consumes: `mesurer_bandes`
@@ -1719,10 +1725,34 @@ Adjust the vertical `padding` of `#title, #subtitle` in `kinda_reel/style.css` u
 
 Open `/tmp/reel.png` side by side with `exemples/[PREVIEW] - Cover Reels.png`. Check: vertical position of the block, gap (or absence of gap) between the two bands, tilt of the cream band, logo position.
 
-- [ ] **Step 5: Remove the `xfail` markers and run the tests**
+- [ ] **Step 5: Add the band-width test, now that the values are calibrated**
+
+Append to `tests/test_render.py`:
+
+```python
+@chromium_absent
+def test_les_largeurs_de_bande_retombent_sur_la_maquette():
+    """Les valeurs mesurees au pixel sur exemples/[PREVIEW] - Cover Reels.png :
+    bande rose 534 px, bande creme 753 px.
+
+    Tolerance large (25 px) et non stricte : la police embarquee est un substitut
+    metriquement compatible d'Arial Narrow, pas Arial Narrow elle-meme. Exiger le
+    pixel exact rendrait ce test faux pour une raison qui n'est pas un defaut.
+    """
+    from app.content.render import mesurer_bandes
+
+    largeurs = mesurer_bandes({
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    })
+
+    assert largeurs["title"][0] == pytest.approx(534, abs=25)
+    assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
+```
 
 Run: `uv run pytest tests/test_render.py -v && uv run ruff check .`
-Expected: PASS, including the band widths.
+Expected: PASS, band widths included. If this test fails, go back to Step 2 — it is the gate of the calibration, not an obstacle to work around.
 
 - [ ] **Step 6: Commit**
 
@@ -2126,7 +2156,9 @@ Aucune exigence sans tâche.
 
 **Hors périmètre, conformément à la spec :** composition automatique des titres de reel, sélection de vidéos, file quotidienne, feedback, modèle local, socle launchd.
 
-**Placeholder scan:** une seule tâche est non déterministe par nature — la 5 (calibration) et la 8 (plafond). Toutes deux fournissent le **script de mesure** et le **critère de décision**, pas un « à ajuster ». Le `xfail` temporaire de la tâche 4 est explicitement lié à la tâche 5 qui le retire.
+**Placeholder scan:** deux tâches sont non déterministes par nature — la 5 (calibration des bandes) et la 8 (plafond de lignes). Toutes deux fournissent le **script de mesure** et le **critère de décision**, pas un « à ajuster ».
+
+Aucun test n'est marqué `xfail` ni laissé rouge entre deux tâches : la tâche 4 n'asserte que la **structure** du gabarit reel (un bandeau par rôle, dimensions du PNG, seconde bande sur un titre long), et la tâche 5 ajoute le test de **largeur** une fois les valeurs calibrées. Chaque tâche laisse donc la suite verte, ce qui est la condition pour que la revue par tâche ait un sens.
 
 **Type consistency:** `Mesure(line_widths, height)` / `.lines` ; `Resultat(scale, lines, overflow)` ; `RenduSlide(png, scale, lines, overflow)` ; `render_post -> list[RenduSlide]` ; `build_document(gabarit, textes, image_data_uri, scale, scrim_height)`. Le champ `lines` est un `dict[str, int]` partout, y compris dans le JSON de `render_report`. La fonction `gabarit(nom)` et les variables locales `gabarit_` ne se marchent pas dessus (noté explicitement en tâche 3).
 
