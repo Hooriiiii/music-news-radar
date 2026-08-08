@@ -241,3 +241,38 @@ def test_variables_css_arrondit_la_hauteur_fractionnaire():
     css = variables_css(GABARIT_POST, scale=1.0, scrim_height=817.6)
 
     assert "--scrim-height: 818px;" in css
+
+
+def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
+    from app.content.layout import GABARIT_REEL
+
+    titre, zone_titre = GABARIT_REEL.roles["title"]
+    sous_titre, zone_sous_titre = GABARIT_REEL.roles["subtitle"]
+
+    assert (GABARIT_REEL.width, GABARIT_REEL.height) == (1080, 1920)
+    assert titre.background == "#FD8BC3"
+    assert titre.color == "#FFF7FA"
+    assert sous_titre.background == "#FFF7FA"
+    assert sous_titre.color == "#1D1D1D"
+    # La bande rose est DROITE, la creme est inclinee : confirme par l'utilisateur
+    # comme voulu (effet autocollant), et mesure a 0,6 deg antihoraire.
+    assert titre.tilt == 0.0
+    assert sous_titre.tilt == -0.6
+    # Les deux corps sont PROCHES, contrairement a ce que l'oeil suggere : les
+    # glyphes mesurent 83 px (titre) et 64 px (sous-titre), ce qui ramene les deux
+    # dans les mid-80 px. Coder « titre 1.4x » ferait diverger le rendu.
+    assert abs(titre.font_size - sous_titre.font_size) <= 8
+    # Bloc centre : 42,9 % de 1920.
+    assert zone_titre.anchor == "center"
+    assert zone_titre.align == "center"
+    assert zone_sous_titre.align == "center"
+    # Deux bandes par role au maximum, puis reduction.
+    assert zone_titre.max_lines == 2
+    assert zone_sous_titre.max_lines == 2
+
+
+def test_variables_css_expose_le_centre_du_bloc_quand_il_existe():
+    from app.content.layout import GABARIT_REEL
+
+    assert "--block-center: 42.9%;" in variables_css(GABARIT_REEL, scale=1.0)
+    assert "--block-center" not in variables_css(GABARIT_POST, scale=1.0)

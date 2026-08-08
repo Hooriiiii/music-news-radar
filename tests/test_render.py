@@ -225,3 +225,38 @@ def test_un_texte_intenable_est_marque_et_non_publie_en_silence():
     assert rendu.overflow is True
     assert rendu.scale == GABARIT_POST.roles["headline"][1].min_scale
     assert _png_size(rendu.png) == (GABARIT_POST.width, GABARIT_POST.height)
+
+
+@chromium_absent
+def test_la_cover_reel_rend_une_bande_par_role():
+    """La STRUCTURE du gabarit : deux roles, une bande chacun, aux dimensions de
+    la toile. Les LARGEURS de bande (534 / 753) sont verifiees a la tache 5,
+    apres calibration -- les asserter ici ferait echouer cette tache pour une
+    raison qui ne la concerne pas."""
+    from app.content.layout import GABARIT_REEL
+
+    slide = {
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }
+    (rendu,) = render_post([slide], "kinda_reel")
+
+    assert rendu.lines == {"title": 1, "subtitle": 1}
+    assert rendu.overflow is False
+    assert _png_size(rendu.png) == (GABARIT_REEL.width, GABARIT_REEL.height)
+
+
+@chromium_absent
+def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
+    """Le choix retenu : la police ne se reduit pas, le titre passe sur une
+    deuxieme bande rose. L'empilement de bandes EST le langage du gabarit."""
+    slide = {
+        "title": "**Gregoire Cliquet** et Nico Moreno en cloture",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }
+    (rendu,) = render_post([slide], "kinda_reel")
+
+    assert rendu.lines["title"] == 2
+    assert rendu.scale == 1.0

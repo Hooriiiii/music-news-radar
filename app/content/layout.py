@@ -67,6 +67,12 @@ class Gabarit:
     width: int
     height: int
     roles: dict[str, tuple[Typo, Zone]]
+    # Position verticale du bloc de texte, en fraction de la hauteur. Mesuree a
+    # 42,9 % sur la cover reel ; inutilisee quand les zones sont ancrees en bas.
+    block_center: float | None = None
+    # Le post a trois degrades pour rendre le texte lisible ; la cover reel n'en a
+    # pas, son contraste vient des bandes.
+    voile: bool = True
 
 
 @dataclass(frozen=True)
@@ -239,7 +245,55 @@ GABARIT_POST = Gabarit(
     },
 )
 
-GABARITS: dict[str, Gabarit] = {GABARIT_POST.name: GABARIT_POST}
+# Valeurs MESUREES AU PIXEL sur `exemples/[PREVIEW] - Cover Reels.png`, faute de
+# frame Figma extraite. Voir REFERENCE.md pour le releve complet.
+#
+# Deux pieges que l'oeil tend ici, et qui sont documentes parce qu'ils ont deja
+# failli etre codes de travers :
+#   - les deux corps sont PROCHES (mid-80 px), pas 1.4x. Ce qui fait paraitre le
+#     titre plus gros, c'est sa bande plus haute (94 vs 85) et ses capitales
+#     larges face a un sous-titre plein de lettres etroites ;
+#   - la bande rose est droite, la creme est inclinee de 0,6 deg antihoraire.
+#     Confirme comme voulu par le proprietaire du design.
+GABARIT_REEL = Gabarit(
+    name="kinda_reel",
+    width=1080,
+    height=1920,
+    roles={
+        "title": (
+            Typo(
+                font_size=86,
+                line_height=1.1,
+                letter_spacing=-0.04,
+                color="#FFF7FA",
+                background="#FD8BC3",
+                tilt=0.0,
+            ),
+            Zone(
+                left=77, right=77, anchor="center", anchor_offset=0, align="center",
+                max_lines=2, max_line_width=926, min_scale=0.7,
+            ),
+        ),
+        "subtitle": (
+            Typo(
+                font_size=80,
+                line_height=1.1,
+                letter_spacing=-0.04,
+                color="#1D1D1D",
+                background="#FFF7FA",
+                tilt=-0.6,
+            ),
+            Zone(
+                left=77, right=77, anchor="center", anchor_offset=0, align="center",
+                max_lines=2, max_line_width=926, min_scale=0.7,
+            ),
+        ),
+    },
+    block_center=0.429,
+    voile=False,
+)
+
+GABARITS: dict[str, Gabarit] = {g.name: g for g in (GABARIT_POST, GABARIT_REEL)}
 
 
 def gabarit(nom: str) -> Gabarit:
@@ -291,6 +345,9 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         # qui n'en porte que l'arrivee.
         "--voile-rose-debut: rgba(253, 139, 195, 0);",
     ]
+
+    if gabarit_.block_center is not None:
+        lignes.append(f"--block-center: {gabarit_.block_center * 100:.1f}%;")
 
     for role, (typo, zone) in gabarit_.roles.items():
         lignes += [

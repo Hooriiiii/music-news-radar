@@ -176,12 +176,13 @@ def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str)
         )
 
     # Passe finale : l'echelle retenue, et le voile cale sur la hauteur du bloc.
-    role_principal = next(iter(gabarit_.roles))
-    voile = (
-        hauteur_voile(gabarit_, role_principal, mesures[role_principal])
-        if role_principal in mesures
-        else None
-    )
+    # La cover reel n'a pas de voile (gabarit_.voile = False) : son contraste
+    # vient des bandes, pas d'un degrade calcule sur la hauteur du texte.
+    voile = None
+    if gabarit_.voile:
+        role_principal = next(iter(gabarit_.roles))
+        if role_principal in mesures:
+            voile = hauteur_voile(gabarit_, role_principal, mesures[role_principal])
     page.set_content(
         build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
     )
@@ -192,6 +193,32 @@ def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str)
         lines=resultat.lines,
         overflow=resultat.overflow,
     )
+
+
+def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[float]]:
+    """Les largeurs de bande reellement rendues, role par role.
+
+    Sert a la calibration : les corps et paddings exacts ne se deduisent pas par
+    inversion des mesures de la maquette, ils se calent en rendant puis en
+    comparant.
+    """
+    gabarit_ = gabarit(template)
+    image_uri = fetch_image_data_uri(slide.get("image_url"))
+    textes = {role: slide[role] for role in gabarit_.roles}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(
+                viewport={"width": gabarit_.width, "height": gabarit_.height},
+                device_scale_factor=1,
+            )
+            page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
+            page.evaluate("document.fonts.ready")
+            return {
+                role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles
+            }
+        finally:
+            browser.close()
 
 
 def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
