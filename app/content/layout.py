@@ -257,6 +257,11 @@ GABARIT_POST = Gabarit(
 #      creme) -- insensible a `letter_spacing` ;
 #   2. `letter_spacing` cale ensuite sur la LARGEUR de bande mesuree (534 px
 #      rose, 753 px creme), `font_size` etant deja fixe.
+# Ces chiffres sont cales sur le texte d'exemple utilise a la calibration :
+# "Gregoire Cliquet" (titre) et "au festival des vieilles Charrues"
+# (sous-titre) -- cf. tests/test_render.py. Une recalibration sur un autre
+# texte (longueur de chaine differente) ne retombera pas forcement dessus,
+# la largeur de bande dependant du nombre de caracteres autant que du corps.
 # Piege a l'oeil documente parce qu'il a deja failli etre code de travers : la
 # bande rose est droite, la creme est inclinee de 0,6 deg antihoraire. Confirme
 # comme voulu par le proprietaire du design.

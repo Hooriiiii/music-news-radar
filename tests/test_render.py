@@ -266,6 +266,16 @@ def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
     assert rendu.scale == 1.0
 
 
+def _plus_long_segment(ligne: np.ndarray) -> int:
+    """Longueur du plus long segment de True consecutifs dans une ligne 1D."""
+    if not ligne.any():
+        return 0
+    bornes = np.diff(np.concatenate(([0], ligne.astype(np.int8), [0])))
+    debuts = np.where(bornes == 1)[0]
+    fins = np.where(bornes == -1)[0]
+    return int((fins - debuts).max())
+
+
 def _hauteurs_de_bande(png: bytes) -> dict[str, float]:
     """Isole les pixels de bande au pixel pres et rend leur hauteur.
 
@@ -279,6 +289,17 @@ def _hauteurs_de_bande(png: bytes) -> dict[str, float]:
     pour exclure du masque creme tout ce qui est au niveau ou au-dessus du
     titre, ce qui ecarte le logo (bien plus haut) et les glyphes du titre (sur
     les memes lignes que sa bande) d'un seul coup.
+
+    Cette exclusion SUPPOSE le titre rendu au-dessus du sous-titre (l'ordre des
+    roles dans `kinda_reel/slide.html.j2`) et que les glyphes du titre ne
+    debordent jamais sous sa propre bande. Si un futur changement de gabarit
+    (ordre des roles, `max_lines`, `line_height`) casse cette hypothese, le
+    masque rognerait le haut de la vraie bande creme et la mesure ressortirait
+    plus petite -- SANS erreur. Le garde-fou ci-dessous le detecte : dans la
+    zone exclue (a l'ecart d'une marge pres du bord, cf. plus bas), les glyphes
+    du titre ne produisent que des traits de lettres (segments horizontaux
+    courts), alors qu'une vraie bande rognee laisserait un remplissage plein
+    (segment large, comparable a la largeur de la bande).
     """
     image = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
     r, g, b = image[:, :, 0], image[:, :, 1], image[:, :, 2]
@@ -288,11 +309,43 @@ def _hauteurs_de_bande(png: bytes) -> dict[str, float]:
     hauteur_rose = float(ys_rose.max() - ys_rose.min() + 1)
 
     creme = (r > 245) & (g > 240) & (b > 240)
+    limite = int(ys_rose.max()) + 1
     creme_sous_le_titre = creme.copy()
-    creme_sous_le_titre[: ys_rose.max() + 1, :] = False
+    creme_sous_le_titre[:limite, :] = False
     ys_creme, xs_creme = np.where(creme_sous_le_titre)
+    if ys_creme.size == 0:
+        # Cas extreme de la meme hypothese cassee : plus AUCUN pixel creme ne
+        # subsiste sous le bas de la bande rose (rangee ys_rose.max()) une fois
+        # la zone exclue -- le sous-titre n'est plus rendu en dessous du tout.
+        raise AssertionError(
+            f"aucun pixel creme sous la bande rose (rangee {ys_rose.max()}) : "
+            "le titre n'est plus au-dessus du sous-titre, l'exclusion de cette "
+            "fonction n'est plus valable"
+        )
     largeur_creme = float(xs_creme.max() - xs_creme.min() + 1)
     boite_creme = float(ys_creme.max() - ys_creme.min() + 1)
+
+    # Garde-fou : un segment plein dans la zone exclue (>= moitie de la largeur
+    # mesuree) ne peut pas etre un trait de lettre -- c'est la vraie bande qui
+    # deborde dans la zone qu'on vient d'exclure. Marge de 20px avant le bord :
+    # le bord haut de la bande creme est INCLINE (0,6 deg), donc son coin
+    # remonte legerement dans la zone exclue meme quand tout va bien (deplace-
+    # ment attendu ~= largeur x sin(0,6 deg), quelques pixels) -- un effet
+    # geometrique normal du design (bandes qui se touchent), pas un signe
+    # d'ordre casse. Sans cette marge, le garde-fou se declenche a CHAQUE rendu
+    # sain, ce qui n'est pas un garde-fou mais un test qui echoue toujours.
+    MARGE_INCLINAISON = 20
+    zone_exclue = creme[: max(limite - MARGE_INCLINAISON, 0), :]
+    plus_long = max((_plus_long_segment(ligne) for ligne in zone_exclue), default=0)
+    if plus_long >= largeur_creme / 2:
+        raise AssertionError(
+            f"segment creme de {plus_long}px a plus de {MARGE_INCLINAISON}px "
+            f"au-dessus du bas de la bande rose (rangee {ys_rose.max()}), alors "
+            f"que la bande creme mesuree ne fait que {largeur_creme:.0f}px de "
+            "large : le titre n'est plus au-dessus du sous-titre (ou deborde "
+            "sous sa bande), l'exclusion de cette fonction n'est plus valable"
+        )
+
     # La bande creme est inclinee : sa boite englobante est plus haute que la
     # bande elle-meme, de largeur x sin(angle).
     hauteur_creme = boite_creme - largeur_creme * math.sin(math.radians(0.6))
