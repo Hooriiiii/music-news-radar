@@ -47,9 +47,16 @@ procédure de ré-extraction. Ce lien-là reste — Figma est la table à dessin
 
 L'utilisateur a décrit huit chantiers. Chacun aura sa propre spec.
 
-- **0. Socle local** — tout tourne sur le Mac : agents launchd (pipeline
-  périodique + uvicorn permanent + LM Studio), GitHub Actions coupé, **base Neon
-  conservée** (sauvegardée, accessible d'ailleurs, aucune migration).
+- **0. Socle local** — agents launchd sur le Mac, **base Neon conservée**
+  (sauvegardée, accessible d'ailleurs, aucune migration).
+  *Révisé le 2026-08-09 — voir `2026-08-09-socle-local-design.md` :* ce document
+  actait « GitHub Actions coupé », et c'est **annulé**. Les alertes Discord partent
+  du pipeline ; un portable fermé fait rattraper le job au réveil, donc l'alerte
+  arriverait le soir et perdrait sa raison d'être. Le cron cloud reste donc en
+  place pour l'ingestion, le scoring et les alertes ; le Mac fait l'ingestion
+  seule (IP résidentielle, ce qui débloque Mixmag et Reddit) et tient le dashboard
+  en permanence. LM Studio n'est pas lancé au démarrage : sans consommateur avant
+  le chantier C, un modèle 7B chargé immobiliserait ~5 Go pour rien.
 - **A. Rendu** — *ce document*.
 - **B. File quotidienne + feedback** — 5 posts/jour mis en avant, validé/refusé
   avec motif écrit.
