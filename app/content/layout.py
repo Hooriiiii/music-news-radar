@@ -248,13 +248,18 @@ GABARIT_POST = Gabarit(
 # Valeurs MESUREES AU PIXEL sur `exemples/[PREVIEW] - Cover Reels.png`, faute de
 # frame Figma extraite. Voir REFERENCE.md pour le releve complet.
 #
-# Deux pieges que l'oeil tend ici, et qui sont documentes parce qu'ils ont deja
-# failli etre codes de travers :
-#   - les deux corps sont PROCHES (mid-80 px), pas 1.4x. Ce qui fait paraitre le
-#     titre plus gros, c'est sa bande plus haute (94 vs 85) et ses capitales
-#     larges face a un sous-titre plein de lettres etroites ;
-#   - la bande rose est droite, la creme est inclinee de 0,6 deg antihoraire.
-#     Confirme comme voulu par le proprietaire du design.
+# `font_size`, `letter_spacing` (et le padding de style.css) ne se deduisent pas
+# par inversion des glyphes de la maquette -- une police de substitution n'a pas
+# les memes metriques. Ils se calent en rendant puis en comparant, dans cet
+# ordre (la largeur de bande depend des trois a la fois, la hauteur seulement de
+# `font_size`/`line_height`/padding vertical, ce qui decouple le probleme) :
+#   1. `font_size` cale sur la HAUTEUR de bande mesuree (94 px rose, 89 px
+#      creme) -- insensible a `letter_spacing` ;
+#   2. `letter_spacing` cale ensuite sur la LARGEUR de bande mesuree (534 px
+#      rose, 753 px creme), `font_size` etant deja fixe.
+# Piege a l'oeil documente parce qu'il a deja failli etre code de travers : la
+# bande rose est droite, la creme est inclinee de 0,6 deg antihoraire. Confirme
+# comme voulu par le proprietaire du design.
 GABARIT_REEL = Gabarit(
     name="kinda_reel",
     width=1080,
@@ -262,9 +267,9 @@ GABARIT_REEL = Gabarit(
     roles={
         "title": (
             Typo(
-                font_size=86,
+                font_size=84.3,
                 line_height=1.1,
-                letter_spacing=-0.04,
+                letter_spacing=-0.02,
                 color="#FFF7FA",
                 background="#FD8BC3",
                 tilt=0.0,
@@ -276,9 +281,9 @@ GABARIT_REEL = Gabarit(
         ),
         "subtitle": (
             Typo(
-                font_size=80,
+                font_size=75.3,
                 line_height=1.1,
-                letter_spacing=-0.04,
+                letter_spacing=-0.08,
                 color="#1D1D1D",
                 background="#FFF7FA",
                 tilt=-0.6,

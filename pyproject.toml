@@ -19,6 +19,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "numpy>=2.4.6",
+    "pillow>=12.3.0",
     "pytest>=8",
     "ruff>=0.6",
 ]

@@ -1,7 +1,11 @@
+import io
+import math
 import struct
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from app.content.layout import GABARIT_POST
 from app.content.render import build_document, fetch_image_data_uri, render_post
@@ -260,3 +264,82 @@ def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
 
     assert rendu.lines["title"] == 2
     assert rendu.scale == 1.0
+
+
+def _hauteurs_de_bande(png: bytes) -> dict[str, float]:
+    """Isole les pixels de bande au pixel pres et rend leur hauteur.
+
+    Le seuil de couleur seul ne suffit pas pour la bande creme : le texte du
+    TITRE est peint dans la meme couleur (#FFF7FA) que le FOND du sous-titre --
+    et le logo aussi. Un masque de couleur brut sur toute l'image confond donc
+    les glyphes du titre et le logo avec la bande creme, et gonfle la boite
+    englobante de plusieurs centaines de pixels (verifie en calibrant cette
+    tache). La bande rose n'a pas ce probleme (rien d'autre n'est peint en rose
+    sur le rendu), donc sa boite englobante brute suffit -- et sert de repere
+    pour exclure du masque creme tout ce qui est au niveau ou au-dessus du
+    titre, ce qui ecarte le logo (bien plus haut) et les glyphes du titre (sur
+    les memes lignes que sa bande) d'un seul coup.
+    """
+    image = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
+    r, g, b = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+
+    rose = (abs(r - 253) < 22) & (abs(g - 139) < 34) & (abs(b - 195) < 28)
+    ys_rose, _ = np.where(rose)
+    hauteur_rose = float(ys_rose.max() - ys_rose.min() + 1)
+
+    creme = (r > 245) & (g > 240) & (b > 240)
+    creme_sous_le_titre = creme.copy()
+    creme_sous_le_titre[: ys_rose.max() + 1, :] = False
+    ys_creme, xs_creme = np.where(creme_sous_le_titre)
+    largeur_creme = float(xs_creme.max() - xs_creme.min() + 1)
+    boite_creme = float(ys_creme.max() - ys_creme.min() + 1)
+    # La bande creme est inclinee : sa boite englobante est plus haute que la
+    # bande elle-meme, de largeur x sin(angle).
+    hauteur_creme = boite_creme - largeur_creme * math.sin(math.radians(0.6))
+
+    return {"rose": hauteur_rose, "creme": hauteur_creme}
+
+
+@chromium_absent
+def test_les_largeurs_de_bande_retombent_sur_la_maquette():
+    """Les valeurs mesurees au pixel sur exemples/[PREVIEW] - Cover Reels.png :
+    bande rose 534 px, bande creme 753 px.
+
+    Tolerance large (25 px) et non stricte : la police embarquee est un substitut
+    metriquement compatible d'Arial Narrow, pas Arial Narrow elle-meme. Exiger le
+    pixel exact rendrait ce test faux pour une raison qui n'est pas un defaut.
+    """
+    from app.content.render import mesurer_bandes
+
+    largeurs = mesurer_bandes({
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    })
+
+    assert largeurs["title"][0] == pytest.approx(534, abs=25)
+    assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
+
+
+@chromium_absent
+def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
+    """Hauteurs mesurees : 94 px pour la bande rose, 89 px pour la creme.
+
+    Ce test remplace l'ancienne assertion `abs(titre.font_size -
+    sous_titre.font_size) <= 8`, qui reposait sur une deduction des corps a
+    partir des glyphes de la maquette -- deduction que les largeurs rendues ont
+    dementie. La hauteur de bande, elle, depend du corps et du padding mais PAS
+    de l'interlettrage : c'est la mesure qui pin le corps sans ambiguite.
+    """
+    (rendu,) = render_post([{
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }], "kinda_reel")
+
+    hauteurs = _hauteurs_de_bande(rendu.png)
+    assert hauteurs["rose"] == pytest.approx(94, abs=8)
+    # La boite englobante de la bande creme est plus haute que la bande : son
+    # inclinaison ajoute largeur x sin(0,6 deg) ~ 8 px. `_hauteurs_de_bande` le
+    # corrige ; comparer la boite brute pousserait a rapetisser une bande juste.
+    assert hauteurs["creme"] == pytest.approx(89, abs=8)

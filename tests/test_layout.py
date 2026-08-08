@@ -258,10 +258,6 @@ def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
     # comme voulu (effet autocollant), et mesure a 0,6 deg antihoraire.
     assert titre.tilt == 0.0
     assert sous_titre.tilt == -0.6
-    # Les deux corps sont PROCHES, contrairement a ce que l'oeil suggere : les
-    # glyphes mesurent 83 px (titre) et 64 px (sous-titre), ce qui ramene les deux
-    # dans les mid-80 px. Coder « titre 1.4x » ferait diverger le rendu.
-    assert abs(titre.font_size - sous_titre.font_size) <= 8
     # Bloc centre : 42,9 % de 1920.
     assert zone_titre.anchor == "center"
     assert zone_titre.align == "center"

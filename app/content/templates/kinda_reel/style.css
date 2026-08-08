@@ -57,7 +57,11 @@ body {
 
 /* Le bloc de texte : centre verticalement sur --block-center, chaque bande
    centree horizontalement sur SA propre largeur (mesure : centres a 529 et 537
-   pour une toile centree a 540). */
+   pour une toile centree a 540).
+
+   Marges prises sur le role `title` : le conteneur porte les DEUX bandes, et
+   cela ne tient que parce que les deux zones declarent les memes 77 px. Si un
+   jour elles divergent, ce conteneur devra cesser de privilegier un role. */
 #bandes {
   position: absolute;
   left: var(--title-left);
