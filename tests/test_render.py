@@ -3,14 +3,8 @@ from pathlib import Path
 
 import pytest
 
-import app.content.render as render_module
-from app.content.render import (
-    SLIDE_HEIGHT,
-    SLIDE_WIDTH,
-    build_document,
-    fetch_image_data_uri,
-    render_post,
-)
+from app.content.layout import GABARIT_POST
+from app.content.render import build_document, fetch_image_data_uri, render_post
 
 
 def _chromium_playwright_present() -> bool:
@@ -46,6 +40,33 @@ def test_fetch_image_data_uri_retombe_sur_le_fallback_si_url_cassee():
     assert uri.startswith("data:image/")
 
 
+def test_le_document_porte_les_variables_du_gabarit():
+    """Le CSS n'a plus de valeurs de mise en page : si les variables ne sont pas
+    injectees, il rend un gabarit vide sans lever d'erreur."""
+    document = build_document(
+        GABARIT_POST, {"headline": "Une **accroche**"}, "data:image/jpeg;base64,AAA"
+    )
+
+    assert "--headline-font-size: 80px;" in document
+    assert "--scale: 1.0;" in document
+    assert "<mark>accroche</mark>" in document
+
+
+def test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page():
+    """Sentinelle du refactoring : une valeur qui revient en dur dans la feuille
+    est une regle qui echappe a layout.py, donc aux tests."""
+    css = Path("app/content/templates/kinda_post/style.css").read_text(encoding="utf-8")
+    # On ignore la police embarquee en base64 et les commentaires.
+    corps = "\n".join(
+        ligne
+        for ligne in css.splitlines()
+        if "base64" not in ligne and not ligne.strip().startswith(("/*", "*", "--"))
+    )
+
+    for valeur in ("80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195"):
+        assert valeur not in corps, f"{valeur} est encore en dur dans style.css"
+
+
 def test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit():
     """L'autoescape de Jinja s'applique aussi a `{{ css }}` dans <style>.
 
@@ -55,7 +76,9 @@ def test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit():
     lignes ailleurs que le gabarit Figma. Aucune erreur, aucun test de taille de
     PNG ne bronche -- d'ou cette verification sur le document lui-meme.
     """
-    document = build_document("Une **accroche**", "data:image/jpeg;base64,AAA")
+    document = build_document(
+        GABARIT_POST, {"headline": "Une **accroche**"}, "data:image/jpeg;base64,AAA"
+    )
 
     assert 'font-family: "KindaDisplay"' in document
     assert 'format("woff2")' in document
@@ -73,11 +96,15 @@ def test_la_police_du_gabarit_est_bien_celle_qui_rend_laccroche():
     """
     from playwright.sync_api import sync_playwright
 
-    document = build_document("Vieilles Charrues", fetch_image_data_uri(None))
+    document = build_document(
+        GABARIT_POST, {"headline": "Vieilles Charrues"}, fetch_image_data_uri(None)
+    )
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            page = browser.new_page(viewport={"width": SLIDE_WIDTH, "height": SLIDE_HEIGHT})
+            page = browser.new_page(
+                viewport={"width": GABARIT_POST.width, "height": GABARIT_POST.height}
+            )
             page.set_content(document, wait_until="load")
             page.evaluate("document.fonts.ready")
             faces = page.evaluate("[...document.fonts].map(f => [f.family, f.status])")
@@ -111,40 +138,12 @@ def test_render_post_produit_un_png_par_slide():
 
     assert len(pngs) == 2
     for png in pngs:
-        assert _png_size(png) == (SLIDE_WIDTH, SLIDE_HEIGHT)
+        assert _png_size(png) == (GABARIT_POST.width, GABARIT_POST.height)
         assert len(png) > 10_000
 
 
-@chromium_absent
-def test_render_post_reduit_la_police_sur_une_accroche_maximale(monkeypatch):
-    """La borne de 110 caracteres ne garantit pas l'absence de debordement :
-    une accroche longue doit sortir un rendu, pas un post illisible.
-
-    Les dimensions du PNG sont imposees par le viewport Playwright, quelle que
-    soit l'echelle de police retenue -- les comparer ne prouve donc rien sur la
-    boucle de reduction elle-meme (ce test resterait vert meme si la
-    comparaison `height <= MAX_HEADLINE_HEIGHT` etait inversee). On rend la
-    MEME accroche deux fois en monkeypatchant `MAX_HEADLINE_HEIGHT` -- une
-    fois tres haut (aucune reduction possible, l'echelle retenue doit rester
-    1.0), une fois tres bas (reduction forcee, l'echelle doit descendre sous
-    1.0) -- et on lit l'echelle reellement appliquee via le parametre
-    `scale_log` de `render_post`. C'est la preuve directe que la boucle de
-    reduction s'est declenchee dans le bon sens, pas un indice indirect.
-    """
-    longue = "**Nico Moreno**, Mosimann, Cassius et le collectif PACT ce week-end aux Vieilles Charrues"
-    slide = [{"headline": longue, "image_url": None}]
-
-    monkeypatch.setattr(render_module, "MAX_HEADLINE_HEIGHT", 100_000)
-    scales_sans_reduction: list[float] = []
-    (png_sans_reduction,) = render_post(slide, scale_log=scales_sans_reduction)
-
-    monkeypatch.setattr(render_module, "MAX_HEADLINE_HEIGHT", 1)
-    scales_avec_reduction: list[float] = []
-    (png_avec_reduction,) = render_post(slide, scale_log=scales_avec_reduction)
-
-    for png in (png_sans_reduction, png_avec_reduction):
-        assert _png_size(png) == (SLIDE_WIDTH, SLIDE_HEIGHT)
-    assert scales_sans_reduction == [1.0]
-    assert scales_avec_reduction == [render_module.SCALE_STEPS[-1]]
-    assert scales_avec_reduction[0] < scales_sans_reduction[0]
-    assert png_sans_reduction != png_avec_reduction
+# La reduction de police sur une accroche trop longue (`MAX_HEADLINE_HEIGHT`,
+# `SCALE_STEPS`) n'existe plus dans ce module : elle est remplacee par la
+# dichotomie de `layout.Ajustement`, cablee dans `_render_one` par la tache
+# suivante. Le test qui la couvrait est donc retire ici plutot que laisse
+# rouge -- il sera reecrit sur `layout.Ajustement` / `RenduSlide`.

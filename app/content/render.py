@@ -18,23 +18,9 @@ from markupsafe import Markup
 from playwright.sync_api import sync_playwright
 
 from app.content.highlight import to_html
+from app.content.layout import Gabarit, gabarit, variables_css
 
 logger = logging.getLogger(__name__)
-
-SLIDE_WIDTH = 1080
-SLIDE_HEIGHT = 1440
-# Hauteur allouee au bloc d'accroche, au-dela on reduit la police.
-# Mesuree (Chromium headless, echelle 1.0) sur l'accroche de reference du template
-# -- « Nico Moreno, Mosimann, Cassius... et **c'est ce week-end** aux **Vieilles
-# Charrues** » -- qui doit tomber sur trois lignes : hauteur reelle 276 px (3 x
-# 92 px de hauteur de ligne). Une accroche qui deborde sur une quatrieme ligne
-# mesure 368 px. 420 px (valeur du brief) ne declenchait donc JAMAIS la reduction,
-# meme a quatre lignes : ajuste a 320 px, a mi-chemin entre les deux, pour laisser
-# passer trois lignes telles quelles et forcer la reduction des la quatrieme.
-MAX_HEADLINE_HEIGHT = 320
-# Paliers de reduction. Bornee a trois essais : au-dela le probleme n'est pas la
-# taille de police mais l'accroche elle-meme.
-SCALE_STEPS = (1.0, 0.9, 0.8)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 ASSETS_DIR = Path(__file__).parent / "assets"
@@ -74,13 +60,17 @@ def _logo_data_uri() -> str:
 
 
 def build_document(
-    headline: str, image_data_uri: str, scale: float = 1.0, template: str = "kinda_post"
+    gabarit: Gabarit,
+    textes: dict[str, str],
+    image_data_uri: str,
+    scale: float = 1.0,
+    scrim_height: float | None = None,
 ) -> str:
-    """Assemble le HTML autonome d'une slide (feuille et images inlinees).
+    """Assemble le HTML autonome d'une slide (feuille, police et images inlinees).
 
-    Sortie par une fonction a part pour etre verifiable sans Chromium : c'est
-    ici que se joue l'echappement de la feuille de style, dont un ratage ne se
-    voit sur le PNG que si on connait deja la bonne police.
+    Sortie par une fonction a part pour etre verifiable sans Chromium : c'est ici
+    que se joue l'echappement de la feuille de style, dont un ratage ne se voit
+    sur le PNG que si on connait deja la bonne police.
     """
     env = Environment(
         loader=FileSystemLoader(TEMPLATES_DIR),
@@ -91,58 +81,43 @@ def build_document(
     # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
     # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
     # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
-    css = Markup((TEMPLATES_DIR / template / "style.css").read_text(encoding="utf-8"))
-    return env.get_template(f"{template}/slide.html.j2").render(
+    css = Markup((TEMPLATES_DIR / gabarit.name / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{gabarit.name}/slide.html.j2").render(
         css=css,
+        variables=Markup(variables_css(gabarit, scale, scrim_height)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
-        headline_html=Markup(to_html(headline)),
-        headline_scale=scale,
+        textes={role: Markup(to_html(textes[role])) for role in gabarit.roles},
     )
 
 
-def _render_one(
-    page, template: str, image_uri: str, headline: str, scale_log: list[float] | None = None
-) -> bytes:
-    """Rend une slide, en reduisant la police tant que l'accroche deborde.
+def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> bytes:
+    """Rend une slide a l'echelle de la maquette.
 
-    `scale_log`, si fourni, recoit l'echelle retenue -- utilise par les tests
-    pour prouver que la boucle de reduction s'est bien declenchee : la taille
-    du PNG produit est fixee par le viewport Playwright et ne temoigne de rien
-    sur l'echelle appliquee a l'accroche.
+    Pas de mesure ni de reduction ici : cette fonction ne fait qu'assembler le
+    document et prendre la capture -- la boucle de mesure/ajustement Chromium
+    (`layout.Ajustement`, hauteur du voile dynamique) est la tache suivante.
     """
-    for scale in SCALE_STEPS:
-        page.set_content(build_document(headline, image_uri, scale, template), wait_until="load")
-        page.evaluate("document.fonts.ready")
-        height = page.evaluate(
-            "document.getElementById('headline').getBoundingClientRect().height"
-        )
-        if height <= MAX_HEADLINE_HEIGHT or scale == SCALE_STEPS[-1]:
-            if height > MAX_HEADLINE_HEIGHT:
-                logger.warning("accroche encore trop longue apres reduction : %r", headline)
-            if scale_log is not None:
-                scale_log.append(scale)
-            return page.screenshot(type="png")
-    raise RuntimeError("boucle de reduction sortie sans capture")  # pragma: no cover
+    page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
+    page.evaluate("document.fonts.ready")
+    return page.screenshot(type="png")
 
 
-def render_post(
-    slides: list[dict], template: str = "kinda_post", scale_log: list[float] | None = None
-) -> list[bytes]:
-    """Rend chaque slide en PNG 1080x1440. Un seul Chromium pour tout le post."""
+def render_post(slides: list[dict], template: str = "kinda_post") -> list[bytes]:
+    """Rend chaque slide en PNG. Un seul Chromium pour tout le post."""
+    gabarit_ = gabarit(template)
     rendus: list[bytes] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
             page = browser.new_page(
-                viewport={"width": SLIDE_WIDTH, "height": SLIDE_HEIGHT},
+                viewport={"width": gabarit_.width, "height": gabarit_.height},
                 device_scale_factor=1,
             )
             for slide in slides:
                 image_uri = fetch_image_data_uri(slide.get("image_url"))
-                rendus.append(
-                    _render_one(page, template, image_uri, slide["headline"], scale_log)
-                )
+                textes = {role: slide[role] for role in gabarit_.roles}
+                rendus.append(_render_one(page, gabarit_, textes, image_uri))
         finally:
             browser.close()
     return rendus

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Kinda post</title>
+<style>{{ variables }}</style>
 <style>{{ css }}</style>
 </head>
 <body>
@@ -10,7 +11,7 @@
     <img id="photo" src="{{ image_data_uri }}" alt="">
     <div id="scrim"></div>
     <img id="logo" src="{{ logo_data_uri }}" alt="">
-    <div id="headline" style="--scale: {{ headline_scale }}">{{ headline_html }}</div>
+    <div id="headline">{{ textes.headline }}</div>
   </div>
 </body>
 </html>
