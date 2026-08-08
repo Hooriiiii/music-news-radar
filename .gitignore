@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# Worktrees Claude Code (espaces de travail isoles, jamais versionnes)
+.claude/worktrees/
