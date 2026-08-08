@@ -806,22 +806,28 @@ body {
 /* Le voile bas n'a plus de hauteur figee : `--scrim-height` suit la hauteur
    mesuree du bloc d'accroche. Sans cela, une accroche de 5 lignes sortirait du
    degrade le plus dense -- invisible sur la maquette dont le bas est deja
-   sombre, illisible sur une photo claire. */
+   sombre, illisible sur une photo claire.
+
+   La valeur de repli 817px est celle de la maquette, et elle n'est PAS un
+   provisoire : un `var()` sans repli invalide la propriete ENTIERE, pas
+   seulement son calque -- les trois degrades passeraient en plein cadre, sans
+   erreur ni test rouge. Le repli garantit qu'un oubli degrade vers la maquette
+   et non vers n'importe quoi. */
 #scrim {
   position: absolute;
   inset: 0;
   background-repeat: no-repeat;
   background-image:
-    linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.8)),
-    linear-gradient(to bottom, rgba(253, 139, 195, 0), rgba(253, 139, 195, 0.3)),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+    linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--voile-noir)),
+    linear-gradient(to bottom, var(--voile-rose-debut), var(--voile-rose)),
+    linear-gradient(to bottom, var(--voile-noir), rgba(0, 0, 0, 0));
   background-size:
-    var(--slide-width) var(--scrim-height),
-    var(--slide-width) var(--scrim-height),
-    var(--slide-width) 727px;
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--voile-haut-hauteur);
   background-position:
-    0 calc(var(--slide-height) - var(--scrim-height)),
-    0 calc(var(--slide-height) - var(--scrim-height)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
     0 0;
 }
 
@@ -888,7 +894,9 @@ Replace the existing `build_document` with:
 
 ```python
 def build_document(
-    gabarit: Gabarit,
+    # `gabarit_` et non `gabarit` : le module importe deja une FONCTION `gabarit()`,
+    # que ce nom masquerait dans tout le corps.
+    gabarit_: Gabarit,
     textes: dict[str, str],
     image_data_uri: str,
     scale: float = 1.0,
@@ -909,13 +917,13 @@ def build_document(
     # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
     # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
     # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
-    css = Markup((TEMPLATES_DIR / gabarit.name / "style.css").read_text(encoding="utf-8"))
-    return env.get_template(f"{gabarit.name}/slide.html.j2").render(
+    css = Markup((TEMPLATES_DIR / gabarit_.name / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{gabarit_.name}/slide.html.j2").render(
         css=css,
-        variables=Markup(variables_css(gabarit, scale, scrim_height)),
+        variables=Markup(variables_css(gabarit_, scale, scrim_height)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
-        textes={role: Markup(to_html(textes[role])) for role in gabarit.roles},
+        textes={role: Markup(to_html(textes[role])) for role in gabarit_.roles},
     )
 ```
 
@@ -1127,18 +1135,18 @@ class RenduSlide:
     overflow: bool
 
 
-def _render_one(page, gabarit: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
+def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
     """Rend une slide : mesure, ajuste, puis capture.
 
     Deux passes AU MINIMUM, et c'est structurel : la hauteur du voile depend de la
     hauteur mesuree du bloc, qu'on ne connait qu'apres un premier rendu.
     """
-    ajustement = Ajustement(gabarit)
+    ajustement = Ajustement(gabarit_)
     mesures: dict[str, Mesure] = {}
     while (echelle := ajustement.prochaine_echelle()) is not None:
-        page.set_content(build_document(gabarit, textes, image_uri, echelle), wait_until="load")
+        page.set_content(build_document(gabarit_, textes, image_uri, echelle), wait_until="load")
         page.evaluate("document.fonts.ready")
-        mesures = {role: mesurer_role(page, role) for role in gabarit.roles}
+        mesures = {role: mesurer_role(page, role) for role in gabarit_.roles}
         ajustement.enregistrer(mesures)
 
     resultat = ajustement.resultat
@@ -1149,14 +1157,14 @@ def _render_one(page, gabarit: Gabarit, textes: dict[str, str], image_uri: str) 
         )
 
     # Passe finale : l'echelle retenue, et le voile cale sur la hauteur du bloc.
-    role_principal = next(iter(gabarit.roles))
+    role_principal = next(iter(gabarit_.roles))
     voile = (
-        hauteur_voile(gabarit, role_principal, mesures[role_principal])
+        hauteur_voile(gabarit_, role_principal, mesures[role_principal])
         if role_principal in mesures
         else None
     )
     page.set_content(
-        build_document(gabarit, textes, image_uri, resultat.scale, voile), wait_until="load"
+        build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
     )
     page.evaluate("document.fonts.ready")
     return RenduSlide(
@@ -1195,7 +1203,7 @@ from dataclasses import dataclass
 from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 ```
 
-Note: the parameter name `gabarit` shadows the function `gabarit()` inside `_render_one`. To avoid it, the function keeps the name `gabarit` and the local variables are named `gabarit_`. Follow exactly the naming above.
+Note on naming: `render.py` imports a **function** `gabarit()` from `layout`, so no parameter or local may be called `gabarit` — it would shadow the function throughout that body. Every gabarit-typed parameter and local is therefore named `gabarit_`, in `build_document`, `_render_one`, `render_post` and `mesurer_bandes` alike. Follow exactly the naming above; it is not a stylistic preference but the reason the code works when someone later adds a `gabarit(...)` call inside one of these bodies.
 
 - [ ] **Step 5: Update the callers in `app/api/posts.py`**
 
@@ -1490,11 +1498,14 @@ body {
   object-position: center;
 }
 
+/* Meme geometrie que sur le post, et elle vient des memes variables : le logo
+   est identique d'un gabarit a l'autre, donc sa position n'a pas a etre ecrite
+   deux fois. */
 #logo {
   position: absolute;
-  right: 77px;
-  top: 87px;
-  width: 150px;
+  right: var(--logo-right);
+  top: var(--logo-top);
+  width: var(--logo-width);
   height: auto;
 }
 
