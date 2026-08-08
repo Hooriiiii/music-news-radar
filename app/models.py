@@ -204,6 +204,12 @@ class Post(Base):
     # Liste ordonnee : [{"headline": "... **surligne** ...", "image_url": "..."}]
     # Reassigner la liste ENTIERE, jamais de mutation in place
     slides: Mapped[list] = mapped_column(JSONVariant, default=list)
+    # Rapport du dernier rendu : par slide, l'echelle retenue, le nombre de lignes
+    # et un drapeau de debordement. Nullable : un post jamais rendu n'en a pas.
+    # C'est ce qui permet au dashboard de signaler un post en defaut au lieu de
+    # laisser publier une image coupee.
+    # Reassigner le dict ENTIER, jamais de mutation in place.
+    render_report: Mapped[dict | None] = mapped_column(JSONVariant)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

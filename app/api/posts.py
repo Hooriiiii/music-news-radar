@@ -97,6 +97,27 @@ def rendre_slide(post_id: int, index: int, db: Session = Depends(get_db)):
     return Response(content=rendu.png, media_type="image/png")
 
 
+@router.post("/posts/{post_id}/render")
+def rendre_post(post_id: int, db: Session = Depends(get_db)):
+    """Rend toutes les slides et PERSISTE le rapport.
+
+    En POST et pas en GET : c'est une ecriture. Les endpoints de rendu en GET
+    restent purs -- ils servent l'image, ils ne consignent rien.
+    """
+    post = _post_ou_404(db, post_id)
+    rendus = render_post(post.slides, post.template)
+    rapport = {
+        "slides": [
+            {"scale": rendu.scale, "lines": rendu.lines, "overflow": rendu.overflow}
+            for rendu in rendus
+        ]
+    }
+    # Reassignation ENTIERE : une mutation in place ne serait pas persistee.
+    post.render_report = rapport
+    db.commit()
+    return rapport
+
+
 def _texte_legende(post: Post) -> str:
     parties = [post.caption]
     if post.hashtags:
