@@ -149,6 +149,10 @@ def test_le_gabarit_post_porte_les_valeurs_de_la_maquette():
     assert typo.color == "#FFF7FA"
     assert zone.anchor == "bottom"
     assert (zone.left, zone.right, zone.anchor_offset) == (77, 77, 76)
+    # Plafond calibre (tache 8, pas une valeur Figma) : mesure au rendu montrant
+    # qu'a 5 lignes le sujet de la photo reste visible sous le texte. Voir le
+    # commentaire de `GABARIT_POST` pour le releve complet.
+    assert zone.max_lines == 5
 
 
 def test_hauteur_voile_retrouve_la_valeur_de_la_maquette():

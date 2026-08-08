@@ -235,8 +235,14 @@ GABARIT_POST = Gabarit(
                 anchor="bottom",
                 anchor_offset=76,
                 align="left",
-                # Plafond calibre a la tache 8. 5 lignes laisse la photo respirer ;
-                # `HEADLINE_MAX = 110` dans compose.py plafonne deja a ~4 lignes.
+                # Mesure : 92 px par ligne a l'echelle 1.0 (184 px a 2 lignes, 276 a 3,
+                # 368 a 4, 460 a 5). Rendu d'accroches croissantes sur une vraie photo
+                # (pas le fallback) : a 5 lignes le sujet de la photo reste visible sous
+                # le bloc de texte ; rendues sans plafond, 7-8 lignes a l'echelle pleine
+                # avalent les visages -- la photo cesse alors d'exister comme image.
+                # 5 est donc le dernier palier ou elle survit. `HEADLINE_MAX = 110` dans
+                # compose.py plafonne deja les accroches normales a ~4 lignes : ce
+                # plafond est un filet de secours, pas le regime courant.
                 max_lines=5,
                 max_line_width=926,   # 1080 - 2 x 77
                 min_scale=0.7,
