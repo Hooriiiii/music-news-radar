@@ -37,7 +37,10 @@ voile bas de la maquette : 817 px de haut à partir de y=623.
 | Mesure | Valeur |
 |---|---|
 | Bande rose (titre) | largeur **534**, hauteur **94**, y 731→824, non inclinée |
-| Bande crème (sous-titre) | largeur **753**, hauteur ≈ **85**, y 831→910, **inclinée -0,6°** |
+| Bande crème (sous-titre) | largeur **753**, hauteur **≈ 89**, boîte englobante y 825→921, **inclinée -0,6°** |
+
+La hauteur de la bande crème n'est pas la hauteur de sa boîte englobante : l'inclinaison
+ajoute `largeur × sin|θ|` = 753 × sin(0,6°) ≈ 7,9 px. Donc 97 − 7,9 ≈ **89**.
 | Empilement | jointives, centrées chacune sur sa propre largeur |
 | Centre vertical du bloc | ≈ 42,9 % de 1920 |
 | Rose | `#FD8BC3` opaque · Crème `#FFF7FA` · Texte titre `#FFF7FA` · Texte sous-titre `#1D1D1D` |
@@ -1703,11 +1706,22 @@ print("subtitle:", largeurs["subtitle"], "-> cible 753")
 PY
 ```
 
-- [ ] **Step 2: Adjust `font_size` proportionally**
+- [ ] **Step 2: Calibrate on the two robust targets, in this order — height first, then width**
 
-The band width is roughly proportional to `font_size`. If `title` measures 500 for a target of 534, multiply `font_size` by `534/500`. Adjust `title` and `subtitle` **independently** — they are two distinct roles. Re-run Step 1 and iterate until both are within ±10 px.
+**Read this before touching a number.** The naive method (scale `font_size` until the width matches) is wrong here, because a band's width is driven by **three** parameters at once — `font_size`, `letter_spacing`, and the horizontal `padding` — so matching the width alone lets you land on the right width with a badly wrong font size. There are two independently measured targets per role, so solve them in the order that decouples them:
 
-Keep `abs(title.font_size - subtitle.font_size) <= 8` (the test of Task 4): if calibration pushes the two apart by more than 8 px, that means the maquette really does use two different sizes and the test's tolerance must be widened — **document why in the commit** rather than forcing the values.
+| Target | Driven by | Not affected by |
+|---|---|---|
+| Band **height** — 94 (pink), 89 (cream) | `font_size`, `line_height`, vertical `padding` | `letter_spacing` |
+| Band **width** — 534 (pink), 753 (cream) | `font_size`, `letter_spacing`, horizontal `padding` | vertical `padding` |
+
+1. **Height first.** Keep the vertical `padding` as it is and solve `font_size` from the band height: `new_font = old_font × target_height / measured_height`. Use the measurement script of Step 3 to read the heights. This fixes `font_size` on evidence that `letter_spacing` cannot contaminate.
+2. **Width second.** With `font_size` now settled, close the remaining gap with `letter_spacing` (and, only if needed, the horizontal `padding`). Each 0.01 em of tracking moves a line of *n* characters by roughly `0.01 × font_size × n` px.
+3. Re-check the height after step 2 (it should not have moved) and iterate once if it did.
+
+**Delete the assertion `abs(titre.font_size - sous_titre.font_size) <= 8`** from `test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette` in `tests/test_layout.py`, and delete the code comment in `GABARIT_REEL` that claims the two sizes are close ("mid-80 px"). Both rest on an inference from glyph spans measured on the mockup — 83 px from the accent of `Grégoire` to the tail of the `q`, 64 px from ascender to baseline on the subtitle — and that inference does not survive contact with the data: three estimators (x-height, cap height, ascender) disagree by 10 %, and the rendered widths contradict all three. **The bands are the ground truth; the glyph spans are not.** Replace the deleted assertion with the band-height assertions this task produces, and say so in the commit message.
+
+Keep the other assertions of that test (colours, tilts, anchors, `max_lines`) — those are measured directly and hold.
 
 - [ ] **Step 3: Check the band heights**
 
@@ -1725,22 +1739,42 @@ print("ecrit /tmp/reel.png")
 PY
 
 uv run --with pillow --with numpy python - <<'PY'
+import math
 from PIL import Image
 import numpy as np
 a = np.asarray(Image.open("/tmp/reel.png").convert("RGB")).astype(int)
 r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+
 rose = (abs(r - 253) < 22) & (abs(g - 139) < 34) & (abs(b - 195) < 28)
 ys, xs = np.where(rose)
-print(f"bande rose : x {xs.min()}-{xs.max()} (l={xs.max()-xs.min()+1}, cible 534)")
-print(f"             y {ys.min()}-{ys.max()} (h={ys.max()-ys.min()+1}, cible 94)")
+print(f"bande ROSE  : l={xs.max()-xs.min()+1} (cible 534)  h={ys.max()-ys.min()+1} (cible 94)")
+
+# La bande creme est INCLINEE : sa boite englobante est plus haute que la bande.
+# hauteur reelle = hauteur_boite - largeur x sin|angle|
+creme = (r > 245) & (g > 240) & (b > 240)
+ys, xs = np.where(creme)
+largeur = xs.max() - xs.min() + 1
+boite = ys.max() - ys.min() + 1
+reelle = boite - largeur * math.sin(math.radians(0.6))
+print(f"bande CREME : l={largeur} (cible 753)  boite={boite}  h_reelle={reelle:.1f} (cible 89)")
 PY
 ```
 
-Adjust the vertical `padding` of `#title, #subtitle` in `kinda_reel/style.css` until the pink band height lands within ±6 px of 94. The horizontal padding affects the width — re-run Step 1 after any change.
+Note the arithmetic for the cream band: its bounding box is taller than the band itself because of the tilt. Comparing its raw bounding-box height against 89 would push you to shrink a band that is already the right size.
 
-- [ ] **Step 4: Compare visually**
+Adjust the vertical `padding` of `#title, #subtitle` in `kinda_reel/style.css` only if `font_size` alone cannot reach the target heights. Any change to horizontal padding invalidates the width step — re-run Step 1 after it.
+
+- [ ] **Step 4: Compare visually, and document one latent coupling**
 
 Open `/tmp/reel.png` side by side with `exemples/[PREVIEW] - Cover Reels.png`. Check: vertical position of the block, gap (or absence of gap) between the two bands, tilt of the cream band, logo position.
+
+While you are in the stylesheet, add a comment on `#bandes`: it takes its horizontal margins from `var(--title-left)` / `var(--title-right)` although it contains both roles. That works only because the two zones declare the same 77 px margins. Say so in the file, so a future edit that gives the roles different margins does not silently de-centre the subtitle:
+
+```css
+/* Marges prises sur le role `title` : le conteneur porte les DEUX bandes, et
+   cela ne tient que parce que les deux zones declarent les memes 77 px. Si un
+   jour elles divergent, ce conteneur devra cesser de privilegier un role. */
+```
 
 - [ ] **Step 5: Add the band-width test, now that the values are calibrated**
 
@@ -1768,8 +1802,41 @@ def test_les_largeurs_de_bande_retombent_sur_la_maquette():
     assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
 ```
 
+And add the height assertions that replace the deleted `font_size` proximity check — they are what pins the font sizes to evidence:
+
+```python
+@chromium_absent
+def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
+    """Hauteurs mesurees : 94 px pour la bande rose, 89 px pour la creme.
+
+    Ce test remplace l'ancienne assertion `abs(titre.font_size -
+    sous_titre.font_size) <= 8`, qui reposait sur une deduction des corps a
+    partir des glyphes de la maquette -- deduction que les largeurs rendues ont
+    dementie. La hauteur de bande, elle, depend du corps et du padding mais PAS
+    de l'interlettrage : c'est la mesure qui pin le corps sans ambiguite.
+    """
+    import math
+
+    from app.content.render import render_post
+
+    (rendu,) = render_post([{
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }], "kinda_reel")
+
+    hauteurs = _hauteurs_de_bande(rendu.png)
+    assert hauteurs["rose"] == pytest.approx(94, abs=8)
+    # La boite englobante de la bande creme est plus haute que la bande : son
+    # inclinaison ajoute largeur x sin(0,6 deg) ~ 8 px. `_hauteurs_de_bande` le
+    # corrige ; comparer la boite brute pousserait a rapetisser une bande juste.
+    assert hauteurs["creme"] == pytest.approx(89, abs=8)
+```
+
+`_hauteurs_de_bande(png)` is a test helper you write in `tests/test_render.py`: it decodes the PNG with Pillow, isolates the pink pixels (`#FD8BC3`) and the off-white pixels (`#FFF7FA`), and returns the pink band's bounding-box height plus the cream band's tilt-corrected height (`boite - largeur * sin(0.6°)`). Add `pillow` and `numpy` to the dev dependency group (`uv add --dev pillow numpy`) — the project does not have them yet, and this is the first test that needs pixel inspection.
+
 Run: `uv run pytest tests/test_render.py -v && uv run ruff check .`
-Expected: PASS, band widths included. If this test fails, go back to Step 2 — it is the gate of the calibration, not an obstacle to work around.
+Expected: PASS, widths and heights included. If a test fails, go back to Step 2 — these assertions are the gate of the calibration, not an obstacle to work around.
 
 - [ ] **Step 6: Commit**
 
