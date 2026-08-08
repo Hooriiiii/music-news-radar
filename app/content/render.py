@@ -29,6 +29,45 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 _USER_AGENT = "KindaBot/1.0 (+https://github.com/kinda)"  # ASCII pur, cf. CLAUDE.md
 
 
+class RenduIndisponible(RuntimeError):
+    """Levee quand Chromium Playwright n'est pas installe localement."""
+
+
+def _signale_chromium_absent(exc: Exception) -> bool:
+    """Vrai seulement pour la signature precise de l'executable manquant.
+
+    Isolee pour que `_ouvrir_chromium` reste lisible : un template casse ou une
+    erreur Jinja ne matchent pas ce message et remontent donc inchanges (via le
+    `raise` nu de son `except`).
+    """
+    return "Executable doesn't exist" in str(exc) or "playwright install" in str(exc)
+
+
+def _ouvrir_chromium():
+    """Demarre Playwright et lance Chromium, ou leve `RenduIndisponible`.
+
+    Le `try` ne couvre QUE ce demarrage, pas la boucle de rendu qui suit chez
+    l'appelant : un bug de gabarit ou une erreur Jinja pendant le rendu ne doit
+    jamais pouvoir se faire passer pour un Chromium absent, meme par hasard de
+    message. Le contexte est ouvert a la main (`__enter__`/`__exit__`) plutot
+    qu'avec `with` pour pouvoir le refermer chez l'appelant, une fois le rendu
+    termine.
+    """
+    try:
+        contexte = sync_playwright()
+        playwright = contexte.__enter__()
+        browser = playwright.chromium.launch()
+    except RenduIndisponible:
+        raise
+    except Exception as exc:
+        if _signale_chromium_absent(exc):
+            raise RenduIndisponible(
+                "Chromium Playwright est absent : lancer `uv run playwright install chromium`"
+            ) from exc
+        raise
+    return contexte, browser
+
+
 def _data_uri(content: bytes, mime: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(content).decode("ascii")
 
@@ -205,37 +244,35 @@ def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[
     gabarit_ = gabarit(template)
     image_uri = fetch_image_data_uri(slide.get("image_url"))
     textes = {role: slide[role] for role in gabarit_.roles}
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = browser.new_page(
-                viewport={"width": gabarit_.width, "height": gabarit_.height},
-                device_scale_factor=1,
-            )
-            page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
-            page.evaluate("document.fonts.ready")
-            return {
-                role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles
-            }
-        finally:
-            browser.close()
+    contexte, browser = _ouvrir_chromium()
+    try:
+        page = browser.new_page(
+            viewport={"width": gabarit_.width, "height": gabarit_.height},
+            device_scale_factor=1,
+        )
+        page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
+        page.evaluate("document.fonts.ready")
+        return {role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles}
+    finally:
+        browser.close()
+        contexte.__exit__(None, None, None)
 
 
 def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
     """Rend chaque slide du post. Un seul Chromium pour tout le post."""
     gabarit_ = gabarit(template)
     rendus: list[RenduSlide] = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = browser.new_page(
-                viewport={"width": gabarit_.width, "height": gabarit_.height},
-                device_scale_factor=1,
-            )
-            for slide in slides:
-                image_uri = fetch_image_data_uri(slide.get("image_url"))
-                textes = {role: slide[role] for role in gabarit_.roles}
-                rendus.append(_render_one(page, gabarit_, textes, image_uri))
-        finally:
-            browser.close()
+    contexte, browser = _ouvrir_chromium()
+    try:
+        page = browser.new_page(
+            viewport={"width": gabarit_.width, "height": gabarit_.height},
+            device_scale_factor=1,
+        )
+        for slide in slides:
+            image_uri = fetch_image_data_uri(slide.get("image_url"))
+            textes = {role: slide[role] for role in gabarit_.roles}
+            rendus.append(_render_one(page, gabarit_, textes, image_uri))
+    finally:
+        browser.close()
+        contexte.__exit__(None, None, None)
     return rendus

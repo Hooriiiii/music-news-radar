@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from app.content.layout import GABARIT_POST
-from app.content.render import build_document, fetch_image_data_uri, render_post
+from app.content.render import RenduIndisponible, build_document, fetch_image_data_uri, render_post
 
 
 def _chromium_playwright_present() -> bool:
@@ -396,3 +396,38 @@ def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
     # inclinaison ajoute largeur x sin(0,6 deg) ~ 8 px. `_hauteurs_de_bande` le
     # corrige ; comparer la boite brute pousserait a rapetisser une bande juste.
     assert hauteurs["creme"] == pytest.approx(89, abs=8)
+
+
+def test_chromium_absent_donne_une_erreur_lisible(monkeypatch):
+    """Le rendu exige Chromium Playwright, que le dashboard n'installe pas. Une
+    trace d'exception au fond de Playwright ne dit pas quoi faire ; ce message,
+    si."""
+    import app.content.render as render_module
+
+    def faux_playwright():
+        raise Exception("Executable doesn't exist at /path/chrome")
+
+    monkeypatch.setattr(render_module, "sync_playwright", faux_playwright)
+
+    with pytest.raises(RenduIndisponible, match="playwright install chromium"):
+        render_post([{"headline": "Une **accroche**", "image_url": None}])
+
+
+def test_erreur_de_rendu_normale_n_est_pas_masquee(monkeypatch):
+    """La discrimination compte : une erreur SANS le signal Playwright (bug de
+    gabarit, erreur Jinja, etc.) ne doit jamais devenir RenduIndisponible -- ca
+    enverrait qui debugue dans la mauvaise direction (installer Chromium alors
+    que Chromium est deja la)."""
+    import app.content.render as render_module
+
+    class FauxPlaywright:
+        def __enter__(self):
+            raise ValueError("gabarit invalide -- rien a voir avec Chromium")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(render_module, "sync_playwright", lambda: FauxPlaywright())
+
+    with pytest.raises(ValueError, match="gabarit invalide"):
+        render_post([{"headline": "Une **accroche**", "image_url": None}])

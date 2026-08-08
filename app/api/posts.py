@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.content.compose import CompositionError, create_post, make_claude_composer
-from app.content.render import render_post
+from app.content.render import RenduIndisponible, render_post
 from app.db import get_db
 from app.models import Article, ArticleStatus, Post, PostStatus
 from app.schemas import PostOut, PostUpdate
@@ -93,7 +93,11 @@ def rendre_slide(post_id: int, index: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
     if index < 1 or index > len(post.slides):
         raise HTTPException(status_code=404, detail="Slide not found")
-    rendu = render_post([post.slides[index - 1]], post.template)[0]
+    try:
+        rendu = render_post([post.slides[index - 1]], post.template)[0]
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(content=rendu.png, media_type="image/png")
 
 
@@ -105,7 +109,11 @@ def rendre_post(post_id: int, db: Session = Depends(get_db)):
     restent purs -- ils servent l'image, ils ne consignent rien.
     """
     post = _post_ou_404(db, post_id)
-    rendus = render_post(post.slides, post.template)
+    try:
+        rendus = render_post(post.slides, post.template)
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     rapport = {
         "slides": [
             {"scale": rendu.scale, "lines": rendu.lines, "overflow": rendu.overflow}
@@ -129,7 +137,11 @@ def _texte_legende(post: Post) -> str:
 @router.get("/posts/{post_id}/export.zip")
 def exporter_post(post_id: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
-    rendus = render_post(post.slides, post.template)
+    try:
+        rendus = render_post(post.slides, post.template)
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
