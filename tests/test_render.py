@@ -176,16 +176,52 @@ def test_render_post_produit_un_png_par_slide():
         {"headline": "**Vieilles Charrues** : le line-up", "image_url": None},
         {"headline": "Rendez-vous **ce week-end**", "image_url": None},
     ]
-    pngs = render_post(slides)
+    rendus = render_post(slides)
 
-    assert len(pngs) == 2
-    for png in pngs:
-        assert _png_size(png) == (GABARIT_POST.width, GABARIT_POST.height)
-        assert len(png) > 10_000
+    assert len(rendus) == 2
+    for rendu in rendus:
+        assert _png_size(rendu.png) == (GABARIT_POST.width, GABARIT_POST.height)
+        assert len(rendu.png) > 10_000
 
 
-# La reduction de police sur une accroche trop longue (`MAX_HEADLINE_HEIGHT`,
-# `SCALE_STEPS`) n'existe plus dans ce module : elle est remplacee par la
-# dichotomie de `layout.Ajustement`, cablee dans `_render_one` par la tache
-# suivante. Le test qui la couvrait est donc retire ici plutot que laisse
-# rouge -- il sera reecrit sur `layout.Ajustement` / `RenduSlide`.
+@chromium_absent
+def test_le_comptage_de_lignes_est_exact_sur_l_accroche_de_reference():
+    """L'accroche de la maquette Figma tombe sur TROIS lignes.
+
+    Le comptage passe par `Range.getClientRects()`, un rectangle par ligne
+    rendue. Diviser la hauteur par l'interlignage serait faux : un accent ou une
+    descendante change la hauteur de boite. Et un `<mark>` produit PLUSIEURS
+    rectangles sur une meme ligne -- s'ils ne sont pas regroupes par ordonnee, le
+    compte explose.
+    """
+    accroche = (
+        "Nico Moreno, Mosimann, Cassius... et **c'est ce week-end** "
+        "aux **Vieilles Charrues**"
+    )
+    (rendu,) = render_post([{"headline": accroche, "image_url": None}])
+
+    assert rendu.lines == {"headline": 3}
+    assert rendu.scale == 1.0
+    assert rendu.overflow is False
+
+
+@chromium_absent
+def test_une_accroche_trop_longue_declenche_la_reduction():
+    """Le regime de secours. La police est reduite, mais le rendu sort."""
+    longue = " ".join(["**Nico Moreno** et Mosimann aux Vieilles Charrues"] * 4)
+    (rendu,) = render_post([{"headline": longue, "image_url": None}])
+
+    assert rendu.scale < 1.0
+    assert rendu.lines["headline"] <= GABARIT_POST.roles["headline"][1].max_lines
+
+
+@chromium_absent
+def test_un_texte_intenable_est_marque_et_non_publie_en_silence():
+    """Ce qui remplace le `logger.warning` suivi d'un rendu coupe. Le drapeau
+    remonte jusqu'au dashboard."""
+    intenable = " ".join(["**Vieilles Charrues** Nico Moreno Mosimann Cassius"] * 20)
+    (rendu,) = render_post([{"headline": intenable, "image_url": None}])
+
+    assert rendu.overflow is True
+    assert rendu.scale == GABARIT_POST.roles["headline"][1].min_scale
+    assert _png_size(rendu.png) == (GABARIT_POST.width, GABARIT_POST.height)

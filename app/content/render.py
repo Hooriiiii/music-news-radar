@@ -10,6 +10,7 @@ Ce module ne connait ni la base ni Claude : il recoit une liste de dicts.
 
 import base64
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -18,7 +19,7 @@ from markupsafe import Markup
 from playwright.sync_api import sync_playwright
 
 from app.content.highlight import to_html
-from app.content.layout import Gabarit, gabarit, variables_css
+from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 
 logger = logging.getLogger(__name__)
 
@@ -91,22 +92,112 @@ def build_document(
     )
 
 
-def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> bytes:
-    """Rend une slide a l'echelle de la maquette.
+# Regroupement par ordonnee et non un rectangle = une ligne : un `<mark>` coupe la
+# ligne en PLUSIEURS rectangles (avant, dans, apres le surlignage). Sans
+# regroupement, une accroche de 3 lignes avec deux segments surlignes compterait
+# 7 lignes et declencherait une reduction injustifiee.
+# La tolerance de 4 px absorbe les ecarts d'ordonnee entre fragments d'une meme
+# ligne (accents, `background-position` du mark).
+_MESURE_JS = """
+(role) => {
+  const el = document.getElementById(role);
+  const style = getComputedStyle(el);
+  // Un role a bande de fond est un element EN LIGNE : ses propres rectangles
+  // incluent le padding et le fond, donc ils SONT les bandes -- c'est ce qu'on
+  // veut mesurer. Un role en bloc n'a qu'un rectangle : il faut passer par un
+  // Range sur son contenu pour obtenir une ligne par ligne rendue.
+  const rects = style.display === 'inline'
+    ? [...el.getClientRects()]
+    : (() => { const r = document.createRange(); r.selectNodeContents(el);
+               return [...r.getClientRects()]; })();
 
-    Pas de mesure ni de reduction ici : cette fonction ne fait qu'assembler le
-    document et prendre la capture -- la boucle de mesure/ajustement Chromium
-    (`layout.Ajustement`, hauteur du voile dynamique) est la tache suivante.
+  const lignes = [];
+  for (const rect of rects.filter(r => r.width > 0 && r.height > 0)
+                          .sort((a, b) => a.top - b.top)) {
+    const derniere = lignes[lignes.length - 1];
+    if (derniere && Math.abs(rect.top - derniere.top) < 4) {
+      derniere.gauche = Math.min(derniere.gauche, rect.left);
+      derniere.droite = Math.max(derniere.droite, rect.right);
+      derniere.bas = Math.max(derniere.bas, rect.bottom);
+    } else {
+      lignes.push({top: rect.top, bas: rect.bottom, gauche: rect.left, droite: rect.right});
+    }
+  }
+  if (!lignes.length) return {widths: [], height: 0};
+  return {
+    widths: lignes.map(l => l.droite - l.gauche),
+    height: lignes[lignes.length - 1].bas - lignes[0].top,
+  };
+}
+"""
+
+
+def mesurer_role(page, role: str) -> Mesure:
+    """Mesure un role : une largeur par ligne rendue, plus la hauteur du bloc."""
+    brut = page.evaluate(_MESURE_JS, role)
+    return Mesure(line_widths=tuple(brut["widths"]), height=float(brut["height"]))
+
+
+@dataclass(frozen=True)
+class RenduSlide:
+    """Le PNG et le rapport de ce qui s'est passe pour le produire.
+
+    Le rapport n'est pas un detail de test : `overflow` est ce qui permet au
+    dashboard de signaler un post en defaut plutot que de laisser publier une
+    image coupee.
     """
-    page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
+
+    png: bytes
+    scale: float
+    lines: dict[str, int]
+    overflow: bool
+
+
+def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
+    """Rend une slide : mesure, ajuste, puis capture.
+
+    Deux passes AU MINIMUM, et c'est structurel : la hauteur du voile depend de la
+    hauteur mesuree du bloc, qu'on ne connait qu'apres un premier rendu.
+    """
+    ajustement = Ajustement(gabarit_)
+    mesures: dict[str, Mesure] = {}
+    while (echelle := ajustement.prochaine_echelle()) is not None:
+        page.set_content(build_document(gabarit_, textes, image_uri, echelle), wait_until="load")
+        page.evaluate("document.fonts.ready")
+        mesures = {role: mesurer_role(page, role) for role in gabarit_.roles}
+        ajustement.enregistrer(mesures)
+
+    resultat = ajustement.resultat
+    if resultat.overflow:
+        logger.warning(
+            "texte intenable meme a l'echelle %.2f, slide marquee en defaut : %r",
+            resultat.scale,
+            textes,
+        )
+
+    # Passe finale : l'echelle retenue, et le voile cale sur la hauteur du bloc.
+    role_principal = next(iter(gabarit_.roles))
+    voile = (
+        hauteur_voile(gabarit_, role_principal, mesures[role_principal])
+        if role_principal in mesures
+        else None
+    )
+    page.set_content(
+        build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
+    )
     page.evaluate("document.fonts.ready")
-    return page.screenshot(type="png")
+    return RenduSlide(
+        png=page.screenshot(type="png"),
+        scale=resultat.scale,
+        lines=resultat.lines,
+        overflow=resultat.overflow,
+    )
 
 
-def render_post(slides: list[dict], template: str = "kinda_post") -> list[bytes]:
-    """Rend chaque slide en PNG. Un seul Chromium pour tout le post."""
+def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
+    """Rend chaque slide du post. Un seul Chromium pour tout le post."""
     gabarit_ = gabarit(template)
-    rendus: list[bytes] = []
+    rendus: list[RenduSlide] = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:

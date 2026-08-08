@@ -1,6 +1,7 @@
 import datetime as dt
 
 from app.content.compose import PostDraft, Slide
+from app.content.render import RenduSlide
 from app.models import Article, ArticleStatus, Post, PostStatus, Source, SourceType
 
 
@@ -182,7 +183,7 @@ def test_rendre_une_slide(client, db_session, monkeypatch):
     def faux_rendu(slides, template):
         assert template == post.template
         assert slides == [post.slides[0]]
-        return [b"PNG_FACTICE"]
+        return [RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={"headline": 1}, overflow=False)]
 
     monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
 
@@ -204,7 +205,7 @@ def test_exporter_un_post(client, db_session, monkeypatch):
     post = _post(db_session, article)
 
     def faux_rendu(slides, template):
-        return [b"PNG_1"]
+        return [RenduSlide(png=b"PNG_1", scale=1.0, lines={"headline": 1}, overflow=False)]
 
     monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
 

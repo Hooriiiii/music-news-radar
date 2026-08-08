@@ -93,8 +93,8 @@ def rendre_slide(post_id: int, index: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
     if index < 1 or index > len(post.slides):
         raise HTTPException(status_code=404, detail="Slide not found")
-    png = render_post([post.slides[index - 1]], post.template)[0]
-    return Response(content=png, media_type="image/png")
+    rendu = render_post([post.slides[index - 1]], post.template)[0]
+    return Response(content=rendu.png, media_type="image/png")
 
 
 def _texte_legende(post: Post) -> str:
@@ -108,12 +108,12 @@ def _texte_legende(post: Post) -> str:
 @router.get("/posts/{post_id}/export.zip")
 def exporter_post(post_id: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
-    pngs = render_post(post.slides, post.template)
+    rendus = render_post(post.slides, post.template)
 
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
-        for numero, png in enumerate(pngs, start=1):
-            archive.writestr(f"slide_{numero:02d}.png", png)
+        for numero, rendu in enumerate(rendus, start=1):
+            archive.writestr(f"slide_{numero:02d}.png", rendu.png)
         archive.writestr("caption.txt", _texte_legende(post))
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
