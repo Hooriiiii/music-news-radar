@@ -115,6 +115,7 @@ class PostOut(BaseModel):
     caption: str
     hashtags: list[str] | None
     slides: list[SlideIn]
+    render_report: dict | None = None
     created_at: dt.datetime
     published_at: dt.datetime | None
 

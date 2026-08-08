@@ -1,6 +1,7 @@
 import datetime as dt
 
 from app.content.compose import PostDraft, Slide
+from app.content.render import RenduSlide
 from app.models import Article, ArticleStatus, Post, PostStatus, Source, SourceType
 
 
@@ -182,7 +183,7 @@ def test_rendre_une_slide(client, db_session, monkeypatch):
     def faux_rendu(slides, template):
         assert template == post.template
         assert slides == [post.slides[0]]
-        return [b"PNG_FACTICE"]
+        return [RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={"headline": 1}, overflow=False)]
 
     monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
 
@@ -204,7 +205,7 @@ def test_exporter_un_post(client, db_session, monkeypatch):
     post = _post(db_session, article)
 
     def faux_rendu(slides, template):
-        return [b"PNG_1"]
+        return [RenduSlide(png=b"PNG_1", scale=1.0, lines={"headline": 1}, overflow=False)]
 
     monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
 
@@ -232,3 +233,55 @@ def test_exporter_un_post(client, db_session, monkeypatch):
 
 def test_exporter_un_post_inexistant(client):
     assert client.get("/posts/9999/export.zip").status_code == 404
+
+
+def test_render_persiste_le_rapport(client, db_session, monkeypatch):
+    """Le but n'est pas de tester le rendu ici -- tests/test_render.py le fait --
+    mais que le RAPPORT arrive bien en base. C'est lui qui permet au dashboard de
+    signaler un post en defaut plutot que de laisser publier une image coupee."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    def faux_render(slides, template="kinda_post"):
+        return [
+            RenduSlide(png=b"PNG", scale=1.0, lines={"headline": 3}, overflow=False),
+            RenduSlide(png=b"PNG", scale=0.7, lines={"headline": 6}, overflow=True),
+        ]
+
+    monkeypatch.setattr("app.api.posts.render_post", faux_render)
+
+    response = client.post(f"/posts/{post.id}/render")
+
+    assert response.status_code == 200
+    rapport = response.json()
+    assert rapport["slides"][0] == {"scale": 1.0, "lines": {"headline": 3}, "overflow": False}
+    assert rapport["slides"][1]["overflow"] is True
+
+    db_session.refresh(post)
+    assert post.render_report == rapport
+
+
+def test_render_sur_un_post_inconnu_rend_404(client):
+    assert client.post("/posts/999/render").status_code == 404
+
+
+def test_editer_les_slides_invalide_le_rapport_de_rendu(client, db_session):
+    """Le rapport parle d'un texte precis. L'editeur de carrousel EST une
+    surface d'edition d'accroche : une fois les slides changees, un ancien
+    rapport (overflow ou pas) ne veut plus rien dire -- et un vieux "clean"
+    serait un faux feu vert sur le signal qui doit empecher une publication en
+    defaut."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+    post.render_report = {"slides": [{"scale": 1.0, "lines": {"headline": 3}, "overflow": False}]}
+    db_session.commit()
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"headline": "Une **nouvelle** accroche", "image_url": None}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["render_report"] is None
+    db_session.refresh(post)
+    assert post.render_report is None

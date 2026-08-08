@@ -17,12 +17,17 @@
 }
 
 /* --- Geometrie de la slide ------------------------------------------------ */
+/* Squelette sans valeurs : toutes les mesures viennent de `layout.py`, injectees
+   par `render.build_document()` dans un bloc de variables a part (voir
+   `slide.html.j2`) -- cette feuille n'en declare aucune elle-meme. Une valeur
+   qui revient en dur ici est une regle qui echappe a `layout.py`, donc aux
+   tests -- cf. le test-sentinelle dans `tests/test_render.py`. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  width: 1080px;
-  height: 1440px;
+  width: var(--slide-width);
+  height: var(--slide-height);
   overflow: hidden;
   background: #000;
   /* Rendu deterministe : pas de lissage dependant du systeme. */
@@ -32,8 +37,8 @@ body {
 
 #slide {
   position: relative;
-  width: 1080px;
-  height: 1440px;
+  width: var(--slide-width);
+  height: var(--slide-height);
   overflow: hidden;
   background: #000;
 }
@@ -54,60 +59,73 @@ body {
    Ordre CSS = du plus haut au plus bas dans la pile :
      1. noir bas   (234:29) y=623 h=817  0 -> 0.8
      2. rose bas   (234:28) y=623 h=817  0 -> 0.3   (la teinte Kinda)
-     3. noir haut  (234:11) y=0   h=727  0.8 -> 0   (retourne dans Figma) */
+     3. noir haut  (234:11) y=0   h=727  0.8 -> 0   (retourne dans Figma)
+
+   Le voile bas n'a plus de hauteur figee : `--scrim-height` suit la hauteur
+   mesuree du bloc d'accroche. Sans cela, une accroche de 5 lignes sortirait du
+   degrade le plus dense -- invisible sur la maquette dont le bas est deja
+   sombre, illisible sur une photo claire. Le voile HAUT, lui, ne depend pas du
+   texte : sa hauteur (727px) et les trois couleurs des degrades restent une
+   recette decorative fixe, exposee en variables (`--voile-*`) pour que le
+   test-sentinelle reste strict sur les valeurs de MISE EN PAGE.
+
+   La valeur de repli 817px est celle de la maquette. Elle n'est pas un
+   provisoire : un `var()` sans repli invalide la propriete ENTIERE, pas
+   seulement son calque -- le voile passerait alors en plein cadre, sans
+   erreur ni test rouge. Le repli garantit que l'oubli degrade vers la
+   maquette et non vers n'importe quoi. */
 #scrim {
   position: absolute;
   inset: 0;
   background-repeat: no-repeat;
   background-image:
-    linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.8)),
-    linear-gradient(to bottom, rgba(253, 139, 195, 0), rgba(253, 139, 195, 0.3)),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+    linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--voile-noir)),
+    linear-gradient(to bottom, var(--voile-rose-debut), var(--voile-rose)),
+    linear-gradient(to bottom, var(--voile-noir), rgba(0, 0, 0, 0));
   background-size:
-    1080px 817px,
-    1080px 817px,
-    1080px 727px;
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--voile-haut-hauteur);
   background-position:
-    0 623px,
-    0 623px,
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
     0 0;
 }
 
 /* --- Logo ----------------------------------------------------------------- */
-/* Figma 234:12 : conteneur x=77 y=87 large de 926, contenu aligne a DROITE ;
-   le logo lui-meme (234:13) fait 150 x 74.75 -> bord droit a x=1003. */
+/* Figma 234:12 : conteneur large de 926, contenu aligne a DROITE ; le logo
+   lui-meme (234:13) fait 150 x 74.75. Position fixe, independante du texte,
+   donc hors du Gabarit -- mais injectee par Python (`variables_css`) au meme
+   titre que la recette des voiles : aucune valeur ne se declare dans cette
+   feuille elle-meme, cf. le test-sentinelle de `tests/test_render.py`. */
 #logo {
   position: absolute;
-  right: 77px;
-  top: 87px;
-  width: 150px;
+  right: var(--logo-right);
+  top: var(--logo-top);
+  width: var(--logo-width);
   height: auto;
 }
 
 /* --- Accroche ------------------------------------------------------------- */
-/* Figma 234:34 : Arial Narrow Bold 80px, interlettrage -4.8px (-0.06em),
-   couleur #fff7fa, bloc x=77 large de 926, y=1088.
-
-   Interlignage : Figma mesure 92.79px (1.16) mais rend un pas de 92px entre
-   les lignes ; on prend donc 1.15 (= 92px pile), ce qui replace les trois
-   lignes de l'accroche de reference au pixel pres sur l'export Figma.
-   Hauteur du bloc a trois lignes = 276 -> ancrage bas 1440 - 1088 - 276 = 76.
+/* Figma 234:34. Police, interlignage, interlettrage, couleur et marges du
+   bloc sont les valeurs du role "headline" de `GABARIT_POST` -- voir
+   layout.py, qui documente aussi pourquoi l'interlignage Figma est arrondi au
+   pas de ligne reellement rendu par Chromium.
    On ancre par le BAS pour que l'accroche pousse vers le haut quand elle est
-   plus longue, ou quand headline_scale la reduit. */
+   plus longue, ou quand l'echelle la reduit. */
 #headline {
-  --headline-size: 80px;
-  --scale: 1;
   position: absolute;
-  left: 77px;
-  right: 77px;
-  bottom: 76px;
+  left: var(--headline-left);
+  right: var(--headline-right);
+  bottom: var(--headline-offset);
+  text-align: var(--headline-align);
   /* Pas de police de repli systeme : le rendu doit etre identique partout. */
   font-family: "KindaDisplay";
   font-weight: 700;
-  font-size: calc(var(--headline-size) * var(--scale));
-  line-height: 1.15;
-  letter-spacing: -0.06em;
-  color: #fff7fa;
+  font-size: calc(var(--headline-font-size) * var(--scale));
+  line-height: var(--headline-line-height);
+  letter-spacing: var(--headline-letter-spacing);
+  color: var(--headline-color);
   overflow-wrap: break-word;
   word-break: break-word;
   hyphens: none;
@@ -121,14 +139,16 @@ body {
    etire en un seul bloc a travers le retour a la ligne.
 
    Le fond passe par un linear-gradient plat plutot que par `background-color` :
-   la hauteur du fond d'un element en ligne est imposee par les metriques de la
-   police (~1.15em), alors que le rectangle de Figma fait 72px pour 80px de
-   corps, soit 0.9em. background-size permet de fixer cette hauteur exacte,
-   background-position de la caler comme dans Figma. */
+   la hauteur du fond d'un element en ligne suit les metriques de la police,
+   pas le rectangle de Figma (qui vaut 0.9em du corps). background-size
+   permet de fixer cette hauteur exacte, background-position de la caler
+   comme dans Figma. */
 #headline mark {
   color: inherit;
   background-color: transparent;
-  background-image: linear-gradient(rgba(253, 139, 195, 0.8), rgba(253, 139, 195, 0.8));
+  background-image: linear-gradient(
+    var(--headline-mark-background), var(--headline-mark-background)
+  );
   background-size: 100% 0.9em;
   background-position: 0 55%;
   background-repeat: no-repeat;

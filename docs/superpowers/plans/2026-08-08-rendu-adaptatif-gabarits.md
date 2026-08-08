@@ -37,7 +37,10 @@ voile bas de la maquette : 817 px de haut à partir de y=623.
 | Mesure | Valeur |
 |---|---|
 | Bande rose (titre) | largeur **534**, hauteur **94**, y 731→824, non inclinée |
-| Bande crème (sous-titre) | largeur **753**, hauteur ≈ **85**, y 831→910, **inclinée -0,6°** |
+| Bande crème (sous-titre) | largeur **753**, hauteur **≈ 89**, boîte englobante y 825→921, **inclinée -0,6°** |
+
+La hauteur de la bande crème n'est pas la hauteur de sa boîte englobante : l'inclinaison
+ajoute `largeur × sin|θ|` = 753 × sin(0,6°) ≈ 7,9 px. Donc 97 − 7,9 ≈ **89**.
 | Empilement | jointives, centrées chacune sur sa propre largeur |
 | Centre vertical du bloc | ≈ 42,9 % de 1920 |
 | Rose | `#FD8BC3` opaque · Crème `#FFF7FA` · Texte titre `#FFF7FA` · Texte sous-titre `#1D1D1D` |
@@ -396,7 +399,11 @@ class Ajustement:
 
     def __init__(self, gabarit: Gabarit) -> None:
         self._gabarit = gabarit
-        self._plancher = min(zone.min_scale for _, zone in gabarit.roles.values())
+        # max et non min : `min_scale` est un plancher PAR ROLE, et le plancher
+        # liant pour la slide est le plus RESTRICTIF des deux. Prendre le minimum
+        # autoriserait la dichotomie a descendre sous le plancher declare d'un
+        # role sans jamais lever `overflow`.
+        self._plancher = max(zone.min_scale for _, zone in gabarit.roles.values())
         self._etape = "maquette"
         self._essai: float | None = None
         self._bas = self._plancher          # borne basse : tient (a confirmer)
@@ -630,7 +637,9 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         if typo.mark_background is not None:
             lignes.append(f"--{role}-mark-background: {typo.mark_background};")
     if scrim_height is not None:
-        lignes.append(f"--scrim-height: {scrim_height}px;")
+        # round et non int : la hauteur vient d'une mesure Chromium fractionnaire
+        # des la tache 3, et tronquer 817.6 en 817 rognerait le voile d'un pixel.
+        lignes.append(f"--scrim-height: {round(scrim_height)}px;")
     return ":root {\n  " + "\n  ".join(lignes) + "\n}"
 ```
 
@@ -800,22 +809,28 @@ body {
 /* Le voile bas n'a plus de hauteur figee : `--scrim-height` suit la hauteur
    mesuree du bloc d'accroche. Sans cela, une accroche de 5 lignes sortirait du
    degrade le plus dense -- invisible sur la maquette dont le bas est deja
-   sombre, illisible sur une photo claire. */
+   sombre, illisible sur une photo claire.
+
+   La valeur de repli 817px est celle de la maquette, et elle n'est PAS un
+   provisoire : un `var()` sans repli invalide la propriete ENTIERE, pas
+   seulement son calque -- les trois degrades passeraient en plein cadre, sans
+   erreur ni test rouge. Le repli garantit qu'un oubli degrade vers la maquette
+   et non vers n'importe quoi. */
 #scrim {
   position: absolute;
   inset: 0;
   background-repeat: no-repeat;
   background-image:
-    linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.8)),
-    linear-gradient(to bottom, rgba(253, 139, 195, 0), rgba(253, 139, 195, 0.3)),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+    linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--voile-noir)),
+    linear-gradient(to bottom, var(--voile-rose-debut), var(--voile-rose)),
+    linear-gradient(to bottom, var(--voile-noir), rgba(0, 0, 0, 0));
   background-size:
-    var(--slide-width) var(--scrim-height),
-    var(--slide-width) var(--scrim-height),
-    var(--slide-width) 727px;
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--scrim-height, 817px),
+    var(--slide-width) var(--voile-haut-hauteur);
   background-position:
-    0 calc(var(--slide-height) - var(--scrim-height)),
-    0 calc(var(--slide-height) - var(--scrim-height)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
+    0 calc(var(--slide-height) - var(--scrim-height, 817px)),
     0 0;
 }
 
@@ -882,7 +897,9 @@ Replace the existing `build_document` with:
 
 ```python
 def build_document(
-    gabarit: Gabarit,
+    # `gabarit_` et non `gabarit` : le module importe deja une FONCTION `gabarit()`,
+    # que ce nom masquerait dans tout le corps.
+    gabarit_: Gabarit,
     textes: dict[str, str],
     image_data_uri: str,
     scale: float = 1.0,
@@ -903,13 +920,13 @@ def build_document(
     # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
     # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
     # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
-    css = Markup((TEMPLATES_DIR / gabarit.name / "style.css").read_text(encoding="utf-8"))
-    return env.get_template(f"{gabarit.name}/slide.html.j2").render(
+    css = Markup((TEMPLATES_DIR / gabarit_.name / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{gabarit_.name}/slide.html.j2").render(
         css=css,
-        variables=Markup(variables_css(gabarit, scale, scrim_height)),
+        variables=Markup(variables_css(gabarit_, scale, scrim_height)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
-        textes={role: Markup(to_html(textes[role])) for role in gabarit.roles},
+        textes={role: Markup(to_html(textes[role])) for role in gabarit_.roles},
     )
 ```
 
@@ -1121,18 +1138,18 @@ class RenduSlide:
     overflow: bool
 
 
-def _render_one(page, gabarit: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
+def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
     """Rend une slide : mesure, ajuste, puis capture.
 
     Deux passes AU MINIMUM, et c'est structurel : la hauteur du voile depend de la
     hauteur mesuree du bloc, qu'on ne connait qu'apres un premier rendu.
     """
-    ajustement = Ajustement(gabarit)
+    ajustement = Ajustement(gabarit_)
     mesures: dict[str, Mesure] = {}
     while (echelle := ajustement.prochaine_echelle()) is not None:
-        page.set_content(build_document(gabarit, textes, image_uri, echelle), wait_until="load")
+        page.set_content(build_document(gabarit_, textes, image_uri, echelle), wait_until="load")
         page.evaluate("document.fonts.ready")
-        mesures = {role: mesurer_role(page, role) for role in gabarit.roles}
+        mesures = {role: mesurer_role(page, role) for role in gabarit_.roles}
         ajustement.enregistrer(mesures)
 
     resultat = ajustement.resultat
@@ -1143,14 +1160,14 @@ def _render_one(page, gabarit: Gabarit, textes: dict[str, str], image_uri: str) 
         )
 
     # Passe finale : l'echelle retenue, et le voile cale sur la hauteur du bloc.
-    role_principal = next(iter(gabarit.roles))
+    role_principal = next(iter(gabarit_.roles))
     voile = (
-        hauteur_voile(gabarit, role_principal, mesures[role_principal])
+        hauteur_voile(gabarit_, role_principal, mesures[role_principal])
         if role_principal in mesures
         else None
     )
     page.set_content(
-        build_document(gabarit, textes, image_uri, resultat.scale, voile), wait_until="load"
+        build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
     )
     page.evaluate("document.fonts.ready")
     return RenduSlide(
@@ -1189,7 +1206,7 @@ from dataclasses import dataclass
 from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 ```
 
-Note: the parameter name `gabarit` shadows the function `gabarit()` inside `_render_one`. To avoid it, the function keeps the name `gabarit` and the local variables are named `gabarit_`. Follow exactly the naming above.
+Note on naming: `render.py` imports a **function** `gabarit()` from `layout`, so no parameter or local may be called `gabarit` — it would shadow the function throughout that body. Every gabarit-typed parameter and local is therefore named `gabarit_`, in `build_document`, `_render_one`, `render_post` and `mesurer_bandes` alike. Follow exactly the naming above; it is not a stylistic preference but the reason the code works when someone later adds a `gabarit(...)` call inside one of these bodies.
 
 - [ ] **Step 5: Update the callers in `app/api/posts.py`**
 
@@ -1297,13 +1314,12 @@ Append to `tests/test_render.py`:
 
 ```python
 @chromium_absent
-def test_la_cover_reel_produit_deux_bandes_aux_largeurs_de_la_maquette():
-    """Les valeurs mesurees au pixel sur exemples/[PREVIEW] - Cover Reels.png :
-    bande rose 534 px, bande creme 753 px. La tolerance est large (25 px) parce
-    que la police est un substitut metriquement compatible d'Arial Narrow, pas
-    Arial Narrow elle-meme."""
+def test_la_cover_reel_rend_une_bande_par_role():
+    """La STRUCTURE du gabarit : deux roles, une bande chacun, aux dimensions de
+    la toile. Les LARGEURS de bande (534 / 753) sont verifiees a la tache 5,
+    apres calibration -- les asserter ici ferait echouer cette tache pour une
+    raison qui ne la concerne pas."""
     from app.content.layout import GABARIT_REEL
-    from app.content.render import mesurer_bandes
 
     slide = {
         "title": "**Gregoire Cliquet**",
@@ -1316,14 +1332,10 @@ def test_la_cover_reel_produit_deux_bandes_aux_largeurs_de_la_maquette():
     assert rendu.overflow is False
     assert _png_size(rendu.png) == (GABARIT_REEL.width, GABARIT_REEL.height)
 
-    largeurs = mesurer_bandes(slide, "kinda_reel")
-    assert largeurs["title"][0] == pytest.approx(534, abs=25)
-    assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
-
 
 @chromium_absent
 def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
-    """Le choix retenu : la police ne rétrecit pas, le titre passe sur une
+    """Le choix retenu : la police ne se reduit pas, le titre passe sur une
     deuxieme bande rose. L'empilement de bandes EST le langage du gabarit."""
     slide = {
         "title": "**Gregoire Cliquet** et Nico Moreno en cloture",
@@ -1489,11 +1501,14 @@ body {
   object-position: center;
 }
 
+/* Meme geometrie que sur le post, et elle vient des memes variables : le logo
+   est identique d'un gabarit a l'autre, donc sa position n'a pas a etre ecrite
+   deux fois. */
 #logo {
   position: absolute;
-  right: 77px;
-  top: 87px;
-  width: 150px;
+  right: var(--logo-right);
+  top: var(--logo-top);
+  width: var(--logo-width);
   height: auto;
 }
 
@@ -1625,11 +1640,22 @@ PY
 - [ ] **Step 8: Run the tests**
 
 Run: `uv run pytest -v && uv run ruff check .`
-Expected: the two reel tests may FAIL on the band widths (534 / 753) — that is the point of Task 5, calibration. If they fail **only** on `pytest.approx(..., abs=25)`, go to Step 9; if they fail on `rendu.lines` or on an exception, fix the template first.
+Expected: PASS. The two reel tests assert **structure only** (one band per role, PNG dimensions, second band on a long title) — not the band widths, which are calibrated in Task 5. If a reel test fails here, the template is wrong, not the calibration: fix it before committing.
 
-- [ ] **Step 9: Commit (with the calibration tests marked xfail if needed)**
+Record the current band widths for the next task (they are not asserted yet, only observed):
 
-If the widths are not yet within tolerance, mark the two assertions with a temporary `pytest.xfail("calibration tache 5")` **inside the test body, after the `lines` assertions**, so the structural part stays enforced. Then:
+```bash
+uv run python - <<'PY'
+from app.content.render import mesurer_bandes
+print(mesurer_bandes({
+    "title": "**Gregoire Cliquet**",
+    "subtitle": "au festival des **vieilles Charrues**",
+    "image_url": None,
+}))
+PY
+```
+
+- [ ] **Step 9: Commit**
 
 ```bash
 git add app/content/layout.py app/content/render.py app/content/templates/kinda_reel/ tests/
@@ -1639,7 +1665,7 @@ Second gabarit, et une logique de texte differente du post : deux bandes
 empilees qui epousent le texte, centrees, au lieu d'un bloc ancre en bas.
 Pas de voile -- le contraste vient des bandes.
 
-Un titre trop long ne rétrecit pas : il passe sur une deuxieme bande rose,
+Un titre trop long ne reduit pas sa police : il passe sur une deuxieme bande,
 via box-decoration-break: clone. L'empilement de bandes EST le langage du
 gabarit.
 
@@ -1658,7 +1684,7 @@ La seule tâche du plan qui n'est pas déterministe : on ajuste des nombres jusq
 **Files:**
 - Modify: `app/content/layout.py` (`GABARIT_REEL` : `font_size`, `letter_spacing`, `line_height`)
 - Modify: `app/content/templates/kinda_reel/style.css` (`padding` des bandes)
-- Test: `tests/test_render.py` (retirer les `xfail`)
+- Test: `tests/test_render.py` (ajouter le test de largeur de bande)
 
 **Interfaces:**
 - Consumes: `mesurer_bandes`
@@ -1680,11 +1706,22 @@ print("subtitle:", largeurs["subtitle"], "-> cible 753")
 PY
 ```
 
-- [ ] **Step 2: Adjust `font_size` proportionally**
+- [ ] **Step 2: Calibrate on the two robust targets, in this order — height first, then width**
 
-The band width is roughly proportional to `font_size`. If `title` measures 500 for a target of 534, multiply `font_size` by `534/500`. Adjust `title` and `subtitle` **independently** — they are two distinct roles. Re-run Step 1 and iterate until both are within ±10 px.
+**Read this before touching a number.** The naive method (scale `font_size` until the width matches) is wrong here, because a band's width is driven by **three** parameters at once — `font_size`, `letter_spacing`, and the horizontal `padding` — so matching the width alone lets you land on the right width with a badly wrong font size. There are two independently measured targets per role, so solve them in the order that decouples them:
 
-Keep `abs(title.font_size - subtitle.font_size) <= 8` (the test of Task 4): if calibration pushes the two apart by more than 8 px, that means the maquette really does use two different sizes and the test's tolerance must be widened — **document why in the commit** rather than forcing the values.
+| Target | Driven by | Not affected by |
+|---|---|---|
+| Band **height** — 94 (pink), 89 (cream) | `font_size`, `line_height`, vertical `padding` | `letter_spacing` |
+| Band **width** — 534 (pink), 753 (cream) | `font_size`, `letter_spacing`, horizontal `padding` | vertical `padding` |
+
+1. **Height first.** Keep the vertical `padding` as it is and solve `font_size` from the band height: `new_font = old_font × target_height / measured_height`. Use the measurement script of Step 3 to read the heights. This fixes `font_size` on evidence that `letter_spacing` cannot contaminate.
+2. **Width second.** With `font_size` now settled, close the remaining gap with `letter_spacing` (and, only if needed, the horizontal `padding`). Each 0.01 em of tracking moves a line of *n* characters by roughly `0.01 × font_size × n` px.
+3. Re-check the height after step 2 (it should not have moved) and iterate once if it did.
+
+**Delete the assertion `abs(titre.font_size - sous_titre.font_size) <= 8`** from `test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette` in `tests/test_layout.py`, and delete the code comment in `GABARIT_REEL` that claims the two sizes are close ("mid-80 px"). Both rest on an inference from glyph spans measured on the mockup — 83 px from the accent of `Grégoire` to the tail of the `q`, 64 px from ascender to baseline on the subtitle — and that inference does not survive contact with the data: three estimators (x-height, cap height, ascender) disagree by 10 %, and the rendered widths contradict all three. **The bands are the ground truth; the glyph spans are not.** Replace the deleted assertion with the band-height assertions this task produces, and say so in the commit message.
+
+Keep the other assertions of that test (colours, tilts, anchors, `max_lines`) — those are measured directly and hold.
 
 - [ ] **Step 3: Check the band heights**
 
@@ -1702,27 +1739,104 @@ print("ecrit /tmp/reel.png")
 PY
 
 uv run --with pillow --with numpy python - <<'PY'
+import math
 from PIL import Image
 import numpy as np
 a = np.asarray(Image.open("/tmp/reel.png").convert("RGB")).astype(int)
 r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+
 rose = (abs(r - 253) < 22) & (abs(g - 139) < 34) & (abs(b - 195) < 28)
 ys, xs = np.where(rose)
-print(f"bande rose : x {xs.min()}-{xs.max()} (l={xs.max()-xs.min()+1}, cible 534)")
-print(f"             y {ys.min()}-{ys.max()} (h={ys.max()-ys.min()+1}, cible 94)")
+print(f"bande ROSE  : l={xs.max()-xs.min()+1} (cible 534)  h={ys.max()-ys.min()+1} (cible 94)")
+
+# La bande creme est INCLINEE : sa boite englobante est plus haute que la bande.
+# hauteur reelle = hauteur_boite - largeur x sin|angle|
+creme = (r > 245) & (g > 240) & (b > 240)
+ys, xs = np.where(creme)
+largeur = xs.max() - xs.min() + 1
+boite = ys.max() - ys.min() + 1
+reelle = boite - largeur * math.sin(math.radians(0.6))
+print(f"bande CREME : l={largeur} (cible 753)  boite={boite}  h_reelle={reelle:.1f} (cible 89)")
 PY
 ```
 
-Adjust the vertical `padding` of `#title, #subtitle` in `kinda_reel/style.css` until the pink band height lands within ±6 px of 94. The horizontal padding affects the width — re-run Step 1 after any change.
+Note the arithmetic for the cream band: its bounding box is taller than the band itself because of the tilt. Comparing its raw bounding-box height against 89 would push you to shrink a band that is already the right size.
 
-- [ ] **Step 4: Compare visually**
+Adjust the vertical `padding` of `#title, #subtitle` in `kinda_reel/style.css` only if `font_size` alone cannot reach the target heights. Any change to horizontal padding invalidates the width step — re-run Step 1 after it.
+
+- [ ] **Step 4: Compare visually, and document one latent coupling**
 
 Open `/tmp/reel.png` side by side with `exemples/[PREVIEW] - Cover Reels.png`. Check: vertical position of the block, gap (or absence of gap) between the two bands, tilt of the cream band, logo position.
 
-- [ ] **Step 5: Remove the `xfail` markers and run the tests**
+While you are in the stylesheet, add a comment on `#bandes`: it takes its horizontal margins from `var(--title-left)` / `var(--title-right)` although it contains both roles. That works only because the two zones declare the same 77 px margins. Say so in the file, so a future edit that gives the roles different margins does not silently de-centre the subtitle:
+
+```css
+/* Marges prises sur le role `title` : le conteneur porte les DEUX bandes, et
+   cela ne tient que parce que les deux zones declarent les memes 77 px. Si un
+   jour elles divergent, ce conteneur devra cesser de privilegier un role. */
+```
+
+- [ ] **Step 5: Add the band-width test, now that the values are calibrated**
+
+Append to `tests/test_render.py`:
+
+```python
+@chromium_absent
+def test_les_largeurs_de_bande_retombent_sur_la_maquette():
+    """Les valeurs mesurees au pixel sur exemples/[PREVIEW] - Cover Reels.png :
+    bande rose 534 px, bande creme 753 px.
+
+    Tolerance large (25 px) et non stricte : la police embarquee est un substitut
+    metriquement compatible d'Arial Narrow, pas Arial Narrow elle-meme. Exiger le
+    pixel exact rendrait ce test faux pour une raison qui n'est pas un defaut.
+    """
+    from app.content.render import mesurer_bandes
+
+    largeurs = mesurer_bandes({
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    })
+
+    assert largeurs["title"][0] == pytest.approx(534, abs=25)
+    assert largeurs["subtitle"][0] == pytest.approx(753, abs=25)
+```
+
+And add the height assertions that replace the deleted `font_size` proximity check — they are what pins the font sizes to evidence:
+
+```python
+@chromium_absent
+def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
+    """Hauteurs mesurees : 94 px pour la bande rose, 89 px pour la creme.
+
+    Ce test remplace l'ancienne assertion `abs(titre.font_size -
+    sous_titre.font_size) <= 8`, qui reposait sur une deduction des corps a
+    partir des glyphes de la maquette -- deduction que les largeurs rendues ont
+    dementie. La hauteur de bande, elle, depend du corps et du padding mais PAS
+    de l'interlettrage : c'est la mesure qui pin le corps sans ambiguite.
+    """
+    import math
+
+    from app.content.render import render_post
+
+    (rendu,) = render_post([{
+        "title": "**Gregoire Cliquet**",
+        "subtitle": "au festival des **vieilles Charrues**",
+        "image_url": None,
+    }], "kinda_reel")
+
+    hauteurs = _hauteurs_de_bande(rendu.png)
+    assert hauteurs["rose"] == pytest.approx(94, abs=8)
+    # La boite englobante de la bande creme est plus haute que la bande : son
+    # inclinaison ajoute largeur x sin(0,6 deg) ~ 8 px. `_hauteurs_de_bande` le
+    # corrige ; comparer la boite brute pousserait a rapetisser une bande juste.
+    assert hauteurs["creme"] == pytest.approx(89, abs=8)
+```
+
+`_hauteurs_de_bande(png)` is a test helper you write in `tests/test_render.py`: it decodes the PNG with Pillow, isolates the pink pixels (`#FD8BC3`) and the off-white pixels (`#FFF7FA`), and returns the pink band's bounding-box height plus the cream band's tilt-corrected height (`boite - largeur * sin(0.6°)`). Add `pillow` and `numpy` to the dev dependency group (`uv add --dev pillow numpy`) — the project does not have them yet, and this is the first test that needs pixel inspection.
 
 Run: `uv run pytest tests/test_render.py -v && uv run ruff check .`
-Expected: PASS, including the band widths.
+Expected: PASS, widths and heights included. If a test fails, go back to Step 2 — these assertions are the gate of the calibration, not an obstacle to work around.
 
 - [ ] **Step 6: Commit**
 
@@ -2126,8 +2240,74 @@ Aucune exigence sans tâche.
 
 **Hors périmètre, conformément à la spec :** composition automatique des titres de reel, sélection de vidéos, file quotidienne, feedback, modèle local, socle launchd.
 
-**Placeholder scan:** une seule tâche est non déterministe par nature — la 5 (calibration) et la 8 (plafond). Toutes deux fournissent le **script de mesure** et le **critère de décision**, pas un « à ajuster ». Le `xfail` temporaire de la tâche 4 est explicitement lié à la tâche 5 qui le retire.
+**Placeholder scan:** deux tâches sont non déterministes par nature — la 5 (calibration des bandes) et la 8 (plafond de lignes). Toutes deux fournissent le **script de mesure** et le **critère de décision**, pas un « à ajuster ».
+
+Aucun test n'est marqué `xfail` ni laissé rouge entre deux tâches : la tâche 4 n'asserte que la **structure** du gabarit reel (un bandeau par rôle, dimensions du PNG, seconde bande sur un titre long), et la tâche 5 ajoute le test de **largeur** une fois les valeurs calibrées. Chaque tâche laisse donc la suite verte, ce qui est la condition pour que la revue par tâche ait un sens.
 
 **Type consistency:** `Mesure(line_widths, height)` / `.lines` ; `Resultat(scale, lines, overflow)` ; `RenduSlide(png, scale, lines, overflow)` ; `render_post -> list[RenduSlide]` ; `build_document(gabarit, textes, image_data_uri, scale, scrim_height)`. Le champ `lines` est un `dict[str, int]` partout, y compris dans le JSON de `render_report`. La fonction `gabarit(nom)` et les variables locales `gabarit_` ne se marchent pas dessus (noté explicitement en tâche 3).
 
 **Point de vigilance pour l'exécutant :** la tâche 2 change la signature de `build_document` et supprime `SLIDE_WIDTH` / `SLIDE_HEIGHT` / `MAX_HEADLINE_HEIGHT` / `SCALE_STEPS`. `tests/test_render.py` doit être adapté dans la même tâche, sinon la suite est rouge entre deux commits.
+
+---
+
+# Suites à donner (relevé après exécution)
+
+Les huit tâches sont livrées : 249 tests verts, `ruff` clean, revue finale de branche passée.
+Ce qui suit a été **délibérément laissé de côté**, avec la raison. C'est la liste à
+reprendre avant d'ouvrir un chantier voisin, pas une liste de dettes honteuses.
+
+## Ce que la revue finale a fait corriger
+
+Cinq trouvailles Important, toutes closes dans `c3581a3` :
+
+1. **Fuite du driver Playwright.** `_ouvrir_chromium` entrait dans le contexte
+   (processus node + boucle asyncio) puis lançait le navigateur ; un échec du
+   lancement — le cas exact pour lequel la fonction existe — ne refermait jamais le
+   contexte. Régression introduite par la branche : le `with sync_playwright()`
+   d'avant garantissait la sortie. Fuite **par slide et par consultation** dans un
+   uvicorn permanent.
+2. **Le signal `overflow` n'avait aucun consommateur.** `render_report` n'était écrit
+   que par `POST /posts/{id}/render`, que rien n'appelait. La colonne serait restée
+   `NULL` indéfiniment : le livrable central de la branche n'était pas atteint de bout
+   en bout. Trou du plan (dashboard hors périmètre en tâche 6), pas de l'implémentation.
+3. **`render_report` n'était pas invalidé** quand les slides changeaient — faux feu
+   vert sur le seul signal censé empêcher une mauvaise publication.
+4. **Le câblage du voile n'était couvert par aucun test** : le supprimer laissait les
+   244 tests verts, le repli CSS masquant l'absence.
+5. **Pas de sentinelle « sans valeurs »** pour `kinda_reel/style.css`.
+
+## Points conservés sciemment
+
+| Point | Raison de le garder |
+|---|---|
+| Duplication reset/body/photo/logo + blob `@font-face` entre les deux feuilles | Conséquence directe du choix « feuille autonome par gabarit ». La duplication est inerte : aucune valeur, elles viennent de `variables_css`. |
+| `Zone.anchor` n'est pas consommé | L'ancrage vit dans les feuilles (`bottom:` pour le post, `top:` + `translateY` pour le reel). Champ descriptif ; le modifier ne fait rien. |
+| `--*-align`, `--*-offset`, `--headline-tilt` émis sans être consommés | Le reel écrit `text-align: center` en dur. Contrat plus large que la réalité. |
+| Le voile est calculé sur la **dernière mesure**, pas sur l'échelle retenue | La dichotomie finit souvent sur une échelle rejetée. Toujours ≥ la hauteur nécessaire (monotonie) et planchée par `VOILE_MINIMUM`, donc inoffensif — mais contredit le contrat documenté. |
+| `MARGE_INCLINAISON = 20` dans `_hauteurs_de_bande` | Laisse ~12 px d'angle mort près de la jointure pour ~8 px d'empiètement légitime. Un ordre de rôles cassé déclenche quand même l'autre branche du garde-fou. |
+| `mesurer_bandes` vit dans `app/content/` | Outil de calibration honnêtement documenté ; sa place serait plutôt `scripts/`. |
+| `-0.08em` d'interlettrage sur le sous-titre | Asymétrique face aux `-0.02em` du titre, mais épinglé numériquement par le test de largeur (753 px ± 25). |
+
+## Trous connus, à ouvrir quand le besoin viendra
+
+- **Le gabarit `kinda_reel` n'est pas atteignable par l'API.** `creer_post` force
+  `template="kinda_post"`, `PostUpdate` n'a pas de champ `template`, et `SlideIn` exige
+  `headline` — les slides `{title, subtitle}` d'un reel ne passeraient pas la
+  sérialisation. Le gabarit est une fondation, pas une fonctionnalité exposée. Un garde
+  de deux lignes validant `template ∈ GABARITS` à la création éviterait un 500 muet.
+- **Après validation ou publication**, `renderPostDetail(updated)` est appelé sans
+  rapport, donc le badge de débordement disparaît alors qu'il reste valable (ces deux
+  actions ne touchent pas aux slides).
+- **La sentinelle du reel ne bannit pas `42.9%`**, cette valeur étant légitimement
+  présente comme repli de `var(--block-center, 42.9%)` — même précédent que `817px`
+  côté post. Une vérification par expression régulière (« cette valeur n'apparaît
+  QUE dans ce `var()` ») fermerait l'angle mort d'une seconde occurrence en dur.
+- **Le garde-fou « Chromium absent » n'est pas testé contre un Chromium réellement
+  absent** (il est installé partout où les tests tournent). La correspondance de chaîne
+  est le seul lien avec le libellé réel de Playwright : une refonte de leurs messages
+  d'erreur le romprait en silence.
+- **Le changement de dashboard n'a pas été vérifié dans un vrai navigateur** (extension
+  indisponible). Vérifié autrement : backend de bout en bout sur une base SQLite
+  jetable, et le vrai `<script>` chargé dans Node avec un DOM bouchonné pour les trois
+  cas (propre, en défaut, rapport nul). Restent non couverts : le clic réel, le
+  `fetch` réel, et la lisibilité visuelle du badge.

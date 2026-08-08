@@ -10,36 +10,75 @@ Ce module ne connait ni la base ni Claude : il recoit une liste de dicts.
 
 import base64
 import logging
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, sync_playwright
 
 from app.content.highlight import to_html
+from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 
 logger = logging.getLogger(__name__)
-
-SLIDE_WIDTH = 1080
-SLIDE_HEIGHT = 1440
-# Hauteur allouee au bloc d'accroche, au-dela on reduit la police.
-# Mesuree (Chromium headless, echelle 1.0) sur l'accroche de reference du template
-# -- « Nico Moreno, Mosimann, Cassius... et **c'est ce week-end** aux **Vieilles
-# Charrues** » -- qui doit tomber sur trois lignes : hauteur reelle 276 px (3 x
-# 92 px de hauteur de ligne). Une accroche qui deborde sur une quatrieme ligne
-# mesure 368 px. 420 px (valeur du brief) ne declenchait donc JAMAIS la reduction,
-# meme a quatre lignes : ajuste a 320 px, a mi-chemin entre les deux, pour laisser
-# passer trois lignes telles quelles et forcer la reduction des la quatrieme.
-MAX_HEADLINE_HEIGHT = 320
-# Paliers de reduction. Bornee a trois essais : au-dela le probleme n'est pas la
-# taille de police mais l'accroche elle-meme.
-SCALE_STEPS = (1.0, 0.9, 0.8)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 ASSETS_DIR = Path(__file__).parent / "assets"
 
 _USER_AGENT = "KindaBot/1.0 (+https://github.com/kinda)"  # ASCII pur, cf. CLAUDE.md
+
+
+class RenduIndisponible(RuntimeError):
+    """Levee quand Chromium Playwright n'est pas installe localement."""
+
+
+def _signale_chromium_absent(exc: Exception) -> bool:
+    """Vrai seulement pour la signature precise de l'executable manquant.
+
+    Isolee pour que `_ouvrir_chromium` reste lisible : un template casse ou une
+    erreur Jinja ne matchent pas ce message et remontent donc inchanges (via le
+    `raise` nu de son `except`).
+    """
+    return "Executable doesn't exist" in str(exc) or "playwright install" in str(exc)
+
+
+def _ouvrir_chromium() -> tuple[Any, Browser]:
+    """Demarre Playwright et lance Chromium, ou leve `RenduIndisponible`.
+
+    Deux echecs distincts a garder separes : `contexte.__enter__()` (demarre la
+    boucle asyncio et le process driver node) peut echouer independamment de
+    `chromium.launch()` (le cas nominal de cette fonction, Chromium absent). Si
+    le lancement echoue APRES un `__enter__()` reussi, il faut sortir du
+    contexte avant de lever -- sinon le process driver et la boucle asyncio
+    qu'il a ouverts ne sont jamais arretes (une fuite par appel echoue).
+    Le contexte est ouvert a la main (`__enter__`/`__exit__`) plutot qu'avec
+    `with` pour pouvoir le refermer chez l'appelant, une fois le rendu termine.
+    """
+    contexte = sync_playwright()
+    try:
+        playwright = contexte.__enter__()
+    except Exception as exc:
+        if _signale_chromium_absent(exc):
+            raise RenduIndisponible(
+                "Chromium Playwright est absent : lancer `uv run playwright install chromium`"
+            ) from exc
+        raise
+    try:
+        browser = playwright.chromium.launch()
+    except Exception as exc:
+        # Le contexte est deja entre : sans cette sortie, le processus driver et
+        # la boucle asyncio survivent a l'echec -- une fuite par slide et par
+        # consultation, dans un uvicorn qui tourne en permanence.
+        contexte.__exit__(None, None, None)
+        if _signale_chromium_absent(exc):
+            raise RenduIndisponible(
+                "Chromium Playwright est absent : lancer `uv run playwright install chromium`"
+            ) from exc
+        raise
+    return contexte, browser
 
 
 def _data_uri(content: bytes, mime: str) -> str:
@@ -74,13 +113,17 @@ def _logo_data_uri() -> str:
 
 
 def build_document(
-    headline: str, image_data_uri: str, scale: float = 1.0, template: str = "kinda_post"
+    gabarit_: Gabarit,
+    textes: dict[str, str],
+    image_data_uri: str,
+    scale: float = 1.0,
+    scrim_height: float | None = None,
 ) -> str:
-    """Assemble le HTML autonome d'une slide (feuille et images inlinees).
+    """Assemble le HTML autonome d'une slide (feuille, police et images inlinees).
 
-    Sortie par une fonction a part pour etre verifiable sans Chromium : c'est
-    ici que se joue l'echappement de la feuille de style, dont un ratage ne se
-    voit sur le PNG que si on connait deja la bonne police.
+    Sortie par une fonction a part pour etre verifiable sans Chromium : c'est ici
+    que se joue l'echappement de la feuille de style, dont un ratage ne se voit
+    sur le PNG que si on connait deja la bonne police.
     """
     env = Environment(
         loader=FileSystemLoader(TEMPLATES_DIR),
@@ -91,58 +134,160 @@ def build_document(
     # "KindaDisplay"` et `format("woff2")` -- l'@font-face n'est alors pas
     # enregistre du tout et Chromium rend l'accroche dans sa police par defaut
     # (un serif), avec d'autres retours a la ligne que le gabarit Figma.
-    css = Markup((TEMPLATES_DIR / template / "style.css").read_text(encoding="utf-8"))
-    return env.get_template(f"{template}/slide.html.j2").render(
+    css = Markup((TEMPLATES_DIR / gabarit_.name / "style.css").read_text(encoding="utf-8"))
+    return env.get_template(f"{gabarit_.name}/slide.html.j2").render(
         css=css,
+        variables=Markup(variables_css(gabarit_, scale, scrim_height)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
-        headline_html=Markup(to_html(headline)),
-        headline_scale=scale,
+        textes={role: Markup(to_html(textes[role])) for role in gabarit_.roles},
     )
 
 
-def _render_one(
-    page, template: str, image_uri: str, headline: str, scale_log: list[float] | None = None
-) -> bytes:
-    """Rend une slide, en reduisant la police tant que l'accroche deborde.
+# Regroupement par ordonnee et non un rectangle = une ligne : un `<mark>` coupe la
+# ligne en PLUSIEURS rectangles (avant, dans, apres le surlignage). Sans
+# regroupement, une accroche de 3 lignes avec deux segments surlignes compterait
+# 7 lignes et declencherait une reduction injustifiee.
+# La tolerance de 4 px absorbe les ecarts d'ordonnee entre fragments d'une meme
+# ligne (accents, `background-position` du mark).
+_MESURE_JS = """
+(role) => {
+  const el = document.getElementById(role);
+  const style = getComputedStyle(el);
+  // Un role a bande de fond est un element EN LIGNE : ses propres rectangles
+  // incluent le padding et le fond, donc ils SONT les bandes -- c'est ce qu'on
+  // veut mesurer. Un role en bloc n'a qu'un rectangle : il faut passer par un
+  // Range sur son contenu pour obtenir une ligne par ligne rendue.
+  const rects = style.display === 'inline'
+    ? [...el.getClientRects()]
+    : (() => { const r = document.createRange(); r.selectNodeContents(el);
+               return [...r.getClientRects()]; })();
 
-    `scale_log`, si fourni, recoit l'echelle retenue -- utilise par les tests
-    pour prouver que la boucle de reduction s'est bien declenchee : la taille
-    du PNG produit est fixee par le viewport Playwright et ne temoigne de rien
-    sur l'echelle appliquee a l'accroche.
+  const lignes = [];
+  for (const rect of rects.filter(r => r.width > 0 && r.height > 0)
+                          .sort((a, b) => a.top - b.top)) {
+    const derniere = lignes[lignes.length - 1];
+    if (derniere && Math.abs(rect.top - derniere.top) < 4) {
+      derniere.gauche = Math.min(derniere.gauche, rect.left);
+      derniere.droite = Math.max(derniere.droite, rect.right);
+      derniere.bas = Math.max(derniere.bas, rect.bottom);
+    } else {
+      lignes.push({top: rect.top, bas: rect.bottom, gauche: rect.left, droite: rect.right});
+    }
+  }
+  if (!lignes.length) return {widths: [], height: 0};
+  return {
+    widths: lignes.map(l => l.droite - l.gauche),
+    height: lignes[lignes.length - 1].bas - lignes[0].top,
+  };
+}
+"""
+
+
+def mesurer_role(page, role: str) -> Mesure:
+    """Mesure un role : une largeur par ligne rendue, plus la hauteur du bloc."""
+    brut = page.evaluate(_MESURE_JS, role)
+    return Mesure(line_widths=tuple(brut["widths"]), height=float(brut["height"]))
+
+
+@dataclass(frozen=True)
+class RenduSlide:
+    """Le PNG et le rapport de ce qui s'est passe pour le produire.
+
+    Le rapport n'est pas un detail de test : `overflow` est ce qui permet au
+    dashboard de signaler un post en defaut plutot que de laisser publier une
+    image coupee.
     """
-    for scale in SCALE_STEPS:
-        page.set_content(build_document(headline, image_uri, scale, template), wait_until="load")
+
+    png: bytes
+    scale: float
+    lines: dict[str, int]
+    overflow: bool
+
+
+def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
+    """Rend une slide : mesure, ajuste, puis capture.
+
+    Deux passes AU MINIMUM, et c'est structurel : la hauteur du voile depend de la
+    hauteur mesuree du bloc, qu'on ne connait qu'apres un premier rendu.
+    """
+    ajustement = Ajustement(gabarit_)
+    mesures: dict[str, Mesure] = {}
+    while (echelle := ajustement.prochaine_echelle()) is not None:
+        page.set_content(build_document(gabarit_, textes, image_uri, echelle), wait_until="load")
         page.evaluate("document.fonts.ready")
-        height = page.evaluate(
-            "document.getElementById('headline').getBoundingClientRect().height"
+        mesures = {role: mesurer_role(page, role) for role in gabarit_.roles}
+        ajustement.enregistrer(mesures)
+
+    resultat = ajustement.resultat
+    if resultat.overflow:
+        logger.warning(
+            "texte intenable meme a l'echelle %.2f, slide marquee en defaut : %r",
+            resultat.scale,
+            textes,
         )
-        if height <= MAX_HEADLINE_HEIGHT or scale == SCALE_STEPS[-1]:
-            if height > MAX_HEADLINE_HEIGHT:
-                logger.warning("accroche encore trop longue apres reduction : %r", headline)
-            if scale_log is not None:
-                scale_log.append(scale)
-            return page.screenshot(type="png")
-    raise RuntimeError("boucle de reduction sortie sans capture")  # pragma: no cover
+
+    # Passe finale : l'echelle retenue, et le voile cale sur la hauteur du bloc.
+    # La cover reel n'a pas de voile (gabarit_.voile = False) : son contraste
+    # vient des bandes, pas d'un degrade calcule sur la hauteur du texte.
+    voile = None
+    if gabarit_.voile:
+        role_principal = next(iter(gabarit_.roles))
+        if role_principal in mesures:
+            voile = hauteur_voile(gabarit_, role_principal, mesures[role_principal])
+    page.set_content(
+        build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
+    )
+    page.evaluate("document.fonts.ready")
+    return RenduSlide(
+        png=page.screenshot(type="png"),
+        scale=resultat.scale,
+        lines=resultat.lines,
+        overflow=resultat.overflow,
+    )
 
 
-def render_post(
-    slides: list[dict], template: str = "kinda_post", scale_log: list[float] | None = None
-) -> list[bytes]:
-    """Rend chaque slide en PNG 1080x1440. Un seul Chromium pour tout le post."""
-    rendus: list[bytes] = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = browser.new_page(
-                viewport={"width": SLIDE_WIDTH, "height": SLIDE_HEIGHT},
-                device_scale_factor=1,
-            )
-            for slide in slides:
-                image_uri = fetch_image_data_uri(slide.get("image_url"))
-                rendus.append(
-                    _render_one(page, template, image_uri, slide["headline"], scale_log)
-                )
-        finally:
-            browser.close()
+def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[float]]:
+    """Les largeurs de bande reellement rendues, role par role.
+
+    Sert a la calibration : les corps et paddings exacts ne se deduisent pas par
+    inversion des mesures de la maquette, ils se calent en rendant puis en
+    comparant.
+    """
+    gabarit_ = gabarit(template)
+    image_uri = fetch_image_data_uri(slide.get("image_url"))
+    textes = {role: slide[role] for role in gabarit_.roles}
+    contexte, browser = _ouvrir_chromium()
+    # ExitStack et non deux `finally` empiles a la main : si `browser.close()`
+    # leve (navigateur deja crashe), la sortie du contexte Playwright doit quand
+    # meme avoir lieu -- sinon meme fuite que dans `_ouvrir_chromium`, sur un
+    # chemin plus rare mais pas moins reel.
+    with ExitStack() as pile:
+        pile.callback(contexte.__exit__, None, None, None)
+        pile.callback(browser.close)
+        page = browser.new_page(
+            viewport={"width": gabarit_.width, "height": gabarit_.height},
+            device_scale_factor=1,
+        )
+        page.set_content(build_document(gabarit_, textes, image_uri), wait_until="load")
+        page.evaluate("document.fonts.ready")
+        return {role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles}
+
+
+def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
+    """Rend chaque slide du post. Un seul Chromium pour tout le post."""
+    gabarit_ = gabarit(template)
+    rendus: list[RenduSlide] = []
+    contexte, browser = _ouvrir_chromium()
+    with ExitStack() as pile:
+        pile.callback(contexte.__exit__, None, None, None)
+        pile.callback(browser.close)
+        page = browser.new_page(
+            viewport={"width": gabarit_.width, "height": gabarit_.height},
+            device_scale_factor=1,
+        )
+        for slide in slides:
+            image_uri = fetch_image_data_uri(slide.get("image_url"))
+            textes = {role: slide[role] for role in gabarit_.roles}
+            rendus.append(_render_one(page, gabarit_, textes, image_uri))
     return rendus

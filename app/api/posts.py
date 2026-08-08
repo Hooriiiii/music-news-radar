@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.content.compose import CompositionError, create_post, make_claude_composer
-from app.content.render import render_post
+from app.content.render import RenduIndisponible, render_post
 from app.db import get_db
 from app.models import Article, ArticleStatus, Post, PostStatus
 from app.schemas import PostOut, PostUpdate
@@ -67,6 +67,12 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # Reassignation ENTIERE (liste de dicts simples, pas les modeles Pydantic) :
         # une mutation in place ne serait pas persistee sur la colonne JSON
         post.slides = [slide.model_dump() for slide in payload.slides]
+        # Un rapport de rendu parle d'un texte precis : une fois les slides
+        # changees (l'editeur de carrousel EST une surface d'edition
+        # d'accroche), un ancien rapport "overflow" ou "clean" ne veut plus rien
+        # dire -- et un ancien "clean" perime serait un faux feu vert sur le
+        # signal qui doit justement empecher une publication en defaut.
+        post.render_report = None
     if payload.status is not None:
         post.status = payload.status
         if payload.status is PostStatus.PUBLISHED:
@@ -93,8 +99,37 @@ def rendre_slide(post_id: int, index: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
     if index < 1 or index > len(post.slides):
         raise HTTPException(status_code=404, detail="Slide not found")
-    png = render_post([post.slides[index - 1]], post.template)[0]
-    return Response(content=png, media_type="image/png")
+    try:
+        rendu = render_post([post.slides[index - 1]], post.template)[0]
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(content=rendu.png, media_type="image/png")
+
+
+@router.post("/posts/{post_id}/render")
+def rendre_post(post_id: int, db: Session = Depends(get_db)):
+    """Rend toutes les slides et PERSISTE le rapport.
+
+    En POST et pas en GET : c'est une ecriture. Les endpoints de rendu en GET
+    restent purs -- ils servent l'image, ils ne consignent rien.
+    """
+    post = _post_ou_404(db, post_id)
+    try:
+        rendus = render_post(post.slides, post.template)
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    rapport = {
+        "slides": [
+            {"scale": rendu.scale, "lines": rendu.lines, "overflow": rendu.overflow}
+            for rendu in rendus
+        ]
+    }
+    # Reassignation ENTIERE : une mutation in place ne serait pas persistee.
+    post.render_report = rapport
+    db.commit()
+    return rapport
 
 
 def _texte_legende(post: Post) -> str:
@@ -108,12 +143,16 @@ def _texte_legende(post: Post) -> str:
 @router.get("/posts/{post_id}/export.zip")
 def exporter_post(post_id: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
-    pngs = render_post(post.slides, post.template)
+    try:
+        rendus = render_post(post.slides, post.template)
+    except RenduIndisponible as exc:
+        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
-        for numero, png in enumerate(pngs, start=1):
-            archive.writestr(f"slide_{numero:02d}.png", png)
+        for numero, rendu in enumerate(rendus, start=1):
+            archive.writestr(f"slide_{numero:02d}.png", rendu.png)
         archive.writestr("caption.txt", _texte_legende(post))
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
