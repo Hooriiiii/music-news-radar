@@ -199,3 +199,38 @@ def test_variables_css_expose_la_recette_des_voiles():
 
     assert "--voile-noir: rgba(0, 0, 0, 0.8);" in css
     assert "--voile-haut-hauteur: 727px;" in css
+
+
+def test_ajustement_respecte_le_max_des_planchers_par_role():
+    """Le plancher liant est le plus RESTRICTIF des min_scale par role.
+    Avec max() au lieu de min(), la dichotomie converge au-dessus du plancher
+    le plus strict, meme si d'autres roles auraient un plancher plus permissif."""
+    typo = Typo(font_size=80, line_height=1.15, letter_spacing=-0.06, color="#FFF7FA")
+    gabarit = Gabarit(
+        name="test_planchers",
+        width=1080,
+        height=1440,
+        roles={
+            "title": (typo, _zone(max_lines=2, max_line_width=926, min_scale=0.7)),
+            "subtitle": (typo, _zone(max_lines=2, max_line_width=926, min_scale=0.4)),
+        },
+    )
+    ajustement = Ajustement(gabarit)
+
+    # La premiere mesure ne tient pas : excede max_lines.
+    assert ajustement.prochaine_echelle() == 1.0
+    ajustement.enregistrer({
+        "title": Mesure(line_widths=(500.0,) * 3, height=282.0),
+        "subtitle": Mesure(line_widths=(500.0,), height=85.0),
+    })
+
+    # Le plancher teste en deuxieme est 0.7 (max des deux), pas 0.4.
+    assert ajustement.prochaine_echelle() == 0.7
+
+
+def test_variables_css_arrondit_la_hauteur_fractionnaire():
+    """hauteur_voile() rend un float ; Chromium fournira 817.6 px.
+    On doit arrondir (818px) plutot que tronquer (817px)."""
+    css = variables_css(GABARIT_POST, scale=1.0, scrim_height=817.6)
+
+    assert "--scrim-height: 818px;" in css
