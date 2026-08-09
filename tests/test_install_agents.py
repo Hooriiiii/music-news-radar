@@ -18,6 +18,7 @@ from scripts.install_agents import (
     PORT_DASHBOARD,
     THROTTLE_DASHBOARD,
     Chemins,
+    chemins_par_defaut,
     plist_dashboard,
     plist_ingest,
     plists,
@@ -107,6 +108,26 @@ def test_les_plists_sont_serialisables_et_relisibles(chemins):
     plist invalide que launchd refuserait en silence."""
     for p in plists(chemins).values():
         assert plistlib.loads(plistlib.dumps(p)) == p
+
+
+def test_chemins_par_defaut_resout_la_racine_du_vrai_depot():
+    """Seul endroit avec de l'arithmetique de chemins (`__file__` remonte de deux
+    crans) : un decalage d'un cran donnerait aux agents le mauvais
+    WorkingDirectory, exactement ce que generer les plists doit eliminer. Pas de
+    chemin absolu code en dur ici : on verifie la forme d'un vrai depot."""
+    depot = chemins_par_defaut().depot
+
+    assert (depot / "pyproject.toml").is_file()
+    assert (depot / "scripts").is_dir()
+
+
+def test_chemins_par_defaut_echoue_fort_si_uv_est_absent(monkeypatch):
+    """Un `None` silencieux finirait serialise dans un plist comme la chaine
+    "None", et launchd echouerait au chargement avec quelque chose d'inutile."""
+    monkeypatch.setattr("scripts.install_agents.shutil.which", lambda _: None)
+
+    with pytest.raises(SystemExit, match="uv"):
+        chemins_par_defaut()
 
 
 def test_les_labels_obsoletes_sont_ceux_de_juillet():

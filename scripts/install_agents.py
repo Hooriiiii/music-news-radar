@@ -1,10 +1,8 @@
 """Installe les agents launchd du socle local de Kinda.
 
 Usage :
-    uv run python -m scripts.install_agents              # affiche le plan
-    uv run python -m scripts.install_agents --apply      # installe
-    uv run python -m scripts.install_agents --status     # etat des agents
-    uv run python -m scripts.install_agents --uninstall  # retire tout
+    uv run python -m scripts.install_agents            # affiche le plan
+    uv run python -m scripts.install_agents --apply    # installe (tache suivante)
 
 Deux ordonnanceurs cohabitent, cloisonnes PAR SCRIPT et non par configuration :
 
@@ -103,8 +101,13 @@ def plist_dashboard(chemins: Chemins) -> dict:
         **_commun(chemins, LABEL_DASHBOARD, "dashboard"),
         "ProgramArguments": [
             str(chemins.uv), "run", "uvicorn", "app.main:app",
+            # 127.0.0.1, jamais 0.0.0.0 : dashboard local, exposer au reseau de
+            # la maison n'apporte rien et ouvre une surface pour rien.
             "--host", "127.0.0.1",
             "--port", str(PORT_DASHBOARD),
+            # launchd ne fait aucune rotation de logs, et le dashboard interroge
+            # sa propre API en boucle : sans ces deux flags, 43 Mo se sont deja
+            # accumules ainsi en cinq semaines.
             "--no-access-log",
             "--log-level", "warning",
         ],
