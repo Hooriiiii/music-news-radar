@@ -48,6 +48,14 @@ THROTTLE_DASHBOARD = 60
 # lance ensuite peut avoir besoin du reste.
 PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
+# newsyslog est la rotation native de macOS. Sa configuration vit dans /etc, donc
+# hors de portee de ce script sans sudo -- on affiche le fichier et la commande
+# plutot que de reclamer les droits administrateur pour trois lignes.
+CONF_ROTATION = Path("/etc/newsyslog.d/music-news-radar.conf")
+ROTATION_GENERATIONS = 5
+ROTATION_TAILLE_KO = 5000
+BASES_LOG = ("ingest", "dashboard")
+
 
 @dataclass(frozen=True)
 class Chemins:
@@ -69,6 +77,61 @@ def chemins_par_defaut() -> Chemins:
         logs=Path.home() / "Library" / "Logs" / "music-news-radar",
         launch_agents=Path.home() / "Library" / "LaunchAgents",
     )
+
+
+def _fichiers_log(chemins: Chemins) -> list[Path]:
+    return [
+        chemins.logs / f"{base}{suffixe}"
+        for base in BASES_LOG
+        for suffixe in (".log", ".err.log")
+    ]
+
+
+def conf_rotation(chemins: Chemins) -> str:
+    """Une ligne par fichier : newsyslog n'etend PAS les jokers dans le champ du
+    nom, un `*.log` ne ferait donc tourner aucun fichier."""
+    proprietaire = f"{Path.home().name}:staff"
+    lignes = [
+        "# Rotation des logs du socle local Kinda.",
+        "# Sans elle : 43 Mo accumules en cinq semaines, et un uvicorn permanent",
+        "# qui s'y ajoute. Installe par scripts/install_agents.py (voir sa sortie).",
+        "# fichier                                   proprietaire mode nb taille quand drapeaux",
+    ]
+    for fichier in _fichiers_log(chemins):
+        lignes.append(
+            f"{fichier} {proprietaire} 644 "
+            f"{ROTATION_GENERATIONS} {ROTATION_TAILLE_KO} * J"
+        )
+    return "\n".join(lignes) + "\n"
+
+
+def tronquer_logs(chemins: Chemins) -> int:
+    """Vide les logs existants et rend le nombre d'octets liberes.
+
+    Tronquer et non supprimer : launchd tient un descripteur ouvert sur ces
+    fichiers, et les supprimer sous ses pieds ferait ecrire dans le vide.
+    """
+    libere = 0
+    if not chemins.logs.is_dir():
+        return 0
+    for fichier in chemins.logs.glob("*.log"):
+        libere += fichier.stat().st_size
+        with fichier.open("w"):
+            pass
+    return libere
+
+
+def afficher_rotation(chemins: Chemins) -> None:
+    if CONF_ROTATION.exists():
+        print(f"\nRotation des logs : déjà configurée ({CONF_ROTATION}).")
+        return
+    print(
+        f"\nRotation des logs : NON configurée. À lancer une fois, "
+        f"{CONF_ROTATION.parent} demandant sudo :\n"
+    )
+    print(f"  sudo tee {CONF_ROTATION} > /dev/null <<'EOF'")
+    print(conf_rotation(chemins), end="")
+    print("EOF")
 
 
 def _commun(chemins: Chemins, label: str, base_log: str) -> dict:
@@ -142,7 +205,13 @@ def afficher_plan(chemins: Chemins) -> None:
         print(f"  - {label}")
     print(f"\nPlists dans : {chemins.launch_agents}")
     print(f"Logs dans    : {chemins.logs}")
+    a_liberer = 0
+    if chemins.logs.is_dir():
+        a_liberer = sum(f.stat().st_size for f in chemins.logs.glob("*.log"))
+    if a_liberer:
+        print(f"\n--apply tronquera les logs existants ({a_liberer:,} octets à libérer).")
     print("\nRelancer avec --apply pour appliquer.")
+    afficher_rotation(chemins)
 
 
 def _executer(commande: list[str], tolere_echec: bool = False) -> str:
@@ -200,6 +269,11 @@ def installer(chemins: Chemins, executer=_executer) -> None:
         executer(["launchctl", "bootstrap", _domaine(), str(fichier)])
         print(f"  + installé : {label}")
 
+    libere = tronquer_logs(chemins)
+    if libere:
+        print(f"\nLogs existants tronqués ({libere:,} octets libérés).")
+    afficher_rotation(chemins)
+
 
 def desinstaller(chemins: Chemins, executer=_executer) -> None:
     for label in (LABEL_INGEST, LABEL_DASHBOARD):
@@ -231,6 +305,7 @@ def statut(chemins: Chemins, executer=_executer) -> None:
         print("\nAgents obsolètes encore chargés (relancer --apply) :")
         for label in survivants:
             print(f"  ! {label}")
+    afficher_rotation(chemins)
 
 
 def main() -> None:

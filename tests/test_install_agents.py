@@ -19,12 +19,14 @@ from scripts.install_agents import (
     THROTTLE_DASHBOARD,
     Chemins,
     chemins_par_defaut,
+    conf_rotation,
     desinstaller,
     installer,
     plist_dashboard,
     plist_ingest,
     plists,
     statut,
+    tronquer_logs,
 )
 
 
@@ -288,3 +290,42 @@ def test_statut_tolere_len_entete_et_une_ligne_malformee(chemins, capsys):
     # ni l'entete ni la ligne tronquee ne doivent apparaitre comme un agent
     assert "Label" not in imprime
     assert "foo" not in imprime and "bar" not in imprime
+
+
+def test_la_conf_de_rotation_cite_chaque_fichier_de_log(chemins):
+    """newsyslog n'etend pas les jokers dans le champ du nom de fichier : il faut
+    lister les quatre fichiers, sinon la rotation ne s'applique a aucun."""
+    conf = conf_rotation(chemins)
+
+    for base in ("ingest", "dashboard"):
+        for suffixe in (".log", ".err.log"):
+            assert str(chemins.logs / f"{base}{suffixe}") in conf
+
+
+def test_la_conf_de_rotation_plafonne_la_taille(chemins):
+    conf = conf_rotation(chemins)
+    ligne = next(
+        candidate
+        for candidate in conf.splitlines()
+        if not candidate.startswith("#") and candidate.strip()
+    )
+    champs = ligne.split()
+
+    # nom, proprietaire:groupe, mode, generations, taille en Ko, quand, drapeaux
+    assert champs[3] == "5"        # 5 generations conservees
+    assert champs[4] == "5000"     # 5 Mo
+    assert "J" in champs[6]        # compression bzip2
+
+
+def test_tronquer_les_logs_libere_la_place_sans_supprimer_les_fichiers(chemins, tmp_path):
+    """Tronquer et non supprimer : launchd tient un descripteur ouvert sur ces
+    fichiers, et le supprimer sous ses pieds ferait ecrire dans le vide."""
+    chemins.logs.mkdir(parents=True)
+    gros = chemins.logs / "ingest.err.log"
+    gros.write_text("x" * 4096)
+
+    libere = tronquer_logs(chemins)
+
+    assert libere == 4096
+    assert gros.exists()
+    assert gros.stat().st_size == 0
