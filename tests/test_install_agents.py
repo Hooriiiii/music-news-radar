@@ -24,6 +24,7 @@ from scripts.install_agents import (
     plist_dashboard,
     plist_ingest,
     plists,
+    statut,
 )
 
 
@@ -223,3 +224,67 @@ def test_installer_est_idempotent(chemins):
 
     for label in (LABEL_INGEST, LABEL_DASHBOARD):
         assert (chemins.launch_agents / f"{label}.plist").exists()
+
+
+def test_statut_distingue_agent_en_cours_et_agent_au_repos(chemins, capsys):
+    """Un `-` dans la colonne PID est l'etat normal d'un agent periodique entre
+    deux declenchements : le confondre avec "absent" serait trompeur."""
+    sortie = (
+        "1234\t0\tcom.musicnewsradar.dashboard\n"
+        "-\t0\tcom.musicnewsradar.ingest\n"
+    )
+
+    statut(chemins, executer=FauxExecuteur(sortie))
+
+    imprime = capsys.readouterr().out
+    assert "com.musicnewsradar.dashboard" in imprime
+    assert "en cours" in imprime
+    assert "com.musicnewsradar.ingest" in imprime
+    assert "au repos" in imprime
+
+
+def test_statut_affiche_le_dernier_code_de_sortie_dun_agent_au_repos(chemins, capsys):
+    """Ce chiffre est le seul moyen de savoir qu'une execution planifiee a
+    echoue -- c'est exactement comme l'agent `digest` de juillet est reste
+    casse sans que personne ne le remarque pendant cinq semaines."""
+    sortie = "-\t1\tcom.musicnewsradar.ingest\n"
+
+    statut(chemins, executer=FauxExecuteur(sortie))
+
+    imprime = capsys.readouterr().out
+    assert "1" in imprime
+
+
+def test_statut_signale_un_agent_absent(chemins, capsys):
+    statut(chemins, executer=FauxExecuteur(""))
+
+    imprime = capsys.readouterr().out
+    assert "com.musicnewsradar.ingest" in imprime
+    assert "absent" in imprime
+    assert "com.musicnewsradar.dashboard" in imprime
+
+
+def test_statut_avertit_si_un_agent_obsolete_survit(chemins, capsys):
+    sortie = "5678\t0\tcom.musicnewsradar.pipeline\n"
+
+    statut(chemins, executer=FauxExecuteur(sortie))
+
+    imprime = capsys.readouterr().out
+    assert "com.musicnewsradar.pipeline" in imprime
+
+
+def test_statut_tolere_len_entete_et_une_ligne_malformee(chemins, capsys):
+    """L'entete de `launchctl list` a elle aussi trois colonnes ("PID\tStatus
+    \tLabel") : elle ne doit pas etre prise pour un agent charge, et une ligne
+    tronquee ne doit pas faire planter le parsing."""
+    sortie = "PID\tStatus\tLabel\nfoo\tbar\n"
+
+    statut(chemins, executer=FauxExecuteur(sortie))
+
+    imprime = capsys.readouterr().out
+    assert "com.musicnewsradar.ingest" in imprime
+    assert "com.musicnewsradar.dashboard" in imprime
+    assert "  com.musicnewsradar.ingest" in imprime and "absent" in imprime
+    # ni l'entete ni la ligne tronquee ne doivent apparaitre comme un agent
+    assert "Label" not in imprime
+    assert "foo" not in imprime and "bar" not in imprime

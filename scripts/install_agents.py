@@ -165,14 +165,24 @@ def _bootout(label: str, executer) -> None:
     executer(["launchctl", "bootout", f"{_domaine()}/{label}"], tolere_echec=True)
 
 
+def _supprimer_plist(fichier: Path, label: str) -> None:
+    """N'affiche « retiré » que si quelque chose a reellement disparu : sur un
+    re-run propre, l'agent est deja absent et le dire quand meme induirait en
+    erreur la personne qui lit cette sortie pour savoir si la migration a fait
+    quelque chose."""
+    try:
+        fichier.unlink()
+        print(f"  - retiré : {label}")
+    except FileNotFoundError:
+        print(f"  - déjà absent : {label}")
+
+
 def _retirer_obsoletes(chemins: Chemins, executer) -> None:
     """Le PREMIER travail de l'installation. Decharger ne suffit pas : un plist
     laisse dans LaunchAgents est recharge a la prochaine ouverture de session."""
     for label in LABELS_OBSOLETES:
         _bootout(label, executer)
-        fichier = chemins.launch_agents / f"{label}.plist"
-        fichier.unlink(missing_ok=True)
-        print(f"  - retiré : {label}")
+        _supprimer_plist(chemins.launch_agents / f"{label}.plist", label)
 
 
 def installer(chemins: Chemins, executer=_executer) -> None:
@@ -194,12 +204,14 @@ def installer(chemins: Chemins, executer=_executer) -> None:
 def desinstaller(chemins: Chemins, executer=_executer) -> None:
     for label in (LABEL_INGEST, LABEL_DASHBOARD):
         _bootout(label, executer)
-        (chemins.launch_agents / f"{label}.plist").unlink(missing_ok=True)
-        print(f"  - retiré : {label}")
+        _supprimer_plist(chemins.launch_agents / f"{label}.plist", label)
 
 
 def statut(chemins: Chemins, executer=_executer) -> None:
-    sortie = executer(["launchctl", "list"], tolere_echec=True)
+    # Pas de tolere_echec ici : contrairement a bootout, il n'y a aucun cas ou
+    # `launchctl list` echoue legitimement. Si ca echoue, on veut le savoir --
+    # taire l'echec afficherait "tout est absent" a la place de la verite.
+    sortie = executer(["launchctl", "list"])
     lignes = {
         colonnes[2]: colonnes
         for colonnes in (ligne.split("\t") for ligne in sortie.splitlines())
