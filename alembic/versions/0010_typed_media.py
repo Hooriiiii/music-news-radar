@@ -44,6 +44,11 @@ def upgrade() -> None:
             SELECT id, jsonb_agg(jsonb_build_object('type', 'photo', 'url', media_url)) AS media
             FROM articles, jsonb_array_elements_text(media_urls) AS media_url
             WHERE media_urls IS NOT NULL
+              -- jsonb_array_elements_text leve une erreur sur un scalaire (JSON
+              -- `null` y compris) : l'ORM n'ecrit jamais autre chose qu'un
+              -- tableau ici, mais une ceinture pour ne pas faire avorter TOUTE
+              -- la migration sur une ligne hors norme coute une seule clause.
+              AND jsonb_typeof(media_urls) = 'array'
             GROUP BY id
         ) AS m
         WHERE a.id = m.id

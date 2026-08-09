@@ -3,6 +3,7 @@ import datetime as dt
 from app.content.compose import CoverVariante, PostDraft
 from app.content.render import RenduSlide
 from app.models import Article, ArticleStatus, Post, PostStatus, Source, SourceType
+from app.schemas import PostOut
 
 
 def _article(db):
@@ -312,35 +313,6 @@ def test_editer_une_slide_au_balisage_invalide_est_refuse(client, db_session):
     assert marqueurs_impairs.status_code == 422
 
 
-def test_slide_hors_bornes(client, db_session):
-    article = _article(db_session)
-    post = _post(db_session, article)
-    assert client.get(f"/posts/{post.id}/slides/7.png").status_code == 404
-
-
-def test_rendre_une_slide(client, db_session, monkeypatch):
-    """Rendu mocke : on verifie le cablage (index -> slide, media type), pas Chromium."""
-    article = _article(db_session)
-    post = _post(db_session, article)
-
-    def faux_rendu(slides, template):
-        assert template == post.template
-        assert slides == [post.slides[0]]
-        return [RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={"headline": 1}, overflow=False)]
-
-    monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
-
-    response = client.get(f"/posts/{post.id}/slides/1.png")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
-    assert response.content == b"PNG_FACTICE"
-
-
-def test_rendre_une_slide_post_inexistant(client):
-    assert client.get("/posts/9999/slides/1.png").status_code == 404
-
-
 def test_exporter_un_post(client, db_session, monkeypatch):
     """Export mocke : verifie l'assemblage du zip (slides + legende) et le nom
     de fichier en ASCII pur (cf. CLAUDE.md)."""
@@ -440,6 +412,39 @@ def test_editer_les_slides_invalide_le_rapport_de_rendu(client, db_session):
     assert post.render_report is None
 
 
+def test_changer_de_gabarit_invalide_le_rapport_de_rendu(client, db_session):
+    """Meme raison que pour `slides` : un gabarit different change les zones et
+    les tailles, donc ce que Chromium mesurerait -- un vieux rapport "clean"
+    serait un faux feu vert."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+    post.render_report = {"slides": [{"scale": 1.0, "lines": {"headline": 3}, "overflow": False}]}
+    db_session.commit()
+
+    response = client.patch(f"/posts/{post.id}", json={"template": "kinda_reel"})
+
+    assert response.status_code == 200
+    assert response.json()["render_report"] is None
+    db_session.refresh(post)
+    assert post.render_report is None
+
+
+def test_retenir_une_variante_invalide_le_rapport_de_rendu(client, db_session):
+    """Meme raison : une autre variante retenue veut dire un autre texte sur la
+    cover, donc un rapport perime."""
+    article = _article(db_session)
+    post = _post(db_session, article, variants=_quatre_variantes())
+    post.render_report = {"slides": [{"scale": 1.0, "lines": {"headline": 3}, "overflow": False}]}
+    db_session.commit()
+
+    response = client.patch(f"/posts/{post.id}", json={"variante_retenue": 1})
+
+    assert response.status_code == 200
+    assert response.json()["render_report"] is None
+    db_session.refresh(post)
+    assert post.render_report is None
+
+
 def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
     """Deux endpoints distincts et non un seul : la generation coute un appel
     Claude, le rendu coute un Chromium. Recharger la page ne doit pas repayer
@@ -450,9 +455,12 @@ def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
     def faux_render_covers(variantes, image_url, template):
         assert len(variantes) == 4
         assert template == post.template
+        # Overflow different par variante, expres : ce n'est pas un simple
+        # applati de True/False identiques -- le test doit prouver que chaque
+        # RenduSlide.overflow arrive individuellement dans la reponse.
         return [
-            RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={}, overflow=False)
-            for _ in variantes
+            RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={}, overflow=(i == 1))
+            for i, _ in enumerate(variantes)
         ]
 
     monkeypatch.setattr("app.api.posts.render_covers", faux_render_covers)
@@ -460,8 +468,15 @@ def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
     reponse = client.post(f"/posts/{post.id}/covers")
 
     assert reponse.status_code == 200
-    assert len(reponse.json()["covers"]) == 4
-    assert all(u.startswith("data:image/png;base64,") for u in reponse.json()["covers"])
+    corps = reponse.json()
+    assert len(corps["covers"]) == 4
+    assert all(u.startswith("data:image/png;base64,") for u in corps["covers"])
+    # `render_covers` calculait deja `overflow` par variante et le jetait :
+    # CoversOut doit maintenant le porter, pour que le dashboard avertisse
+    # AVANT que l'utilisateur choisisse une variante qui ne tient pas, et
+    # pour eviter un second lancement de Chromium (POST /render) rien que
+    # pour re-obtenir ce meme signal sur la variante retenue.
+    assert corps["overflow"] == [False, True, False, False]
 
 
 def test_covers_sur_un_post_sans_variantes_est_refuse(client, db_session):
@@ -491,6 +506,22 @@ def test_retenir_une_variante_reecrit_la_cover(client, db_session):
     # Le fond est le choix de l'utilisateur : il doit survivre au changement
     # de variante retenue, meme si la fixture le pose a None ici.
     assert relu.slides[0]["image_url"] is None
+
+
+def test_retenir_une_variante_sur_des_slides_vides_ne_leve_pas(client, db_session):
+    """`slides: []` est permis par le schema (PostUpdate.slides) : un IndexError
+    sur `post.slides[0]` serait un 500, pas la reponse d'un cas legal."""
+    article = _article(db_session)
+    post = _post(db_session, article, variants=_quatre_variantes())
+    post.slides = []
+    db_session.commit()
+
+    reponse = client.patch(f"/posts/{post.id}", json={"variante_retenue": 1})
+
+    assert reponse.status_code == 200
+    db_session.expire_all()
+    relu = db_session.get(Post, post.id)
+    assert relu.slides[0]["headline"] == relu.variants["variantes"][1]["headline"]
 
 
 def test_un_indice_de_variante_hors_bornes_est_refuse(client, db_session):
@@ -549,3 +580,64 @@ def test_un_post_approuve_ne_se_supprime_pas(client, db_session):
 
 def test_supprimer_un_post_inexistant(client):
     assert client.delete("/posts/9999").status_code == 404
+
+
+def _transforme_slide_legacy_comme_la_migration_0011(entree: dict) -> dict:
+    """Reproduit en Python le SQL de la migration `0011` (backfill `kind`, puis
+    `title`/`subtitle` depuis `headline`) : `UPDATE ... SET slides = entree ||
+    '{"kind": "cover"}' || jsonb_build_object('title', COALESCE(...))`.
+
+    Ce n'est PAS un remplacement de la verification sur cluster jetable (faite a
+    la main, cf. le rapport de cette tache) : Postgres/JSONB n'existe pas sous
+    SQLite, donc les tests ne peuvent pas executer la vraie migration. Ce test
+    verifie la partie qu'un test SQLite PEUT verifier -- que le RESULTAT de la
+    transformation satisfait `PostOut`, le schema qui a fait 500 la file
+    entiere en production avant ce correctif.
+    """
+    return {
+        **entree,
+        "kind": "cover",
+        "title": entree.get("title", entree.get("headline")),
+        "subtitle": entree.get("subtitle", entree.get("headline")),
+    }
+
+
+def test_une_slide_legacy_migree_valide_postout(client, db_session):
+    """Avant le correctif, la migration ne backfillait QUE `kind` : une slide
+    legacy n'avait ni `title` ni `subtitle`, que `CoverIn` rend obligatoires --
+    `GET /posts` (qui valide chaque ligne via `list[PostOut]`) rendait donc 500
+    sur la file ENTIERE des qu'un seul post pre-0011 trainait en base. Verifie
+    a la main sur la base de l'utilisateur (lecture seule, 2026-08-09) : il y en
+    a trois, a la revision 0009 -- ce n'etait donc pas hypothetique."""
+    article = _article(db_session)
+    slide_legacy = {
+        "headline": "**Vieilles Charrues** : le line-up",
+        "image_url": "https://example.com/fond.jpg",
+    }
+    post = Post(
+        article_id=article.id,
+        article_title=article.title,
+        article_url=article.url,
+        source_name="Tsugi",
+        caption="Une legende.",
+        hashtags=["#electro"],
+        slides=[_transforme_slide_legacy_comme_la_migration_0011(slide_legacy)],
+        variants=None,
+    )
+    db_session.add(post)
+    db_session.commit()
+
+    # C'est EXACTEMENT le chemin qui 500ait : la validation de sortie de
+    # `GET /posts`/`GET /posts/{id}` (response_model=list[PostOut] / PostOut).
+    valide = PostOut.model_validate(post)
+
+    assert valide.slides[0].kind == "cover"
+    assert valide.slides[0].title == "**Vieilles Charrues** : le line-up"
+    assert valide.slides[0].subtitle == "**Vieilles Charrues** : le line-up"
+
+    reponse = client.get(f"/posts/{post.id}")
+    assert reponse.status_code == 200
+    assert reponse.json()["slides"][0]["title"] == valide.slides[0].title
+
+    reponse_liste = client.get("/posts")
+    assert reponse_liste.status_code == 200

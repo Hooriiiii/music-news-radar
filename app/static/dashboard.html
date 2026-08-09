@@ -124,6 +124,10 @@
   .cover-choice .tag { display: block; text-align: center; font-size: 11px; color: var(--muted);
     margin-top: 4px; }
   .cover-choice.retenue .tag { color: #b9a6ff; font-weight: 600; }
+  /* Meme rouge que .render-warning : "attention" est deja ce langage-la dans le
+     dashboard, pas une nouvelle convention. */
+  .cover-choice.en-defaut { border-color: #5a2a2a; }
+  .cover-choice.en-defaut .tag { color: #ff8a8a; }
   .template-switch { display: flex; gap: 8px; align-items: center; }
   .template-switch button { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 12.5px; }
@@ -233,10 +237,14 @@ async function load() {
   for (const a of articles) {
     const card = document.createElement("div");
     card.className = `card st-${a.status}`;
-    const img = (a.media || []).map(m => m.url || m.preview_url).filter(Boolean)[0];
+    // Meme regle que le selecteur de medias du detail : la vignette d'abord,
+    // sinon l'URL directe pour une photo seulement -- pas pour une video, dont
+    // l'URL est un .mp4 qu'une balise <img> ne peut pas afficher (onerror la
+    // retire alors silencieusement, et la carte perd son image).
+    const img = (a.media || []).map(m => m.preview_url || (m.type === "photo" ? m.url : null)).filter(Boolean)[0];
     const hotClass = a.hotness_score >= 80 ? "hot-high" : "";
     card.innerHTML = `
-      ${img ? `<img class="thumb" src="${img}" loading="lazy" onerror="this.remove()">` : ""}
+      ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
         <div class="scores">
           <span class="badge rel">pertinence ${a.relevance_score ?? "—"}</span>
@@ -478,7 +486,7 @@ async function fetchArticleById(id) {
 async function chargerCovers(postId) {
   const reponse = await fetch(`/posts/${postId}/covers`, { method: "POST" });
   if (!reponse.ok) throw new Error(await reponse.text());
-  return (await reponse.json()).covers;
+  return await reponse.json(); // { covers: [...], overflow: [...] } -- cf. CoversOut
 }
 
 async function ouvrirPost(postId) {
@@ -492,22 +500,14 @@ async function ouvrirPost(postId) {
 
   const article = await fetchArticleById(post.article_id);
 
-  // Le rendu est declenche ici, pas lu depuis le GET : c'est le seul moyen
-  // d'avoir un rapport a jour sur les slides ACTUELLES (le GET reste pur, cf.
-  // app/api/posts.py). Un echec de rendu (Chromium absent en local -> 503, ou
-  // toute autre erreur) ne doit jamais empecher l'ouverture du detail -- on
-  // degrade sans badge plutot que de bloquer l'edition.
-  let rapport = null;
-  try {
-    const reponse = await fetch(`/posts/${postId}/render`, { method: "POST" });
-    if (!reponse.ok) throw new Error(await reponse.text());
-    rapport = await reponse.json();
-  } catch (erreur) {
-    alert("Rendu indisponible pour l'aperçu : " + erreur.message);
-  }
-
-  // Meme degradation pour les 4 covers : Chromium absent (503) ou toute autre
-  // panne ne doit pas empecher l'ouverture du detail, juste griser la grille.
+  // Un seul Chromium pour l'apercu, pas deux : `/covers` rend les 4 variantes
+  // sur le fond du post et renvoie l'`overflow` de chacune (CoversOut) -- la
+  // variante retenue (ou la premiere par defaut) y est deja, donc le meme
+  // texte/fond qu'un appel a `/render` aurait mesure. Repayer un second
+  // lancement pour le meme signal doublait le temps d'ouverture d'un post, le
+  // geste que l'utilisateur fait chaque soir. Un echec (Chromium absent en
+  // local -> 503, ou toute autre panne) ne doit jamais empecher l'ouverture du
+  // detail -- on degrade sans badge plutot que de bloquer l'edition.
   let covers = null;
   try {
     covers = await chargerCovers(postId);
@@ -515,32 +515,33 @@ async function ouvrirPost(postId) {
     alert("Aperçu des covers indisponible : " + erreur.message);
   }
 
-  renderPostDetail(post, rapport, article, covers);
+  renderPostDetail(post, article, covers);
 }
 
-function renderPostDetail(post, rapport, article, covers) {
-  const slidesEnDefaut = new Set(
-    (rapport && rapport.slides || [])
-      .map((s, i) => (s.overflow ? i : null))
-      .filter((i) => i !== null)
-  );
-
-  const numerosEnDefaut = [...slidesEnDefaut].map((i) => i + 1);
-  const avertissementHtml = numerosEnDefaut.length ? `
-      <div class="render-warning">
-        ⚠ Slide${numerosEnDefaut.length > 1 ? "s" : ""} ${numerosEnDefaut.join(", ")} :
-        texte trop long même à la taille minimale, image rognée -- à corriger avant publication.
-      </div>` : "";
-
+function renderPostDetail(post, article, covers) {
   const cover = (post.slides || [])[0] || {};
   const variantes = (post.variants && post.variants.variantes) || [];
   const retenue = post.variants ? post.variants.retenue : null;
+  // La cover EFFECTIVEMENT servie (slides[0]) est la variante retenue, ou la
+  // premiere par defaut (cf. create_post) -- c'est donc aussi l'index a lire
+  // dans `covers.overflow` pour savoir si CE qui sera publie tient.
+  const indexActif = retenue != null ? retenue : 0;
+  const enDefaut = !!(covers && covers.overflow && covers.overflow[indexActif]);
 
-  const coversHtml = variantes.length ? variantes.map((v, i) => `
-    <div class="cover-choice${retenue === i ? " retenue" : ""}" data-index="${i}">
-      ${covers ? `<img src="${covers[i]}" loading="lazy">` : `<div class="media-empty">aperçu indisponible</div>`}
-      <span class="tag">Variante ${i + 1}${retenue === i ? " · retenue" : ""}</span>
-    </div>`).join("") : `<div class="media-empty">Pas de variantes pour ce post.</div>`;
+  const avertissementHtml = enDefaut ? `
+      <div class="render-warning">
+        ⚠ Texte trop long même à la taille de police minimale sur la cover retenue --
+        à corriger avant publication.
+      </div>` : "";
+
+  const coversHtml = variantes.length ? variantes.map((v, i) => {
+    const variantEnDefaut = !!(covers && covers.overflow && covers.overflow[i]);
+    return `
+    <div class="cover-choice${retenue === i ? " retenue" : ""}${variantEnDefaut ? " en-defaut" : ""}" data-index="${i}">
+      ${covers ? `<img src="${covers.covers[i]}" loading="lazy">` : `<div class="media-empty">aperçu indisponible</div>`}
+      <span class="tag">Variante ${i + 1}${retenue === i ? " · retenue" : ""}${variantEnDefaut ? " · texte trop long" : ""}</span>
+    </div>`;
+  }).join("") : `<div class="media-empty">Pas de variantes pour ce post.</div>`;
 
   const raisonReel = raisonPasDeReel(article ? article.media : null);
   const reelDisabled = raisonReel != null;
@@ -561,14 +562,25 @@ function renderPostDetail(post, rapport, article, covers) {
     // qu'on sache qu'elle existe) mais n'est pas cochable -- meme logique que
     // le switch REELS : une case grisee muette serait une enigme.
     const tropLongue = m.type === "video" && m.duration_ms != null && m.duration_ms > DUREE_MAX_SLIDE_MS;
+    // Meme cas que `raisonPasDeReel` : une video sans URL directe (source qui
+    // ne donne qu'un lien de page) n'a rien a telecharger. Sans ce garde-fou la
+    // case restait cochable et un PATCH avec `url: null` echouait en 422 pour
+    // une action que l'UI presentait comme possible.
+    const sansUrl = m.type === "video" && !m.url;
+    const desactivee = tropLongue || sansUrl;
+    const raison = tropLongue
+      ? `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`
+      : sansUrl
+        ? "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)"
+        : null;
     return `
     <div class="media-choice" data-index="${i}">
       ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
       <label>
-        <input type="checkbox" class="media-check" ${coche ? "checked" : ""} ${tropLongue ? "disabled" : ""}>
+        <input type="checkbox" class="media-check" ${coche ? "checked" : ""} ${desactivee ? "disabled" : ""}>
         ${escapeHtml(m.type)} · ${dims}${duree}
       </label>
-      ${tropLongue ? `<span class="reel-reason">trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)</span>` : ""}
+      ${raison ? `<span class="reel-reason">${escapeHtml(raison)}</span>` : ""}
     </div>`;
   }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Actu introuvable (probablement purgée) -- pas de médias à proposer."}</div>`;
 
@@ -629,7 +641,7 @@ function renderPostDetail(post, rapport, article, covers) {
         const updated = await enregistrerPost(post.id, { variante_retenue: index });
         // Les 4 covers rendues ne changent pas (meme fond, memes 4 textes) --
         // seule la marque "retenue" bouge : pas besoin de repayer un rendu.
-        renderPostDetail(updated, null, article, covers);
+        renderPostDetail(updated, article, covers);
       } catch (erreur) {
         alert("Échec de la sélection de la variante : " + erreur.message);
       }
@@ -662,7 +674,7 @@ function renderPostDetail(post, rapport, article, covers) {
     } catch (erreur) {
       alert("Format changé, mais l'aperçu des covers a échoué : " + erreur.message);
     }
-    renderPostDetail(updated, null, article, nouvellesCovers);
+    renderPostDetail(updated, article, nouvellesCovers);
   };
   detailEl.querySelector("#tpl-post").onclick = () => basculerTemplate("kinda_post");
   const btnReel = detailEl.querySelector("#tpl-reel");
@@ -688,7 +700,7 @@ function renderPostDetail(post, rapport, article, covers) {
     } catch (erreur) {
       alert("Fond mis à jour, mais l'aperçu des covers a échoué : " + erreur.message);
     }
-    renderPostDetail(updated, null, article, nouvellesCovers);
+    renderPostDetail(updated, article, nouvellesCovers);
   };
 
   // --- Choix des medias du carrousel ---
@@ -700,7 +712,7 @@ function renderPostDetail(post, rapport, article, covers) {
       const slides = [cover, ...coches.map((m) => ({ kind: "media", ...m }))];
       try {
         const updated = await enregistrerPost(post.id, { slides });
-        renderPostDetail(updated, null, article, covers);
+        renderPostDetail(updated, article, covers);
       } catch (erreur) {
         alert("Échec de la mise à jour des médias : " + erreur.message);
       }
@@ -712,7 +724,7 @@ function renderPostDetail(post, rapport, article, covers) {
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
     try {
       const updated = await enregistrerPost(post.id, { caption, hashtags });
-      renderPostDetail(updated, null, article, covers);
+      renderPostDetail(updated, article, covers);
     } catch (erreur) {
       alert("Échec de l'enregistrement : " + erreur.message);
     }
@@ -720,7 +732,7 @@ function renderPostDetail(post, rapport, article, covers) {
   detailEl.querySelector("#btn-approve").onclick = async () => {
     try {
       const updated = await enregistrerPost(post.id, { status: "approved" });
-      renderPostDetail(updated, null, article, covers);
+      renderPostDetail(updated, article, covers);
       if (!postsPanelEl.hidden) loadPostsPanel();
     } catch (erreur) {
       alert("Échec de la validation : " + erreur.message);
@@ -729,7 +741,7 @@ function renderPostDetail(post, rapport, article, covers) {
   detailEl.querySelector("#btn-publish").onclick = async () => {
     try {
       const updated = await enregistrerPost(post.id, { status: "published" });
-      renderPostDetail(updated, null, article, covers);
+      renderPostDetail(updated, article, covers);
       if (!postsPanelEl.hidden) loadPostsPanel();
     } catch (erreur) {
       alert("Échec de la publication : " + erreur.message);

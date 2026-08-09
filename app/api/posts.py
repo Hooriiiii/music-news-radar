@@ -87,6 +87,10 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # persister. La cover (slides[0]) porte deja les trois textes -- la
         # bascule est donc instantanee, aucun rendu ni appel Claude requis.
         post.template = payload.template
+        # Un gabarit different change ce qui sera rendu (zones, tailles) :
+        # meme raison que pour `slides` plus haut, un ancien rapport ne parle
+        # plus du rendu a venir.
+        post.render_report = None
     if payload.variante_retenue is not None:
         variantes = (post.variants or {}).get("variantes") or []
         if not (0 <= payload.variante_retenue < len(variantes)):
@@ -97,11 +101,15 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         post.variants = {**post.variants, "retenue": payload.variante_retenue}
         # La cover est REECRITE avec les trois textes de la variante retenue,
         # mais le fond (image_url) est le choix de l'utilisateur et doit
-        # survivre a un changement d'avis sur la variante.
-        post.slides = [
-            {**post.slides[0], **variante},
-            *post.slides[1:],
-        ]
+        # survivre a un changement d'avis sur la variante. `post.slides` peut
+        # etre vide (schema le permet) : pas de slide[0] a fusionner, on part
+        # de la variante seule.
+        cover_existante = post.slides[0] if post.slides else {"kind": "cover"}
+        reste = post.slides[1:] if post.slides else []
+        post.slides = [{**cover_existante, **variante}, *reste]
+        # Un autre texte pour la meme cover : meme raison que pour `slides` et
+        # `template` ci-dessus.
+        post.render_report = None
 
     db.commit()
     return post
@@ -131,19 +139,6 @@ def supprimer_post(post_id: int, db: Session = Depends(get_db)):
     db.delete(post)
     db.commit()
     return Response(status_code=204)
-
-
-@router.get("/posts/{post_id}/slides/{index}.png")
-def rendre_slide(post_id: int, index: int, db: Session = Depends(get_db)):
-    post = _post_ou_404(db, post_id)
-    if index < 1 or index > len(post.slides):
-        raise HTTPException(status_code=404, detail="Slide not found")
-    try:
-        rendu = render_post([post.slides[index - 1]], post.template)[0]
-    except RenduIndisponible as exc:
-        # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return Response(content=rendu.png, media_type="image/png")
 
 
 @router.post("/posts/{post_id}/covers", response_model=CoversOut)
@@ -176,7 +171,8 @@ def rendre_covers(post_id: int, db: Session = Depends(get_db)):
         "covers": [
             "data:image/png;base64," + base64.b64encode(rendu.png).decode("ascii")
             for rendu in rendus
-        ]
+        ],
+        "overflow": [rendu.overflow for rendu in rendus],
     }
 
 

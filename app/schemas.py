@@ -119,7 +119,11 @@ class MediaIn(BaseModel):
     """
 
     kind: Literal["media"]
-    type: str
+    # Vocabulaire ferme sur celui de `app/content/media.py` : `export.py`
+    # interpole `type` dans un nom d'entree de zip, un `str` libre y laisserait
+    # passer une forme de zip-slip (ex. "../../x") -- attaquable seulement par
+    # l'utilisateur local lui-meme, d'ou Minor, mais autant fermer la porte.
+    type: Literal["photo", "video", "gif"]
     url: str
     preview_url: str | None = None
     duration_ms: int | None = None
@@ -185,6 +189,15 @@ class PostUpdate(BaseModel):
 class CoversOut(BaseModel):
     """Les 4 covers rendues, en data URIs -- pas de fichiers sur disque : sur
     localhost, quatre PNG en base64 pesent ~800 Ko de JSON, instantane et sans
-    etat a gerer cote serveur."""
+    etat a gerer cote serveur.
+
+    `overflow` porte le meme signal que `render_report`, mais PAR VARIANTE :
+    `render_covers` le calcule deja pour chacune (`RenduSlide.overflow`) et le
+    jetait avant cette tache. Le dashboard peut donc avertir AVANT que
+    l'utilisateur choisisse une variante qui ne tient pas -- et n'a plus besoin
+    d'un second lancement de Chromium (POST /render) pour le savoir sur celle
+    retenue : c'est la meme mesure, sur le meme texte et le meme fond.
+    """
 
     covers: list[str]
+    overflow: list[bool]
