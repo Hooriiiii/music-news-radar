@@ -723,6 +723,18 @@ def test_installer_est_idempotent(chemins):
 
 Add `desinstaller`, `installer` to the module imports at the top of the test file.
 
+**Also test `statut()`** — it is the one piece of parsing in the module, and the piece the brief itself flags as easy to get subtly wrong. `FauxExecuteur` already accepts a `sortie`, so feed it canned `launchctl list` output (tab-separated, `PID\tStatus\tLabel`) and assert on the printed result with `capsys`:
+
+- a real PID and a `-` PID are told apart — `-` is the *normal* state of a periodic agent between runs, so reporting it "absent" would mislead;
+- an idle agent's **last exit code** is surfaced: that number is how one learns a scheduled run failed, and it is precisely how the July `digest` agent stayed broken unnoticed for five weeks;
+- an absent agent is reported absent rather than crashing;
+- a surviving obsolete label produces the warning that names it;
+- the header line and a malformed short row are tolerated without inventing a label — `launchctl list`'s header also has three fields, so it must not be mistaken for an agent.
+
+And **do not tolerate a failure of `launchctl list`**. Unlike `bootout`, there is no expected-nonzero case: swallowing it would print "both agents absent, no obsolete survivors" — the reassuring opposite of the truth, from the one command whose whole job is telling the truth about what runs.
+
+Finally, print `- retiré : <label>` only when something was actually removed, and `déjà absent` otherwise. This is output someone reads to decide whether the migration worked.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_install_agents.py -v`
