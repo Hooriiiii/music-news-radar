@@ -1,8 +1,8 @@
-"""Article score -> post carrousel Instagram (slides + legende).
+"""Article score -> brouillon de cover Instagram (4 variantes + legende).
 
 Meme forme que `app/pipeline/scoring.py` : structured outputs via `messages.parse()`,
-schema Pydantic re-valide en sortie. Les bornes numeriques (nombre de slides,
-longueur d'accroche) vivent dans le SCHEMA JSON et sont donc contraintes cote API ;
+schema Pydantic re-valide en sortie. Les bornes numeriques (nombre de variantes,
+longueur des textes) vivent dans le SCHEMA JSON et sont donc contraintes cote API ;
 la regle de balisage (`_balisage_valide`, au moins un segment surligne) n'est,
 elle, verifiee que par Pydantic APRES coup -- c'est precisement la contrainte que
 le modele peut rater. `client.messages.parse()` leve alors une `pydantic.
@@ -27,11 +27,15 @@ from app.models import Article, Post
 logger = logging.getLogger(__name__)
 
 HEADLINE_MAX = 110
-# Budget genereux : sur Sonnet 5, omettre `thinking` active un raisonnement adaptatif
-# par defaut, et max_tokens plafonne le TOTAL raisonnement + sortie -- un carrousel a
-# 6 slides + legende de 2000 caracteres + 12 hashtags peut depasser un budget serre,
-# ce qui tronque le JSON et retombe sur le defaut n°1 (validation ratee).
-COMPOSER_MAX_TOKENS = 8000
+NB_VARIANTES = 4
+# Le sous-titre du reel vit dans une bande plus etroite que l'accroche du post :
+# une borne plus courte evite de proposer un texte qui ne tiendra pas.
+SUBTITLE_MAX = 70
+# Quatre variantes de trois textes + legende + hashtags. L'ancien budget etait
+# calibre pour UN carrousel ; le depasser tronque le JSON, ce qui retombe sur
+# l'echec de validation que la boucle de tentatives doit rattraper -- autant ne pas
+# le provoquer.
+COMPOSER_MAX_TOKENS = 16000
 # Bornee : au-dela, le probleme n'est pas la chance mais le prompt ou l'article.
 COMPOSER_MAX_ATTEMPTS = 3
 
@@ -40,14 +44,23 @@ class CompositionError(RuntimeError):
     """Levee quand aucune tentative de composition n'a produit un brouillon valide."""
 
 
-class Slide(BaseModel):
-    """Une slide du carrousel. Le template ne comporte QU'UNE zone de texte : pas
-    de corps de texte, pas de type de slide. `image_url` n'est pas demande au
-    modele -- un modele a qui l'on demande une URL l'invente."""
+class CoverVariante(BaseModel):
+    """Une proposition de cover : les trois textes, pour les deux gabarits.
+
+    `headline` sert au gabarit post (une zone de texte), `title` + `subtitle` au
+    gabarit reel (deux bandes empilees). Porter les trois d'avance est ce qui rend
+    la bascule POST/REELS instantanee -- sinon il faudrait un appel Claude par
+    bascule, et l'utilisateur perdrait sa selection.
+
+    `image_url` n'est PAS demande au modele : un modele a qui l'on demande une URL
+    l'invente. Le fond vient des medias de l'article, ou de l'utilisateur.
+    """
 
     headline: str = Field(max_length=HEADLINE_MAX)
+    title: str = Field(max_length=HEADLINE_MAX)
+    subtitle: str = Field(max_length=SUBTITLE_MAX)
 
-    @field_validator("headline")
+    @field_validator("headline", "title", "subtitle")
     @classmethod
     def _balisage_valide(cls, value: str) -> str:
         validate_headline(value)
@@ -55,7 +68,9 @@ class Slide(BaseModel):
 
 
 class PostDraft(BaseModel):
-    slides: list[Slide] = Field(min_length=2, max_length=6)
+    # min_length == max_length == 4 contraint le nombre COTE API via le schema
+    # JSON envoye au modele, pas seulement apres coup par Pydantic.
+    variantes: list[CoverVariante] = Field(min_length=NB_VARIANTES, max_length=NB_VARIANTES)
     caption: str = Field(max_length=2000)
     hashtags: list[str] = Field(default_factory=list, max_length=15)
 
@@ -69,28 +84,43 @@ Bordeaux, Lille, Toulouse, Nantes, Rennes, Brest), les festivals a toutes les \
 echelles, et les grosses actus pop et K-pop. Ce n'est PAS un compte regional : la \
 Bretagne est un angle recurrent, jamais le sujet principal.
 
-Tu produis un CARROUSEL a partir d'un article. Regles :
+Tu ne produis PLUS un carrousel de slides de texte. Tu produis UNE cover -- la \
+premiere image du post -- sous QUATRE variantes parmi lesquelles l'utilisateur \
+choisira. Les slides suivantes du post seront les vraies photos et videos de \
+l'actu, pas du texte genere.
 
-1. NOMBRE DE SLIDES : entre 2 et 6, selon la matiere reellement disponible dans \
-l'article. Une breve de trois lignes fait 2 slides. N'INVENTE JAMAIS de contenu \
-pour remplir une slide de plus : un carrousel court et dense vaut mieux qu'un \
-carrousel delaye.
+1. QUATRE VARIANTES, UNE SEULE INFORMATION : les 4 variantes disent TOUJOURS la \
+meme chose -- ce n'est pas 4 angles editoriaux differents, c'est 4 FORMULATIONS \
+de la meme info, pour que l'utilisateur choisisse celle qui accroche le mieux. \
+Varie l'angle d'attaque : le chiffre qui frappe, le nom de l'artiste ou du lieu, \
+la question, le rendez-vous (date/heure). N'INVENTE AUCUN fait different d'une \
+variante a l'autre.
 
-2. ACCROCHE (`headline`) : une phrase par slide, 110 caracteres maximum, en \
-francais. C'est le SEUL texte affiche sur l'image. Ton direct, parle, sans \
-ponctuation d'article de presse. La premiere slide accroche et donne l'info \
-principale ; les suivantes deroulent le detail ; la derniere donne le rendez-vous \
-ou l'invitation (date, lieu, sortie, lien en bio).
+2. TROIS TEXTES PAR VARIANTE : chaque variante fournit `headline` (pour le \
+gabarit post, une seule zone de texte, 110 caracteres maximum), et le couple \
+`title` / `subtitle` (pour le gabarit reel, deux bandes de texte empilees). \
+`title` porte le NOM ou le CHIFFRE -- COURT et FRAPPANT, quelques mots, pas une \
+phrase (exemple : "Gregoire Cliquet", pas "Gregoire Cliquet est en interview"). \
+`subtitle` porte le CONTEXTE qui complete `title` (70 caracteres maximum) -- \
+c'est la structure des deux bandes de la maquette : `title` = "Gregoire Cliquet", \
+`subtitle` = "au festival des vieilles Charrues". `headline` reste une phrase \
+complete, ton direct, parle, sans ponctuation d'article de presse.
 
-3. SURLIGNAGE : dans chaque accroche, entoure de ** les segments a mettre en \
-avant -- ils seront surlignes en rose, c'est la signature visuelle du compte. \
-Surligne ce qui accroche l'oeil : le nom d'artiste, le lieu, la date, le chiffre \
-qui frappe. UN A DEUX segments par accroche, jamais plus, sinon l'effet se perd. \
-CHAQUE accroche doit contenir au moins un segment surligne.
-Exemple d'accroche correcte :
+3. SURLIGNAGE : dans `headline`, `title` ET `subtitle`, entoure de ** les \
+segments a mettre en avant -- ils seront surlignes en rose, c'est la signature \
+visuelle du compte. Surligne ce qui accroche l'oeil : le nom d'artiste, le lieu, \
+la date, le chiffre qui frappe. UN A DEUX segments par texte, jamais plus, sinon \
+l'effet se perd. CHACUN des trois textes doit contenir au moins un segment \
+surligne.
+Exemple de headline correcte :
 Nico Moreno, Mosimann, Cassius... et **c'est ce week-end** aux **Vieilles Charrues**
+Exemple de couple title/subtitle correct :
+title : **Vieilles Charrues**
+subtitle : le line-up electro tombe **ce week-end**
 
-4. LEGENDE (`caption`) : le texte sous le post, en francais, 3 a 6 lignes. Elle \
+4. LEGENDE (`caption`) : COMMUNE aux quatre variantes -- les variantes sont des \
+formulations de cover, pas des angles editoriaux distincts, une seule legende \
+suffit. Le texte sous le post, en francais, 3 a 6 lignes. Elle \
 developpe ce que les slides annoncent, cite la source de l'info, et se termine par \
 une question ou une invitation a reagir. Pas de hashtags dans la legende.
 
