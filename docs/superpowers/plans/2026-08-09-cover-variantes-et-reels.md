@@ -21,6 +21,15 @@
 - Dans les migrations écrites à la main, entourer les noms de contraintes avec `op.f()`.
 - En-têtes HTTP en **ASCII pur** (httpx plante avant l'envoi sinon).
 - **Ne jamais lancer `alembic upgrade` sur la base de l'utilisateur.** `DATABASE_URL` pointe sur Neon en production. Pour éprouver une migration, monter un cluster jetable (voir « Vérifier une migration » plus bas).
+- **Corollaire découvert à l'exécution, et il est sérieux :** `0010` **supprime**
+  `articles.media_urls`. L'agent uvicorn de l'utilisateur tourne depuis le dépôt
+  **principal**, dont les modèles (branche `main`, révision `0009`) attendent encore
+  cette colonne. Appliquer `0010` à Neon avant la fusion ferait donc tomber son
+  dashboard en production — le 500 silencieux de cet après-midi, dans l'autre sens.
+  **Les migrations s'appliquent à la mise en service, après la fusion.**
+  Conséquence normale et attendue jusque-là : depuis ce worktree, toute requête ORM
+  sur `articles` échoue, puisque les modèles attendent `0010` et que Neon est à
+  `0009`. Ce n'est pas un problème à réparer.
 - Chaque tâche laisse **la suite verte**. Une tâche qui casserait la suite doit être fusionnée avec celle qui la répare.
 - Commit après chaque tâche, message en français, préfixe `feat(posts):` / `feat(sources):` / `fix(...)` / `docs(...)`.
 
@@ -608,6 +617,28 @@ pas des angles editoriaux distincts."
 ---
 
 ## Task 3: un post décrit ce qui sera publié
+
+> **Révisé en cours d'exécution (2026-08-09).** Le découpage 2/3 était au mauvais
+> endroit : la tâche 2 change `PostDraft`, cette tâche change `create_post` qui le
+> consomme. La tâche 2 ne pouvait donc **pas** laisser la suite verte, ce que les
+> contraintes globales exigent — et le défaut n'était pas seulement un test rouge :
+> `create_post` lisait `draft.slides`, donc `POST /articles/{id}/posts` levait une
+> `AttributeError`. **Les étapes 3 à 5 ci-dessous ont été repliées dans la tâche 2.**
+> Ce qui reste ici : `PostUpdate.template` et `PostUpdate.variante_retenue` —
+> **déplacés vers la tâche 6**, où ils sont réellement consommés et où ils ont leur
+> propre validation (contre `GABARITS`, contre le nombre de variantes).
+>
+> **L'union discriminée `CoverIn` / `MediaIn` a été repliée dans la tâche 2 aussi**,
+> et pas par commodité : la laisser ici ouvrait une **perte de données réelle**.
+> `PostUpdate.slides` valide par `SlideIn`, et `modifier_post` fait
+> `post.slides = [slide.model_dump() for slide in payload.slides]` — avec un
+> `SlideIn` étroit (`headline` + `image_url`), un `PATCH` réécrivait donc la cover
+> **dépouillée** de `kind`, `title` et `subtitle`. Le bouton « Enregistrer » du
+> dashboard actuel envoie exactement ce PATCH : sauvegarder un post détruisait les
+> textes reel que `create_post` venait d'écrire. L'union porte sur `slides`, et
+> `slides` est ce que la tâche 2 modifie — elle appartient donc là.
+>
+> Cette tâche n'a plus de travail propre ; passer directement à la tâche 4.
 
 **Files:**
 - Modify: `app/models.py`, `app/content/compose.py` (`create_post`), `app/schemas.py`
