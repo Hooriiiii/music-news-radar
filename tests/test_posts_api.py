@@ -354,9 +354,9 @@ def test_exporter_un_post(client, db_session, monkeypatch):
 
     with zipfile.ZipFile(BytesIO(response.content)) as archive:
         noms = archive.namelist()
-        assert "slide_01.png" in noms
+        assert "01_cover.png" in noms
         assert "caption.txt" in noms
-        assert archive.read("slide_01.png") == b"PNG_1"
+        assert archive.read("01_cover.png") == b"PNG_1"
         legende = archive.read("caption.txt").decode("utf-8")
         assert "Une legende." in legende
         assert "#electro" in legende

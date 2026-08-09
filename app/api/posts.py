@@ -1,12 +1,11 @@
 import datetime as dt
-import io
-import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.content.compose import CompositionError, create_post, make_claude_composer
+from app.content.export import construire_zip
 from app.content.render import RenduIndisponible, render_post
 from app.db import get_db
 from app.models import Article, ArticleStatus, Post, PostStatus
@@ -144,20 +143,19 @@ def _texte_legende(post: Post) -> str:
 def exporter_post(post_id: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
     try:
+        # `render_post` ne rend plus que les covers (kind: "cover") -- les
+        # medias de l'actu (kind: "media") sont a telecharger tels quels,
+        # role que `construire_zip` prend en charge.
         rendus = render_post(post.slides, post.template)
     except RenduIndisponible as exc:
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    tampon = io.BytesIO()
-    with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
-        for numero, rendu in enumerate(rendus, start=1):
-            archive.writestr(f"slide_{numero:02d}.png", rendu.png)
-        archive.writestr("caption.txt", _texte_legende(post))
+    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], _texte_legende(post))
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
     return Response(
-        content=tampon.getvalue(),
+        content=zip_octets,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="kinda_post_{post.id}.zip"'},
     )
