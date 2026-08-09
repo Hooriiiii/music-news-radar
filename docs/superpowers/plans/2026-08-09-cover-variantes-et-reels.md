@@ -1255,3 +1255,78 @@ Aucune exigence sans tâche.
 **Point de vigilance pour l'exécutant :** la tâche 1 est la plus large du plan (renommage traversant 7 fichiers de tests). Elle est indivisible : la scinder laisserait la suite rouge entre deux commits, ce qui priverait la revue par tâche de tout sens. Si elle paraît trop grosse en cours de route, le signaler plutôt que de committer un état intermédiaire cassé.
 
 **Dette connexe, hors périmètre mais à ne pas perdre :** rien ne vérifie au démarrage de l'agent uvicorn que le schéma et les modèles concordent. Le job `schema` de la CI (ajouté le 2026-08-09) attrape la divergence avant le merge, ce qui couvre le cas de ce plan — mais un `alembic upgrade` oublié sur Neon produirait encore des 500 silencieux jusqu'à ce qu'on ouvre le dashboard. Ce plan ajoute **deux** migrations : les appliquer à Neon fait partie de la mise en service, pas de l'implémentation.
+
+---
+
+# Suites à donner (relevé après exécution)
+
+320 tests verts, `ruff` clean, revue finale de branche passée et sa vague de
+correction re-revue.
+
+## La mise en service, et elle demande un ordre
+
+Les deux migrations **doivent** être appliquées à Neon, mais pas n'importe quand :
+`0010` **supprime** `articles.media_urls`, que les modèles de `main` attendaient
+encore avant la fusion. L'agent uvicorn tourne depuis le dépôt principal **sans
+`--reload`**, donc il garde en mémoire le code chargé à son démarrage.
+
+Ordre correct :
+
+1. fusionner sur `main` ;
+2. **arrêter** l'agent dashboard (`launchctl bootout gui/$(id -u)/com.musicnewsradar.dashboard`) ;
+3. appliquer les migrations (`uv run alembic upgrade head`) ;
+4. **redémarrer** l'agent, qui chargera le nouveau code.
+
+Sauter l'étape 2 laisse une fenêtre pendant laquelle l'agent, avec l'ancien code
+en mémoire, interroge une base dont `media_urls` a disparu — le 500 silencieux, à
+nouveau.
+
+## Ce que la revue finale a fait corriger
+
+**La migration `0011` aurait mis la file éditoriale à 500.** Elle remplissait
+`kind` mais pas `title`/`subtitle`, alors que `CoverIn` les exige et que
+`GET /posts` valide **chaque** ligne : un seul post ancien suffisait à faire
+échouer toute la liste. Son commentaire affirmait « il n'y en a aucune en
+production » — une requête en lecture seule en a trouvé **trois**. L'affirmation
+fausse dans un commentaire de migration était le vrai danger : elle rassurait.
+
+**Le sélecteur de médias offrait une case qui ne pouvait que 422.** Une vidéo sans
+URL directe — cas réel, asserté par un test — restait cochable, et le PATCH était
+rejeté. L'interface proposait une action impossible, alors que la branche contenait
+déjà le prédicat qui l'explique.
+
+**Le garde-fou de débordement cessait d'être recalculé** dès qu'on utilisait les
+nouveaux contrôles : changer de format ou de variante modifie ce qui sera rendu,
+sans invalider `render_report`, et le dashboard effaçait l'avertissement. On
+pouvait donc publier une accroche qui déborde — exactement ce que le chantier
+précédent avait construit pour l'empêcher. Corrigé, et `CoversOut` porte désormais
+le drapeau **par variante** : l'avertissement se voit avant le choix, et ça
+supprime au passage le second démarrage de Chromium à chaque ouverture de post.
+
+## Points conservés sciemment
+
+| Point | Raison |
+|---|---|
+| `CoverIn` sans `max_length` | Le compositeur borne Claude, et le drapeau `overflow` est le filet prévu pour un texte saisi à la main. |
+| Troisième copie du montage Chromium/`ExitStack` dans `render.py` | Duplication réelle mais inerte ; un context manager partagé est une suite propre. |
+| `slide["url"]` par crochets dans `export.py` | `MediaIn.url` est obligatoire chez le seul producteur ; il faudrait une ligne éditée à la main. |
+| Prédicat reel dupliqué en JS | Page sans outil de build : on ne peut pas importer le Python. Les deux copies dériveront ; l'alternative serait un endpoint dédié. |
+| `entree()` ignore les kwargs inconnus | Une faute de frappe de producteur passerait en silence. |
+| Un `gif` X porte un vrai MP4 mais n'ouvre pas REELS | Décision produit, à assumer explicitement. |
+| L'over-plafond de débit n'est testé que côté `x_api` | `x_apify` est une alternative non utilisée, sans échantillon réel dans le dépôt. |
+
+## Trous connus
+
+- **`0010` est destructive.** Son `downgrade` reconstruit `media_urls` depuis
+  `media`, donc l'aller-retour préserve les URL — mais pas le `type`. Revenir en
+  arrière puis repartir reclasserait toutes les vidéos en photos.
+- **Un débordement réel n'a pas été vu à l'écran.** Le câblage et les classes DOM
+  sont vérifiés, avec du texte court. La chaîne complète — accroche trop longue →
+  `overflow` → bandeau — reste à constater sur une vraie actu.
+- **Le 503 « Chromium absent » n'est pas éprouvé pour de vrai** sur l'endpoint des
+  covers : un stub d'endpoint a servi de substitut, ce qui a la même forme côté
+  client mais ne prouve pas la détection.
+- **Aucun garde-fou au démarrage** ne compare le schéma aux modèles. Le job CI
+  `schema` attrape la divergence avant la fusion, mais un `alembic upgrade` oublié
+  produirait encore des 500 jusqu'à ce qu'on ouvre le dashboard — c'est exactement
+  l'incident du 2026-08-09.
