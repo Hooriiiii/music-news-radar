@@ -94,7 +94,11 @@ class Article(Base):
         index=True,
     )
     raw_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    media_urls: Mapped[list | None] = mapped_column(JSONVariant)
+    # Medias TYPES (photo / video / gif) avec URL exploitable, duree et dimensions.
+    # Remplace l'ancienne `media_urls: list[str]`, dans laquelle un tweet video
+    # stockait sa VIGNETTE -- indistinguable d'une photo, donc le format REELS
+    # etait indecidable. Reassigner la liste ENTIERE, jamais de mutation in place.
+    media: Mapped[list | None] = mapped_column(JSONVariant)
     # Horodatage de l'alerte Discord envoyée (null = jamais alerté) -- garantit
     # l'idempotence des runs fréquents de détection du hot
     alerted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

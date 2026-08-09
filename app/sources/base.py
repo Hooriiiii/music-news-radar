@@ -13,7 +13,12 @@ class RawItem:
     title: str
     summary: str | None = None
     published_at: dt.datetime | None = None
-    media_urls: list[str] = field(default_factory=list)
+    # Medias TYPES et non une liste d'URL : une video et sa vignette ne se
+    # distinguaient pas, ce qui rendait le format REELS indecidable.
+    # {"type": "photo"|"video"|"gif", "url": str,
+    #  "preview_url": str | None, "duration_ms": int | None,
+    #  "width": int | None, "height": int | None}
+    media: list[dict] = field(default_factory=list)
 
 
 class SourceAdapter(ABC):

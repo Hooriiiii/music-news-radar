@@ -21,7 +21,7 @@ def make_article(db, source, *, title, raw_hash, relevance=None, hotness=None,
         hotness_score=hotness,
         status=status,
         raw_hash=raw_hash,
-        media_urls=["https://example.com/img.jpg"],
+        media=[{"type": "photo", "url": "https://example.com/img.jpg"}],
     )
     db.add(article)
     db.commit()
@@ -102,7 +102,7 @@ def test_filter_articles_with_media_only(client, db_session):
     source = make_source(db_session)
     make_article(db_session, source, title="Avec image", raw_hash="med1")
     without = make_article(db_session, source, title="Sans image", raw_hash="med2")
-    without.media_urls = None
+    without.media = None
     db_session.commit()
 
     titles = [a["title"] for a in client.get("/articles", params={"has_media": True}).json()]

@@ -6,6 +6,7 @@ import time
 import feedparser
 import httpx
 
+from app.content.media import PHOTO
 from app.sources.base import RawItem, SourceAdapter
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -60,7 +61,7 @@ class RssAdapter(SourceAdapter):
                     title=title,
                     summary=self._summary(entry),
                     published_at=self._published_at(entry),
-                    media_urls=self._media_urls(entry),
+                    media=self._media(entry),
                 )
             )
         return items
@@ -77,7 +78,10 @@ class RssAdapter(SourceAdapter):
             return None
         return dt.datetime(*parsed[:6], tzinfo=dt.timezone.utc)
 
-    def _media_urls(self, entry) -> list[str]:
+    def _media(self, entry) -> list[dict]:
+        """Un flux RSS ne publie que des photos : les pieces jointes sont deja
+        filtrees sur image/, et media_content d'un flux musical ne porte pas de
+        fichier video. D'ou le type PHOTO fixe, sans inference."""
         urls = []
         for media in entry.get("media_content", []) + entry.get("media_thumbnail", []):
             if media.get("url"):
@@ -86,4 +90,5 @@ class RssAdapter(SourceAdapter):
             if enclosure.get("type", "").startswith("image/") and enclosure.get("href"):
                 urls.append(enclosure["href"])
         seen = set()
-        return [u for u in urls if not (u in seen or seen.add(u))]
+        deduped = [u for u in urls if not (u in seen or seen.add(u))]
+        return [{"type": PHOTO, "url": u} for u in deduped]

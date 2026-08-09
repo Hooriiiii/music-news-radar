@@ -25,7 +25,7 @@ def _article(db):
         summary="Nico Moreno, Mosimann et Cassius sont annonces.",
         raw_hash="h1",
         published_at=dt.datetime(2026, 7, 20, tzinfo=dt.timezone.utc),
-        media_urls=["https://tsugi.fr/photo.jpg"],
+        media=[{"type": "photo", "url": "https://tsugi.fr/photo.jpg"}],
     )
     db.add(article)
     db.commit()

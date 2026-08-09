@@ -34,7 +34,7 @@ def make_item(slug="a", title="Titre"):
         title=title,
         summary="résumé",
         published_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1),
-        media_urls=["https://example.com/img.jpg"],
+        media=[{"type": "photo", "url": "https://example.com/img.jpg"}],
     )
 
 
@@ -47,7 +47,7 @@ def test_ingest_inserts_new_articles(db_session):
     assert len(articles) == 2
     assert all(len(a.raw_hash) == 64 for a in articles)
     assert all(a.status == ArticleStatus.NEW for a in articles)
-    assert articles[0].media_urls == ["https://example.com/img.jpg"]
+    assert articles[0].media == [{"type": "photo", "url": "https://example.com/img.jpg"}]
 
 
 def test_ingest_skips_already_ingested(db_session):

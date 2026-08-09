@@ -79,12 +79,68 @@ def test_parse_maps_tweets(x_config):
     assert "\n" not in first.title  # titre sur une seule ligne
     assert "Warp" in first.summary
     assert first.published_at == dt.datetime(2026, 7, 5, 10, 30, tzinfo=UTC)
-    assert first.media_urls == ["https://pbs.twimg.com/media/xyz.jpg"]
-    assert items[1].media_urls == []
+    assert first.media == [
+        {"type": "photo", "url": "https://pbs.twimg.com/media/xyz.jpg",
+         "width": None, "height": None}
+    ]
+    assert items[1].media == []
 
 
 def test_parse_empty_response(x_config):
     assert make_adapter().parse(EMPTY_PAYLOAD) == []
+
+
+# --- Le bug corrige par cette tache : une video n'est PAS une photo ---
+
+# `url` n'existe pas pour une video dans l'API v2 -- seule `variants` porte des
+# MP4 exploitables. Prendre `preview_image_url` comme URL (l'ancien comportement)
+# revenait a publier une vignette immobile a la place de la video.
+VIDEO_PAYLOAD = {
+    "data": [
+        {
+            "id": "1820000000000000001",
+            "text": "Boiler Room set qui tourne en boucle",
+            "created_at": "2026-07-06T12:00:00.000Z",
+            "attachments": {"media_keys": ["7_video"]},
+        },
+    ],
+    "includes": {
+        "media": [
+            {
+                "media_key": "7_video",
+                "type": "video",
+                "preview_image_url": "https://pbs.twimg.com/vid_thumb.jpg",
+                "duration_ms": 45_000,
+                "width": 1280,
+                "height": 720,
+                "variants": [
+                    {"bit_rate": 832_000, "content_type": "video/mp4",
+                     "url": "https://video.twimg.com/vid/low.mp4"},
+                    {"bit_rate": 2_176_000, "content_type": "video/mp4",
+                     "url": "https://video.twimg.com/vid/high.mp4"},
+                    {"content_type": "application/x-mpegURL",
+                     "url": "https://video.twimg.com/vid/index.m3u8"},
+                ],
+            }
+        ]
+    },
+    "meta": {"newest_id": "1820000000000000001", "result_count": 1},
+}
+
+
+def test_parse_picks_the_mp4_variant_not_the_thumbnail(x_config):
+    """C'est le bug que cette tache corrige : l'ancien code prenait la vignette
+    (`preview_image_url`) comme URL, indistinguable d'une photo."""
+    item = make_adapter().parse(VIDEO_PAYLOAD)[0]
+    assert len(item.media) == 1
+    entree = item.media[0]
+    assert entree["type"] == "video"
+    # le plus haut debit sous le plafond, jamais la vignette ni le manifeste HLS
+    assert entree["url"] == "https://video.twimg.com/vid/high.mp4"
+    assert entree["preview_url"] == "https://pbs.twimg.com/vid_thumb.jpg"
+    assert entree["duration_ms"] == 45_000
+    assert entree["width"] == 1280
+    assert entree["height"] == 720
 
 
 # --- fetch : user_id caché, since_id avancé ---
@@ -211,7 +267,10 @@ def test_parse_search_requires_media_and_resolves_authors(x_config):
     tweet = items[0]
     assert tweet.url == "https://x.com/technofan/status/1900000000000000001"
     assert tweet.title.startswith("@technofan:")
-    assert tweet.media_urls == ["https://pbs.twimg.com/media/aaa.jpg"]
+    assert tweet.media == [
+        {"type": "photo", "url": "https://pbs.twimg.com/media/aaa.jpg",
+         "width": None, "height": None}
+    ]
 
 
 def test_search_fetch_is_throttled(x_config, monkeypatch):
@@ -245,8 +304,13 @@ def test_popularity_keeps_viral_unverified(x_config, monkeypatch):
     payload = make_search_payload(verified=False, likes=250)
     items = make_adapter("#rave").parse_search(payload)
     assert len(items) == 1
-    # la vignette de la vidéo est bien récupérée comme média
-    assert items[0].media_urls == ["https://pbs.twimg.com/vid_thumb.jpg"]
+    # pas de variants dans ce payload -> pas d'URL MP4 exploitable, mais la
+    # vignette reste recuperee : l'entree video est gardee quand meme
+    media = items[0].media
+    assert len(media) == 1
+    assert media[0]["type"] == "video"
+    assert media[0]["url"] is None
+    assert media[0]["preview_url"] == "https://pbs.twimg.com/vid_thumb.jpg"
 
 
 def test_popularity_drops_unverified_low_engagement(x_config, monkeypatch):

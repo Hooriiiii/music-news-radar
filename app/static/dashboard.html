@@ -208,7 +208,7 @@ async function load() {
   for (const a of articles) {
     const card = document.createElement("div");
     card.className = `card st-${a.status}`;
-    const img = (a.media_urls || [])[0];
+    const img = (a.media || []).map(m => m.url || m.preview_url).filter(Boolean)[0];
     const hotClass = a.hotness_score >= 80 ? "hot-high" : "";
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${img}" loading="lazy" onerror="this.remove()">` : ""}

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.content.highlight import validate_headline
+from app.content.media import PHOTO
 from app.models import Article, Post
 
 logger = logging.getLogger(__name__)
@@ -163,9 +164,14 @@ def create_post(
 ) -> Post:
     """Persiste un brouillon. Les champs sont DENORMALISES exprès : l'article sera
     purge a 14 jours, le post doit rester lisible sans lui."""
-    premiere_image = None
-    if article.media_urls:
-        premiere_image = article.media_urls[0]
+    # Une photo passe en priorite ; a defaut la vignette d'une video est un fond
+    # de cover parfaitement valable -- c'est meme le cas normal pour une actu video.
+    medias = article.media or []
+    premiere_image = next(
+        (m["url"] for m in medias if m.get("type") == PHOTO and m.get("url")), None
+    )
+    if premiere_image is None:
+        premiere_image = next((m["preview_url"] for m in medias if m.get("preview_url")), None)
 
     slides = [
         {"headline": slide.headline, "image_url": premiere_image if index == 0 else None}

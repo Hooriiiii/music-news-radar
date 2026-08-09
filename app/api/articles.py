@@ -46,7 +46,7 @@ def list_articles(
         stmt = stmt.where(Article.category == category)
     if has_media is not None:
         stmt = stmt.where(
-            Article.media_urls.is_not(None) if has_media else Article.media_urls.is_(None)
+            Article.media.is_not(None) if has_media else Article.media.is_(None)
         )
     if since is not None:
         stmt = stmt.where(Article.published_at >= since)

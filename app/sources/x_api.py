@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from app.config import settings
+from app.content.media import GIF, PHOTO, VIDEO
 from app.sources.base import RawItem, SourceAdapter
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,11 @@ class XApiAdapter(SourceAdapter):
     """
 
     timeout = 30.0
+
+    # Plafond de debit : `variants` liste plusieurs MP4, du plus leger au plus lourd.
+    # Le plus haut debit est parfois enorme pour un gain invisible sur Instagram, qui
+    # re-encode de toute facon.
+    _DEBIT_MAX = 5_000_000
 
     def __init__(self, source):
         super().__init__(source)
@@ -132,7 +138,7 @@ class XApiAdapter(SourceAdapter):
             "sort_order": "relevancy",
             "tweet.fields": "created_at,public_metrics",
             "expansions": "attachments.media_keys,author_id",
-            "media.fields": "url,preview_image_url",
+            "media.fields": "type,url,preview_image_url,variants,duration_ms,width,height",
             "user.fields": "username,verified,public_metrics",
         }
         if state.get("since_id"):
@@ -160,14 +166,14 @@ class XApiAdapter(SourceAdapter):
             text = (tweet.get("text") or "").strip()
             if not tweet_id or not text:
                 continue
-            media_urls = []
+            medias = []
             for key in (tweet.get("attachments") or {}).get("media_keys", []):
                 media = media_by_key.get(key)
                 if media:
-                    url = media.get("url") or media.get("preview_image_url")
-                    if url:
-                        media_urls.append(url)
-            if not media_urls:
+                    normalise = self._media_depuis(media)
+                    if normalise:
+                        medias.append(normalise)
+            if not medias:
                 continue  # média obligatoire en mode recherche
             if self.is_radar and not self._mentions_radar_artist(text):
                 continue  # anti-spam : la vidéo doit vraiment parler de l'artiste
@@ -190,7 +196,7 @@ class XApiAdapter(SourceAdapter):
                     title=title,
                     summary=self._summary_with_metrics(text, tweet, author),
                     published_at=published_at,
-                    media_urls=media_urls,
+                    media=medias,
                 )
             )
         return items
@@ -248,7 +254,7 @@ class XApiAdapter(SourceAdapter):
             "exclude": "retweets,replies",
             "tweet.fields": "created_at",
             "expansions": "attachments.media_keys",
-            "media.fields": "url,preview_image_url",
+            "media.fields": "type,url,preview_image_url,variants,duration_ms,width,height",
         }
         if state.get("since_id"):
             params["since_id"] = state["since_id"]  # incrémental : depuis le dernier vu
@@ -274,13 +280,13 @@ class XApiAdapter(SourceAdapter):
             title = f"@{handle}: {single_line}"
             if len(title) > 200:
                 title = title[:197] + "..."
-            media_urls = []
+            medias = []
             for key in (tweet.get("attachments") or {}).get("media_keys", []):
                 media = media_by_key.get(key)
                 if media:
-                    url = media.get("url") or media.get("preview_image_url")
-                    if url:
-                        media_urls.append(url)
+                    normalise = self._media_depuis(media)
+                    if normalise:
+                        medias.append(normalise)
             published_at = None
             if tweet.get("created_at"):
                 published_at = dt.datetime.fromisoformat(
@@ -292,7 +298,7 @@ class XApiAdapter(SourceAdapter):
                     title=title,
                     summary=text,
                     published_at=published_at,
-                    media_urls=media_urls,
+                    media=medias,
                 )
             )
         return items
@@ -303,6 +309,34 @@ class XApiAdapter(SourceAdapter):
         if not user_id:
             raise RuntimeError(f"Compte X introuvable : @{self.handle} ({payload})")
         return user_id
+
+    def _media_depuis(self, media: dict) -> dict | None:
+        """Normalise un objet media de l'API v2 vers la forme typee du pipeline."""
+        type_ = media.get("type")
+        if type_ == "photo":
+            url = media.get("url")
+            return {"type": PHOTO, "url": url, "width": media.get("width"),
+                    "height": media.get("height")} if url else None
+        if type_ in ("video", "animated_gif"):
+            # `url` n'existe PAS pour une video : c'est `variants` qui porte les MP4,
+            # et `preview_image_url` la vignette. Prendre `preview_image_url` comme
+            # url, comme le faisait l'ancien code, revenait a traiter une video
+            # comme une photo.
+            mp4 = [
+                v for v in (media.get("variants") or [])
+                if v.get("content_type") == "video/mp4" and v.get("url")
+            ]
+            sous_plafond = [v for v in mp4 if (v.get("bit_rate") or 0) <= self._DEBIT_MAX]
+            meilleur = max(sous_plafond or mp4, key=lambda v: v.get("bit_rate") or 0, default=None)
+            return {
+                "type": VIDEO if type_ == "video" else GIF,
+                "url": meilleur["url"] if meilleur else None,
+                "preview_url": media.get("preview_image_url"),
+                "duration_ms": media.get("duration_ms"),
+                "width": media.get("width"),
+                "height": media.get("height"),
+            }
+        return None
 
     def _get(self, path: str, params: dict) -> dict:
         response = httpx.get(

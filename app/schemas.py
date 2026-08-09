@@ -47,7 +47,7 @@ class ArticleOut(BaseModel):
     imprint: str | None
     genre: str | None
     status: ArticleStatus
-    media_urls: list[str] | None
+    media: list[dict] | None
 
 
 class ArtistOut(BaseModel):
