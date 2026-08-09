@@ -17,6 +17,17 @@ GIF = "gif"
 DUREE_MAX_REEL_MS = 90_000
 DUREE_MAX_SLIDE_MS = 60_000
 
+# Les six cles sont TOUJOURS presentes, a None quand la source ne les fournit pas.
+# Une forme uniforme evite qu'un consommateur ait a deviner lesquelles existent
+# selon la source et le type -- une photo RSS et une video X doivent se lire
+# pareil.
+CLES = ("type", "url", "preview_url", "duration_ms", "width", "height")
+
+
+def entree(type_: str, url: str | None, **extras) -> dict:
+    """Une entree de media a la forme complete, champs absents a None."""
+    return {"type": type_, "url": url, **{c: extras.get(c) for c in CLES[2:]}}
+
 
 def videos_exploitables(media: list[dict] | None, duree_max_ms: int = DUREE_MAX_REEL_MS):
     """Les videos qu'on peut reellement publier, dans l'ordre des medias.

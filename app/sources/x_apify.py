@@ -4,7 +4,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.content.media import GIF, PHOTO, VIDEO
+from app.content.media import GIF, PHOTO, VIDEO, entree
 from app.sources.base import RawItem, SourceAdapter
 
 logger = logging.getLogger(__name__)
@@ -138,18 +138,26 @@ class XApifyAdapter(SourceAdapter):
         type_ = media.get("type")
         if type_ in (None, "photo"):
             url = media.get("media_url_https") or media.get("url")
-            return {"type": PHOTO, "url": url} if url else None
+            return entree(PHOTO, url) if url else None
         if type_ in ("video", "animated_gif"):
             variants = (media.get("video_info") or {}).get("variants") or []
             mp4 = [v for v in variants if v.get("content_type") == "video/mp4" and v.get("url")]
             sous_plafond = [v for v in mp4 if (v.get("bitrate") or 0) <= self._DEBIT_MAX]
-            meilleur = max(sous_plafond or mp4, key=lambda v: v.get("bitrate") or 0, default=None)
-            return {
-                "type": VIDEO if type_ == "video" else GIF,
-                "url": meilleur["url"] if meilleur else None,
-                "preview_url": media.get("media_url_https"),
-                "duration_ms": (media.get("video_info") or {}).get("duration_millis"),
-            }
+            if sous_plafond:
+                # Le plus haut debit acceptable : la meilleure qualite sous le plafond.
+                meilleur = max(sous_plafond, key=lambda v: v.get("bitrate") or 0)
+            elif mp4:
+                # Tout depasse le plafond : on prend le MOINS lourd, pas le plus
+                # lourd -- le contraire trahirait la raison d'etre du plafond.
+                meilleur = min(mp4, key=lambda v: v.get("bitrate") or 0)
+            else:
+                meilleur = None
+            return entree(
+                VIDEO if type_ == "video" else GIF,
+                meilleur["url"] if meilleur else None,
+                preview_url=media.get("media_url_https"),
+                duration_ms=(media.get("video_info") or {}).get("duration_millis"),
+            )
         return None
 
     def _recently_fetched(self) -> bool:

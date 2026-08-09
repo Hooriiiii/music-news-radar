@@ -6,7 +6,7 @@ import time
 import feedparser
 import httpx
 
-from app.content.media import PHOTO
+from app.content.media import PHOTO, entree
 from app.sources.base import RawItem, SourceAdapter
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -91,4 +91,4 @@ class RssAdapter(SourceAdapter):
                 urls.append(enclosure["href"])
         seen = set()
         deduped = [u for u in urls if not (u in seen or seen.add(u))]
-        return [{"type": PHOTO, "url": u} for u in deduped]
+        return [entree(PHOTO, u) for u in deduped]

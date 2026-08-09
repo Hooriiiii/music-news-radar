@@ -81,7 +81,7 @@ def test_parse_maps_tweets(x_config):
     assert first.published_at == dt.datetime(2026, 7, 5, 10, 30, tzinfo=UTC)
     assert first.media == [
         {"type": "photo", "url": "https://pbs.twimg.com/media/xyz.jpg",
-         "width": None, "height": None}
+         "preview_url": None, "duration_ms": None, "width": None, "height": None}
     ]
     assert items[1].media == []
 
@@ -141,6 +141,44 @@ def test_parse_picks_the_mp4_variant_not_the_thumbnail(x_config):
     assert entree["duration_ms"] == 45_000
     assert entree["width"] == 1280
     assert entree["height"] == 720
+
+
+# Les deux MP4 depassent le plafond (_DEBIT_MAX = 5_000_000) : le fallback doit
+# prendre le MOINS lourd, pas le plus lourd -- sinon le plafond ne sert a rien.
+OVER_CAP_VIDEO_PAYLOAD = {
+    "data": [
+        {
+            "id": "1830000000000000001",
+            "text": "Set en 4K qui pese une tonne",
+            "created_at": "2026-07-06T12:00:00.000Z",
+            "attachments": {"media_keys": ["9_video"]},
+        },
+    ],
+    "includes": {
+        "media": [
+            {
+                "media_key": "9_video",
+                "type": "video",
+                "preview_image_url": "https://pbs.twimg.com/vid_thumb2.jpg",
+                "variants": [
+                    {"bit_rate": 6_000_000, "content_type": "video/mp4",
+                     "url": "https://video.twimg.com/vid/over_low.mp4"},
+                    {"bit_rate": 9_000_000, "content_type": "video/mp4",
+                     "url": "https://video.twimg.com/vid/over_high.mp4"},
+                ],
+            }
+        ]
+    },
+    "meta": {"newest_id": "1830000000000000001", "result_count": 1},
+}
+
+
+def test_parse_picks_the_least_bad_variant_when_all_over_cap(x_config):
+    """Quand aucun MP4 n'est sous le plafond, prendre le moins lourd des deux --
+    pas le plus lourd, qui trahirait la raison d'etre du plafond."""
+    item = make_adapter().parse(OVER_CAP_VIDEO_PAYLOAD)[0]
+    entree = item.media[0]
+    assert entree["url"] == "https://video.twimg.com/vid/over_low.mp4"
 
 
 # --- fetch : user_id caché, since_id avancé ---
@@ -269,7 +307,7 @@ def test_parse_search_requires_media_and_resolves_authors(x_config):
     assert tweet.title.startswith("@technofan:")
     assert tweet.media == [
         {"type": "photo", "url": "https://pbs.twimg.com/media/aaa.jpg",
-         "width": None, "height": None}
+         "preview_url": None, "duration_ms": None, "width": None, "height": None}
     ]
 
 

@@ -96,7 +96,9 @@ Le job `schema` de `ci.yml` fait exactement cela sur chaque push. Une migration 
 - Produces:
   - `RawItem.media: list[dict]` (remplace `media_urls`)
   - `Article.media: Mapped[list | None]`
-  - `app/content/media.py` : `PHOTO = "photo"`, `VIDEO = "video"`, `GIF = "gif"`, `DUREE_MAX_REEL_MS = 90_000`, `DUREE_MAX_SLIDE_MS = 60_000`, `videos_exploitables(media) -> list[dict]`, `raison_pas_de_reel(media) -> str | None`
+  - `app/content/media.py` : `PHOTO = "photo"`, `VIDEO = "video"`, `GIF = "gif"`, `DUREE_MAX_REEL_MS = 90_000`, `DUREE_MAX_SLIDE_MS = 60_000`, `CLES`, `entree(type_, url, **extras) -> dict`, `videos_exploitables(media) -> list[dict]`, `raison_pas_de_reel(media) -> str | None`
+
+**Les six clés d'une entrée sont TOUJOURS présentes**, à `None` quand la source ne les fournit pas, et c'est le rôle de `entree()` — que les trois adapters utilisent. Une forme uniforme évite qu'un consommateur ait à deviner quelles clés existent selon la source et le type : une photo RSS et une vidéo X doivent se lire pareil. Les tâches suivantes affichent les dimensions et nomment les fichiers par type, donc le premier accès par crochets sur une entrée photo échouerait.
 
 - [ ] **Step 1: Write the failing tests for the predicate**
 
@@ -296,7 +298,15 @@ et remplacer l'extraction par une méthode partagée :
                 if v.get("content_type") == "video/mp4" and v.get("url")
             ]
             sous_plafond = [v for v in mp4 if (v.get("bit_rate") or 0) <= self._DEBIT_MAX]
-            meilleur = max(sous_plafond or mp4, key=lambda v: v.get("bit_rate") or 0, default=None)
+            if sous_plafond:
+                meilleur = max(sous_plafond, key=lambda v: v.get("bit_rate") or 0)
+            elif mp4:
+                # Tout depasse le plafond : on prend le MOINS lourd, pas le plus
+                # lourd. `max(sous_plafond or mp4, ...)` faisait l'inverse et
+                # trahissait la raison d'etre du plafond.
+                meilleur = min(mp4, key=lambda v: v.get("bit_rate") or 0)
+            else:
+                meilleur = None
             return {
                 "type": VIDEO if type_ == "video" else GIF,
                 "url": meilleur["url"] if meilleur else None,

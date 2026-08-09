@@ -47,7 +47,11 @@ def test_parse_extracts_published_date_as_utc():
 
 def test_parse_extracts_media():
     items = make_adapter().parse(RSS_FIXTURE)
-    assert items[0].media == [{"type": "photo", "url": "https://example.com/img/aphex.jpg"}]
+    # Les six cles du contrat sont toujours presentes, meme absentes de la source
+    assert items[0].media == [{
+        "type": "photo", "url": "https://example.com/img/aphex.jpg",
+        "preview_url": None, "duration_ms": None, "width": None, "height": None,
+    }]
 
 
 def test_parse_handles_missing_optional_fields():

@@ -4,7 +4,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.content.media import GIF, PHOTO, VIDEO
+from app.content.media import GIF, PHOTO, VIDEO, entree
 from app.sources.base import RawItem, SourceAdapter
 
 logger = logging.getLogger(__name__)
@@ -315,8 +315,8 @@ class XApiAdapter(SourceAdapter):
         type_ = media.get("type")
         if type_ == "photo":
             url = media.get("url")
-            return {"type": PHOTO, "url": url, "width": media.get("width"),
-                    "height": media.get("height")} if url else None
+            return entree(PHOTO, url, width=media.get("width"),
+                          height=media.get("height")) if url else None
         if type_ in ("video", "animated_gif"):
             # `url` n'existe PAS pour une video : c'est `variants` qui porte les MP4,
             # et `preview_image_url` la vignette. Prendre `preview_image_url` comme
@@ -327,15 +327,23 @@ class XApiAdapter(SourceAdapter):
                 if v.get("content_type") == "video/mp4" and v.get("url")
             ]
             sous_plafond = [v for v in mp4 if (v.get("bit_rate") or 0) <= self._DEBIT_MAX]
-            meilleur = max(sous_plafond or mp4, key=lambda v: v.get("bit_rate") or 0, default=None)
-            return {
-                "type": VIDEO if type_ == "video" else GIF,
-                "url": meilleur["url"] if meilleur else None,
-                "preview_url": media.get("preview_image_url"),
-                "duration_ms": media.get("duration_ms"),
-                "width": media.get("width"),
-                "height": media.get("height"),
-            }
+            if sous_plafond:
+                # Le plus haut debit acceptable : la meilleure qualite sous le plafond.
+                meilleur = max(sous_plafond, key=lambda v: v.get("bit_rate") or 0)
+            elif mp4:
+                # Tout depasse le plafond : on prend le MOINS lourd, pas le plus
+                # lourd -- le contraire trahirait la raison d'etre du plafond.
+                meilleur = min(mp4, key=lambda v: v.get("bit_rate") or 0)
+            else:
+                meilleur = None
+            return entree(
+                VIDEO if type_ == "video" else GIF,
+                meilleur["url"] if meilleur else None,
+                preview_url=media.get("preview_image_url"),
+                duration_ms=media.get("duration_ms"),
+                width=media.get("width"),
+                height=media.get("height"),
+            )
         return None
 
     def _get(self, path: str, params: dict) -> dict:

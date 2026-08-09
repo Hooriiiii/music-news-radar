@@ -48,7 +48,10 @@ def test_parse_atom_entry():
     assert item.title == "New Daft Punk documentary announced"
     assert item.url == "https://www.reddit.com/r/electronicmusic/comments/abc123/new_daft_punk/"
     assert item.published_at == dt.datetime(2026, 7, 2, 8, 0, tzinfo=dt.timezone.utc)
-    assert item.media == [{"type": "photo", "url": "https://b.thumbs.redditmedia.com/xyz.jpg"}]
+    assert item.media == [{
+        "type": "photo", "url": "https://b.thumbs.redditmedia.com/xyz.jpg",
+        "preview_url": None, "duration_ms": None, "width": None, "height": None,
+    }]
     assert "submitted by" in item.summary
 
 
