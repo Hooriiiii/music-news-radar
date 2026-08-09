@@ -1183,3 +1183,68 @@ Do not report this step as done. It is theirs, and it happens later.
 **Type consistency:** `Chemins(depot, uv, logs, launch_agents)` partout ; `plists() -> dict[str, dict]` indexé par label ; `installer/desinstaller/statut(chemins, executer=...)` ont la même signature ; `_executer(commande, tolere_echec=False) -> str` est la seule forme que `FauxExecuteur` doit imiter.
 
 **Point de vigilance pour l'exécutant :** la tâche 3 ajoute des fonctions au module créé en tâche 2 et supprime trois fichiers de `deploy/`. Les imports du fichier de test doivent grandir avec le module — `installer`, `desinstaller`, `conf_rotation`, `tronquer_logs` s'ajoutent au fur et à mesure, sinon la suite est rouge entre deux commits.
+
+---
+
+# Suites à donner (relevé après exécution des tâches 1 à 4)
+
+280 tests verts, `ruff` clean, revue finale de branche passée. La tâche 5
+(documentation + installation réelle) se fait **depuis le dépôt principal**, après
+fusion : les agents portent `WorkingDirectory` = la racine du dépôt, et installés
+depuis un worktree ils pointeraient sur un dossier voué à disparaître.
+
+## Ce que la revue finale a fait corriger
+
+**Le test qui gardait l'affichage du code de sortie ne pouvait pas échouer.**
+`assert "1" in imprime` passait même sans le code affiché, parce que `statut()`
+imprimait juste après la configuration de rotation, qui contient `644`, `5000` et
+des chemins avec des chiffres. Or ce nombre est tout le mécanisme par lequel on
+remarque qu'un run planifié a échoué — c'est ce qui a laissé l'agent `digest`
+cassé cinq semaines. Corrigé, et la cause racine avec : `CONF_ROTATION` est passé
+dans `Chemins`, donc les tests ne lisent plus le `/etc` de la machine hôte et ne
+polluent plus la sortie capturée.
+
+**La configuration `newsyslog` omettait le drapeau `N`.** Sans champ
+`path_to_pid_file`, `newsyslog` envoie un SIGHUP à `syslogd` à chaque rotation —
+un démon système étranger au projet. Vérifié contre `man 5 newsyslog.conf`.
+
+**La troncature avait lieu après le `bootstrap`.** L'agent d'ingestion a
+`RunAtLoad`, donc il commençait à écrire avant d'être tronqué : les premières
+secondes du premier run étaient jetées, et comptées comme octets libérés.
+
+**`scripts/send_digest.py` n'avait pas le préambule réseau** — le script dont les
+cinq semaines d'échecs DNS motivent précisément ce préambule, et le seul point
+d'entrée à ne pas l'avoir reçu.
+
+## Points conservés sciemment
+
+| Point | Raison |
+|---|---|
+| `attendre_base(essais=0)` lève sans tenter de connexion | Inatteignable : les deux appelants utilisent le défaut. Une garde ajouterait une branche que rien n'exerce. |
+| `derniere: Exception \| None` plus large que ce qui y est assigné | Annotation sur un local, sans effet. |
+| Somme des tailles dupliquée entre `afficher_plan()` et `tronquer_logs()` | Deux lignes ; un helper serait agréable, pas correctif. |
+| Le test `statut()` n'attache pas chaque état à son label | Le format d'impression les rend adjacents, donc une inversion se verrait. |
+
+## Trous connus, à ouvrir quand le besoin viendra
+
+- **La rotation ne peut pas fonctionner pour l'agent dashboard.** `newsyslog`
+  renomme puis compresse ; un uvicorn `KeepAlive` garde son descripteur ouvert
+  toute sa vie et ne le réouvre jamais, donc la sortie post-rotation part vers un
+  inode sans nom. L'agent d'ingestion y échappe (nouveau processus toutes les
+  30 min). Impact faible — `--no-access-log --log-level warning` fait que ce log
+  atteint rarement 5 Mo — et documenté dans le code plutôt que contourné.
+- **Deux ingesteurs en parallèle peuvent perdre le lot d'une source.**
+  `articles.raw_hash` est unique, et `ingest_source` fait lecture-puis-insertion
+  avec un commit par source. Quand le Mac (30 min) et le cloud (2 h) se croisent
+  sur la même source, le perdant prend un `IntegrityError`, le `rollback` jette
+  **tous** les articles neufs de cette source pour ce run. Rattrapé au run
+  suivant. La course préexistait (l'agent de juillet ingérait déjà toutes les
+  30 min en parallèle), mais cette branche rend la topologie à deux ingesteurs
+  délibérée et permanente — c'est le moment de le noter.
+- **`--apply` déclenche une ingestion immédiate** (`RunAtLoad`), sources X
+  incluses. Le throttle de 6 h ne couvre que les sources de *recherche* ; les
+  sources timeline sont interrogées à chaque run. Borné par `since_id`, donc coût
+  quasi nul — mais `--apply` est aussi une action réseau, pas seulement locale.
+- **Le garde-fou « Chromium absent » et celui-ci se ressemblent** : la
+  reconnaissance de l'absence de `launchctl` produirait une trace et non un
+  message. Inatteignable sur macOS en pratique.
