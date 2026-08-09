@@ -76,15 +76,37 @@ hotness >= 80 pour l'alerte Discord.
   (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
   la génération est déclenchée à la main depuis le dashboard.
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
-- Scheduler : GitHub Actions (`.github/workflows/` — pipeline toutes les 2 h,
-  CI à chaque push). Secrets requis côté repo : DATABASE_URL (Neon),
-  ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, APIFY_TOKEN.
+- **Scheduler : DEUX ordonnanceurs, cloisonnés par SCRIPT et non par configuration.**
+
+  *Cloud* — GitHub Actions (`.github/workflows/pipeline.yml`), toutes les 2 h :
+  `run_pipeline` = ingestion + scoring + alertes Discord + purge. On le garde parce
+  qu'un runner ne dort jamais : c'est le canal **temps réel**. Sur un portable fermé,
+  launchd rattraperait le job au réveil et l'alerte arriverait le soir — elle
+  perdrait sa raison d'être. Secrets côté repo : DATABASE_URL (Neon),
+  ANTHROPIC_API_KEY, DISCORD_WEBHOOK_URL, APIFY_TOKEN, X_BEARER_TOKEN.
+  Cron GitHub = UTC et best-effort (d'où le 2e horaire de rattrapage).
+  `ci.yml` (tests à chaque push) n'est pas un ordonnanceur et reste tel quel.
+
+  *Mac* — agents launchd, gérés par `uv run python -m scripts.install_agents`
+  (sans option : affiche le plan ; `--apply`, `--status`, `--uninstall`) :
+  - `com.musicnewsradar.ingest` — `run_ingest` toutes les 30 min, **ingestion
+    seule**. Sa raison d'être est l'IP résidentielle : depuis l'IP datacenter
+    d'Azure, Mixmag renvoie 403 (Cloudflare) et Reddit 429.
+  - `com.musicnewsradar.dashboard` — uvicorn en permanence, pour que
+    `localhost:8000` soit debout. `KeepAlive`, sans `--reload`, sur `127.0.0.1`.
+
+  **Conflit de port :** l'agent tient le 8000. Avant un `uvicorn --reload` manuel,
+  décharger l'agent (`launchctl bootout gui/$(id -u)/com.musicnewsradar.dashboard`)
+  ou `--uninstall`.
+
+  **Rotation des logs :** launchd n'en fait aucune (43 Mo accumulés en cinq
+  semaines avant ce socle). `--status` dit si la conf `newsyslog` est en place et
+  affiche la commande `sudo` à passer une fois — `/etc/newsyslog.d` est hors de
+  portée du script.
+
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
   restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
-  Cron GitHub = UTC et best-effort (retards de quelques minutes possibles).
-  Ancienne alternative locale : agents launchd dans `deploy/`
-  (`bash deploy/install_launchd.sh` / `launchctl bootout gui/$(id -u)/com.musicnewsradar.{pipeline,digest}`)
 - Tests : `uv run pytest` (un seul test : `uv run pytest tests/test_api.py::test_health`)
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
@@ -112,8 +134,12 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
 - `app/delivery/` — restitution : digest (Jinja2 + SMTP), alertes Discord (webhook).
   Communique avec le pipeline uniquement via la base.
 - `app/api/` — endpoints REST (`/articles`, `/digests`) pour une future UI web.
-- `scripts/` — points d'entrée cron : `run_ingest.py` (fréquent, déclenche aussi les
-  alertes hot au moment de l'ingestion), `send_digest.py` (quotidien).
+- `scripts/` — points d'entrée planifiés. `run_ingest.py` fait de l'ingestion **et
+  rien d'autre** : ni scoring, ni alertes, ni purge. C'est `run_pipeline.py` qui
+  enchaîne les quatre (via `app/pipeline/run.py`), et donc lui seul qui alerte.
+  Cette distinction n'est pas cosmétique : c'est elle qui permet aux deux
+  ordonnanceurs de cohabiter sans doublon (voir « Scheduler » plus haut).
+  Tout point d'entrée planifié appelle `attendre_base()` en premier.
 - Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de `get_db`).
 
 ## Philosophie de sourcing (source-level, pas aggregator)
@@ -277,6 +303,24 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   48 runs quotidiens. Si un blocage devient systématique : passer Reddit sur son
   API officielle OAuth (fiable depuis les datacenters), remplacer la source RSS.
 - Postgres local : auth en `trust` (pas de mot de passe), user `postgres`.
+- **Un job launchd peut partir avant que le réseau soit debout.** Un agent avec
+  `RunAtLoad`, ou réveillé par `StartInterval` à la sortie de veille, s'exécute
+  parfois avant que la résolution DNS réponde : l'ancien agent `digest` a échoué
+  ainsi **chaque jour pendant cinq semaines** sur `failed to resolve host
+  … .neon.tech`, sans que rien ne le signale. D'où `attendre_base()` dans
+  `app/db.py` — quelques `SELECT 1` espacés, puis une erreur explicite et un code
+  de sortie non nul, que launchd enregistre et que `--status` affiche. **Tout
+  nouveau point d'entrée planifié doit l'appeler en premier.**
+- **`newsyslog` n'étend pas les jokers** dans le champ du nom de fichier : un
+  `*.log` ne fait tourner aucun fichier, silencieusement. D'où l'énumération des
+  quatre logs. Et le drapeau `N` est nécessaire : sans champ `path_to_pid_file`,
+  chaque rotation envoie un SIGHUP à `syslogd`, étranger au projet.
+- **La rotation ne peut pas fonctionner pour l'agent dashboard.** `newsyslog`
+  renomme puis compresse ; un uvicorn `KeepAlive` garde son descripteur ouvert
+  toute sa vie et ne le réouvre jamais, donc la sortie post-rotation part vers un
+  inode sans nom. L'agent d'ingestion y échappe (nouveau processus toutes les
+  30 min). Impact faible grâce à `--no-access-log`, mais à savoir avant de chercher
+  pourquoi `dashboard.log` est vide.
 
 ## Conventions
 
@@ -300,10 +344,13 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
    qu'un article hot n'est alerté qu'une fois, posé seulement après envoi réussi.
    Limitation connue : la dédup par hash ne fusionne pas la même actu couverte par
    deux sources différentes — amélioration possible en V2.)
-6. ~~Scheduler (digest quotidien, ingestion fréquente)~~ ✓
-   (launchd plutôt que cron — natif macOS, rattrape les jobs manqués à la sortie
-   de veille. Plists dans `deploy/`. Sur un futur VPS Linux : équivalents crontab
-   `*/30 * * * *` pour le pipeline et `30 8 * * *` pour le digest.)
+6. ~~Scheduler~~ ✓ — puis refondu en **deux ordonnanceurs cloisonnés** (2026-08-09,
+   voir « Scheduler » dans les Commandes). launchd plutôt que cron côté Mac : natif
+   macOS, et il rattrape les jobs manqués à la sortie de veille. Les plists ne sont
+   plus des fichiers versionnés mais sont **générés** par
+   `scripts/install_agents.py` (`plistlib`), ce qui les rend testables et supprime
+   les chemins absolus du dépôt. Sur un futur VPS Linux : équivalent crontab
+   `*/30 * * * *` pour l'ingestion, et un service systemd pour le dashboard.
 7. ~~Adapter X via Apify~~ ✓ — V1 complète.
    (`app/sources/x_apify.py`, actor `apidojo~tweet-scraper` ~0,40 $/1000 tweets avec
    **minimum 50 tweets facturés par requête** — d'où trois garde-fous de coût :
