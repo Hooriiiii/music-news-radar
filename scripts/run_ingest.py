@@ -6,12 +6,20 @@ Usage :
 
 import logging
 
-from app.db import SessionLocal
+from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.pipeline.ingest import run_ingest
 
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    # Avant toute chose : ce script est lance par launchd, parfois au reveil du
+    # Mac avant que le DNS reponde.
+    try:
+        attendre_base()
+    except BaseInjoignable as exc:
+        print(f"[ERREUR] {exc}")
+        raise SystemExit(1) from exc
+
     with SessionLocal() as db:
         all_stats = run_ingest(db)
 
