@@ -76,6 +76,26 @@ def test_list_digests_empty(client):
 # --- Extensions pour le dashboard ---
 
 
+def test_get_article(client, db_session):
+    source = make_source(db_session)
+    article = make_article(db_session, source, title="Un festival annonce son line-up",
+                            raw_hash="get1", relevance=70)
+
+    response = client.get(f"/articles/{article.id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == article.id
+    assert body["title"] == "Un festival annonce son line-up"
+    # Meme schema que la liste : le dashboard s'appuie sur `media` pour la liste
+    # de medias cochables du post -- une regression de serialisation ici
+    # casserait silencieusement le detail d'un post.
+    assert body["media"] == [{"type": "photo", "url": "https://example.com/img.jpg"}]
+
+
+def test_get_article_404(client):
+    assert client.get("/articles/99999").status_code == 404
+
+
 def test_patch_article_status(client, db_session):
     source = make_source(db_session)
     article = make_article(db_session, source, title="À traiter", raw_hash="patch1")

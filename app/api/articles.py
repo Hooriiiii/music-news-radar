@@ -66,6 +66,14 @@ def list_articles(
     return db.scalars(stmt.limit(limit).offset(offset)).all()
 
 
+@router.get("/{article_id}", response_model=ArticleOut)
+def get_article(article_id: int, db: Session = Depends(get_db)):
+    article = db.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return article
+
+
 class ArticleStatusUpdate(BaseModel):
     status: ArticleStatus
 

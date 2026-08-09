@@ -461,28 +461,18 @@ function raisonPasDeReel(media) {
   return "aucune vidéo exploitable";
 }
 
-// Pas de GET /articles/{id} : la liste est le seul moyen d'obtenir les medias
-// de l'actu. On balaie les 400 entrees les plus recentes (deux pages de la
-// limite max = 200) -- suffisant pour un post qu'on vient de generer depuis
-// cette meme liste, mais une actu plus ancienne peut echapper a ce balayage :
-// voir le rapport de tache.
+// Un post survit a la purge de son article (14 jours) : GET peut donc
+// legitimement rendre 404, pas seulement en cas de panne reseau -- dans les
+// deux cas on degrade a null plutot que de casser l'ouverture du detail.
 async function fetchArticleById(id) {
   if (id == null) return null;
-  for (const offset of [0, 200]) {
-    const params = new URLSearchParams({ limit: 200, offset, include_duplicates: true });
-    let articles;
-    try {
-      const reponse = await fetch(`/articles?${params}`);
-      if (!reponse.ok) return null;
-      articles = await reponse.json();
-    } catch {
-      return null;
-    }
-    const trouve = articles.find((a) => a.id === id);
-    if (trouve) return trouve;
-    if (articles.length < 200) break;
+  try {
+    const reponse = await fetch(`/articles/${id}`);
+    if (!reponse.ok) return null;
+    return await reponse.json();
+  } catch {
+    return null;
   }
-  return null;
 }
 
 async function chargerCovers(postId) {
@@ -556,7 +546,7 @@ function renderPostDetail(post, rapport, article, covers) {
   const reelDisabled = raisonReel != null;
   const reasonHtml = reelDisabled
     ? `<div class="reel-reason" id="reel-reason">${escapeHtml(
-        article ? raisonReel : "médias de l'actu introuvables (voir le rapport de tâche)"
+        article ? raisonReel : "actu introuvable (probablement purgée -- 14 jours de rétention)"
       )}</div>`
     : "";
 
@@ -580,7 +570,7 @@ function renderPostDetail(post, rapport, article, covers) {
       </label>
       ${tropLongue ? `<span class="reel-reason">trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)</span>` : ""}
     </div>`;
-  }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Médias non chargés (actu introuvable dans les 400 plus récentes)."}</div>`;
+  }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Actu introuvable (probablement purgée) -- pas de médias à proposer."}</div>`;
 
   detailEl.innerHTML = `
     <div class="sheet">
