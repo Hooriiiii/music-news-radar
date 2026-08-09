@@ -21,7 +21,7 @@ def _article(db):
     return article
 
 
-def _post(db, article, status=PostStatus.DRAFT):
+def _post(db, article, status=PostStatus.DRAFT, variants=None):
     post = Post(
         article_id=article.id,
         article_title=article.title,
@@ -39,10 +39,21 @@ def _post(db, article, status=PostStatus.DRAFT):
                 "image_url": None,
             }
         ],
+        variants=variants,
     )
     db.add(post)
     db.commit()
     return post
+
+
+def _quatre_variantes():
+    return {
+        "variantes": [
+            {"headline": f"**H**{i}", "title": f"**T**{i}", "subtitle": f"**S**{i}"}
+            for i in range(4)
+        ],
+        "retenue": None,
+    }
 
 
 def test_creer_un_post_depuis_un_article(client, db_session, monkeypatch):
@@ -427,3 +438,114 @@ def test_editer_les_slides_invalide_le_rapport_de_rendu(client, db_session):
     assert response.json()["render_report"] is None
     db_session.refresh(post)
     assert post.render_report is None
+
+
+def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
+    """Deux endpoints distincts et non un seul : la generation coute un appel
+    Claude, le rendu coute un Chromium. Recharger la page ne doit pas repayer
+    Claude."""
+    article = _article(db_session)
+    post = _post(db_session, article, variants=_quatre_variantes())
+
+    def faux_render_covers(variantes, image_url, template):
+        assert len(variantes) == 4
+        assert template == post.template
+        return [
+            RenduSlide(png=b"PNG_FACTICE", scale=1.0, lines={}, overflow=False)
+            for _ in variantes
+        ]
+
+    monkeypatch.setattr("app.api.posts.render_covers", faux_render_covers)
+
+    reponse = client.post(f"/posts/{post.id}/covers")
+
+    assert reponse.status_code == 200
+    assert len(reponse.json()["covers"]) == 4
+    assert all(u.startswith("data:image/png;base64,") for u in reponse.json()["covers"])
+
+
+def test_covers_sur_un_post_sans_variantes_est_refuse(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    assert client.post(f"/posts/{post.id}/covers").status_code == 409
+
+
+def test_covers_sur_un_post_inexistant(client):
+    assert client.post("/posts/9999/covers").status_code == 404
+
+
+def test_retenir_une_variante_reecrit_la_cover(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article, variants=_quatre_variantes())
+
+    reponse = client.patch(f"/posts/{post.id}", json={"variante_retenue": 2})
+
+    assert reponse.status_code == 200
+
+    db_session.expire_all()
+    relu = db_session.get(Post, post.id)
+    assert relu.variants["retenue"] == 2
+    assert relu.slides[0]["headline"] == relu.variants["variantes"][2]["headline"]
+    assert relu.slides[0]["title"] == relu.variants["variantes"][2]["title"]
+    # Le fond est le choix de l'utilisateur : il doit survivre au changement
+    # de variante retenue, meme si la fixture le pose a None ici.
+    assert relu.slides[0]["image_url"] is None
+
+
+def test_un_indice_de_variante_hors_bornes_est_refuse(client, db_session):
+    """422 a la frontiere plutot qu'un IndexError dans le renderer."""
+    article = _article(db_session)
+    post = _post(db_session, article, variants=_quatre_variantes())
+
+    assert client.patch(f"/posts/{post.id}", json={"variante_retenue": 9}).status_code == 422
+
+
+def test_changer_de_gabarit_conserve_la_cover_et_ses_trois_textes(client, db_session):
+    """La bascule est instantanee parce que la cover porte deja les trois textes."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    reponse = client.patch(f"/posts/{post.id}", json={"template": "kinda_reel"})
+
+    assert reponse.status_code == 200
+    db_session.refresh(post)
+    assert post.template == "kinda_reel"
+    assert post.slides[0]["title"] and post.slides[0]["subtitle"]
+
+
+def test_un_gabarit_inconnu_est_refuse(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    assert client.patch(f"/posts/{post.id}", json={"template": "kinda_carre"}).status_code == 422
+
+
+def test_un_brouillon_se_supprime(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    assert client.delete(f"/posts/{post.id}").status_code == 204
+    assert db_session.get(Post, post.id) is None
+
+
+def test_un_post_publie_ne_se_supprime_pas(client, db_session):
+    """La regle "jamais purge" protege l'ARCHIVE EDITORIALE : savoir ce qui a ete
+    publie, et ne pas le reposter. La frontiere est donc la publication."""
+    article = _article(db_session)
+    post = _post(db_session, article, status=PostStatus.PUBLISHED)
+
+    assert client.delete(f"/posts/{post.id}").status_code == 409
+    assert db_session.get(Post, post.id) is not None
+
+
+def test_un_post_approuve_ne_se_supprime_pas(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article, status=PostStatus.APPROVED)
+
+    assert client.delete(f"/posts/{post.id}").status_code == 409
+    assert db_session.get(Post, post.id) is not None
+
+
+def test_supprimer_un_post_inexistant(client):
+    assert client.delete("/posts/9999").status_code == 404

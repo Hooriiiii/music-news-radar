@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.content import layout
 from app.content.highlight import validate_headline
 from app.models import ArticleStatus, PostStatus, SourceType
 
@@ -166,3 +167,24 @@ class PostUpdate(BaseModel):
     hashtags: list[str] | None = None
     slides: list[SlideIn] | None = None
     status: PostStatus | None = None
+    # `template` : verifiable ici, sans la base -- `layout.GABARITS` est un
+    # registre statique. `variante_retenue` ne l'est pas : ses bornes valides
+    # dependent du NOMBRE de variantes du post vise, connu seulement en base.
+    # Ce controle-la reste donc dans l'endpoint.
+    template: str | None = None
+    variante_retenue: int | None = None
+
+    @field_validator("template")
+    @classmethod
+    def _gabarit_connu(cls, value: str) -> str:
+        if value not in layout.GABARITS:
+            raise ValueError(f"gabarit inconnu : {value!r} (connus : {sorted(layout.GABARITS)})")
+        return value
+
+
+class CoversOut(BaseModel):
+    """Les 4 covers rendues, en data URIs -- pas de fichiers sur disque : sur
+    localhost, quatre PNG en base64 pesent ~800 Ko de JSON, instantane et sans
+    etat a gerer cote serveur."""
+
+    covers: list[str]
