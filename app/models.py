@@ -205,9 +205,18 @@ class Post(Base):
     )
     caption: Mapped[str] = mapped_column(Text)
     hashtags: Mapped[list | None] = mapped_column(JSONVariant)
-    # Liste ordonnee : [{"headline": "... **surligne** ...", "image_url": "..."}]
-    # Reassigner la liste ENTIERE, jamais de mutation in place
+    # Liste ordonnee : [{"kind": "cover", "headline": ..., "title": ..., "subtitle":
+    # ..., "image_url": ...}, ...]. "cover" est rendue par Chromium ; "media" (a
+    # venir) passe telle quelle a l'export -- c'est une vraie photo/video de
+    # l'actu, pas du texte genere. Reassigner la liste ENTIERE, jamais de mutation
+    # in place.
     slides: Mapped[list] = mapped_column(JSONVariant, default=list)
+    # Les quatre propositions et l'indice de celle que l'utilisateur retient
+    # (`retenue: null` tant qu'il n'a pas choisi). Les non retenues sont GARDEES :
+    # choisir entre quatre formulations du meme sujet est du signal sur ce qui
+    # plait, gratuit a collecter, et exploitable par le tri local a venir.
+    # Reassigner le dict ENTIER, jamais de mutation in place.
+    variants: Mapped[dict | None] = mapped_column(JSONVariant)
     # Rapport du dernier rendu : par slide, l'echelle retenue, le nombre de lignes
     # et un drapeau de debordement. Nullable : un post jamais rendu n'en a pas.
     # C'est ce qui permet au dashboard de signaler un post en defaut au lieu de

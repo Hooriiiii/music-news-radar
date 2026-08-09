@@ -189,25 +189,30 @@ def make_claude_composer(
     return composer
 
 
+def _fond_par_defaut(article: Article) -> str | None:
+    """La photo de l'article, sinon la vignette d'une video.
+
+    Une actu video n'a pas de photo, et sa vignette fait un fond de cover
+    parfaitement valable -- c'est meme le cas normal pour ce type d'actu.
+    """
+    for entree in article.media or []:
+        if entree.get("type") == PHOTO and entree.get("url"):
+            return entree["url"]
+    for entree in article.media or []:
+        if entree.get("preview_url"):
+            return entree["preview_url"]
+    return None
+
+
 def create_post(
     db: Session, article: Article, draft: PostDraft, template: str = "kinda_post"
 ) -> Post:
-    """Persiste un brouillon. Les champs sont DENORMALISES exprès : l'article sera
-    purge a 14 jours, le post doit rester lisible sans lui."""
-    # Une photo passe en priorite ; a defaut la vignette d'une video est un fond
-    # de cover parfaitement valable -- c'est meme le cas normal pour une actu video.
-    medias = article.media or []
-    premiere_image = next(
-        (m["url"] for m in medias if m.get("type") == PHOTO and m.get("url")), None
-    )
-    if premiere_image is None:
-        premiere_image = next((m["preview_url"] for m in medias if m.get("preview_url")), None)
+    """Persiste un brouillon : les quatre variantes, et une cover sans retenue.
 
-    slides = [
-        {"headline": slide.headline, "image_url": premiere_image if index == 0 else None}
-        for index, slide in enumerate(draft.slides)
-    ]
-
+    Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
+    doit rester lisible sans lui.
+    """
+    premiere = draft.variantes[0]
     post = Post(
         article_id=article.id,
         article_title=article.title,
@@ -216,7 +221,21 @@ def create_post(
         template=template,
         caption=draft.caption,
         hashtags=draft.hashtags or None,
-        slides=slides,
+        # La cover affiche la variante 1 en attendant un choix, pour que le rendu
+        # soit possible immediatement ; `variants.retenue` reste null.
+        slides=[
+            {
+                "kind": "cover",
+                "headline": premiere.headline,
+                "title": premiere.title,
+                "subtitle": premiere.subtitle,
+                "image_url": _fond_par_defaut(article),
+            }
+        ],
+        variants={
+            "variantes": [v.model_dump() for v in draft.variantes],
+            "retenue": None,
+        },
     )
     db.add(post)
     db.commit()

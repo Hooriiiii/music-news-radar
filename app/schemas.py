@@ -115,6 +115,10 @@ class PostOut(BaseModel):
     caption: str
     hashtags: list[str] | None
     slides: list[SlideIn]
+    # Les quatre variantes + l'indice retenu : l'API ne cache pas ce qui est en
+    # base, meme si `slides`/`SlideIn` restent la vue etroite en attendant la
+    # tache qui expose la selection et le type de gabarit.
+    variants: dict | None = None
     render_report: dict | None = None
     created_at: dt.datetime
     published_at: dt.datetime | None

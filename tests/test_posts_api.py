@@ -1,6 +1,6 @@
 import datetime as dt
 
-from app.content.compose import PostDraft, Slide
+from app.content.compose import CoverVariante, PostDraft
 from app.content.render import RenduSlide
 from app.models import Article, ArticleStatus, Post, PostStatus, Source, SourceType
 
@@ -44,9 +44,13 @@ def test_creer_un_post_depuis_un_article(client, db_session, monkeypatch):
     def faux_composeur():
         def composer(_article):
             return PostDraft(
-                slides=[
-                    Slide(headline="**Vieilles Charrues** : le line-up"),
-                    Slide(headline="Rendez-vous **ce week-end**"),
+                variantes=[
+                    CoverVariante(
+                        headline=f"**Vieilles Charrues** : le line-up {i}",
+                        title=f"**Titre** {i}",
+                        subtitle=f"**Sous-titre** {i}",
+                    )
+                    for i in range(4)
                 ],
                 caption="Le line-up est tombe.",
                 hashtags=["#vieillescharrues"],
@@ -61,7 +65,11 @@ def test_creer_un_post_depuis_un_article(client, db_session, monkeypatch):
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
-    assert len(body["slides"]) == 2
+    # Une seule slide a la creation : la cover (variante 1) ; les trois autres
+    # variantes vivent dans `variants`, pas dans `slides`.
+    assert len(body["slides"]) == 1
+    assert len(body["variants"]["variantes"]) == 4
+    assert body["variants"]["retenue"] is None
     assert body["article_title"] == article.title
 
 

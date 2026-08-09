@@ -8,6 +8,7 @@ from app.content.compose import (
     CoverVariante,
     PostDraft,
     build_user_prompt,
+    create_post,
     make_claude_composer,
 )
 from app.models import Article, Source, SourceType
@@ -59,6 +60,50 @@ def test_build_user_prompt_contient_le_titre_et_la_source(db_session):
     prompt = build_user_prompt(article)
     assert "Vieilles Charrues" in prompt
     assert "Tsugi" in prompt
+
+
+def _draft():
+    return PostDraft(variantes=[_variante(i) for i in range(4)], caption="c", hashtags=["#e"])
+
+
+def test_create_post_pose_les_quatre_variantes_sans_retenue(db_session):
+    """La retenue est nulle a la creation : l'utilisateur n'a pas encore choisi, et
+    c'est ce qui rend le brouillon reprenable sans repayer un appel Claude."""
+    article = _article(db_session)
+
+    post = create_post(db_session, article, _draft())
+
+    assert len(post.variants["variantes"]) == 4
+    assert post.variants["retenue"] is None
+
+
+def test_create_post_pose_une_cover_avec_le_fond_de_larticle(db_session):
+    """La slide 1 est une cover, pas un media : c'est la seule que le renderer
+    rendra."""
+    article = _article(db_session)
+
+    post = create_post(db_session, article, _draft())
+
+    (cover,) = post.slides
+    assert cover["kind"] == "cover"
+    assert cover["image_url"] == "https://tsugi.fr/photo.jpg"
+    # Les trois textes sont poses des la creation, pour que la bascule de gabarit
+    # n'ait rien a redemander.
+    assert cover["headline"] and cover["title"] and cover["subtitle"]
+
+
+def test_create_post_prend_la_vignette_dune_video_comme_fond(db_session):
+    """Une actu video n'a pas de photo : sa vignette est un fond parfaitement
+    valable, et c'est meme le cas normal."""
+    article = _article(db_session)
+    article.media = [
+        {"type": "video", "url": "https://v.mp4", "preview_url": "https://thumb.jpg"}
+    ]
+    db_session.commit()
+
+    post = create_post(db_session, article, _draft())
+
+    assert post.slides[0]["image_url"] == "https://thumb.jpg"
 
 
 def _validation_error() -> ValidationError:
