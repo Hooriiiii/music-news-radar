@@ -96,7 +96,10 @@ def test_parse_maps_tweets_and_skips_malformed(apify_config):
     assert "Aphex Twin" in tweet.title
     assert tweet.summary == "Aphex Twin announces surprise album on Warp Records"
     assert tweet.published_at == dt.datetime(2026, 7, 4, 10, 30, tzinfo=UTC)
-    assert tweet.media_urls == ["https://pbs.twimg.com/media/xyz.jpg"]
+    assert tweet.media == [{
+        "type": "photo", "url": "https://pbs.twimg.com/media/xyz.jpg",
+        "preview_url": None, "duration_ms": None, "width": None, "height": None,
+    }]
 
 
 # --- Throttle : ne pas payer un run Apify toutes les 30 minutes ---

@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from app.config import settings
+from app.content.media import GIF, PHOTO, VIDEO, entree
 from app.sources.base import RawItem, SourceAdapter
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,10 @@ class XApifyAdapter(SourceAdapter):
     """
 
     timeout = 300.0  # un run synchrone Apify peut prendre plusieurs minutes
+
+    # Meme plafond que l'adapter API officielle : un debit enorme est invisible
+    # sur Instagram, qui re-encode de toute facon.
+    _DEBIT_MAX = 5_000_000
 
     @property
     def handle(self) -> str:
@@ -92,7 +97,7 @@ class XApifyAdapter(SourceAdapter):
                     title=title,
                     summary=text,
                     published_at=self._parse_date(item.get("createdAt")),
-                    media_urls=self._media_urls(item),
+                    media=self._media(item),
                 )
             )
         return raw_items
@@ -114,17 +119,46 @@ class XApifyAdapter(SourceAdapter):
         logger.warning("Date de tweet illisible : %r", value)
         return None
 
-    def _media_urls(self, item: dict) -> list[str]:
+    def _media(self, item: dict) -> list[dict]:
+        """Meme forme d'entree que l'API v1.1 (extended_entities.media) : `type`
+        vaut photo/video/animated_gif, et les MP4 d'une video sont dans
+        `video_info.variants` -- `media_url_https` seul n'est que la vignette."""
         media = (item.get("extendedEntities") or {}).get("media") or item.get("media") or []
-        urls = []
+        medias = []
         for entry in media:
-            if isinstance(entry, dict):
-                url = entry.get("media_url_https") or entry.get("url")
-                if url:
-                    urls.append(url)
-            elif isinstance(entry, str):
-                urls.append(entry)
-        return urls
+            if not isinstance(entry, dict):
+                continue
+            normalise = self._media_depuis(entry)
+            if normalise:
+                medias.append(normalise)
+        return medias
+
+    def _media_depuis(self, media: dict) -> dict | None:
+        """Normalise une entree extended_entities.media vers la forme typee."""
+        type_ = media.get("type")
+        if type_ in (None, "photo"):
+            url = media.get("media_url_https") or media.get("url")
+            return entree(PHOTO, url) if url else None
+        if type_ in ("video", "animated_gif"):
+            variants = (media.get("video_info") or {}).get("variants") or []
+            mp4 = [v for v in variants if v.get("content_type") == "video/mp4" and v.get("url")]
+            sous_plafond = [v for v in mp4 if (v.get("bitrate") or 0) <= self._DEBIT_MAX]
+            if sous_plafond:
+                # Le plus haut debit acceptable : la meilleure qualite sous le plafond.
+                meilleur = max(sous_plafond, key=lambda v: v.get("bitrate") or 0)
+            elif mp4:
+                # Tout depasse le plafond : on prend le MOINS lourd, pas le plus
+                # lourd -- le contraire trahirait la raison d'etre du plafond.
+                meilleur = min(mp4, key=lambda v: v.get("bitrate") or 0)
+            else:
+                meilleur = None
+            return entree(
+                VIDEO if type_ == "video" else GIF,
+                meilleur["url"] if meilleur else None,
+                preview_url=media.get("media_url_https"),
+                duration_ms=(media.get("video_info") or {}).get("duration_millis"),
+            )
+        return None
 
     def _recently_fetched(self) -> bool:
         last_run = (self.source.state or {}).get("last_run_at")

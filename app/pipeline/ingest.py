@@ -53,7 +53,7 @@ def ingest_source(db: Session, source: Source, adapter: SourceAdapter | None = N
                 summary=item.summary,
                 published_at=item.published_at,
                 raw_hash=raw_hash,
-                media_urls=item.media_urls or None,
+                media=item.media or None,
             )
         )
         stats.new += 1

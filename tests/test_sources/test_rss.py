@@ -45,16 +45,20 @@ def test_parse_extracts_published_date_as_utc():
     assert items[0].published_at == dt.datetime(2026, 7, 1, 10, 30, tzinfo=dt.timezone.utc)
 
 
-def test_parse_extracts_media_urls():
+def test_parse_extracts_media():
     items = make_adapter().parse(RSS_FIXTURE)
-    assert items[0].media_urls == ["https://example.com/img/aphex.jpg"]
+    # Les six cles du contrat sont toujours presentes, meme absentes de la source
+    assert items[0].media == [{
+        "type": "photo", "url": "https://example.com/img/aphex.jpg",
+        "preview_url": None, "duration_ms": None, "width": None, "height": None,
+    }]
 
 
 def test_parse_handles_missing_optional_fields():
     second = make_adapter().parse(RSS_FIXTURE)[1]
     assert second.summary is None
     assert second.published_at is None
-    assert second.media_urls == []
+    assert second.media == []
 
 
 def test_parse_skips_entries_without_link():

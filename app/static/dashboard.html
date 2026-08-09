@@ -92,13 +92,7 @@
   #post-detail .sheet-head h2 { font-size: 15.5px; flex: 1; }
   #post-detail .close-btn { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
-  .slides-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
-    margin-bottom: 16px; }
-  .slide-edit { background: #0c0c10; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
-  .slide-edit img { width: 100%; aspect-ratio: 1080 / 1440; object-fit: cover; border-radius: 8px;
-    background: #16161c; display: block; margin-bottom: 8px; }
-  .slide-edit label { display: block; font-size: 11px; color: var(--muted); margin: 6px 0 3px; }
-  .slide-edit input, .slide-edit textarea, #post-detail textarea { width: 100%; background: #0c0c10;
+  #post-detail textarea { width: 100%; background: #0c0c10;
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12.5px;
     font-family: inherit; resize: vertical; }
   .hl-hint { color: var(--muted); font-size: 11px; margin: 10px 0 12px; }
@@ -106,8 +100,6 @@
      du dashboard, pas une nouvelle convention. */
   .render-warning { background: #3d1f1f; color: #ff8a8a; border: 1px solid #5a2a2a;
     border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 0 0 14px; }
-  .slide-edit.overflow { border-color: #ff8a8a; }
-  .slide-edit.overflow img { outline: 2px solid #ff8a8a; outline-offset: -2px; }
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .field textarea { min-height: 70px; }
@@ -116,7 +108,44 @@
     color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 12.5px;
     text-decoration: none; }
   .detail-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .detail-actions .danger { border-color: #5a2a2a; color: #ff8a8a; }
   .detail-actions button:hover, .detail-actions a:hover { border-color: var(--accent); }
+  .detail-actions button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* --- Covers, switch, fond, medias --- */
+  .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .4px; margin: 18px 0 8px; }
+  .covers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .cover-choice { background: #0c0c10; border: 2px solid var(--border); border-radius: 10px;
+    padding: 6px; cursor: pointer; }
+  .cover-choice img { width: 100%; aspect-ratio: 1080 / 1440; object-fit: cover; border-radius: 6px;
+    background: #16161c; display: block; }
+  .cover-choice.retenue { border-color: var(--accent); }
+  .cover-choice .tag { display: block; text-align: center; font-size: 11px; color: var(--muted);
+    margin-top: 4px; }
+  .cover-choice.retenue .tag { color: #b9a6ff; font-weight: 600; }
+  /* Meme rouge que .render-warning : "attention" est deja ce langage-la dans le
+     dashboard, pas une nouvelle convention. */
+  .cover-choice.en-defaut { border-color: #5a2a2a; }
+  .cover-choice.en-defaut .tag { color: #ff8a8a; }
+  .template-switch { display: flex; gap: 8px; align-items: center; }
+  .template-switch button { border: 1px solid var(--border); background: #20202a; color: var(--text);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 12.5px; }
+  .template-switch button.on { border-color: var(--accent); background: #241f3d; color: #b9a6ff; }
+  .template-switch button:disabled { opacity: .4; cursor: not-allowed; }
+  .reel-reason { color: #ff8a8a; font-size: 11.5px; }
+  .bg-field { display: flex; gap: 8px; }
+  .bg-field input { flex: 1; background: #0c0c10; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font-size: 12.5px; }
+  .bg-field button { border: 1px solid var(--border); background: #20202a; color: var(--text);
+    border-radius: 8px; padding: 0 14px; cursor: pointer; font-size: 12.5px; }
+  .media-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .media-choice { background: #0c0c10; border: 1px solid var(--border); border-radius: 10px; padding: 6px;
+    display: flex; flex-direction: column; gap: 4px; }
+  .media-choice img { width: 100%; aspect-ratio: 1/1; object-fit: cover; border-radius: 6px;
+    background: #16161c; display: block; }
+  .media-choice label { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+  .media-empty { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -208,10 +237,14 @@ async function load() {
   for (const a of articles) {
     const card = document.createElement("div");
     card.className = `card st-${a.status}`;
-    const img = (a.media_urls || [])[0];
+    // Meme regle que le selecteur de medias du detail : la vignette d'abord,
+    // sinon l'URL directe pour une photo seulement -- pas pour une video, dont
+    // l'URL est un .mp4 qu'une balise <img> ne peut pas afficher (onerror la
+    // retire alors silencieusement, et la carte perd son image).
+    const img = (a.media || []).map(m => m.preview_url || (m.type === "photo" ? m.url : null)).filter(Boolean)[0];
     const hotClass = a.hotness_score >= 80 ? "hot-high" : "";
     card.innerHTML = `
-      ${img ? `<img class="thumb" src="${img}" loading="lazy" onerror="this.remove()">` : ""}
+      ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
         <div class="scores">
           <span class="badge rel">pertinence ${a.relevance_score ?? "—"}</span>
@@ -408,6 +441,54 @@ async function enregistrerPost(postId, donnees) {
 
 const detailEl = document.getElementById("post-detail");
 
+// --- Predicat "video exploitable" reimplemente depuis app/content/media.py :
+// on ne peut pas importer du Python dans le navigateur. Toute modification de
+// la regle cote serveur doit etre reportee ici a la main.
+const DUREE_MAX_REEL_MS = 90000;
+// Limite Instagram pour une slide de carrousel (app.content.media.DUREE_MAX_SLIDE_MS) :
+// une video plus longue reste affichee (pour qu'on sache qu'elle existe) mais n'est
+// pas cochable comme slide.
+const DUREE_MAX_SLIDE_MS = 60000;
+
+function videosExploitables(media) {
+  return (media || []).filter((m) =>
+    m.type === "video" && m.url && (m.duration_ms == null || m.duration_ms <= DUREE_MAX_REEL_MS)
+  );
+}
+
+function raisonPasDeReel(media) {
+  if (videosExploitables(media).length) return null;
+  const videos = (media || []).filter((m) => m.type === "video");
+  if (!videos.length) return "aucune vidéo dans cette actu";
+  if (!videos.some((m) => m.url)) return "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)";
+  const durees = videos.map((m) => m.duration_ms).filter((d) => d != null);
+  if (durees.length) {
+    const duree = Math.min(...durees);
+    return `vidéo trop longue : ${Math.floor(duree / 1000)} s, maximum ${DUREE_MAX_REEL_MS / 1000} s pour un reel`;
+  }
+  return "aucune vidéo exploitable";
+}
+
+// Un post survit a la purge de son article (14 jours) : GET peut donc
+// legitimement rendre 404, pas seulement en cas de panne reseau -- dans les
+// deux cas on degrade a null plutot que de casser l'ouverture du detail.
+async function fetchArticleById(id) {
+  if (id == null) return null;
+  try {
+    const reponse = await fetch(`/articles/${id}`);
+    if (!reponse.ok) return null;
+    return await reponse.json();
+  } catch {
+    return null;
+  }
+}
+
+async function chargerCovers(postId) {
+  const reponse = await fetch(`/posts/${postId}/covers`, { method: "POST" });
+  if (!reponse.ok) throw new Error(await reponse.text());
+  return await reponse.json(); // { covers: [...], overflow: [...] } -- cf. CoversOut
+}
+
 async function ouvrirPost(postId) {
   let post;
   try {
@@ -417,46 +498,91 @@ async function ouvrirPost(postId) {
     return;
   }
 
-  // Le rendu est declenche ici, pas lu depuis le GET : c'est le seul moyen
-  // d'avoir un rapport a jour sur les slides ACTUELLES (le GET reste pur, cf.
-  // app/api/posts.py). Un echec de rendu (Chromium absent en local -> 503, ou
-  // toute autre erreur) ne doit jamais empecher l'ouverture du detail -- on
-  // degrade sans badge plutot que de bloquer l'edition.
-  let rapport = null;
+  const article = await fetchArticleById(post.article_id);
+
+  // Un seul Chromium pour l'apercu, pas deux : `/covers` rend les 4 variantes
+  // sur le fond du post et renvoie l'`overflow` de chacune (CoversOut) -- la
+  // variante retenue (ou la premiere par defaut) y est deja, donc le meme
+  // texte/fond qu'un appel a `/render` aurait mesure. Repayer un second
+  // lancement pour le meme signal doublait le temps d'ouverture d'un post, le
+  // geste que l'utilisateur fait chaque soir. Un echec (Chromium absent en
+  // local -> 503, ou toute autre panne) ne doit jamais empecher l'ouverture du
+  // detail -- on degrade sans badge plutot que de bloquer l'edition.
+  let covers = null;
   try {
-    const reponse = await fetch(`/posts/${postId}/render`, { method: "POST" });
-    if (!reponse.ok) throw new Error(await reponse.text());
-    rapport = await reponse.json();
+    covers = await chargerCovers(postId);
   } catch (erreur) {
-    alert("Rendu indisponible pour l'aperçu : " + erreur.message);
+    alert("Aperçu des covers indisponible : " + erreur.message);
   }
 
-  renderPostDetail(post, rapport);
+  renderPostDetail(post, article, covers);
 }
 
-function renderPostDetail(post, rapport) {
-  const cacheBust = Date.now();
-  const slidesEnDefaut = new Set(
-    (rapport && rapport.slides || [])
-      .map((s, i) => (s.overflow ? i : null))
-      .filter((i) => i !== null)
-  );
+function renderPostDetail(post, article, covers) {
+  const cover = (post.slides || [])[0] || {};
+  const variantes = (post.variants && post.variants.variantes) || [];
+  const retenue = post.variants ? post.variants.retenue : null;
+  // La cover EFFECTIVEMENT servie (slides[0]) est la variante retenue, ou la
+  // premiere par defaut (cf. create_post) -- c'est donc aussi l'index a lire
+  // dans `covers.overflow` pour savoir si CE qui sera publie tient.
+  const indexActif = retenue != null ? retenue : 0;
+  const enDefaut = !!(covers && covers.overflow && covers.overflow[indexActif]);
 
-  const slidesHtml = (post.slides || []).map((s, i) => `
-    <div class="slide-edit${slidesEnDefaut.has(i) ? " overflow" : ""}" data-index="${i}">
-      <img src="/posts/${post.id}/slides/${i + 1}.png?v=${cacheBust}" loading="lazy" onerror="this.style.opacity=0.2">
-      <label>Accroche</label>
-      <textarea class="slide-headline" rows="2">${escapeHtml(s.headline || "")}</textarea>
-      <label>URL de l'image</label>
-      <input class="slide-image" type="text" value="${escapeHtml(s.image_url || "")}">
-    </div>`).join("");
-
-  const numerosEnDefaut = [...slidesEnDefaut].map((i) => i + 1);
-  const avertissementHtml = numerosEnDefaut.length ? `
+  const avertissementHtml = enDefaut ? `
       <div class="render-warning">
-        ⚠ Slide${numerosEnDefaut.length > 1 ? "s" : ""} ${numerosEnDefaut.join(", ")} :
-        texte trop long même à la taille minimale, image rognée -- à corriger avant publication.
+        ⚠ Texte trop long même à la taille de police minimale sur la cover retenue --
+        à corriger avant publication.
       </div>` : "";
+
+  const coversHtml = variantes.length ? variantes.map((v, i) => {
+    const variantEnDefaut = !!(covers && covers.overflow && covers.overflow[i]);
+    return `
+    <div class="cover-choice${retenue === i ? " retenue" : ""}${variantEnDefaut ? " en-defaut" : ""}" data-index="${i}">
+      ${covers ? `<img src="${covers.covers[i]}" loading="lazy">` : `<div class="media-empty">aperçu indisponible</div>`}
+      <span class="tag">Variante ${i + 1}${retenue === i ? " · retenue" : ""}${variantEnDefaut ? " · texte trop long" : ""}</span>
+    </div>`;
+  }).join("") : `<div class="media-empty">Pas de variantes pour ce post.</div>`;
+
+  const raisonReel = raisonPasDeReel(article ? article.media : null);
+  const reelDisabled = raisonReel != null;
+  const reasonHtml = reelDisabled
+    ? `<div class="reel-reason" id="reel-reason">${escapeHtml(
+        article ? raisonReel : "actu introuvable (probablement purgée -- 14 jours de rétention)"
+      )}</div>`
+    : "";
+
+  const mediaList = (article && article.media) || [];
+  const slidesMedia = (post.slides || []).slice(1);
+  const mediaHtml = mediaList.length ? mediaList.map((m, i) => {
+    const coche = slidesMedia.some((s) => s.url === m.url);
+    const dims = (m.width && m.height) ? `${m.width}×${m.height}px` : "dimensions inconnues";
+    const duree = m.duration_ms != null ? ` · ${Math.round(m.duration_ms / 1000)} s` : "";
+    const vignette = m.preview_url || (m.type === "photo" ? m.url : null);
+    // Une video trop longue pour une slide de carrousel reste visible (pour
+    // qu'on sache qu'elle existe) mais n'est pas cochable -- meme logique que
+    // le switch REELS : une case grisee muette serait une enigme.
+    const tropLongue = m.type === "video" && m.duration_ms != null && m.duration_ms > DUREE_MAX_SLIDE_MS;
+    // Meme cas que `raisonPasDeReel` : une video sans URL directe (source qui
+    // ne donne qu'un lien de page) n'a rien a telecharger. Sans ce garde-fou la
+    // case restait cochable et un PATCH avec `url: null` echouait en 422 pour
+    // une action que l'UI presentait comme possible.
+    const sansUrl = m.type === "video" && !m.url;
+    const desactivee = tropLongue || sansUrl;
+    const raison = tropLongue
+      ? `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`
+      : sansUrl
+        ? "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)"
+        : null;
+    return `
+    <div class="media-choice" data-index="${i}">
+      ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
+      <label>
+        <input type="checkbox" class="media-check" ${coche ? "checked" : ""} ${desactivee ? "disabled" : ""}>
+        ${escapeHtml(m.type)} · ${dims}${duree}
+      </label>
+      ${raison ? `<span class="reel-reason">${escapeHtml(raison)}</span>` : ""}
+    </div>`;
+  }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Actu introuvable (probablement purgée) -- pas de médias à proposer."}</div>`;
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -467,7 +593,27 @@ function renderPostDetail(post, rapport) {
       </div>
       ${avertissementHtml}
       <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
-      <div class="slides-grid">${slidesHtml}</div>
+
+      <div class="section-title">Cover — 4 variantes</div>
+      <div class="covers-grid">${coversHtml}</div>
+
+      <div class="section-title">Format</div>
+      <div class="template-switch">
+        <button id="tpl-post" class="${post.template === "kinda_post" ? "on" : ""}">POST</button>
+        <button id="tpl-reel" class="${post.template === "kinda_reel" ? "on" : ""}" ${reelDisabled ? "disabled" : ""}
+          title="${reelDisabled ? escapeHtml(article ? raisonReel : "médias indisponibles") : ""}">REELS</button>
+      </div>
+      ${reasonHtml}
+
+      <div class="section-title">Image de fond</div>
+      <div class="bg-field">
+        <input type="text" id="bg-url" value="${escapeHtml(cover.image_url || "")}" placeholder="https://…">
+        <button id="bg-valider">Valider</button>
+      </div>
+
+      <div class="section-title">Médias de l'actu (carrousel)</div>
+      <div class="media-list">${mediaHtml}</div>
+
       <div class="field">
         <label>Légende</label>
         <textarea id="edit-caption">${escapeHtml(post.caption || "")}</textarea>
@@ -478,24 +624,107 @@ function renderPostDetail(post, rapport) {
       </div>
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
-        <button id="btn-approve">Valider</button>
+        <button id="btn-approve">Valider le statut</button>
         <button id="btn-publish">Marquer comme publié</button>
         <a href="/posts/${post.id}/export.zip">⬇ Télécharger</a>
+        ${post.status === "draft" ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
       </div>
     </div>`;
   detailEl.querySelector("h2").textContent = post.article_title || "Post";
   detailEl.querySelector(".close-btn").onclick = () => { detailEl.hidden = true; detailEl.innerHTML = ""; };
 
+  // --- Selection d'une variante de cover ---
+  for (const choix of detailEl.querySelectorAll(".cover-choice")) {
+    choix.onclick = async () => {
+      const index = Number(choix.dataset.index);
+      try {
+        const updated = await enregistrerPost(post.id, { variante_retenue: index });
+        // Les 4 covers rendues ne changent pas (meme fond, memes 4 textes) --
+        // seule la marque "retenue" bouge : pas besoin de repayer un rendu.
+        renderPostDetail(updated, article, covers);
+      } catch (erreur) {
+        alert("Échec de la sélection de la variante : " + erreur.message);
+      }
+    };
+  }
+
+  // --- Switch POST / REELS ---
+  //
+  // Deux `try` DISTINCTS et non un seul : le PATCH et le rendu des covers sont
+  // deux appels reseau independants, et seul le premier engage un changement
+  // persiste. Un seul `try` autour des deux ferait echouer silencieusement un
+  // changement de format DEJA COMMIS cote serveur des que le rendu (Chromium,
+  // 503 transitoire) rate -- l'utilisateur verrait "Echec du changement de
+  // format" alors que le format a change, et l'UI resterait sur l'ancien
+  // etat/anciennes covers sans aucun moyen de le voir sans fermer-rouvrir.
+  // Meme principe que `ouvrirPost`, qui separe deja render et covers de la
+  // lecture du post pour la meme raison.
+  const basculerTemplate = async (template) => {
+    if (template === post.template) return;
+    let updated;
+    try {
+      updated = await enregistrerPost(post.id, { template });
+    } catch (erreur) {
+      alert("Échec du changement de format : " + erreur.message);
+      return;
+    }
+    let nouvellesCovers = null;
+    try {
+      nouvellesCovers = await chargerCovers(post.id);
+    } catch (erreur) {
+      alert("Format changé, mais l'aperçu des covers a échoué : " + erreur.message);
+    }
+    renderPostDetail(updated, article, nouvellesCovers);
+  };
+  detailEl.querySelector("#tpl-post").onclick = () => basculerTemplate("kinda_post");
+  const btnReel = detailEl.querySelector("#tpl-reel");
+  if (!reelDisabled) btnReel.onclick = () => basculerTemplate("kinda_reel");
+
+  // --- Fond de la cover ---
+  // Meme separation que basculerTemplate, meme motif : le PATCH du fond est
+  // deja commis quand le rendu des covers echoue, l'UI ne doit pas le cacher.
+  detailEl.querySelector("#bg-valider").onclick = async () => {
+    const url = detailEl.querySelector("#bg-url").value.trim() || null;
+    const nouvelleCover = { ...cover, image_url: url };
+    const slides = [nouvelleCover, ...slidesMedia];
+    let updated;
+    try {
+      updated = await enregistrerPost(post.id, { slides });
+    } catch (erreur) {
+      alert("Échec de la mise à jour du fond : " + erreur.message);
+      return;
+    }
+    let nouvellesCovers = null;
+    try {
+      nouvellesCovers = await chargerCovers(post.id);
+    } catch (erreur) {
+      alert("Fond mis à jour, mais l'aperçu des covers a échoué : " + erreur.message);
+    }
+    renderPostDetail(updated, article, nouvellesCovers);
+  };
+
+  // --- Choix des medias du carrousel ---
+  for (const choix of detailEl.querySelectorAll(".media-choice")) {
+    choix.querySelector(".media-check").onchange = async () => {
+      const coches = [...detailEl.querySelectorAll(".media-choice")]
+        .filter((el) => el.querySelector(".media-check").checked)
+        .map((el) => mediaList[Number(el.dataset.index)]);
+      const slides = [cover, ...coches.map((m) => ({ kind: "media", ...m }))];
+      try {
+        const updated = await enregistrerPost(post.id, { slides });
+        renderPostDetail(updated, article, covers);
+      } catch (erreur) {
+        alert("Échec de la mise à jour des médias : " + erreur.message);
+      }
+    };
+  }
+
   detailEl.querySelector("#btn-save").onclick = async () => {
-    const slides = [...detailEl.querySelectorAll(".slide-edit")].map((el) => ({
-      headline: el.querySelector(".slide-headline").value,
-      image_url: el.querySelector(".slide-image").value || null,
-    }));
     const caption = detailEl.querySelector("#edit-caption").value;
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
     try {
-      const updated = await enregistrerPost(post.id, { slides, caption, hashtags });
-      renderPostDetail(updated);
+      const updated = await enregistrerPost(post.id, { caption, hashtags });
+      renderPostDetail(updated, article, covers);
     } catch (erreur) {
       alert("Échec de l'enregistrement : " + erreur.message);
     }
@@ -503,7 +732,7 @@ function renderPostDetail(post, rapport) {
   detailEl.querySelector("#btn-approve").onclick = async () => {
     try {
       const updated = await enregistrerPost(post.id, { status: "approved" });
-      renderPostDetail(updated);
+      renderPostDetail(updated, article, covers);
       if (!postsPanelEl.hidden) loadPostsPanel();
     } catch (erreur) {
       alert("Échec de la validation : " + erreur.message);
@@ -512,12 +741,26 @@ function renderPostDetail(post, rapport) {
   detailEl.querySelector("#btn-publish").onclick = async () => {
     try {
       const updated = await enregistrerPost(post.id, { status: "published" });
-      renderPostDetail(updated);
+      renderPostDetail(updated, article, covers);
       if (!postsPanelEl.hidden) loadPostsPanel();
     } catch (erreur) {
       alert("Échec de la publication : " + erreur.message);
     }
   };
+  const btnDelete = detailEl.querySelector("#btn-delete");
+  if (btnDelete) {
+    btnDelete.onclick = async () => {
+      if (!confirm("Supprimer ce brouillon ?")) return;
+      try {
+        const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
+        if (!reponse.ok) throw new Error(await reponse.text());
+        detailEl.hidden = true; detailEl.innerHTML = "";
+        if (!postsPanelEl.hidden) loadPostsPanel();
+      } catch (erreur) {
+        alert("Échec de la suppression : " + erreur.message);
+      }
+    };
+  }
 
   detailEl.hidden = false;
 }

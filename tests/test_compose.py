@@ -5,13 +5,13 @@ from pydantic import ValidationError
 
 from app.content.compose import (
     CompositionError,
+    CoverVariante,
     PostDraft,
-    Slide,
     build_user_prompt,
     create_post,
     make_claude_composer,
 )
-from app.models import Article, PostStatus, Source, SourceType
+from app.models import Article, Source, SourceType
 
 
 def _article(db):
@@ -25,32 +25,34 @@ def _article(db):
         summary="Nico Moreno, Mosimann et Cassius sont annonces.",
         raw_hash="h1",
         published_at=dt.datetime(2026, 7, 20, tzinfo=dt.timezone.utc),
-        media_urls=["https://tsugi.fr/photo.jpg"],
+        media=[{"type": "photo", "url": "https://tsugi.fr/photo.jpg"}],
     )
     db.add(article)
     db.commit()
     return article
 
 
-def test_draft_refuse_moins_de_deux_slides():
+def _variante(n):
+    return CoverVariante(
+        headline=f"**Accroche {n}**", title=f"**Titre {n}**", subtitle=f"**Sous {n}**"
+    )
+
+
+def test_une_variante_exige_les_trois_textes_balises():
+    """Chaque variante porte l'accroche du post ET le couple titre/sous-titre du
+    reel : c'est ce qui rend la bascule POST/REELS instantanee, sans redemander a
+    Claude. Les trois passent par la meme regle de surlignage."""
     with pytest.raises(ValidationError):
-        PostDraft(slides=[Slide(headline="**Un** seul")], caption="c", hashtags=[])
+        CoverVariante(headline="sans surlignage", title="**Titre**", subtitle="**Sous**")
 
 
-def test_draft_refuse_plus_de_six_slides():
-    slides = [Slide(headline=f"**Slide** {i}") for i in range(7)]
-    with pytest.raises(ValidationError):
-        PostDraft(slides=slides, caption="c", hashtags=[])
+def test_le_brouillon_exige_exactement_quatre_variantes():
+    for nombre in (3, 5):
+        with pytest.raises(ValidationError):
+            PostDraft(variantes=[_variante(i) for i in range(nombre)], caption="c", hashtags=[])
 
-
-def test_slide_refuse_une_accroche_sans_surlignage():
-    with pytest.raises(ValidationError):
-        Slide(headline="Une accroche parfaitement plate")
-
-
-def test_slide_refuse_une_accroche_trop_longue():
-    with pytest.raises(ValidationError):
-        Slide(headline="**A** " + "x" * 120)
+    draft = PostDraft(variantes=[_variante(i) for i in range(4)], caption="c", hashtags=[])
+    assert len(draft.variantes) == 4
 
 
 def test_build_user_prompt_contient_le_titre_et_la_source(db_session):
@@ -60,31 +62,48 @@ def test_build_user_prompt_contient_le_titre_et_la_source(db_session):
     assert "Tsugi" in prompt
 
 
-def test_create_post_denormalise_et_pose_l_image_de_l_article(db_session):
-    """La premiere slide herite de l'image de l'article ; les autres restent vides
-    tant que l'utilisateur n'en a pas choisi une."""
+def _draft():
+    return PostDraft(variantes=[_variante(i) for i in range(4)], caption="c", hashtags=["#e"])
+
+
+def test_create_post_pose_les_quatre_variantes_sans_retenue(db_session):
+    """La retenue est nulle a la creation : l'utilisateur n'a pas encore choisi, et
+    c'est ce qui rend le brouillon reprenable sans repayer un appel Claude."""
     article = _article(db_session)
-    draft = PostDraft(
-        slides=[
-            Slide(headline="**Vieilles Charrues** : le line-up"),
-            Slide(headline="Rendez-vous **ce week-end**"),
-        ],
-        caption="Le line-up electro est tombe.",
-        hashtags=["#vieillescharrues", "#electro"],
-    )
 
-    post = create_post(db_session, article, draft)
+    post = create_post(db_session, article, _draft())
 
-    assert post.status == PostStatus.DRAFT
-    assert post.article_id == article.id
-    assert post.article_title == article.title
-    assert post.article_url == article.url
-    assert post.source_name == "Tsugi"
-    assert post.caption == "Le line-up electro est tombe."
-    assert post.hashtags == ["#vieillescharrues", "#electro"]
-    assert len(post.slides) == 2
-    assert post.slides[0]["image_url"] == "https://tsugi.fr/photo.jpg"
-    assert post.slides[1]["image_url"] is None
+    assert len(post.variants["variantes"]) == 4
+    assert post.variants["retenue"] is None
+
+
+def test_create_post_pose_une_cover_avec_le_fond_de_larticle(db_session):
+    """La slide 1 est une cover, pas un media : c'est la seule que le renderer
+    rendra."""
+    article = _article(db_session)
+
+    post = create_post(db_session, article, _draft())
+
+    (cover,) = post.slides
+    assert cover["kind"] == "cover"
+    assert cover["image_url"] == "https://tsugi.fr/photo.jpg"
+    # Les trois textes sont poses des la creation, pour que la bascule de gabarit
+    # n'ait rien a redemander.
+    assert cover["headline"] and cover["title"] and cover["subtitle"]
+
+
+def test_create_post_prend_la_vignette_dune_video_comme_fond(db_session):
+    """Une actu video n'a pas de photo : sa vignette est un fond parfaitement
+    valable, et c'est meme le cas normal."""
+    article = _article(db_session)
+    article.media = [
+        {"type": "video", "url": "https://v.mp4", "preview_url": "https://thumb.jpg"}
+    ]
+    db_session.commit()
+
+    post = create_post(db_session, article, _draft())
+
+    assert post.slides[0]["image_url"] == "https://thumb.jpg"
 
 
 def _validation_error() -> ValidationError:
@@ -92,7 +111,7 @@ def _validation_error() -> ValidationError:
     sortie du modele viole le schema (ex. la regle de balisage `_balisage_valide`,
     qui n'est verifiee qu'apres coup et n'est donc PAS contrainte cote API)."""
     try:
-        PostDraft.model_validate({"slides": [], "caption": "x", "hashtags": []})
+        PostDraft.model_validate({"variantes": [], "caption": "x", "hashtags": []})
     except ValidationError as exc:
         return exc
     raise AssertionError("attendu une ValidationError")  # pragma: no cover
@@ -136,7 +155,7 @@ def test_composer_reessaie_puis_reussit(db_session):
     succes doit bien aboutir a un brouillon, pas a une erreur."""
     article = _article(db_session)
     bon_draft = PostDraft(
-        slides=[Slide(headline="**Vieilles Charrues** : le line-up"), Slide(headline="**Info**")],
+        variantes=[_variante(i) for i in range(4)],
         caption="c",
         hashtags=[],
     )

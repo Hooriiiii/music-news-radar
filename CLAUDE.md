@@ -188,12 +188,48 @@ chiffres de streaming ne bougent.
 ## Génération de posts (`app/content/`)
 
 Le compte d'actu ne s'arrête plus au flux scoré : un article peut devenir un
-**carrousel Instagram** prêt à publier, sur deux gabarits — `kinda_post`
-(1080×1440, carrousel de slides) et `kinda_reel` (1080×1920, cover de reel).
-Quatre unités indépendantes — `layout.py` (les valeurs de mise en page en
-Python pur : gabarits, zones, typographie, machine d'ajustement d'échelle),
-`compose.py` (article → slides + légende, via Claude), `render.py` (slides →
-PNG, via Chromium headless), `api/posts.py` (file éditoriale).
+**post Instagram** prêt à publier. Ce n'est plus un carrousel de texte —
+c'est une **cover générée** (fond + logo + accroche accrocheuse) suivie des
+**médias réels de l'actu** (photos, vidéos) :
+
+```
+slide 1  = cover, kind: "cover" -> RENDUE par Chromium
+slide 2+ = médias de l'actu, kind: "media" -> laissés passer tels quels
+```
+
+La cover est proposée en **4 variantes** (`Post.variants`, quatre formulations
+de la même info, jamais quatre angles différents) sur le MÊME fond, et sur deux
+formats — `template` sur le post : `kinda_post` (1080×1440, POST, toujours
+disponible) et `kinda_reel` (1080×1920, REELS, disponible seulement quand
+l'article a une vidéo exploitable). Chaque variante porte trois textes :
+`headline` (gabarit post) et le couple `title`/`subtitle` (gabarit reel, deux
+bandes empilées) — légende et hashtags sont communs aux quatre. `Post.variants`
+est `{"variantes": [...], "retenue": int | None}` ; choisir une variante
+(`PATCH /posts/{id}` avec `variante_retenue`) réécrit `slides[0]` avec ses
+trois textes sans repayer Claude ni relancer Chromium.
+
+Cinq unités indépendantes — `media.py` (le vocabulaire des médias d'un
+article : `entree()`, `videos_exploitables()`, `raison_pas_de_reel()`),
+`layout.py` (les valeurs de mise en page en Python pur : gabarits, zones,
+typographie, machine d'ajustement d'échelle), `compose.py` (article → 4
+variantes de cover + légende, via Claude), `render.py` (slides `kind: "cover"`
+→ PNG, via Chromium headless ; `render_covers()` rend les 4 variantes sur un
+fond commun avec un seul Chromium et une seule récupération d'image),
+`export.py` (zip : covers rendues + médias `kind: "media"` téléchargés tels
+quels), `api/posts.py` (file éditoriale : `POST /articles/{id}/posts`,
+`POST /posts/{id}/covers`, `PATCH /posts/{id}` — `template`,
+`variante_retenue`, `slides`, `status` —, `DELETE /posts/{id}`,
+`POST /posts/{id}/render`, `GET /posts/{id}/export.zip`).
+
+**Pourquoi les médias sont typés.** `articles.media` (`app/models.py`) est une
+liste de dicts `{type, url, preview_url, duration_ms, width, height}` — pas la
+simple `list[str]` d'avant. L'API X v2 rend `url` pour une photo mais une
+**vignette** (`preview_image_url`) pour une vidéo, jamais un lien direct vers
+le fichier ; sans stocker `type`, un tweet vidéo était indistinguable d'un
+tweet photo, et le format REELS était donc INDÉCIDABLE — impossible de savoir,
+au moment d'afficher le switch, si l'actu avait de quoi remplir un reel.
+`media.py::raison_pas_de_reel()` est la fonction que le dashboard interroge
+pour griser ce switch avec un motif lisible plutôt qu'un bouton muet.
 
 `layout.py` porte TOUTES les valeurs de mise en page, `render.py` n'en déclare
 aucune : Chromium MESURE (lignes rendues, largeur de chacune), Python DÉCIDE
@@ -321,6 +357,29 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   inode sans nom. L'agent d'ingestion y échappe (nouveau processus toutes les
   30 min). Impact faible grâce à `--no-access-log`, mais à savoir avant de chercher
   pourquoi `dashboard.log` est vide.
+- `media.fields=url,preview_image_url` sur l'API X v2 ne suffit PAS pour les
+  reels : ce sont les `variants` d'un tweet vidéo qui portent les MP4
+  effectivement téléchargeables (`url` reste une vignette) — et sans le champ
+  `type` en plus, une vidéo est indistinguable d'une photo, donc le format
+  REELS reste indécidable même avec `preview_image_url` demandé.
+- Un flux RSS ne publie jamais de FICHIER vidéo, seulement un lien vers une
+  page qui en contient un (Instagram, YouTube...) : ce n'est pas une limite du
+  code, c'est une propriété de ce que les flux exposent. Les reels viendront
+  donc de X (qui donne un MP4 direct via `variants`) ou de rien — jamais d'une
+  source RSS.
+- L'union discriminée `SlideIn` (`app/schemas.py`, `CoverIn | MediaIn` sur
+  `kind`) REJETTE en 422 une slide qui arrive sans `kind` du tout
+  (`union_tag_not_found`) plutôt que de retomber sur `CoverIn` par défaut :
+  toute slide envoyée dans un `PATCH /posts/{id}` doit porter `kind`
+  explicitement, y compris quand elle vient d'un éditeur qui ne manipulait
+  jusque-là que des covers.
+- Dans une migration écrite à la main (`0010_typed_media.py`), un alias `AS
+  url` dans un `UPDATE ... FROM` est résolu par Postgres sur la colonne RÉELLE
+  `articles.url` plutôt que sur l'alias, sans avertissement : la transformation
+  écrivait donc l'URL de l'article, pas celle du média. Silencieux — repéré
+  seulement en vérifiant la transformation à la main sur un cluster jetable, pas
+  par une erreur SQL. Nommer l'alias différemment de toute colonne existante
+  (`media_url`, pas `url`) évite le piège.
 
 ## Conventions
 

@@ -46,7 +46,7 @@ def list_articles(
         stmt = stmt.where(Article.category == category)
     if has_media is not None:
         stmt = stmt.where(
-            Article.media_urls.is_not(None) if has_media else Article.media_urls.is_(None)
+            Article.media.is_not(None) if has_media else Article.media.is_(None)
         )
     if since is not None:
         stmt = stmt.where(Article.published_at >= since)
@@ -64,6 +64,14 @@ def list_articles(
     else:
         stmt = stmt.order_by(Article.published_at.desc().nulls_last(), Article.id.desc())
     return db.scalars(stmt.limit(limit).offset(offset)).all()
+
+
+@router.get("/{article_id}", response_model=ArticleOut)
+def get_article(article_id: int, db: Session = Depends(get_db)):
+    article = db.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return article
 
 
 class ArticleStatusUpdate(BaseModel):

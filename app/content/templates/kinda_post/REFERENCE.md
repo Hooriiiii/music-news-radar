@@ -44,10 +44,22 @@ rôles avec `render.py` est stricte : Chromium MESURE (lignes rendues, largeur d
 chacune, via `Range.getClientRects()`), Python DÉCIDE (échelle à essayer,
 acceptation, abandon — la machine à états `Ajustement`).
 
+## Ce que le gabarit rend
+
+Le gabarit ne rend plus un carrousel de slides de texte : il rend **une
+cover** — la première image du post (`slide[0]`, `kind: "cover"` dans
+`posts.slides`), fond + logo + accroche. Les slides suivantes d'un post
+(`kind: "media"`) sont les photos/vidéos réelles de l'actu ; elles ne passent
+JAMAIS par ce gabarit ni par Chromium (`app/content/render.py::render_post`
+ne rend que les entrées `kind: "cover"`, `app/content/export.py` télécharge
+les `kind: "media"` telles quelles). `render_covers()` réutilise ce même
+gabarit pour rendre les 4 variantes de cover proposées à l'utilisateur, sur un
+fond commun.
+
 ## Contrat de variables (`app/content/render.py::build_document`)
 
 `build_document(gabarit_, textes, image_data_uri, scale, scrim_height)` assemble
-le HTML autonome d'une slide. Deux entrées consomment ce contrat et cassent le
+le HTML autonome d'UNE cover. Deux entrées consomment ce contrat et cassent le
 rendu si on les change sans mettre ce fichier à jour :
 
 - `variables` : les variables CSS produites par `variables_css()` — voir la liste
