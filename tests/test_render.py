@@ -9,7 +9,13 @@ import pytest
 from PIL import Image
 
 from app.content.layout import GABARIT_POST
-from app.content.render import RenduIndisponible, build_document, fetch_image_data_uri, render_post
+from app.content.render import (
+    RenduIndisponible,
+    build_document,
+    fetch_image_data_uri,
+    render_covers,
+    render_post,
+)
 
 
 def _chromium_playwright_present() -> bool:
@@ -549,6 +555,65 @@ def test_echec_du_lancement_de_chromium_referme_le_contexte_playwright(monkeypat
         render_post([{"headline": "Une **accroche**", "image_url": None}])
 
     assert len(appels_exit) == 1, "le contexte Playwright n'a pas ete referme apres l'echec"
+
+
+@chromium_absent
+def test_render_post_ignore_les_medias_et_ne_rend_que_les_covers():
+    """Un media n'est pas rendu : il part tel quel dans l'export. Le renderer doit
+    donc en produire AUCUN png, pas un png vide."""
+    slides = [
+        {"kind": "cover", "headline": "**Accroche**", "title": "**T**",
+         "subtitle": "**S**", "image_url": None},
+        {"kind": "media", "type": "video", "url": "https://v.mp4"},
+    ]
+
+    rendus = render_post(slides)
+
+    assert len(rendus) == 1
+
+
+@chromium_absent
+def test_render_covers_rend_les_quatre_sur_le_meme_fond():
+    """Quatre covers, un seul Chromium, une seule recuperation d'image : c'est le
+    lancement du navigateur et le telechargement qui coutent, pas la capture."""
+    variantes = [
+        {"headline": f"**Accroche {i}**", "title": f"**T{i}**", "subtitle": f"**S{i}**"}
+        for i in range(4)
+    ]
+
+    rendus = render_covers(variantes, image_url=None, template="kinda_post")
+
+    assert len(rendus) == 4
+    assert all(_png_size(r.png) == (GABARIT_POST.width, GABARIT_POST.height) for r in rendus)
+    # Quatre textes differents -> quatre images differentes. Un bug qui rendrait
+    # quatre fois la meme variante passerait toutes les autres assertions.
+    assert len({r.png for r in rendus}) == 4
+
+
+@chromium_absent
+def test_render_covers_utilise_le_gabarit_reel_quand_on_le_demande():
+    from app.content.layout import GABARIT_REEL
+
+    variantes = [{"headline": "**a**", "title": "**T**", "subtitle": "**S**"}]
+
+    (rendu,) = render_covers(variantes, image_url=None, template="kinda_reel")
+
+    assert _png_size(rendu.png) == (GABARIT_REEL.width, GABARIT_REEL.height)
+
+
+def test_render_covers_signale_chromium_absent(monkeypatch):
+    """Meme garde-fou que render_post : un message qui dit quoi faire, pas une
+    trace au fond de Playwright."""
+    import app.content.render as render_module
+
+    def faux():
+        raise Exception("Executable doesn't exist at /path/chrome")
+
+    monkeypatch.setattr(render_module, "sync_playwright", faux)
+
+    variantes = [{"headline": "**a**", "title": "**T**", "subtitle": "**S**"}]
+    with pytest.raises(RenduIndisponible, match="playwright install chromium"):
+        render_covers(variantes, None, "kinda_post")
 
 
 def test_erreur_de_rendu_normale_n_est_pas_masquee(monkeypatch):

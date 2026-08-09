@@ -56,9 +56,13 @@ def _ouvrir_chromium() -> tuple[Any, Browser]:
     qu'il a ouverts ne sont jamais arretes (une fuite par appel echoue).
     Le contexte est ouvert a la main (`__enter__`/`__exit__`) plutot qu'avec
     `with` pour pouvoir le refermer chez l'appelant, une fois le rendu termine.
+    L'appel `sync_playwright()` lui-meme est dans le meme essai que
+    `__enter__()` : en vrai Playwright il ne fait que construire un objet et
+    n'echoue jamais, mais rien ne garantit que cette frontiere reste stable --
+    et un test peut la remplacer par un faux qui echoue des l'appel.
     """
-    contexte = sync_playwright()
     try:
+        contexte = sync_playwright()
         playwright = contexte.__enter__()
     except Exception as exc:
         if _signale_chromium_absent(exc):
@@ -277,6 +281,11 @@ def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[
 def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
     """Rend chaque slide du post. Un seul Chromium pour tout le post."""
     gabarit_ = gabarit(template)
+    # Un `kind: "media"` est une photo ou une video de l'actu : elle part telle
+    # quelle dans l'export, sans passer par le gabarit. Le defaut sur "cover"
+    # est une ceinture pour une ligne que la migration aurait manquee -- a la
+    # frontiere API le tag discriminant refuse deja un `kind` absent.
+    covers = [s for s in slides if s.get("kind", "cover") == "cover"]
     rendus: list[RenduSlide] = []
     contexte, browser = _ouvrir_chromium()
     with ExitStack() as pile:
@@ -286,8 +295,39 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduS
             viewport={"width": gabarit_.width, "height": gabarit_.height},
             device_scale_factor=1,
         )
-        for slide in slides:
+        for slide in covers:
             image_uri = fetch_image_data_uri(slide.get("image_url"))
             textes = {role: slide[role] for role in gabarit_.roles}
+            rendus.append(_render_one(page, gabarit_, textes, image_uri))
+    return rendus
+
+
+def render_covers(
+    variantes: list[dict], image_url: str | None, template: str = "kinda_post"
+) -> list[RenduSlide]:
+    """Rend les covers de plusieurs variantes sur le MEME fond.
+
+    Un seul Chromium et une seule recuperation d'image pour les quatre : c'est
+    le lancement du navigateur et le telechargement qui coutent du temps a
+    l'usage du soir, pas la capture elle-meme. Rendre les quatre separement
+    multiplierait par quatre le seul cout qui se voit.
+
+    `gabarit_.roles` differe entre gabarits ({"headline": ...} pour le post,
+    {"title": ..., "subtitle": ...} pour le reel) : la meme variante sert donc
+    les deux sans condition, en ne prenant que les roles que le gabarit attend.
+    """
+    gabarit_ = gabarit(template)
+    image_uri = fetch_image_data_uri(image_url)
+    rendus: list[RenduSlide] = []
+    contexte, browser = _ouvrir_chromium()
+    with ExitStack() as pile:
+        pile.callback(contexte.__exit__, None, None, None)
+        pile.callback(browser.close)
+        page = browser.new_page(
+            viewport={"width": gabarit_.width, "height": gabarit_.height},
+            device_scale_factor=1,
+        )
+        for variante in variantes:
+            textes = {role: variante[role] for role in gabarit_.roles}
             rendus.append(_render_one(page, gabarit_, textes, image_uri))
     return rendus
