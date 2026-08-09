@@ -566,7 +566,7 @@ function renderPostDetail(post, rapport, article, covers) {
       ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
       <label>
         <input type="checkbox" class="media-check" ${coche ? "checked" : ""} ${tropLongue ? "disabled" : ""}>
-        ${m.type} · ${dims}${duree}
+        ${escapeHtml(m.type)} · ${dims}${duree}
       </label>
       ${tropLongue ? `<span class="reel-reason">trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)</span>` : ""}
     </div>`;
@@ -637,32 +637,58 @@ function renderPostDetail(post, rapport, article, covers) {
   }
 
   // --- Switch POST / REELS ---
+  //
+  // Deux `try` DISTINCTS et non un seul : le PATCH et le rendu des covers sont
+  // deux appels reseau independants, et seul le premier engage un changement
+  // persiste. Un seul `try` autour des deux ferait echouer silencieusement un
+  // changement de format DEJA COMMIS cote serveur des que le rendu (Chromium,
+  // 503 transitoire) rate -- l'utilisateur verrait "Echec du changement de
+  // format" alors que le format a change, et l'UI resterait sur l'ancien
+  // etat/anciennes covers sans aucun moyen de le voir sans fermer-rouvrir.
+  // Meme principe que `ouvrirPost`, qui separe deja render et covers de la
+  // lecture du post pour la meme raison.
   const basculerTemplate = async (template) => {
     if (template === post.template) return;
+    let updated;
     try {
-      const updated = await enregistrerPost(post.id, { template });
-      const nouvellesCovers = await chargerCovers(post.id);
-      renderPostDetail(updated, null, article, nouvellesCovers);
+      updated = await enregistrerPost(post.id, { template });
     } catch (erreur) {
       alert("Échec du changement de format : " + erreur.message);
+      return;
     }
+    let nouvellesCovers = null;
+    try {
+      nouvellesCovers = await chargerCovers(post.id);
+    } catch (erreur) {
+      alert("Format changé, mais l'aperçu des covers a échoué : " + erreur.message);
+    }
+    renderPostDetail(updated, null, article, nouvellesCovers);
   };
   detailEl.querySelector("#tpl-post").onclick = () => basculerTemplate("kinda_post");
   const btnReel = detailEl.querySelector("#tpl-reel");
   if (!reelDisabled) btnReel.onclick = () => basculerTemplate("kinda_reel");
 
   // --- Fond de la cover ---
+  // Meme separation que basculerTemplate, meme motif : le PATCH du fond est
+  // deja commis quand le rendu des covers echoue, l'UI ne doit pas le cacher.
   detailEl.querySelector("#bg-valider").onclick = async () => {
     const url = detailEl.querySelector("#bg-url").value.trim() || null;
     const nouvelleCover = { ...cover, image_url: url };
     const slides = [nouvelleCover, ...slidesMedia];
+    let updated;
     try {
-      const updated = await enregistrerPost(post.id, { slides });
-      const nouvellesCovers = await chargerCovers(post.id);
-      renderPostDetail(updated, null, article, nouvellesCovers);
+      updated = await enregistrerPost(post.id, { slides });
     } catch (erreur) {
       alert("Échec de la mise à jour du fond : " + erreur.message);
+      return;
     }
+    let nouvellesCovers = null;
+    try {
+      nouvellesCovers = await chargerCovers(post.id);
+    } catch (erreur) {
+      alert("Fond mis à jour, mais l'aperçu des covers a échoué : " + erreur.message);
+    }
+    renderPostDetail(updated, null, article, nouvellesCovers);
   };
 
   // --- Choix des medias du carrousel ---
@@ -715,7 +741,7 @@ function renderPostDetail(post, rapport, article, covers) {
       if (!confirm("Supprimer ce brouillon ?")) return;
       try {
         const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
-        if (!reponse.ok && reponse.status !== 204) throw new Error(await reponse.text());
+        if (!reponse.ok) throw new Error(await reponse.text());
         detailEl.hidden = true; detailEl.innerHTML = "";
         if (!postsPanelEl.hidden) loadPostsPanel();
       } catch (erreur) {
