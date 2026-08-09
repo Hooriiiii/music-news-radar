@@ -19,6 +19,8 @@ from scripts.install_agents import (
     THROTTLE_DASHBOARD,
     Chemins,
     chemins_par_defaut,
+    desinstaller,
+    installer,
     plist_dashboard,
     plist_ingest,
     plists,
@@ -136,3 +138,88 @@ def test_les_labels_obsoletes_sont_ceux_de_juillet():
     assert LABELS_OBSOLETES == ("com.musicnewsradar.pipeline", "com.musicnewsradar.digest")
     assert LABEL_INGEST not in LABELS_OBSOLETES
     assert LABEL_DASHBOARD not in LABELS_OBSOLETES
+
+
+class FauxExecuteur:
+    """Enregistre les commandes au lieu de les lancer."""
+
+    def __init__(self, sortie: str = "") -> None:
+        self.commandes: list[list[str]] = []
+        self.sortie = sortie
+
+    def __call__(self, commande: list[str], tolere_echec: bool = False) -> str:
+        self.commandes.append(commande)
+        return self.sortie
+
+
+def _labels_de(commandes: list[list[str]], verbe: str) -> list[str]:
+    """Les labels vises par un `launchctl <verbe>`, dans l'ordre."""
+    trouves = []
+    for commande in commandes:
+        if verbe in commande:
+            trouves.append(commande[-1].split("/")[-1].removesuffix(".plist"))
+    return trouves
+
+
+def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins):
+    """L'ordre n'est pas cosmetique : l'ancien agent `pipeline` tourne encore et
+    execute run_pipeline. S'il survit au bootstrap du nouveau, le double emploi
+    qu'on cherche a supprimer continue."""
+    executeur = FauxExecuteur()
+
+    installer(chemins, executer=executeur)
+
+    sortis = _labels_de(executeur.commandes, "bootout")
+    charges = _labels_de(executeur.commandes, "bootstrap")
+    assert set(LABELS_OBSOLETES).issubset(set(sortis))
+    dernier_bootout = max(
+        i for i, c in enumerate(executeur.commandes) if "bootout" in c
+        and c[-1].split("/")[-1] in LABELS_OBSOLETES
+    )
+    premier_bootstrap = min(i for i, c in enumerate(executeur.commandes) if "bootstrap" in c)
+    assert dernier_bootout < premier_bootstrap
+    assert set(charges) == {LABEL_INGEST, LABEL_DASHBOARD}
+
+
+def test_installer_ecrit_les_plists_et_cree_le_dossier_de_logs(chemins):
+    installer(chemins, executer=FauxExecuteur())
+
+    assert chemins.logs.is_dir()
+    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+        fichier = chemins.launch_agents / f"{label}.plist"
+        assert plistlib.loads(fichier.read_bytes())["Label"] == label
+
+
+def test_installer_supprime_les_plists_obsoletes_du_dossier_systeme(chemins):
+    """Decharger ne suffit pas : un plist laisse dans LaunchAgents est rechargé
+    a la prochaine ouverture de session."""
+    chemins.launch_agents.mkdir(parents=True)
+    for label in LABELS_OBSOLETES:
+        (chemins.launch_agents / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label}))
+
+    installer(chemins, executer=FauxExecuteur())
+
+    for label in LABELS_OBSOLETES:
+        assert not (chemins.launch_agents / f"{label}.plist").exists()
+
+
+def test_desinstaller_retire_les_deux_agents_et_leurs_plists(chemins):
+    executeur = FauxExecuteur()
+    installer(chemins, executer=executeur)
+    executeur.commandes.clear()
+
+    desinstaller(chemins, executer=executeur)
+
+    assert set(_labels_de(executeur.commandes, "bootout")) == {LABEL_INGEST, LABEL_DASHBOARD}
+    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+        assert not (chemins.launch_agents / f"{label}.plist").exists()
+
+
+def test_installer_est_idempotent(chemins):
+    """On doit pouvoir relancer --apply apres avoir change une valeur, sans
+    empiler deux agents ni tomber sur « service already loaded »."""
+    installer(chemins, executer=FauxExecuteur())
+    installer(chemins, executer=FauxExecuteur())
+
+    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+        assert (chemins.launch_agents / f"{label}.plist").exists()

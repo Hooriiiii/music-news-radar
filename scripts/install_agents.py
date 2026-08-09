@@ -22,7 +22,10 @@ silencieusement si le depot bougeait.
 """
 
 import argparse
+import os
+import plistlib
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -142,16 +145,99 @@ def afficher_plan(chemins: Chemins) -> None:
     print("\nRelancer avec --apply pour appliquer.")
 
 
+def _executer(commande: list[str], tolere_echec: bool = False) -> str:
+    """Lance une commande. `tolere_echec` sert aux `bootout` d'agents qui ne sont
+    peut-etre pas charges -- launchctl y repond par un code non nul, et ce n'est
+    pas une erreur ici."""
+    resultat = subprocess.run(commande, capture_output=True, text=True)
+    if resultat.returncode != 0 and not tolere_echec:
+        raise SystemExit(
+            f"echec de {' '.join(commande)} :\n{resultat.stderr.strip()}"
+        )
+    return resultat.stdout
+
+
+def _domaine() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def _bootout(label: str, executer) -> None:
+    executer(["launchctl", "bootout", f"{_domaine()}/{label}"], tolere_echec=True)
+
+
+def _retirer_obsoletes(chemins: Chemins, executer) -> None:
+    """Le PREMIER travail de l'installation. Decharger ne suffit pas : un plist
+    laisse dans LaunchAgents est recharge a la prochaine ouverture de session."""
+    for label in LABELS_OBSOLETES:
+        _bootout(label, executer)
+        fichier = chemins.launch_agents / f"{label}.plist"
+        fichier.unlink(missing_ok=True)
+        print(f"  - retiré : {label}")
+
+
+def installer(chemins: Chemins, executer=_executer) -> None:
+    chemins.launch_agents.mkdir(parents=True, exist_ok=True)
+    chemins.logs.mkdir(parents=True, exist_ok=True)
+
+    _retirer_obsoletes(chemins, executer)
+
+    for label, contenu in plists(chemins).items():
+        fichier = chemins.launch_agents / f"{label}.plist"
+        # bootout avant bootstrap : sinon launchctl refuse un service deja
+        # charge, et --apply ne serait pas rejouable.
+        _bootout(label, executer)
+        fichier.write_bytes(plistlib.dumps(contenu))
+        executer(["launchctl", "bootstrap", _domaine(), str(fichier)])
+        print(f"  + installé : {label}")
+
+
+def desinstaller(chemins: Chemins, executer=_executer) -> None:
+    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+        _bootout(label, executer)
+        (chemins.launch_agents / f"{label}.plist").unlink(missing_ok=True)
+        print(f"  - retiré : {label}")
+
+
+def statut(chemins: Chemins, executer=_executer) -> None:
+    sortie = executer(["launchctl", "list"], tolere_echec=True)
+    lignes = {
+        colonnes[2]: colonnes
+        for colonnes in (ligne.split("\t") for ligne in sortie.splitlines())
+        if len(colonnes) == 3
+    }
+    print("Agents du socle :")
+    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+        colonnes = lignes.get(label)
+        if colonnes is None:
+            print(f"  {label:34s} absent")
+        else:
+            pid, code, _ = colonnes
+            etat = "en cours" if pid != "-" else f"au repos (dernier code {code})"
+            print(f"  {label:34s} {etat}")
+    survivants = [label for label in LABELS_OBSOLETES if label in lignes]
+    if survivants:
+        print("\nAgents obsolètes encore chargés (relancer --apply) :")
+        for label in survivants:
+            print(f"  ! {label}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agents launchd du socle local Kinda")
-    parser.add_argument("--apply", action="store_true", help="installe réellement")
+    groupe = parser.add_mutually_exclusive_group()
+    groupe.add_argument("--apply", action="store_true", help="installe réellement")
+    groupe.add_argument("--status", action="store_true", help="état des agents")
+    groupe.add_argument("--uninstall", action="store_true", help="retire les agents")
     args = parser.parse_args()
 
     chemins = chemins_par_defaut()
-    if not args.apply:
+    if args.status:
+        statut(chemins)
+    elif args.uninstall:
+        desinstaller(chemins)
+    elif args.apply:
+        installer(chemins)
+    else:
         afficher_plan(chemins)
-        return
-    raise SystemExit("--apply n'est pas encore implémenté (tâche 3)")
 
 
 if __name__ == "__main__":
