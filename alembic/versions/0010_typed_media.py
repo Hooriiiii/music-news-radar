@@ -22,8 +22,25 @@ down_revision = "0009"
 branch_labels = None
 depends_on = None
 
+# La vue `v_tri_pertinence` existait en production SANS etre dans les migrations :
+# creee a la main dans un client SQL, elle est restee hors du depot. Consequence
+# constatee le 2026-08-09 en appliquant cette migration a la vraie base : elle a
+# echoue sur « cannot drop column media_urls because other objects depend on it »,
+# alors qu'elle passait sur un cluster jetable -- ou la vue n'existe pas. Un objet
+# de schema hors migrations est invisible a toute verification prealable.
+#
+# Cette migration la DEPOSE seulement ; c'est `0012` qui la recree sur la nouvelle
+# colonne. Le decoupage n'est pas cosmetique : une vue recreee ici survivrait a tous
+# les downgrades jusqu'a `0001`, qui ne pourrait alors plus supprimer `articles`
+# (« cannot drop table because other objects depend on it ») -- et le job CI
+# `schema` execute justement `downgrade base`. En naissant dans `0012`, elle meurt
+# dans son downgrade, avant que les tables tombent.
+
 
 def upgrade() -> None:
+    # IF EXISTS : la vue est presente sur la base de l'utilisateur, absente d'un
+    # cluster neuf. Les deux cas doivent passer.
+    op.execute("DROP VIEW IF EXISTS v_tri_pertinence")
     op.add_column(
         "articles",
         sa.Column("media", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
@@ -58,6 +75,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP VIEW IF EXISTS v_tri_pertinence")
     op.add_column(
         "articles",
         sa.Column("media_urls", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
