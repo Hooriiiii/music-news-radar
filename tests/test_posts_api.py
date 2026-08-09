@@ -30,7 +30,15 @@ def _post(db, article, status=PostStatus.DRAFT):
         status=status,
         caption="Une legende.",
         hashtags=["#electro"],
-        slides=[{"headline": "**Vieilles Charrues** : le line-up", "image_url": None}],
+        slides=[
+            {
+                "kind": "cover",
+                "headline": "**Vieilles Charrues** : le line-up",
+                "title": "**Vieilles Charrues**",
+                "subtitle": "le line-up **electro**",
+                "image_url": None,
+            }
+        ],
     )
     db.add(post)
     db.commit()
@@ -117,7 +125,15 @@ def test_editer_la_legende_et_les_slides(client, db_session):
         f"/posts/{post.id}",
         json={
             "caption": "Une meilleure legende.",
-            "slides": [{"headline": "**Nouvelle** accroche", "image_url": "https://x/y.jpg"}],
+            "slides": [
+                {
+                    "kind": "cover",
+                    "headline": "**Nouvelle** accroche",
+                    "title": "**Nouveau titre**",
+                    "subtitle": "**Nouveau** sous-titre",
+                    "image_url": "https://x/y.jpg",
+                }
+            ],
         },
     )
 
@@ -125,6 +141,99 @@ def test_editer_la_legende_et_les_slides(client, db_session):
     body = response.json()
     assert body["caption"] == "Une meilleure legende."
     assert body["slides"][0]["image_url"] == "https://x/y.jpg"
+
+
+def test_editer_une_cover_round_trip_les_trois_textes_et_le_kind(client, db_session):
+    """C'est le test qui aurait attrape le bug : PATCH persistait `slides` via
+    `SlideIn` (headline + image_url seulement), donc `title`/`subtitle`/`kind`
+    disparaissaient de la ligne en base -- silencieusement, puisque Pydantic ignore
+    les cles inconnues en entree ET ne re-ecrit que ce que le modele declare en
+    sortie. On relit la ligne EN BASE, pas la reponse HTTP : une reponse pourrait
+    par accident sembler correcte si elle echouait a d'autres endroits."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={
+            "slides": [
+                {
+                    "kind": "cover",
+                    "headline": "**CORTIS** toujours **2e**",
+                    "title": "**CORTIS**",
+                    "subtitle": "13 semaines au **Top 2**",
+                    "image_url": "https://x/cover.jpg",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+
+    db_session.expire_all()
+    relu = db_session.get(Post, post.id)
+    (slide,) = relu.slides
+    assert slide["kind"] == "cover"
+    assert slide["headline"] == "**CORTIS** toujours **2e**"
+    assert slide["title"] == "**CORTIS**"
+    assert slide["subtitle"] == "13 semaines au **Top 2**"
+    assert slide["image_url"] == "https://x/cover.jpg"
+
+
+def test_editer_un_media_ne_requiert_pas_de_headline(client, db_session):
+    """Un media (photo/video reelle de l'actu) n'est pas rendu par le gabarit : il
+    n'a pas de texte a valider, seulement une provenance."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={
+            "slides": [
+                {"kind": "media", "type": "photo", "url": "https://x/photo.jpg"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    relu = db_session.get(Post, post.id)
+    (slide,) = relu.slides
+    assert slide["kind"] == "media"
+    assert slide["type"] == "photo"
+    assert slide["url"] == "https://x/photo.jpg"
+
+
+def test_editer_une_cover_sans_titre_ou_sous_titre_est_refuse(client, db_session):
+    """Une union permissive laisserait passer une cover sans texte et ferait
+    echouer le rendu plus tard chez Chromium -- ici l'echec doit arriver a la
+    frontiere de l'API, en 422."""
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    sans_titre = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"kind": "cover", "headline": "**A**", "subtitle": "**B**"}]},
+    )
+    assert sans_titre.status_code == 422
+
+    sans_sous_titre = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"kind": "cover", "headline": "**A**", "title": "**B**"}]},
+    )
+    assert sans_sous_titre.status_code == 422
+
+
+def test_editer_une_slide_au_kind_inconnu_est_refuse(client, db_session):
+    article = _article(db_session)
+    post = _post(db_session, article)
+
+    response = client.patch(
+        f"/posts/{post.id}",
+        json={"slides": [{"kind": "carrousel", "headline": "**A**"}]},
+    )
+
+    assert response.status_code == 422
 
 
 def test_publier_un_post_marque_l_article_comme_poste(client, db_session):
@@ -152,7 +261,12 @@ def test_editer_une_slide_sans_headline_est_refuse(client, db_session):
 
     response = client.patch(
         f"/posts/{post.id}",
-        json={"slides": [{"image_url": "https://x/y.jpg"}]},
+        json={
+            "slides": [
+                {"kind": "cover", "title": "**T**", "subtitle": "**S**",
+                 "image_url": "https://x/y.jpg"}
+            ]
+        },
     )
 
     assert response.status_code == 422
@@ -166,13 +280,23 @@ def test_editer_une_slide_au_balisage_invalide_est_refuse(client, db_session):
 
     sans_surlignage = client.patch(
         f"/posts/{post.id}",
-        json={"slides": [{"headline": "Une accroche plate sans surlignage"}]},
+        json={
+            "slides": [
+                {"kind": "cover", "headline": "Une accroche plate sans surlignage",
+                 "title": "**T**", "subtitle": "**S**"}
+            ]
+        },
     )
     assert sans_surlignage.status_code == 422
 
     marqueurs_impairs = client.patch(
         f"/posts/{post.id}",
-        json={"slides": [{"headline": "Une accroche **mal fermee"}]},
+        json={
+            "slides": [
+                {"kind": "cover", "headline": "Une accroche **mal fermee",
+                 "title": "**T**", "subtitle": "**S**"}
+            ]
+        },
     )
     assert marqueurs_impairs.status_code == 422
 
@@ -286,7 +410,17 @@ def test_editer_les_slides_invalide_le_rapport_de_rendu(client, db_session):
 
     response = client.patch(
         f"/posts/{post.id}",
-        json={"slides": [{"headline": "Une **nouvelle** accroche", "image_url": None}]},
+        json={
+            "slides": [
+                {
+                    "kind": "cover",
+                    "headline": "Une **nouvelle** accroche",
+                    "title": "**Titre**",
+                    "subtitle": "**Sous-titre**",
+                    "image_url": None,
+                }
+            ]
+        },
     )
 
     assert response.status_code == 200

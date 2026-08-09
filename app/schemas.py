@@ -1,6 +1,7 @@
 import datetime as dt
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.content.highlight import validate_headline
 from app.models import ArticleStatus, PostStatus, SourceType
@@ -86,20 +87,56 @@ class DigestOut(BaseModel):
     article_ids: list[int]
 
 
-class SlideIn(BaseModel):
-    """Une slide telle qu'exposee/acceptee par l'API. Meme regle qu'a la composition
-    (`app.content.compose.Slide`) : `render_post` fait `slide["headline"]` sans
-    filet, donc `headline` doit rester obligatoire et balise -- un `**` orphelin
-    saisi a la main dans le dashboard ne doit pas s'imprimer tel quel sur le PNG."""
+class CoverIn(BaseModel):
+    """La slide 1 : le seul contenu RENDU par Chromium.
 
+    Elle porte les trois textes -- l'accroche du gabarit post et le couple
+    titre/sous-titre du gabarit reel -- pour que la bascule POST/REELS n'ait rien a
+    redemander a Claude. Une union permissive (un seul modele avec des champs
+    optionnels) accepterait une cover sans texte et ferait echouer le rendu plus
+    tard chez Chromium -- ici l'echec arrive a la frontiere de l'API, en 422.
+    """
+
+    kind: Literal["cover"] = "cover"
     headline: str
+    title: str
+    subtitle: str
     image_url: str | None = None
 
-    @field_validator("headline")
+    @field_validator("headline", "title", "subtitle")
     @classmethod
     def _balisage_valide(cls, value: str) -> str:
         validate_headline(value)
         return value
+
+
+class MediaIn(BaseModel):
+    """Une photo ou une video de l'actu, publiee TELLE QUELLE.
+
+    Elle ne passe pas par le gabarit : le renderer l'ignore, l'export la telecharge.
+    Aucun balisage a valider, il n'y a pas de texte.
+    """
+
+    kind: Literal["media"]
+    type: str
+    url: str
+    preview_url: str | None = None
+    duration_ms: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+# `kind` discrimine : Pydantic route chaque entree vers CoverIn ou MediaIn selon
+# cette cle, au lieu de tenter les deux modeles dans l'ordre -- une entree dont le
+# `kind` ne vaut ni "cover" ni "media" est donc rejetee en 422, a la frontiere de
+# l'API. Le defaut "cover" sur CoverIn.kind documente l'intention -- une slide sans
+# `kind` EST une cover -- mais une union DISCRIMINEE exige la cle presente pour
+# choisir le modele : verifie a la main, une entree qui omet `kind` entierement est
+# rejetee en 422 ("Unable to extract tag"), le defaut ne joue pas. C'est le
+# comportement voulu ici, a l'ECRITURE : mieux vaut echouer tot que deviner. La
+# migration 0011 backfille deja `kind` sur toutes les lignes existantes ; le
+# defaut documente seulement l'intention pour un futur lecteur cote renderer.
+SlideIn = Annotated[CoverIn | MediaIn, Field(discriminator="kind")]
 
 
 class PostOut(BaseModel):
