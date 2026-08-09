@@ -48,10 +48,6 @@ THROTTLE_DASHBOARD = 60
 # lance ensuite peut avoir besoin du reste.
 PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
-# newsyslog est la rotation native de macOS. Sa configuration vit dans /etc, donc
-# hors de portee de ce script sans sudo -- on affiche le fichier et la commande
-# plutot que de reclamer les droits administrateur pour trois lignes.
-CONF_ROTATION = Path("/etc/newsyslog.d/music-news-radar.conf")
 ROTATION_GENERATIONS = 5
 ROTATION_TAILLE_KO = 5000
 BASES_LOG = ("ingest", "dashboard")
@@ -65,6 +61,14 @@ class Chemins:
     uv: Path
     logs: Path
     launch_agents: Path
+    # newsyslog est la rotation native de macOS. Sa configuration vit dans /etc,
+    # donc hors de portee de ce script sans sudo -- on affiche le fichier et la
+    # commande plutot que de reclamer les droits administrateur pour trois
+    # lignes. Champ plutot que constante module : les tests visent un tmp_path,
+    # jamais le vrai /etc, sinon `.exists()` lit l'hote et deverse la conf de
+    # rotation dans stdout des qu'elle est absente -- ce qui a fait passer
+    # l'assertion sur le code de sortie de statut() a vide (voir tests).
+    conf_rotation: Path
 
 
 def chemins_par_defaut() -> Chemins:
@@ -76,6 +80,7 @@ def chemins_par_defaut() -> Chemins:
         uv=Path(uv),
         logs=Path.home() / "Library" / "Logs" / "music-news-radar",
         launch_agents=Path.home() / "Library" / "LaunchAgents",
+        conf_rotation=Path("/etc/newsyslog.d/music-news-radar.conf"),
     )
 
 
@@ -89,7 +94,18 @@ def _fichiers_log(chemins: Chemins) -> list[Path]:
 
 def conf_rotation(chemins: Chemins) -> str:
     """Une ligne par fichier : newsyslog n'etend PAS les jokers dans le champ du
-    nom, un `*.log` ne ferait donc tourner aucun fichier."""
+    nom, un `*.log` ne ferait donc tourner aucun fichier.
+
+    Angle mort : newsyslog renomme et compresse le fichier ; le dashboard tourne
+    en KeepAlive et garde son descripteur StandardOutPath ouvert pour toute sa
+    vie, donc apres une rotation son flux continue d'ecrire dans l'inode renomme,
+    invisible sous le nom `dashboard.log`. L'agent d'ingestion est immunise : un
+    nouveau processus toutes les 30 min rouvre le chemin a chaque fois. Impact
+    pratique faible (--no-access-log + --log-level warning font que le
+    dashboard atteint rarement 5 Mo) -- ne pas redesigner pour ca, juste eviter
+    qu'un futur lecteur perde une apres-midi sur "pourquoi dashboard.log est vide
+    apres une rotation".
+    """
     proprietaire = f"{Path.home().name}:staff"
     lignes = [
         "# Rotation des logs du socle local Kinda.",
@@ -100,7 +116,12 @@ def conf_rotation(chemins: Chemins) -> str:
     for fichier in _fichiers_log(chemins):
         lignes.append(
             f"{fichier} {proprietaire} 644 "
-            f"{ROTATION_GENERATIONS} {ROTATION_TAILLE_KO} * J"
+            # JN : J compresse en bzip2 ; N dit qu'aucun processus ne doit etre
+            # signale a la rotation. Sans N, newsyslog envoie un SIGHUP a
+            # syslogd(8) par defaut (man 5 newsyslog.conf, champ
+            # path_to_pid_file) -- un daemon systeme sans aucun rapport avec ce
+            # projet, reveille a chaque rotation de chacun des quatre fichiers.
+            f"{ROTATION_GENERATIONS} {ROTATION_TAILLE_KO} * JN"
         )
     return "\n".join(lignes) + "\n"
 
@@ -122,14 +143,14 @@ def tronquer_logs(chemins: Chemins) -> int:
 
 
 def afficher_rotation(chemins: Chemins) -> None:
-    if CONF_ROTATION.exists():
-        print(f"\nRotation des logs : déjà configurée ({CONF_ROTATION}).")
+    if chemins.conf_rotation.exists():
+        print(f"\nRotation des logs : déjà configurée ({chemins.conf_rotation}).")
         return
     print(
-        f"\nRotation des logs : NON configurée. À lancer une fois, "
-        f"{CONF_ROTATION.parent} demandant sudo :\n"
+        f"\nRotation des logs : NON configurée. "
+        f"{chemins.conf_rotation.parent} exige sudo — à lancer une fois :\n"
     )
-    print(f"  sudo tee {CONF_ROTATION} > /dev/null <<'EOF'")
+    print(f"  sudo tee {chemins.conf_rotation} > /dev/null <<'EOF'")
     print(conf_rotation(chemins), end="")
     print("EOF")
 
@@ -258,6 +279,12 @@ def installer(chemins: Chemins, executer=_executer) -> None:
     chemins.launch_agents.mkdir(parents=True, exist_ok=True)
     chemins.logs.mkdir(parents=True, exist_ok=True)
 
+    # AVANT le bootstrap : l'agent d'ingestion a RunAtLoad, donc bootstrap le
+    # fait ecrire dans ingest.log immediatement. Tronquer apres aurait jete ce
+    # premier run et compte ses octets comme "liberes" alors qu'ils venaient
+    # d'etre ecrits par l'installation elle-meme.
+    libere = tronquer_logs(chemins)
+
     _retirer_obsoletes(chemins, executer)
 
     for label, contenu in plists(chemins).items():
@@ -269,7 +296,6 @@ def installer(chemins: Chemins, executer=_executer) -> None:
         executer(["launchctl", "bootstrap", _domaine(), str(fichier)])
         print(f"  + installé : {label}")
 
-    libere = tronquer_logs(chemins)
     if libere:
         print(f"\nLogs existants tronqués ({libere:,} octets libérés).")
     afficher_rotation(chemins)

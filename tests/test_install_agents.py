@@ -18,6 +18,7 @@ from scripts.install_agents import (
     PORT_DASHBOARD,
     THROTTLE_DASHBOARD,
     Chemins,
+    afficher_rotation,
     chemins_par_defaut,
     conf_rotation,
     desinstaller,
@@ -37,6 +38,11 @@ def chemins(tmp_path: Path) -> Chemins:
         uv=tmp_path / "bin" / "uv",
         logs=tmp_path / "logs",
         launch_agents=tmp_path / "LaunchAgents",
+        # tmp_path, jamais /etc : un vrai /etc/newsyslog.d/... absent sur la
+        # machine de test ferait deverser toute la conf de rotation dans stdout
+        # a chaque appel de statut()/installer(), et c'est precisement ce qui a
+        # fait passer l'assertion sur le code de sortie a vide.
+        conf_rotation=tmp_path / "etc" / "newsyslog.d" / "music-news-radar.conf",
     )
 
 
@@ -248,13 +254,16 @@ def test_statut_distingue_agent_en_cours_et_agent_au_repos(chemins, capsys):
 def test_statut_affiche_le_dernier_code_de_sortie_dun_agent_au_repos(chemins, capsys):
     """Ce chiffre est le seul moyen de savoir qu'une execution planifiee a
     echoue -- c'est exactement comme l'agent `digest` de juillet est reste
-    casse sans que personne ne le remarque pendant cinq semaines."""
+    casse sans que personne ne le remarque pendant cinq semaines. Assertion sur
+    la phrase complete et pas sur "1" nu : le bloc de rotation affiche par
+    statut() contient lui aussi des chiffres (644, 5000, des chemins tmp_path)
+    et faisait passer un `assert "1" in imprime` meme code retire de statut()."""
     sortie = "-\t1\tcom.musicnewsradar.ingest\n"
 
     statut(chemins, executer=FauxExecuteur(sortie))
 
     imprime = capsys.readouterr().out
-    assert "1" in imprime
+    assert "dernier code 1" in imprime
 
 
 def test_statut_signale_un_agent_absent(chemins, capsys):
@@ -314,7 +323,33 @@ def test_la_conf_de_rotation_plafonne_la_taille(chemins):
     # nom, proprietaire:groupe, mode, generations, taille en Ko, quand, drapeaux
     assert champs[3] == "5"        # 5 generations conservees
     assert champs[4] == "5000"     # 5 Mo
-    assert "J" in champs[6]        # compression bzip2
+    # JN explicitement : J compresse en bzip2, N evite le SIGHUP a syslogd(8)
+    # qu'envoie newsyslog par defaut quand aucun path_to_pid_file n'est donne
+    # (man 5 newsyslog.conf). Un `assert "J" in champs[6]` seul est aussi
+    # satisfait par "JN" et n'aurait donc pas attrape l'oubli du N.
+    assert champs[6] == "JN"
+
+
+def test_afficher_rotation_imprime_le_bloc_sudo_tee_si_absente(chemins, capsys):
+    """Rendu possible seulement depuis que conf_rotation vise un tmp_path : sur
+    /etc en dur, ce chemin de test n'existait jamais parce que le fichier reel
+    est toujours absent sur la machine de test, jamais present."""
+    afficher_rotation(chemins)
+
+    imprime = capsys.readouterr().out
+    assert "NON configurée" in imprime
+    assert f"sudo tee {chemins.conf_rotation}" in imprime
+
+
+def test_afficher_rotation_se_tait_si_deja_configuree(chemins, capsys):
+    chemins.conf_rotation.parent.mkdir(parents=True)
+    chemins.conf_rotation.write_text("deja la\n")
+
+    afficher_rotation(chemins)
+
+    imprime = capsys.readouterr().out
+    assert "déjà configurée" in imprime
+    assert "sudo" not in imprime
 
 
 def test_tronquer_les_logs_libere_la_place_sans_supprimer_les_fichiers(chemins, tmp_path):

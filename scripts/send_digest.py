@@ -12,7 +12,7 @@ import datetime as dt
 from pathlib import Path
 
 from app.config import settings
-from app.db import SessionLocal
+from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.delivery.digest import build_digest, render_digest, render_digest_text
 from app.delivery.email import send_email
 
@@ -23,6 +23,16 @@ def main() -> None:
     parser.add_argument("--date", default=None, help="Date du digest (défaut : aujourd'hui)")
     args = parser.parse_args()
     for_date = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+
+    # Avant toute chose : ce script est le nomme dans le commentaire de
+    # attendre_base() -- c'est lui qui a echoue cinq semaines de suite sur un
+    # DNS pas encore reveille. Plus planifie aujourd'hui, mais une future
+    # replanification ne doit pas reintroduire le meme bug.
+    try:
+        attendre_base()
+    except BaseInjoignable as exc:
+        print(f"[ERREUR] {exc}")
+        raise SystemExit(1) from exc
 
     with SessionLocal() as db:
         digest, articles, created = build_digest(db, for_date=for_date,
