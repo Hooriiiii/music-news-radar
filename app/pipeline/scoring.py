@@ -239,6 +239,10 @@ class ScoringStats:
     errors: int = 0
     # Articles écartés par le pré-filtre local, donc jamais soumis à Claude.
     prefiltered: int = 0
+    # Le message de la dernière erreur, pour que la supervision puisse NOMMER la
+    # panne. Sans lui, des crédits épuisés passent pour une erreur réseau parmi
+    # d'autres -- c'est ce qui les a rendus invisibles pendant des jours.
+    derniere_erreur: str | None = None
 
 
 def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
@@ -306,8 +310,9 @@ def score_pending(
                 article.scored_by = ScoredBy.CLAUDE
                 stats.scored += 1
             db.commit()
-        except Exception:
+        except Exception as exc:
             logger.exception("Scoring échoué pour l'article %s (%s)", article.id, article.title)
             db.rollback()
             stats.errors += 1
+            stats.derniere_erreur = str(exc)
     return stats
