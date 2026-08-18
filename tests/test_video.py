@@ -98,7 +98,40 @@ def test_une_video_illisible_donne_une_erreur_lisible(tmp_path):
 def test_ffmpeg_absent_donne_une_erreur_explicite(monkeypatch):
     """Meme philosophie que Chromium pour le rendu : une dependance locale
     manquante se dit, elle ne se devine pas."""
-    monkeypatch.setattr("app.content.video.shutil.which", lambda _: None)
+    import app.content.video as mod
+
+    # Neutraliser AUSSI les emplacements en dur : sinon le resultat depend de
+    # ce qui est installe sur la machine qui execute les tests.
+    monkeypatch.setattr(mod.shutil, "which", lambda _: None)
+    monkeypatch.setattr(mod, "EMPLACEMENTS_CONNUS", ())
     with pytest.raises(AssemblageIndisponible) as exc:
         assembler_reel(b"", b"")
     assert "ffmpeg" in str(exc.value).lower()
+
+
+def test_ffmpeg_est_trouve_hors_du_PATH_de_launchd(monkeypatch, tmp_path):
+    """L'agent launchd n'a que /usr/bin:/bin:/usr/sbin:/sbin et le dossier d'uv.
+
+    ffmpeg vit dans /opt/homebrew/bin : `which` y échoue alors qu'il EST
+    installé. Constaté en vrai — l'export d'un post reel retombait sur cover et
+    vidéo séparées, avec « ffmpeg est introuvable » dans les manquants, alors
+    que l'assemblage marchait parfaitement depuis un terminal.
+    """
+    import app.content.video as mod
+
+    faux = tmp_path / "ffmpeg"
+    faux.write_text("")
+    monkeypatch.setattr(mod.shutil, "which", lambda _: None)
+    monkeypatch.setattr(mod, "EMPLACEMENTS_CONNUS", (str(tmp_path),))
+
+    assert mod._exiger_ffmpeg("ffmpeg") == str(faux)
+
+
+def test_binaire_introuvable_partout_reste_une_erreur_lisible(monkeypatch, tmp_path):
+    import app.content.video as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _: None)
+    monkeypatch.setattr(mod, "EMPLACEMENTS_CONNUS", (str(tmp_path / "vide"),))
+    with pytest.raises(AssemblageIndisponible) as exc:
+        mod._exiger_ffmpeg("ffmpeg")
+    assert "brew install ffmpeg" in str(exc.value)

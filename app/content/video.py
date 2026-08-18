@@ -47,8 +47,21 @@ class AssemblageIndisponible(RuntimeError):
     """ffmpeg manquant, ou entree illisible. Message affichable tel quel."""
 
 
+# launchd ne fournit qu'un PATH minimal -- /usr/bin, /bin, /usr/sbin, /sbin et
+# le dossier d'uv. `/opt/homebrew/bin` n'y est PAS, donc `which` echoue alors que
+# ffmpeg est bien installe : l'export d'un post reel retombait sur cover et video
+# separees depuis l'agent, tout en marchant parfaitement depuis un terminal.
+# Meme piege que pour le notifieur -- c'est un motif de ce projet, pas un cas.
+EMPLACEMENTS_CONNUS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
 def _exiger_ffmpeg(nom: str) -> str:
     chemin = shutil.which(nom)
+    if chemin is None:
+        chemin = next(
+            (str(Path(d) / nom) for d in EMPLACEMENTS_CONNUS if (Path(d) / nom).exists()),
+            None,
+        )
     if chemin is None:
         raise AssemblageIndisponible(
             f"{nom} est introuvable. L'assemblage des reels a besoin de ffmpeg : "
