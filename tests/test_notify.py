@@ -117,3 +117,29 @@ def test_repli_sur_osascript_si_terminal_notifier_echoue(monkeypatch):
 
     assert notifier("Kinda", "test", run=run) is True
     assert [c[0] for c in appels] == ["/tn", "osascript"]
+
+
+def test_terminal_notifier_trouve_meme_sans_PATH_homebrew(monkeypatch, tmp_path):
+    """launchd ne fournit qu'un PATH minimal, SANS /opt/homebrew/bin.
+
+    `which` y échoue donc alors que le binaire est installé : l'agent
+    retomberait sur osascript et perdrait le logo — en silence, puisque le repli
+    fonctionne. On regarde aussi les emplacements Homebrew usuels.
+    """
+    import app.delivery.notify as mod
+
+    faux_binaire = tmp_path / "terminal-notifier"
+    faux_binaire.write_text("")
+    monkeypatch.setattr(mod, "shutil", type("S", (), {"which": staticmethod(lambda n: None)}))
+    monkeypatch.setattr(mod, "EMPLACEMENTS_CONNUS", (str(faux_binaire),))
+
+    assert mod._chemin_terminal_notifier() == str(faux_binaire)
+
+
+def test_aucun_binaire_nulle_part_rend_None(monkeypatch):
+    import app.delivery.notify as mod
+
+    monkeypatch.setattr(mod, "shutil", type("S", (), {"which": staticmethod(lambda n: None)}))
+    monkeypatch.setattr(mod, "EMPLACEMENTS_CONNUS", ("/inexistant/terminal-notifier",))
+
+    assert mod._chemin_terminal_notifier() is None

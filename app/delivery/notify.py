@@ -37,9 +37,26 @@ def _echapper(texte: str) -> str:
 LOGO = Path(__file__).resolve().parent.parent / "content" / "assets" / "logo.png"
 
 
+# launchd ne fournit qu'un PATH minimal -- sans /opt/homebrew/bin. `which` y
+# echoue donc alors que le binaire EST installe, et l'agent retomberait sur
+# osascript en perdant le logo, sans que rien ne le signale puisque le repli
+# fonctionne. On regarde aussi les emplacements Homebrew usuels (arm64 puis
+# Intel).
+EMPLACEMENTS_CONNUS = (
+    "/opt/homebrew/bin/terminal-notifier",
+    "/usr/local/bin/terminal-notifier",
+)
+
+
 def _chemin_terminal_notifier() -> str | None:
-    """Le binaire Homebrew, s'il est la. Isole pour etre remplacable en test."""
-    return shutil.which("terminal-notifier")
+    """Le binaire, s'il est la. Isole pour etre remplacable en test."""
+    trouve = shutil.which("terminal-notifier")
+    if trouve:
+        return trouve
+    for chemin in EMPLACEMENTS_CONNUS:
+        if Path(chemin).exists():
+            return chemin
+    return None
 
 
 def _via_terminal_notifier(binaire: str, titre: str, message: str, run) -> bool:
