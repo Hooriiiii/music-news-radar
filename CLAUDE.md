@@ -327,13 +327,26 @@ du digest : un article de bruit ne sera jamais posté, lui chercher une image es
 une requête réseau pour rien. Et `illustration_max_par_run` (40) borne un run,
 sinon le premier passage partirait sur des centaines de requêtes.
 
-**Les liens Google News ne mènent pas à l'article** : ils atterrissent sur la
-page de consentement de Google, sans `og:image`. Ces URL sont donc ignorées sans
-requête, et comptées à part (`ignores`) pour rester visibles au lieu de se fondre
-dans les échecs réseau. Ça concerne 4 sources — Mixmag, festivals électro FR,
-festivals Bretagne, musique × écologie — dont 73 % des articles sont pertinents.
-Le vrai correctif est de repasser ces sources sur leur flux DIRECT, ce que le
-tout-local rend possible : Mixmag ne renvoyait 403 que depuis les runners Azure.
+**Plus aucune source Google News** (2026-08-18). Ces liens ne mènent pas à
+l'article mais à la page de consentement de Google — irrésoluble, y compris avec
+un navigateur complet et le cookie de consentement, tous deux essayés. Deux
+conséquences : pas d'`og:image` donc pas d'illustration, et un post citerait
+Google au lieu de l'éditeur.
+
+Les quatre sources concernées ont migré, par `scripts/migrer_sources_google.py` :
+Mixmag, qui est un ÉDITEUR, retrouve son flux direct (`mixmag.net/rss.xml`) —
+le tout-local le rend de nouveau accessible, Cloudflare ne renvoyant 403 que
+depuis les runners Azure ; les trois autres sont des RECHERCHES thématiques et
+passent sur **Bing News RSS**, qui porte l'URL réelle dans son paramètre `url=`.
+`_url_reelle()` dans l'adapter RSS la décode. Résultat : 105 items, zéro lien de
+redirecteur, et de la vraie presse française (Ouest-France, Le Dauphiné,
+20 Minutes) là où Google ne rendait que des liens opaques.
+
+Deux pièges rencontrés. Bing ne comprend PAS l'opérateur `OR` : « A OR B » y rend
+zéro résultat, ce qui éteindrait la source en silence — les requêtes concernées
+sont réécrites. Et une source Mixmag directe existait déjà, désactivée à l'époque
+du 403 : migrer sans regarder aurait créé un doublon interrogeant le même flux
+deux fois par run.
 
 L'adapter RSS lit aussi les `<img>` du HTML de la description, en DERNIER recours
 — un `<img>` peut être un logo, une pub ou un pixel de suivi (ceux d'au plus

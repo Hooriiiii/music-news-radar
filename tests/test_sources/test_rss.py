@@ -23,6 +23,18 @@ RSS_FIXTURE = b"""<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+def _flux(items):
+    """Un flux RSS minimal, construit a partir de dicts."""
+    corps = "".join(
+        f"<item><title>{i['title']}</title><link>{i['link'].replace('&', '&amp;')}</link></item>"
+        for i in items
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+        f"<title>t</title>{corps}</channel></rss>"
+    ).encode()
+
+
 def make_adapter():
     source = Source(id=1, name="Test", type=SourceType.RSS, url="https://example.com/feed.xml")
     return RssAdapter(source)
@@ -123,3 +135,47 @@ def test_media_lit_aussi_le_champ_content():
     adapter = make_adapter()
     entry = {"content": [{"value": '<img src="https://cdn.fr/dans-content.jpg">'}]}
     assert [e["url"] for e in adapter._media(entry)] == ["https://cdn.fr/dans-content.jpg"]
+
+
+# --- Redirecteurs : l'URL stockee doit etre celle de l'EDITEUR ---
+
+
+def test_un_lien_bing_est_decode_vers_l_article_reel():
+    """Les recherches d'actualite passent par un redirecteur. Bing porte l'URL
+    reelle dans son parametre `url=` -- contrairement a Google News, dont le lien
+    est opaque et mene a une page de consentement.
+
+    Sans ce decodage, `articles.url` pointerait vers bing.com : illustration
+    impossible (pas d'og:image), et un post citerait Bing au lieu d'Ouest-France.
+    """
+    adapter = make_adapter()
+    lien = (
+        "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=abc"
+        "&url=https%3A%2F%2Fwww.ouest-france.fr%2Ffestivals%2Farticle.html&c=1"
+    )
+    items = adapter.parse(_flux([{"link": lien, "title": "Festival"}]))
+    assert items[0].url == "https://www.ouest-france.fr/festivals/article.html"
+
+
+def test_une_url_normale_n_est_pas_touchee():
+    adapter = make_adapter()
+    items = adapter.parse(_flux([{"link": "https://tsugi.fr/actu/1", "title": "t"}]))
+    assert items[0].url == "https://tsugi.fr/actu/1"
+
+
+def test_un_redirecteur_sans_url_exploitable_reste_tel_quel():
+    """Mieux vaut un lien de redirection qu'aucun lien : l'article existe, il
+    sera simplement mal illustre."""
+    adapter = make_adapter()
+    lien = "http://www.bing.com/news/apiclick.aspx?ref=FexRss&aid=&tid=abc"
+    items = adapter.parse(_flux([{"link": lien, "title": "t"}]))
+    assert items[0].url == lien
+
+
+def test_un_parametre_url_non_http_est_refuse():
+    """Un `url=` qui ne commence pas par http est soit une relative, soit une
+    tentative d'injection : on garde le lien d'origine."""
+    adapter = make_adapter()
+    lien = "http://www.bing.com/news/apiclick.aspx?url=javascript%3Aalert(1)"
+    items = adapter.parse(_flux([{"link": lien, "title": "t"}]))
+    assert items[0].url == lien
