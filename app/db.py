@@ -22,7 +22,21 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_engine(settings.database_url, echo=settings.sql_echo)
+# `pool_pre_ping` : un SELECT 1 avant de rendre une connexion du pool, et
+# remplacement transparent si elle est morte. Neon est un Postgres serverless qui
+# ferme vite les connexions inactives, et la cascade de scoring a rendu ces temps
+# morts bien plus longs -- chaque article passe desormais quelques secondes dans
+# le modele LOCAL, connexion ouverte et inactive pendant ce temps. Sans ce
+# reglage, un run complet finissait en `PendingRollbackError` : la connexion
+# tombait pendant que le modele reflechissait, et la session ne s'en relevait pas.
+# `pool_recycle` fait le meme travail en amont, en jetant les connexions avant
+# que le serveur ne les juge trop vieilles.
+engine = create_engine(
+    settings.database_url,
+    echo=settings.sql_echo,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 # Un job launchd part au reveil du Mac, parfois avant que la resolution DNS

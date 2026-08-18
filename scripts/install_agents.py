@@ -4,16 +4,18 @@ Usage :
     uv run python -m scripts.install_agents            # affiche le plan
     uv run python -m scripts.install_agents --apply    # installe (tache suivante)
 
-Deux ordonnanceurs cohabitent, cloisonnes PAR SCRIPT et non par configuration :
+UN SEUL ordonnanceur depuis le passage au tout-local : launchd, sur le Mac.
 
-  CLOUD  GitHub Actions, 2 h -> scripts.run_pipeline
-         ingestion + scoring Haiku + alertes Discord + purge
-         Raison d'etre : il ne dort jamais, c'est le canal temps reel.
+  com.musicnewsradar.pipeline   scripts.run_pipeline, toutes les heures
+        ingestion + dedup + scoring Haiku + mentions + purge.
+        GitHub Actions ne planifie plus rien : sa seule raison d'etre etait
+        l'alerte Discord temps reel (un runner ne dort jamais), et les alertes
+        sont coupees. Gain immediat : depuis l'IP residentielle, Mixmag ne
+        renvoie plus 403 (Cloudflare) ni Reddit 429 -- ces blocages etaient
+        documentes depuis les runners Azure.
 
-  MAC    launchd -> scripts.run_ingest, 30 min
-         ingestion SEULE : l'IP residentielle debloque Mixmag (403 Cloudflare)
-         et Reddit (429), que l'IP datacenter d'Azure fait bloquer.
-         + uvicorn en permanence, pour que le dashboard soit debout.
+  com.musicnewsradar.dashboard  uvicorn en permanence, pour que le dashboard
+        soit debout sur localhost:8000.
 
 Pourquoi Python et pas bash : `plistlib` produit des plists valides par
 construction et leur CONTENU devient testable sans appeler launchctl. Les
@@ -29,16 +31,25 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-LABEL_INGEST = "com.musicnewsradar.ingest"
+# Le label reprend le nom `pipeline` -- celui de l'agent de juillet, retire en
+# aout puis ressuscite ici -- parce que c'est de nouveau exactement ce qu'il
+# fait. Le renommage depuis `ingest` n'est donc pas cosmetique : c'est LE piege
+# de ce changement. Un agent launchd est identifie par son label, pas par son
+# contenu ; laisser `com.musicnewsradar.ingest` charge a cote du nouveau ferait
+# tourner DEUX ordonnanceurs et doublerait toute l'ingestion. D'ou son passage
+# dans LABELS_OBSOLETES ci-dessous, traite par --apply comme par --uninstall.
+LABEL_PIPELINE = "com.musicnewsradar.pipeline"
 LABEL_DASHBOARD = "com.musicnewsradar.dashboard"
 
-# Agents installes le 5 juillet et JAMAIS desinstalles. `pipeline` executait
-# run_pipeline toutes les 30 min -- scoring et alertes comprises -- en parallele
-# de GitHub Actions ; `digest` echouait chaque jour. Les decharger est le PREMIER
-# travail de ce script : sans cela le double emploi survit a l'installation.
-LABELS_OBSOLETES = ("com.musicnewsradar.pipeline", "com.musicnewsradar.digest")
+# Agents a decharger : `ingest` est l'agent d'ingestion seule du socle d'aout,
+# remplace par celui-ci ; `digest` date du 5 juillet et echouait chaque jour.
+# Les retirer est le PREMIER travail de ce script -- sans cela le double emploi
+# survit a l'installation.
+LABELS_OBSOLETES = ("com.musicnewsradar.ingest", "com.musicnewsradar.digest")
 
-INTERVALLE_INGEST = 1800
+# Une heure. Le run score desormais a chaque passage (appels Claude payes) et
+# plus rien n'a besoin d'etre temps reel : les alertes Discord sont coupees.
+INTERVALLE_PIPELINE = 3600
 PORT_DASHBOARD = 8000
 # KeepAlive face a un port durablement occupe boucle : sans ce plancher, launchd
 # reessaie toutes les 10 s et remplit les logs.
@@ -50,7 +61,7 @@ PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 ROTATION_GENERATIONS = 5
 ROTATION_TAILLE_KO = 5000
-BASES_LOG = ("ingest", "dashboard")
+BASES_LOG = ("pipeline", "dashboard")
 
 
 @dataclass(frozen=True)
@@ -143,15 +154,24 @@ def tronquer_logs(chemins: Chemins) -> int:
 
 
 def afficher_rotation(chemins: Chemins) -> None:
+    """On compare le CONTENU, pas la seule existence du fichier : le passage de
+    `ingest.log` a `pipeline.log` a rendu caduque la conf deja posee, qui fait
+    tourner un fichier que plus rien n'ecrit. Dire « déjà configurée » sur la
+    foi d'un `.exists()` reproduirait le silence de newsyslog face a un joker."""
+    attendue = conf_rotation(chemins)
     if chemins.conf_rotation.exists():
-        print(f"\nRotation des logs : déjà configurée ({chemins.conf_rotation}).")
-        return
+        if chemins.conf_rotation.read_text() == attendue:
+            print(f"\nRotation des logs : déjà configurée ({chemins.conf_rotation}).")
+            return
+        etat = "obsolète (les noms de logs ont changé)"
+    else:
+        etat = "NON configurée"
     print(
-        f"\nRotation des logs : NON configurée. "
+        f"\nRotation des logs : {etat}. "
         f"{chemins.conf_rotation.parent} exige sudo — à lancer une fois :\n"
     )
     print(f"  sudo tee {chemins.conf_rotation} > /dev/null <<'EOF'")
-    print(conf_rotation(chemins), end="")
+    print(attendue, end="")
     print("EOF")
 
 
@@ -168,15 +188,16 @@ def _commun(chemins: Chemins, label: str, base_log: str) -> dict:
     }
 
 
-def plist_ingest(chemins: Chemins) -> dict:
-    """Ingestion SEULE : ni scoring, ni alertes, ni purge -- tout cela reste au
-    cloud. C'est a cette ligne que tient le cloisonnement."""
+def plist_pipeline(chemins: Chemins) -> dict:
+    """Le pipeline COMPLET : ingestion + dedup + scoring + mentions + purge.
+    Plus rien ne tourne dans le cloud, donc un `run_ingest` ici laisserait les
+    articles ingeres sans jamais les scorer."""
     return {
-        **_commun(chemins, LABEL_INGEST, "ingest"),
+        **_commun(chemins, LABEL_PIPELINE, "pipeline"),
         "ProgramArguments": [
-            str(chemins.uv), "run", "python", "-m", "scripts.run_ingest",
+            str(chemins.uv), "run", "python", "-m", "scripts.run_pipeline",
         ],
-        "StartInterval": INTERVALLE_INGEST,
+        "StartInterval": INTERVALLE_PIPELINE,
         "RunAtLoad": True,
     }
 
@@ -206,7 +227,7 @@ def plist_dashboard(chemins: Chemins) -> dict:
 
 def plists(chemins: Chemins) -> dict[str, dict]:
     return {
-        LABEL_INGEST: plist_ingest(chemins),
+        LABEL_PIPELINE: plist_pipeline(chemins),
         LABEL_DASHBOARD: plist_dashboard(chemins),
     }
 
@@ -221,7 +242,7 @@ def afficher_plan(chemins: Chemins) -> None:
         )
         print(f"  + {label:34s} {cadence}")
         print(f"      {' '.join(contenu['ProgramArguments'])}")
-    print("\nAgents à retirer (installés le 5 juillet, toujours chargés) :")
+    print("\nAgents à retirer (anciens labels, sinon ingestion en double) :")
     for label in LABELS_OBSOLETES:
         print(f"  - {label}")
     print(f"\nPlists dans : {chemins.launch_agents}")
@@ -279,8 +300,8 @@ def installer(chemins: Chemins, executer=_executer) -> None:
     chemins.launch_agents.mkdir(parents=True, exist_ok=True)
     chemins.logs.mkdir(parents=True, exist_ok=True)
 
-    # AVANT le bootstrap : l'agent d'ingestion a RunAtLoad, donc bootstrap le
-    # fait ecrire dans ingest.log immediatement. Tronquer apres aurait jete ce
+    # AVANT le bootstrap : l'agent du pipeline a RunAtLoad, donc bootstrap le
+    # fait ecrire dans pipeline.log immediatement. Tronquer apres aurait jete ce
     # premier run et compte ses octets comme "liberes" alors qu'ils venaient
     # d'etre ecrits par l'installation elle-meme.
     libere = tronquer_logs(chemins)
@@ -302,7 +323,10 @@ def installer(chemins: Chemins, executer=_executer) -> None:
 
 
 def desinstaller(chemins: Chemins, executer=_executer) -> None:
-    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+    """Les labels obsoletes sont retires ici AUSSI : quelqu'un qui desinstalle
+    sans avoir relance --apply depuis le passage au tout-local garderait sinon
+    l'ancien `com.musicnewsradar.ingest` charge, en croyant tout avoir retire."""
+    for label in (LABEL_PIPELINE, LABEL_DASHBOARD, *LABELS_OBSOLETES):
         _bootout(label, executer)
         _supprimer_plist(chemins.launch_agents / f"{label}.plist", label)
 
@@ -318,7 +342,7 @@ def statut(chemins: Chemins, executer=_executer) -> None:
         if len(colonnes) == 3
     }
     print("Agents du socle :")
-    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+    for label in (LABEL_PIPELINE, LABEL_DASHBOARD):
         colonnes = lignes.get(label)
         if colonnes is None:
             print(f"  {label:34s} absent")

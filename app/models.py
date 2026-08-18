@@ -37,6 +37,18 @@ class ArticleStatus(str, enum.Enum):
     USED = "used"
 
 
+class ScoredBy(str, enum.Enum):
+    """Quel étage de la cascade a produit les notes d'un article.
+
+    Sans cette trace, impossible de savoir a posteriori quels articles n'ont eu
+    que le traitement au rabais du modèle local — et le dashboard ne peut pas les
+    distinguer de ceux jugés par Claude.
+    """
+
+    CLAUDE = "claude"
+    LOCAL = "local"
+
+
 class PostStatus(str, enum.Enum):
     DRAFT = "draft"
     APPROVED = "approved"
@@ -81,6 +93,15 @@ class Article(Base):
     hotness_score: Mapped[int | None] = mapped_column(Integer)
     # Axe A&R : intérêt "jeune artiste à suivre", indépendant de relevance
     emergence_score: Mapped[int | None] = mapped_column(Integer, index=True)
+    # Étage de la cascade qui a produit ces notes : "claude" (le juge) ou
+    # "local" (article écarté par le pré-filtre, jamais soumis à Claude).
+    # Null = pas encore scoré.
+    scored_by: Mapped[ScoredBy | None] = mapped_column(
+        Enum(
+            ScoredBy, name="scored_by", native_enum=False, length=20,
+            values_callable=_values,
+        )
+    )
     category: Mapped[str | None] = mapped_column(String(100))
     imprint: Mapped[str | None] = mapped_column(String(200))
     genre: Mapped[str | None] = mapped_column(String(100))

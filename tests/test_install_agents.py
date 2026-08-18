@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from scripts.install_agents import (
-    INTERVALLE_INGEST,
+    INTERVALLE_PIPELINE,
     LABEL_DASHBOARD,
-    LABEL_INGEST,
+    LABEL_PIPELINE,
     LABELS_OBSOLETES,
     PORT_DASHBOARD,
     THROTTLE_DASHBOARD,
@@ -24,7 +24,7 @@ from scripts.install_agents import (
     desinstaller,
     installer,
     plist_dashboard,
-    plist_ingest,
+    plist_pipeline,
     plists,
     statut,
     tronquer_logs,
@@ -46,21 +46,24 @@ def chemins(tmp_path: Path) -> Chemins:
     )
 
 
-def test_l_agent_d_ingestion_execute_run_ingest_et_pas_run_pipeline(chemins):
-    """Tout le cloisonnement cloud/Mac tient a cette ligne. `run_pipeline`
-    scorerait et alerterait en double avec GitHub Actions ; `run_ingest` ne fait
-    que de l'ingestion."""
-    args = plist_ingest(chemins)["ProgramArguments"]
+def test_l_agent_execute_le_pipeline_complet_et_pas_la_seule_ingestion(chemins):
+    """Plus de cloisonnement : GitHub Actions ne planifie plus rien, donc le Mac
+    doit faire le travail ENTIER (ingestion + dedup + scoring + purge). Un
+    `run_ingest` ici laisserait les articles non scores indefiniment."""
+    args = plist_pipeline(chemins)["ProgramArguments"]
 
-    assert "scripts.run_ingest" in args
-    assert "scripts.run_pipeline" not in args
+    assert "scripts.run_pipeline" in args
+    assert "scripts.run_ingest" not in args
 
 
-def test_l_agent_d_ingestion_a_sa_cadence_et_part_au_demarrage(chemins):
-    p = plist_ingest(chemins)
+def test_l_agent_a_sa_cadence_horaire_et_part_au_demarrage(chemins):
+    """Une heure et non 30 min : le run fait desormais du scoring paye a chaque
+    passage, et plus rien n'a besoin d'etre temps reel depuis que les alertes
+    Discord sont coupees."""
+    p = plist_pipeline(chemins)
 
-    assert p["Label"] == LABEL_INGEST
-    assert p["StartInterval"] == INTERVALLE_INGEST == 1800
+    assert p["Label"] == LABEL_PIPELINE
+    assert p["StartInterval"] == INTERVALLE_PIPELINE == 3600
     assert p["RunAtLoad"] is True
     assert p["WorkingDirectory"] == str(chemins.depot)
 
@@ -141,11 +144,13 @@ def test_chemins_par_defaut_echoue_fort_si_uv_est_absent(monkeypatch):
         chemins_par_defaut()
 
 
-def test_les_labels_obsoletes_sont_ceux_de_juillet():
-    """Ces deux agents tournent encore. Le premier executait run_pipeline toutes
-    les 30 min -- scoring et alertes comprises -- en parallele de GitHub Actions."""
-    assert LABELS_OBSOLETES == ("com.musicnewsradar.pipeline", "com.musicnewsradar.digest")
-    assert LABEL_INGEST not in LABELS_OBSOLETES
+def test_l_ancien_agent_d_ingestion_est_declare_obsolete():
+    """LE piege du passage au tout-local : l'agent s'appelait
+    `com.musicnewsradar.ingest`. Sans ce label dans la liste des obsoletes, il
+    survit a l'installation du nouveau et DEUX agents ingerent en parallele."""
+    assert "com.musicnewsradar.ingest" in LABELS_OBSOLETES
+    assert "com.musicnewsradar.digest" in LABELS_OBSOLETES
+    assert LABEL_PIPELINE not in LABELS_OBSOLETES
     assert LABEL_DASHBOARD not in LABELS_OBSOLETES
 
 
@@ -170,10 +175,27 @@ def _labels_de(commandes: list[list[str]], verbe: str) -> list[str]:
     return trouves
 
 
+def test_desinstaller_retire_AUSSI_les_labels_obsoletes(chemins):
+    """--uninstall doit nettoyer l'ancien nom : quelqu'un qui desinstalle apres
+    n'avoir jamais relance --apply garderait sinon l'agent `ingest` charge, en
+    croyant tout avoir retire."""
+    executeur = FauxExecuteur()
+    chemins.launch_agents.mkdir(parents=True)
+    for label in LABELS_OBSOLETES:
+        (chemins.launch_agents / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label}))
+
+    desinstaller(chemins, executer=executeur)
+
+    sortis = set(_labels_de(executeur.commandes, "bootout"))
+    assert set(LABELS_OBSOLETES).issubset(sortis)
+    for label in LABELS_OBSOLETES:
+        assert not (chemins.launch_agents / f"{label}.plist").exists()
+
+
 def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins):
-    """L'ordre n'est pas cosmetique : l'ancien agent `pipeline` tourne encore et
-    execute run_pipeline. S'il survit au bootstrap du nouveau, le double emploi
-    qu'on cherche a supprimer continue."""
+    """L'ordre n'est pas cosmetique : l'ancien agent `ingest` tourne encore et
+    ingere toutes les 30 min. S'il survit au bootstrap du nouveau, l'ingestion
+    part en double -- le piege meme du renommage."""
     executeur = FauxExecuteur()
 
     installer(chemins, executer=executeur)
@@ -187,14 +209,14 @@ def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins)
     )
     premier_bootstrap = min(i for i, c in enumerate(executeur.commandes) if "bootstrap" in c)
     assert dernier_bootout < premier_bootstrap
-    assert set(charges) == {LABEL_INGEST, LABEL_DASHBOARD}
+    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD}
 
 
 def test_installer_ecrit_les_plists_et_cree_le_dossier_de_logs(chemins):
     installer(chemins, executer=FauxExecuteur())
 
     assert chemins.logs.is_dir()
-    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+    for label in (LABEL_PIPELINE, LABEL_DASHBOARD):
         fichier = chemins.launch_agents / f"{label}.plist"
         assert plistlib.loads(fichier.read_bytes())["Label"] == label
 
@@ -219,8 +241,9 @@ def test_desinstaller_retire_les_deux_agents_et_leurs_plists(chemins):
 
     desinstaller(chemins, executer=executeur)
 
-    assert set(_labels_de(executeur.commandes, "bootout")) == {LABEL_INGEST, LABEL_DASHBOARD}
-    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+    sortis = set(_labels_de(executeur.commandes, "bootout"))
+    assert {LABEL_PIPELINE, LABEL_DASHBOARD}.issubset(sortis)
+    for label in (LABEL_PIPELINE, LABEL_DASHBOARD):
         assert not (chemins.launch_agents / f"{label}.plist").exists()
 
 
@@ -230,7 +253,7 @@ def test_installer_est_idempotent(chemins):
     installer(chemins, executer=FauxExecuteur())
     installer(chemins, executer=FauxExecuteur())
 
-    for label in (LABEL_INGEST, LABEL_DASHBOARD):
+    for label in (LABEL_PIPELINE, LABEL_DASHBOARD):
         assert (chemins.launch_agents / f"{label}.plist").exists()
 
 
@@ -239,7 +262,7 @@ def test_statut_distingue_agent_en_cours_et_agent_au_repos(chemins, capsys):
     deux declenchements : le confondre avec "absent" serait trompeur."""
     sortie = (
         "1234\t0\tcom.musicnewsradar.dashboard\n"
-        "-\t0\tcom.musicnewsradar.ingest\n"
+        "-\t0\tcom.musicnewsradar.pipeline\n"
     )
 
     statut(chemins, executer=FauxExecuteur(sortie))
@@ -247,7 +270,7 @@ def test_statut_distingue_agent_en_cours_et_agent_au_repos(chemins, capsys):
     imprime = capsys.readouterr().out
     assert "com.musicnewsradar.dashboard" in imprime
     assert "en cours" in imprime
-    assert "com.musicnewsradar.ingest" in imprime
+    assert "com.musicnewsradar.pipeline" in imprime
     assert "au repos" in imprime
 
 
@@ -258,7 +281,7 @@ def test_statut_affiche_le_dernier_code_de_sortie_dun_agent_au_repos(chemins, ca
     la phrase complete et pas sur "1" nu : le bloc de rotation affiche par
     statut() contient lui aussi des chiffres (644, 5000, des chemins tmp_path)
     et faisait passer un `assert "1" in imprime` meme code retire de statut()."""
-    sortie = "-\t1\tcom.musicnewsradar.ingest\n"
+    sortie = "-\t1\tcom.musicnewsradar.pipeline\n"
 
     statut(chemins, executer=FauxExecuteur(sortie))
 
@@ -270,18 +293,21 @@ def test_statut_signale_un_agent_absent(chemins, capsys):
     statut(chemins, executer=FauxExecuteur(""))
 
     imprime = capsys.readouterr().out
-    assert "com.musicnewsradar.ingest" in imprime
+    assert "com.musicnewsradar.pipeline" in imprime
     assert "absent" in imprime
     assert "com.musicnewsradar.dashboard" in imprime
 
 
 def test_statut_avertit_si_un_agent_obsolete_survit(chemins, capsys):
-    sortie = "5678\t0\tcom.musicnewsradar.pipeline\n"
+    """Le cas concret : l'ancien agent `ingest` toujours charge a cote du
+    nouveau, donc une ingestion en double."""
+    sortie = "5678\t0\tcom.musicnewsradar.ingest\n"
 
     statut(chemins, executer=FauxExecuteur(sortie))
 
     imprime = capsys.readouterr().out
-    assert "com.musicnewsradar.pipeline" in imprime
+    assert "com.musicnewsradar.ingest" in imprime
+    assert "obsolètes" in imprime
 
 
 def test_statut_tolere_len_entete_et_une_ligne_malformee(chemins, capsys):
@@ -293,9 +319,9 @@ def test_statut_tolere_len_entete_et_une_ligne_malformee(chemins, capsys):
     statut(chemins, executer=FauxExecuteur(sortie))
 
     imprime = capsys.readouterr().out
-    assert "com.musicnewsradar.ingest" in imprime
+    assert "com.musicnewsradar.pipeline" in imprime
     assert "com.musicnewsradar.dashboard" in imprime
-    assert "  com.musicnewsradar.ingest" in imprime and "absent" in imprime
+    assert "  com.musicnewsradar.pipeline" in imprime and "absent" in imprime
     # ni l'entete ni la ligne tronquee ne doivent apparaitre comme un agent
     assert "Label" not in imprime
     assert "foo" not in imprime and "bar" not in imprime
@@ -306,7 +332,7 @@ def test_la_conf_de_rotation_cite_chaque_fichier_de_log(chemins):
     lister les quatre fichiers, sinon la rotation ne s'applique a aucun."""
     conf = conf_rotation(chemins)
 
-    for base in ("ingest", "dashboard"):
+    for base in ("pipeline", "dashboard"):
         for suffixe in (".log", ".err.log"):
             assert str(chemins.logs / f"{base}{suffixe}") in conf
 
@@ -343,7 +369,7 @@ def test_afficher_rotation_imprime_le_bloc_sudo_tee_si_absente(chemins, capsys):
 
 def test_afficher_rotation_se_tait_si_deja_configuree(chemins, capsys):
     chemins.conf_rotation.parent.mkdir(parents=True)
-    chemins.conf_rotation.write_text("deja la\n")
+    chemins.conf_rotation.write_text(conf_rotation(chemins))
 
     afficher_rotation(chemins)
 
@@ -352,11 +378,27 @@ def test_afficher_rotation_se_tait_si_deja_configuree(chemins, capsys):
     assert "sudo" not in imprime
 
 
+def test_afficher_rotation_signale_une_conf_perimee(chemins, capsys):
+    """Le renommage de `ingest.log` en `pipeline.log` rend caduque la conf deja
+    posee en /etc : elle existe, mais elle fait tourner un fichier que plus rien
+    n'ecrit. Un simple `.exists()` dirait « déjà configurée » et la rotation ne
+    s'appliquerait a rien -- exactement le silence que newsyslog produit deja
+    quand on lui donne un joker."""
+    chemins.conf_rotation.parent.mkdir(parents=True)
+    chemins.conf_rotation.write_text("une vieille conf qui parle de ingest.log\n")
+
+    afficher_rotation(chemins)
+
+    imprime = capsys.readouterr().out
+    assert "obsolète" in imprime
+    assert f"sudo tee {chemins.conf_rotation}" in imprime
+
+
 def test_tronquer_les_logs_libere_la_place_sans_supprimer_les_fichiers(chemins, tmp_path):
     """Tronquer et non supprimer : launchd tient un descripteur ouvert sur ces
     fichiers, et le supprimer sous ses pieds ferait ecrire dans le vide."""
     chemins.logs.mkdir(parents=True)
-    gros = chemins.logs / "ingest.err.log"
+    gros = chemins.logs / "pipeline.err.log"
     gros.write_text("x" * 4096)
 
     libere = tronquer_logs(chemins)

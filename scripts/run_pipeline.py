@@ -33,7 +33,15 @@ def main() -> None:
     for stats in errors:
         print(f"  [ERREUR] {stats.source_name}: {stats.error}")
     if report.scoring is not None:
-        print(f"  scoring : {report.scoring.scored} scorés, {report.scoring.errors} erreurs")
+        ligne = f"  scoring : {report.scoring.scored} scorés, {report.scoring.errors} erreurs"
+        # N'afficher le pré-filtre que s'il a servi : sur une installation sans
+        # LM Studio, un « 0 écartés » permanent serait du bruit dans le rapport.
+        if report.scoring.prefiltered:
+            ligne += (
+                f", {report.scoring.prefiltered} écartés par le modèle local "
+                f"(autant d'appels Claude non payés)"
+            )
+        print(ligne)
     else:
         print(f"  scoring sauté : {report.scoring_skipped_reason}")
     if report.alerts_skipped_reason is None:

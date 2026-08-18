@@ -346,7 +346,8 @@ class XApiAdapter(SourceAdapter):
             )
         return None
 
-    def _get(self, path: str, params: dict) -> dict:
+    def _requete(self, path: str, params: dict) -> dict:
+        """L'appel HTTP nu. Séparé de `_get` pour que le repli soit testable."""
         response = httpx.get(
             f"{API_BASE}{path}",
             params=params,
@@ -355,3 +356,44 @@ class XApiAdapter(SourceAdapter):
         )
         response.raise_for_status()
         return response.json()
+
+    @staticmethod
+    def _since_id_perime(exc: httpx.HTTPStatusError) -> bool:
+        """L'API rejette-t-elle notre `since_id` parce qu'il est hors fenêtre ?
+
+        On lit le MESSAGE plutôt que le seul code : un 400 peut aussi bien
+        signaler une requête malformée, qu'il ne faut surtout pas rejouer.
+        """
+        if exc.response.status_code != 400:
+            return False
+        try:
+            corps = exc.response.json()
+        except ValueError:
+            return False
+        messages = [e.get("message", "") for e in corps.get("errors", [])]
+        messages.append(str(corps.get("detail", "")))
+        return any("since_id" in m and "created after" in m for m in messages)
+
+    def _get(self, path: str, params: dict) -> dict:
+        """Appelle l'API, en abandonnant un `since_id` devenu trop vieux.
+
+        La recherche récente de X ne couvre que 7 jours. Une source restée muette
+        plus longtemps garde un `since_id` hors fenêtre, que l'API refuse en 400 --
+        et comme le fetch échoue, ce `since_id` n'est JAMAIS mis à jour : la source
+        échoue alors à chaque run, indéfiniment. C'est une panne qui se verrouille
+        elle-même, observée sur la source radar restée muette plusieurs jours.
+        On repart donc comme au premier fetch, quitte à relire quelques tweets.
+        """
+        try:
+            return self._requete(path, params)
+        except httpx.HTTPStatusError as exc:
+            if "since_id" not in params or not self._since_id_perime(exc):
+                raise
+            logger.warning(
+                "since_id hors fenêtre pour la source %s : abandonné, requête rejouée",
+                self.source.name,
+            )
+            self.source.state = {
+                k: v for k, v in (self.source.state or {}).items() if k != "since_id"
+            }
+            return self._requete(path, {k: v for k, v in params.items() if k != "since_id"})

@@ -1,5 +1,6 @@
 import datetime as dt
 
+import httpx
 import pytest
 
 from app.config import settings
@@ -528,3 +529,71 @@ def test_search_incremental_uses_since_id_not_start_time(x_config):
     params = make_adapter("#techno").build_search_params({"since_id": "99"})
     assert params["since_id"] == "99"
     assert "start_time" not in params
+
+
+# --- since_id périmé : la fenêtre de recherche récente ne fait que 7 jours ---
+
+
+def _erreur_400(message):
+    requete = httpx.Request("GET", "https://api.x.com/2/x")
+    reponse = httpx.Response(400, request=requete, json={"errors": [{"message": message}]})
+    return httpx.HTTPStatusError("400", request=requete, response=reponse)
+
+
+SINCE_ID_PERIME = (
+    "'since_id' must be a tweet id created after 2026-08-11T12:44Z. "
+    "Please use a 'since_id' that is larger than 2087158166885236736"
+)
+
+
+def test_un_since_id_perime_est_abandonne_et_la_requete_rejouee(x_config, monkeypatch):
+    """Une source X non fetchée pendant 7 jours se verrouillait DÉFINITIVEMENT.
+
+    L'API rejette en 400 un `since_id` antérieur à sa fenêtre de recherche
+    récente. Comme le fetch échouait, `since_id` n'était jamais mis à jour : la
+    source échouait donc à chaque run, pour toujours. Observé en vrai sur la
+    source radar, muette depuis le 11/08. On abandonne le `since_id` et on
+    rejoue la requête, exactement comme un premier fetch.
+    """
+    adapter = make_adapter(state={"user_id": "12345", "since_id": "1700"})
+    appels = []
+
+    def fausse_requete(path, params):
+        appels.append(dict(params))
+        if "since_id" in params:
+            raise _erreur_400(SINCE_ID_PERIME)
+        return API_PAYLOAD
+
+    monkeypatch.setattr(adapter, "_requete", fausse_requete)
+    items = adapter.fetch()
+
+    assert len(items) == 2, "le second appel, sans since_id, doit aboutir"
+    assert len(appels) == 2
+    assert "since_id" in appels[0]
+    assert "since_id" not in appels[1], "le since_id perime doit avoir ete abandonne"
+    assert adapter.source.state["since_id"] == "1810000000000000001"
+
+
+def test_un_400_qui_ne_parle_pas_de_since_id_reste_une_erreur(x_config, monkeypatch):
+    """Ne pas avaler n'importe quel 400 : seul le since_id périmé est rattrapable."""
+    adapter = make_adapter(state={"user_id": "12345", "since_id": "1700"})
+    monkeypatch.setattr(
+        adapter, "_requete", lambda path, params: (_ for _ in ()).throw(_erreur_400("Invalid query"))
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        adapter.fetch()
+
+
+def test_sans_since_id_aucun_rejeu(x_config, monkeypatch):
+    """Un 400 sur une requête qui ne portait pas de since_id ne se rejoue pas."""
+    appels = []
+
+    def fausse_requete(path, params):
+        appels.append(dict(params))
+        raise _erreur_400(SINCE_ID_PERIME)
+
+    adapter = make_adapter(state={"user_id": "12345"})
+    monkeypatch.setattr(adapter, "_requete", fausse_requete)
+    with pytest.raises(httpx.HTTPStatusError):
+        adapter.fetch()
+    assert len(appels) == 1
