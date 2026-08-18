@@ -12,6 +12,7 @@ from app.content.layout import (
     VOILE_MINIMUM,
     Ajustement,
     Gabarit,
+    Logo,
     Mesure,
     Typo,
     Zone,
@@ -19,6 +20,9 @@ from app.content.layout import (
     tient,
     variables_css,
 )
+
+
+_LOGO_ESSAI = Logo(right=77, top=87, width=150)
 
 
 def _zone(**kwargs) -> Zone:
@@ -51,7 +55,13 @@ def test_tient_refuse_une_ligne_trop_large():
 
 def _gabarit_essai(**kwargs) -> Gabarit:
     typo = Typo(font_size=80, line_height=1.15, letter_spacing=-0.06, color="#FFF7FA")
-    return Gabarit(name="essai", width=1080, height=1440, roles={"headline": (typo, _zone(**kwargs))})
+    return Gabarit(
+        name="essai",
+        width=1080,
+        height=1440,
+        roles={"headline": (typo, _zone(**kwargs))},
+        logo=_LOGO_ESSAI,
+    )
 
 
 def test_ajustement_accepte_la_maquette_sans_reduire():
@@ -126,6 +136,7 @@ def test_ajustement_exige_que_TOUS_les_roles_tiennent():
             "title": (typo, _zone(max_lines=2, max_line_width=926)),
             "subtitle": (typo, _zone(max_lines=2, max_line_width=926)),
         },
+        logo=_LOGO_ESSAI,
     )
     ajustement = Ajustement(gabarit)
     ajustement.prochaine_echelle()
@@ -204,12 +215,45 @@ def test_variables_css_expose_la_recette_des_voiles():
     assert "--voile-noir: rgba(0, 0, 0, 0.8);" in css
     assert "--voile-haut-hauteur: 727px;" in css
     assert "--voile-rose-debut: rgba(253, 139, 195, 0);" in css
-    # Geometrie du logo : fixe, identique sur tous les gabarits -- meme raison
-    # de passer par une variable que la recette des voiles (cf. style.css, qui
-    # ne doit declarer aucune valeur en dur derriere ces noms).
-    assert "--logo-right: 77px;" in css
-    assert "--logo-top: 87px;" in css
-    assert "--logo-width: 150px;" in css
+
+
+def test_variables_css_expose_la_geometrie_du_logo_du_gabarit():
+    """La geometrie du logo passe par des variables (cf. style.css, qui ne doit
+    declarer aucune valeur en dur derriere ces noms) mais elle vient du GABARIT :
+    seuls `right` et `width` sont communs, `top` ne l'est pas."""
+    from app.content.layout import GABARIT_REEL
+
+    post = variables_css(GABARIT_POST, scale=1.0)
+    reel = variables_css(GABARIT_REEL, scale=1.0)
+
+    assert "--logo-right: 77px;" in post
+    assert "--logo-width: 150px;" in post
+    assert "--logo-top: 87px;" in post
+    assert "--logo-top: 372px;" in reel
+
+
+def test_les_deux_gabarits_n_ont_pas_le_meme_logo_top():
+    """Deux hauteurs de toile, deux rognages de la grille Instagram : un
+    `--logo-top` commun aux deux serait forcement faux pour l'un des deux."""
+    from app.content.layout import GABARIT_REEL
+
+    assert GABARIT_POST.logo.top != GABARIT_REEL.logo.top
+    assert "--logo-top: 87px;" not in variables_css(GABARIT_REEL, scale=1.0)
+
+
+def test_le_logo_du_reel_tombe_au_meme_endroit_dans_la_vignette_de_grille():
+    """Le POURQUOI de 372, ancre pour que personne ne le prenne pour un reglage
+    a l'oeil : la vignette de grille Instagram est un crop 4:5 CENTRE, donc son
+    origine verticale vaut (hauteur - largeur x 5/4) / 2. Sur le reel elle tombe
+    a 285 px ; le logo doit donc commencer 285 px plus bas que sur le post pour
+    apparaitre a la meme place dans la vignette. Si quelqu'un change une hauteur
+    de gabarit sans revoir le logo, c'est ce test qui casse."""
+    from app.content.layout import GABARIT_REEL
+
+    origine_reel = (GABARIT_REEL.height - GABARIT_REEL.width * 5 / 4) / 2
+
+    assert origine_reel == pytest.approx(285)
+    assert GABARIT_REEL.logo.top - origine_reel == pytest.approx(GABARIT_POST.logo.top)
 
 
 def test_ajustement_respecte_le_max_des_planchers_par_role():
@@ -225,6 +269,7 @@ def test_ajustement_respecte_le_max_des_planchers_par_role():
             "title": (typo, _zone(max_lines=2, max_line_width=926, min_scale=0.7)),
             "subtitle": (typo, _zone(max_lines=2, max_line_width=926, min_scale=0.4)),
         },
+        logo=_LOGO_ESSAI,
     )
     ajustement = Ajustement(gabarit)
 

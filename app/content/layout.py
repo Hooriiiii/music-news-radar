@@ -59,6 +59,28 @@ class Zone:
 
 
 @dataclass(frozen=True)
+class Logo:
+    """Ou se pose le logo Kinda sur la toile -- une valeur PAR GABARIT.
+
+    `right` et `width` se trouvent etre identiques sur les deux gabarits, mais
+    `top` ne peut pas l'etre, et c'est la grille Instagram qui l'impose : la
+    vignette d'une publication y est un crop 4:5 CENTRE, dont l'origine
+    verticale vaut (hauteur - largeur x 5/4) / 2. Sur le post (1080x1440) elle
+    tombe a 45 px, sur le reel (1080x1920) a 285 px. Un logo pose a 87 px du
+    haut passe donc dans la vignette du post, mais se fait COUPER dans celle du
+    reel, dont les 285 premiers pixels n'existent pas en grille.
+
+    D'ou 372 = 285 + 87 sur le reel : ce n'est pas un reglage a l'oeil, c'est le
+    decalage qui redonne au logo la meme place percue une fois la grille rognee.
+    Deplacer une hauteur de gabarit oblige a recalculer ce nombre.
+    """
+
+    right: int
+    top: int
+    width: int
+
+
+@dataclass(frozen=True)
 class Gabarit:
     """Un format de sortie complet. `roles` est ordonne et fait foi : les cles
     des slides en base doivent correspondre."""
@@ -67,6 +89,7 @@ class Gabarit:
     width: int
     height: int
     roles: dict[str, tuple[Typo, Zone]]
+    logo: Logo
     # Position verticale du bloc de texte, en fraction de la hauteur. Mesuree a
     # 42,9 % sur la cover reel ; inutilisee quand les zones sont ancrees en bas.
     block_center: float | None = None
@@ -249,6 +272,8 @@ GABARIT_POST = Gabarit(
             ),
         ),
     },
+    # Crop 4:5 de la grille a y=45 : un logo a 87 px du haut y passe entier.
+    logo=Logo(right=77, top=87, width=150),
 )
 
 # Valeurs MESUREES AU PIXEL sur `exemples/[PREVIEW] - Cover Reels.png`, faute de
@@ -305,6 +330,9 @@ GABARIT_REEL = Gabarit(
             ),
         ),
     },
+    # 285 + 87 : le crop 4:5 de la grille commence a y=285 sur une toile 1920,
+    # donc un logo a 87 px du haut y serait coupe. Voir `Logo`.
+    logo=Logo(right=77, top=372, width=150),
     block_center=0.429,
     voile=False,
 )
@@ -351,12 +379,13 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         "--voile-noir: rgba(0, 0, 0, 0.8);",
         "--voile-rose: rgba(253, 139, 195, 0.3);",
         "--voile-haut-hauteur: 727px;",
-        # Geometrie du logo : fixe, identique sur tous les gabarits (le reel de
-        # la tache 4 reprend le meme 77/87/150) -- meme raison de passer par une
-        # variable que la recette des voiles.
-        "--logo-right: 77px;",
-        "--logo-top: 87px;",
-        "--logo-width: 150px;",
+        # Geometrie du logo : elle vient du GABARIT, pas d'ici -- `top` depend du
+        # rognage de la grille Instagram, donc de la hauteur de la toile (cf.
+        # `Logo`). Meme raison de passer par une variable que la recette des
+        # voiles : une valeur en dur dans style.css echapperait aux tests.
+        f"--logo-right: {gabarit_.logo.right}px;",
+        f"--logo-top: {gabarit_.logo.top}px;",
+        f"--logo-width: {gabarit_.logo.width}px;",
         # Point de depart transparent du degrade rose : complete `--voile-rose`,
         # qui n'en porte que l'arrivee.
         "--voile-rose-debut: rgba(253, 139, 195, 0);",
