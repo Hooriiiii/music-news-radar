@@ -28,7 +28,7 @@ def test_post_defaults(db_session):
         article_title=article.title,
         article_url=article.url,
         source_name=src.name,
-        caption="Le line-up est tombe.",
+        caption="Le line-up est tombe 🎧 ✨",
         slides=[{"headline": "**Vieilles Charrues** : le line-up", "image_url": None}],
     )
     db_session.add(post)
@@ -53,7 +53,7 @@ def test_post_survit_a_la_suppression_de_l_article(db_session):
         article_title=article.title,
         article_url=article.url,
         source_name=src.name,
-        caption="c",
+        caption="c 🎧 ✨",
         slides=[],
     )
     db_session.add(post)

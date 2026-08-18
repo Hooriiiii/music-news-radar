@@ -13,6 +13,7 @@ si aucune tentative n'aboutit.
 """
 
 import logging
+import re
 
 import anthropic
 import pydantic
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 HEADLINE_MAX = 110
 NB_VARIANTES = 4
+# Bornes des emojis de legende. Le prompt en demande 2 a 4 ; la borne haute du
+# validateur est plus lache expres (voir `PostDraft._emojis_presents`).
+CAPTION_EMOJIS_MIN = 2
+CAPTION_EMOJIS_MAX = 6
 # Le sous-titre du reel vit dans une bande plus etroite que l'accroche du post :
 # une borne plus courte evite de proposer un texte qui ne tiendra pas.
 SUBTITLE_MAX = 70
@@ -42,6 +47,29 @@ COMPOSER_MAX_ATTEMPTS = 3
 
 class CompositionError(RuntimeError):
     """Levee quand aucune tentative de composition n'a produit un brouillon valide."""
+
+
+# Detection par PLAGES Unicode (les blocs qui portent les proprietes
+# Emoji_Presentation / Extended_Pictographic), et non par liste d'emojis en dur :
+# une liste serait perimee a la version d'Unicode suivante. Le module `regex`, seul
+# a exposer `\p{Extended_Pictographic}`, n'est pas une dependance du projet.
+# Les plages sont choisies pour ne PAS attraper ce que les accroches contiennent
+# deja legitimement : lettres accentuees (bloc latin), apostrophes typographiques,
+# points de suspension, guillemets, degre, et les marqueurs `**` du surlignage.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001f000-\U0001faff"  # pictogrammes, visages, objets, transports, drapeaux
+    "\U00002600-\U000027bf"  # symboles divers et dingbats (coeur, etoile, soleil)
+    "\U00002b00-\U00002bff"  # fleches et formes geometriques a rendu emoji
+    "\U0000fe0f"  # selecteur de variation : force le rendu emoji du caractere precedent
+    "\U0000200d"  # liaison des sequences composees (famille, drapeaux regionaux)
+    "]"
+)
+
+
+def contient_emoji(texte: str) -> bool:
+    """Vrai si `texte` porte au moins un pictogramme emoji."""
+    return _EMOJI_RE.search(texte) is not None
 
 
 class CoverVariante(BaseModel):
@@ -66,6 +94,23 @@ class CoverVariante(BaseModel):
         validate_headline(value)
         return value
 
+    @field_validator("headline", "title", "subtitle")
+    @classmethod
+    def _sans_emoji(cls, value: str) -> str:
+        """Ces trois textes sont RENDUS EN PNG par Chromium, dans une police precise.
+
+        Un emoji y sort en couleur systeme et casse la direction artistique
+        rose / creme du compte ; il fausse en plus la mesure de largeur de ligne
+        sur laquelle repose la machine d'ajustement d'echelle de
+        `app/content/layout.py`. Le prompt l'interdit deja, mais un prompt ne
+        garantit rien : ce rejet fait relancer l'appel par la boucle de tentatives
+        de `make_claude_composer`. La legende, elle, n'est pas rendue et garde ses
+        emojis.
+        """
+        if contient_emoji(value):
+            raise ValueError("Emoji interdit dans un texte rendu (headline/title/subtitle)")
+        return value
+
 
 class PostDraft(BaseModel):
     # min_length == max_length == 4 contraint le nombre COTE API via le schema
@@ -73,6 +118,41 @@ class PostDraft(BaseModel):
     variantes: list[CoverVariante] = Field(min_length=NB_VARIANTES, max_length=NB_VARIANTES)
     caption: str = Field(max_length=2000)
     hashtags: list[str] = Field(default_factory=list, max_length=15)
+
+    @field_validator("caption")
+    @classmethod
+    def _sans_balisage(cls, value: str) -> str:
+        """La legende n'est pas rendue : le `**` y resterait litteral.
+
+        Le surlignage rose est une transformation du RENDU -- `**segment**` devient
+        un <mark> dans le gabarit. La legende, elle, est recopiee telle quelle dans
+        Instagram par `api/posts.py::export`, ou `**Sensational**` s'affiche avec
+        ses asterisques. Le modele confond les deux registres des qu'un nom propre
+        lui semble meriter d'etre mis en avant (observe sur une composition reelle)
+        : la regle 3 du prompt le dit deja, ce rejet le garantit.
+        """
+        if "**" in value:
+            raise ValueError("Balisage ** interdit dans la legende : elle n'est pas rendue")
+        return value
+
+    @field_validator("caption")
+    @classmethod
+    def _emojis_presents(cls, value: str) -> str:
+        """La regle 6 du prompt demande 2 a 4 emojis ; le modele l'oublie souvent.
+
+        Releve sur le banc d'essai : une composition sur deux repartait sans aucun
+        emoji. La borne haute est volontairement plus large que celle du prompt --
+        elle n'est la que pour arreter l'exces. Un intervalle trop serre ferait
+        echouer les trois tentatives de `make_claude_composer` sur une legende
+        deja bonne, et bloquerait la creation du post pour un detail de forme.
+        """
+        nombre = len(_EMOJI_RE.findall(value))
+        if not CAPTION_EMOJIS_MIN <= nombre <= CAPTION_EMOJIS_MAX:
+            raise ValueError(
+                f"La legende porte {nombre} emoji(s), attendu entre "
+                f"{CAPTION_EMOJIS_MIN} et {CAPTION_EMOJIS_MAX}"
+            )
+        return value
 
 
 SYSTEM_PROMPT = """\
@@ -120,11 +200,41 @@ subtitle : le line-up electro tombe **ce week-end**
 
 4. LEGENDE (`caption`) : COMMUNE aux quatre variantes -- les variantes sont des \
 formulations de cover, pas des angles editoriaux distincts, une seule legende \
-suffit. Le texte sous le post, en francais, 3 a 6 lignes. Elle \
-developpe ce que les slides annoncent, cite la source de l'info, et se termine par \
-une question ou une invitation a reagir. Pas de hashtags dans la legende.
+suffit. Le texte sous le post, en francais, 3 a 6 lignes. Elle developpe ce que la \
+cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
+AUCUN balisage ** : le surlignage n'existe que sur la cover, qui est une image ; \
+dans la legende les asterisques s'afficheraient telles quelles.
+La CLOTURE depend de la nature de l'actu :
+- actu ordinaire (annonce, sortie, line-up, date, record) : termine par une \
+question ou une invitation a reagir.
+- ACTU TERMINALE -- annulation, liquidation judiciaire, faillite, deces, \
+separation d'un groupe, derniere edition, arret definitif -- : termine par une \
+projection (ce qui reste, ce qui vient apres) ou par un hommage. JAMAIS par une \
+invitation a participer, a revenir, a prendre sa place ou a y retourner : \
+l'evenement n'aura pas lieu.
+Exemple sur une liquidation judiciaire de festival :
+mauvaise cloture : "Vous y etiez cette annee ? Racontez-nous !" (le festival \
+n'existe plus, on ne peut plus y aller)
+bonne cloture : "Dix ans de scenes electro qui laissent une trace dans la ville. \
+On espere que quelque chose renaitra de ce terrain-la."
 
-5. HASHTAGS : 5 a 12, en minuscules, pertinents et specifiques (nom d'artiste, nom \
+5. AUCUNE PHRASE NE CONTREDIT L'ARTICLE : la regle de cloture n'en est qu'un cas \
+particulier. Chaque phrase de la legende ne doit supposer AUCUN fait que l'article \
+contredit -- ne suppose pas qu'un evenement aura lieu s'il est annule, qu'un \
+artiste tourne s'il arrete, qu'un groupe sortira un album s'il se separe, qu'un \
+lieu est ouvert s'il a ferme. Relis la legende en te demandant, pour chaque \
+phrase : l'article dit-il le contraire ?
+
+6. EMOJIS : 2 a 4 emojis dans la legende (`caption`), jamais deux a la suite, \
+jamais un emoji purement decoratif hors sujet -- chacun doit coller a ce que dit \
+la phrase. AUCUN emoji dans `headline`, `title` ou `subtitle` : ces trois textes \
+sont rendus en image par un moteur de rendu, dans une police precise ; un emoji y \
+sort en couleur systeme, casse la direction artistique rose / creme du compte, et \
+fausse le calcul de largeur de ligne qui ajuste la taille du texte. Choisis \
+uniquement dans cette palette, accordee a la charte et aux axes du compte : \
+🩷 🎧 🪩 🎪 ✨ 🌱 🔊
+
+7. HASHTAGS : 5 a 12, en minuscules, pertinents et specifiques (nom d'artiste, nom \
 de festival, ville, genre). Evite les hashtags fourre-tout du type #music ou #love.
 
 N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom.\

@@ -72,7 +72,7 @@ def test_creer_un_post_depuis_un_article(client, db_session, monkeypatch):
                     )
                     for i in range(4)
                 ],
-                caption="Le line-up est tombe.",
+                caption="Le line-up est tombe 🎧 ✨",
                 hashtags=["#vieillescharrues"],
             )
 
