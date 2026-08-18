@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     apify_max_charge_usd: float = 0.25
     x_min_fetch_interval_hours: int = 6
 
+    # --- Supervision : notifications macOS ---
+    # Le canal d'alerte du socle local. Discord est coupé et l'utilisateur ne
+    # veut pas de mail : sans ça, une panne ne se signale nulle part -- trois
+    # sont passées inaperçues (agent digest 5 semaines, source X figée 7 jours,
+    # crédits API épuisés).
+    notifications_enabled: bool = True
+    # Au-delà, une source qui n'a rien ramené est considérée morte et non calme.
+    # 7 jours : assez long pour le radar X, muet en semaine par nature ; assez
+    # court pour attraper une panne avant qu'elle s'installe.
+    source_muette_jours: int = 7
+
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
     # Mention ajoutée aux alertes pour déclencher une vraie notification

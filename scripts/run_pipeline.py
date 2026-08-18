@@ -49,6 +49,10 @@ def main() -> None:
     else:
         print(f"  alertes sautées : {report.alerts_skipped_reason}")
     print(f"  rétention : {report.purged} articles purgés (> {settings.retention_days} j)")
+    if report.problemes:
+        print("  \u26a0 supervision :")
+        for probleme in report.problemes:
+            print(f"      {probleme}")
 
 
 if __name__ == "__main__":

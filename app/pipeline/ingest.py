@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Article, Source
 from app.pipeline.dedup import compute_raw_hash
+from app.pipeline.health import marquer_sante
 from app.pipeline.radar import top_artists
 from app.pipeline.retention import _within_retention
 from app.sources import get_adapter as default_get_adapter
@@ -85,11 +86,15 @@ def run_ingest(
                     min_relevance=settings.radar_min_relevance,
                     limit=settings.radar_max_artists,
                 )
-            results.append(ingest_source(db, source, adapter=adapter))
+            stats = ingest_source(db, source, adapter=adapter)
         except Exception as exc:
             logger.exception("Ingestion échouée pour la source %s", source.name)
             db.rollback()
-            results.append(
-                IngestStats(source_id=source.id, source_name=source.name, error=str(exc))
-            )
+            stats = IngestStats(source_id=source.id, source_name=source.name, error=str(exc))
+        # Consigné pour TOUTES les issues, succès comme échec : c'est cette trace
+        # qui permet de repérer une source morte, les articles étant purgés à
+        # 14 jours et ne pouvant donc pas en témoigner.
+        marquer_sante(source, stats)
+        db.commit()
+        results.append(stats)
     return results
