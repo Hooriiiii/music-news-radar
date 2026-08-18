@@ -2,6 +2,7 @@ import datetime as dt
 import html
 import re
 import time
+from urllib.parse import parse_qs, urlparse
 
 import feedparser
 import httpx
@@ -16,6 +17,29 @@ _MINIATURE_MAX = 32
 _IMG = re.compile(r"<img\b([^>]*)>", re.IGNORECASE)
 _SRC = re.compile(r"""\bsrc=["']([^"']+)""", re.IGNORECASE)
 _DIMENSION = re.compile(r"""\b(?:width|height)=["']?(\d+)""", re.IGNORECASE)
+
+
+# Les recherches d'actualite passent par un redirecteur. Bing porte l'URL reelle
+# dans son parametre `url=` -- contrairement a Google News, dont le lien est
+# opaque et mene a une page de consentement, irresoluble meme avec un navigateur
+# et le cookie de consentement (verifie). C'est ce qui a fait remplacer les
+# sources Google par Bing.
+#
+# Sans ce decodage, `articles.url` pointerait vers le redirecteur : pas d'og:image
+# donc pas d'illustration, et un post citerait Bing au lieu d'Ouest-France.
+_REDIRECTEURS = ("bing.com/news/apiclick",)
+
+
+def _url_reelle(lien: str | None) -> str | None:
+    if not lien or not any(r in lien for r in _REDIRECTEURS):
+        return lien
+    cible = parse_qs(urlparse(lien).query).get("url", [None])[0]
+    # Mieux vaut le lien de redirection qu'aucun lien : l'article existe, il sera
+    # simplement mal illustre. Et on refuse ce qui n'est pas http(s) -- une
+    # relative ou une tentative d'injection.
+    if cible and cible.startswith(("http://", "https://")):
+        return cible
+    return lien
 
 
 def _html_de(entry) -> str:
@@ -81,7 +105,7 @@ class RssAdapter(SourceAdapter):
         feed = feedparser.parse(raw)
         items = []
         for entry in feed.entries:
-            url = entry.get("link")
+            url = _url_reelle(entry.get("link"))
             title = (entry.get("title") or "").strip()
             if not url or not title:
                 continue

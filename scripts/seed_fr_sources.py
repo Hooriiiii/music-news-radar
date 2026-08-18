@@ -42,14 +42,14 @@ FR_SOURCES: list[tuple[str, str, str, str]] = [
     (
         "Google News - festivals electro FR",
         "rss",
-        "https://news.google.com/rss/search?q=festival+%C3%A9lectro+France+line-up"
+        "https://www.bing.com/news/search?q=festival%20%C3%A9lectro%20France%20line-up&format=RSS&setmkt=fr-FR"
         "&hl=fr&gl=FR&ceid=FR:fr",
         "festivals",
     ),
     (
         "Google News - clubs et soirees FR",
         "rss",
-        "https://news.google.com/rss/search?q=%22musique+%C3%A9lectronique%22+club"
+        "https://www.bing.com/news/search?q=%22musique%20%C3%A9lectronique%22%20club&format=RSS&setmkt=fr-FR"
         "+OR+festival+France&hl=fr&gl=FR&ceid=FR:fr",
         "festivals",
     ),
