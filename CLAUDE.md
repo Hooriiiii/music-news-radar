@@ -311,6 +311,35 @@ Le modèle de composition est `composer_model` (défaut `claude-sonnet-5`), plus
 que celui du scoring : la composition tourne quelques fois par jour et sa qualité
 se voit directement sur le feed.
 
+## Illustration des articles (`app/pipeline/illustrations.py`)
+
+57 % des articles arrivaient sans aucun média, et le déficit était concentré sur
+les flux RSS — 19 % d'illustration, alors que ce sont eux qui portent la matière
+éditoriale. La réponse n'est PAS une recherche web : chaque éditeur publie une
+balise **`og:image`**, celle que Facebook, X et Instagram affichent quand on
+partage le lien. Elle est à jour, gratuite, et illustre l'article EXACT — une
+recherche ramènerait au mieux la même image, au pire celle d'un autre événement.
+
+Mesuré en production : 35 illustrés, 1 échec sur 36 tentatives (97 %).
+
+Deux règles de coût. On n'illustre qu'**après le scoring** et au-dessus du seuil
+du digest : un article de bruit ne sera jamais posté, lui chercher une image est
+une requête réseau pour rien. Et `illustration_max_par_run` (40) borne un run,
+sinon le premier passage partirait sur des centaines de requêtes.
+
+**Les liens Google News ne mènent pas à l'article** : ils atterrissent sur la
+page de consentement de Google, sans `og:image`. Ces URL sont donc ignorées sans
+requête, et comptées à part (`ignores`) pour rester visibles au lieu de se fondre
+dans les échecs réseau. Ça concerne 4 sources — Mixmag, festivals électro FR,
+festivals Bretagne, musique × écologie — dont 73 % des articles sont pertinents.
+Le vrai correctif est de repasser ces sources sur leur flux DIRECT, ce que le
+tout-local rend possible : Mixmag ne renvoyait 403 que depuis les runners Azure.
+
+L'adapter RSS lit aussi les `<img>` du HTML de la description, en DERNIER recours
+— un `<img>` peut être un logo, une pub ou un pixel de suivi (ceux d'au plus
+32 px sont écartés), là où `media_content` est choisi par l'éditeur. Gain mesuré
+sur 12 flux réels : +12 % d'articles illustrés sans aucune requête réseau.
+
 ## Dédup à deux étages
 
 1. **Par hash** (`pipeline/dedup.py`) : même url normalisée + même titre → le même

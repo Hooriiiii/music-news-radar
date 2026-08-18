@@ -9,6 +9,7 @@ from app.delivery.notify import notifier
 from app.pipeline.artists import record_mentions
 from app.pipeline.cluster import link_duplicates
 from app.pipeline.health import diagnostiquer
+from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
 from app.pipeline.retention import purge_old_articles
 from app.pipeline.scoring import ScoringStats, score_pending
@@ -22,6 +23,7 @@ class PipelineReport:
     duplicates_linked: int = 0
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
+    illustres: int = 0
     scoring_skipped_reason: str | None = None
     alerts_sent: int = 0
     alerts_errors: int = 0
@@ -37,6 +39,7 @@ def run_pipeline(
     cluster=link_duplicates,
     score=score_pending,
     record=record_mentions,
+    illustrer=enrichir_articles,
     alert=send_hot_alerts,
     purge=purge_old_articles,
     notify=notifier,
@@ -59,6 +62,10 @@ def run_pipeline(
     else:
         report.scoring_skipped_reason = "ANTHROPIC_API_KEY absente"
         logger.warning("Scoring sauté : %s", report.scoring_skipped_reason)
+
+    # Après le scoring : on ne sait qu'à ce moment-là si l'article mérite qu'on
+    # dépense une requête réseau pour l'illustrer.
+    report.illustres = illustrer(db).illustres
 
     # Après le scoring, avant la purge : les artistes cités sont archivés pour de
     # bon, même quand les articles qui les mentionnaient seront supprimés

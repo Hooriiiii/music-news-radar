@@ -42,6 +42,8 @@ def main() -> None:
                 f"(autant d'appels Claude non payés)"
             )
         print(ligne)
+    if report.illustres:
+        print(f"  illustration : {report.illustres} articles enrichis (og:image)")
     else:
         print(f"  scoring sauté : {report.scoring_skipped_reason}")
     if report.alerts_skipped_reason is None:
