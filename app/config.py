@@ -18,6 +18,29 @@ class Settings(BaseSettings):
     # le cout), la composition tourne quelques fois par jour a la demande et sa
     # qualite se voit directement sur le feed -- on paie un modele plus fort.
     composer_model: str = "claude-sonnet-5"
+    # --- Pré-filtre local (cascade à deux étages) ---
+    # Un petit modèle tournant en local note l'article AVANT Claude : sous le
+    # seuil, on n'appelle jamais Claude et on garde la note locale.
+    # Mesure du 2026-08 sur 36 articles réels : le modèle local n'a JAMAIS noté
+    # sous 60 un article que Haiku gardait au-dessus de 60 -- ses erreurs sont
+    # toutes des faux positifs (il laisse passer trop), jamais des faux négatifs.
+    # Mauvais juge, bon videur : on l'utilise en pré-filtre, pas en remplaçant.
+    #
+    # Opt-in : le pipeline doit tourner à l'identique sans LM Studio installé.
+    local_scoring_enabled: bool = False
+    # Endpoint compatible OpenAI exposé par LM Studio
+    local_scoring_url: str = "http://localhost:1234/v1/chat/completions"
+    # Modèle chargé dans LM Studio (identifiant tel qu'il l'expose)
+    local_scoring_model: str = "qwen/qwen3-4b"
+    # Sous cette note de pertinence LOCALE, l'article est écarté sans appel Claude.
+    # Volontairement plus bas que le seuil du digest (60) : la mesure porte sur
+    # 36 articles, assez pour voir la tendance, pas pour jurer que le zéro faux
+    # négatif tient à l'échelle. Ces 15 points sont la marge de sécurité.
+    local_prefilter_threshold: int = 45
+    # Le modèle local tourne sur CPU/GPU de la machine : quelques secondes par
+    # article, mais un modèle qui se charge peut prendre bien plus long
+    local_scoring_timeout: float = 120.0
+
     # Seuils du design doc
     digest_relevance_threshold: int = 60
     alert_hotness_threshold: int = 80

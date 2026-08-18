@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.config import settings
 from app.models import Article, Source, SourceType
 from app.pipeline.scoring import (
     ArticleScore,
@@ -284,3 +285,110 @@ def test_system_prompt_keeps_pop_despite_electronic_label():
     lowered = SYSTEM_PROMPT.lower()
     assert "ne se ferme pas à la pop" in lowered
     assert "jamais" in lowered
+
+
+# --- Cascade à deux étages : le modèle local videur, Claude juge ---
+
+
+def scorer_interdit(article):
+    raise AssertionError("Claude ne doit pas être appelé sur un article pré-filtré")
+
+
+def test_prefiltre_sous_le_seuil_n_appelle_jamais_claude(db_session):
+    article = seed(db_session)
+    stats = score_pending(
+        db_session,
+        scorer=scorer_interdit,
+        prefilter=lambda a: make_score(relevance=20, summary="Résumé local."),
+    )
+    assert stats.prefiltered == 1
+    assert stats.scored == 0
+    assert stats.errors == 0
+    db_session.refresh(article)
+    assert article.relevance_score == 20
+    assert article.scored_by == "local"
+
+
+def test_prefiltre_au_dessus_du_seuil_passe_par_claude(db_session):
+    article = seed(db_session)
+    stats = score_pending(
+        db_session,
+        scorer=lambda a: make_score(relevance=88),
+        prefilter=lambda a: make_score(relevance=70),
+    )
+    assert stats.scored == 1
+    assert stats.prefiltered == 0
+    db_session.refresh(article)
+    # la note qui fait foi est celle de Claude, pas celle du local
+    assert article.relevance_score == 88
+    assert article.scored_by == "claude"
+
+
+def test_seuil_strict_une_note_egale_passe_chez_claude(db_session):
+    article = seed(db_session)
+    stats = score_pending(
+        db_session,
+        scorer=lambda a: make_score(relevance=88),
+        prefilter=lambda a: make_score(relevance=settings.local_prefilter_threshold),
+    )
+    assert stats.prefiltered == 0
+    assert stats.scored == 1
+    db_session.refresh(article)
+    assert article.scored_by == "claude"
+
+
+def test_prefiltre_muet_fait_passer_par_claude(db_session):
+    """LM Studio éteint : le pré-filtre renvoie None, le pipeline continue."""
+    article = seed(db_session)
+    stats = score_pending(
+        db_session, scorer=lambda a: make_score(relevance=42), prefilter=lambda a: None
+    )
+    assert stats.scored == 1
+    assert stats.prefiltered == 0
+    assert stats.errors == 0
+    db_session.refresh(article)
+    assert article.relevance_score == 42
+    assert article.scored_by == "claude"
+
+
+def test_prefiltre_qui_leve_ne_casse_pas_le_run(db_session):
+    article = seed(db_session)
+
+    def prefiltre_casse(a):
+        raise RuntimeError("LM Studio a planté")
+
+    stats = score_pending(
+        db_session, scorer=lambda a: make_score(relevance=42), prefilter=prefiltre_casse
+    )
+    assert stats.scored == 1
+    assert stats.errors == 0
+    db_session.refresh(article)
+    assert article.scored_by == "claude"
+
+
+def test_sans_prefiltre_le_comportement_reste_celui_d_avant(db_session):
+    article = seed(db_session)
+    stats = score_pending(db_session, scorer=lambda a: make_score(relevance=42))
+    assert stats.scored == 1
+    assert stats.prefiltered == 0
+    db_session.refresh(article)
+    assert article.scored_by == "claude"
+
+
+def test_prefiltered_compte_plusieurs_articles(db_session):
+    source = Source(name="Feed", type=SourceType.RSS, url="https://example.com/f")
+    db_session.add(source)
+    db_session.commit()
+    for i in range(3):
+        db_session.add(Article(source_id=source.id, url=f"https://example.com/{i}",
+                               title=f"T{i}", raw_hash=str(i) * 64))
+    db_session.commit()
+
+    notes = iter([10, 90, 20])
+    stats = score_pending(
+        db_session,
+        scorer=lambda a: make_score(relevance=88),
+        prefilter=lambda a: make_score(relevance=next(notes)),
+    )
+    assert stats.prefiltered == 2
+    assert stats.scored == 1

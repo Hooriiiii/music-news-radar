@@ -28,8 +28,13 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     with SessionLocal() as db:
         stats = score_pending(db, limit=args.limit)
-        print(f"{stats.scored} articles scorés, {stats.errors} erreurs "
-              f"(modèle : {settings.scoring_model})")
+        ligne = (f"{stats.scored} articles scorés, {stats.errors} erreurs "
+                 f"(modèle : {settings.scoring_model})")
+        if stats.prefiltered:
+            ligne += (f"\n{stats.prefiltered} écartés par le pré-filtre local "
+                      f"({settings.local_scoring_model}, seuil "
+                      f"{settings.local_prefilter_threshold}) — jamais soumis à Claude")
+        print(ligne)
 
         digest_ready = db.scalars(
             select(Article)

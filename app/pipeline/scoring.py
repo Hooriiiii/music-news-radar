@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Article
+from app.models import Article, ScoredBy
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,29 @@ producteur français ou breton passe devant un artiste étranger.
   80+ : breaking news à poster dans l'heure (décès, annonce surprise, drama chaud, \
 séparation/reformation) — et uniquement si l'actu est dans la ligne éditoriale. \
 Une interview de fond ou une rétrospective reste froide (<40) même si pertinente.
-- category : le type d'actu.
+- category : le type d'actu. Parcours cette liste DANS L'ORDRE et prends la \
+PREMIÈRE qui s'applique — l'ordre va du plus spécifique au plus général, il tranche \
+donc les cas où deux catégories sembleraient convenir.
+  1. rip : un décès. Rien d'autre ne prime là-dessus.
+  2. drama : conflit, polémique, accusation, procès, clash public, séparation \
+houleuse, annulation pour scandale.
+  3. event_festival : le sujet est un ÉVÉNEMENT physique daté — festival, soirée, \
+club, rave. Line-up, programmation, édition, billetterie, bilan, annulation, \
+fermeture ou ouverture de lieu. Vaut MÊME quand l'actu est une annonce : un \
+line-up dévoilé est `event_festival`, jamais `announcement`.
+  4. new_release : de la musique DÉJÀ ÉCOUTABLE — single, EP, album, remix, mix, \
+clip sortis. Le critère est la disponibilité immédiate, pas le fait qu'on en parle.
+  5. announcement : quelque chose est annoncé POUR PLUS TARD et n'est pas un \
+événement au sens 3 — sortie à venir, tournée, date, collaboration confirmée, \
+retour d'un artiste. Si c'est déjà écoutable, c'est 4 ; si c'est un festival ou \
+une soirée, c'est 3.
+  6. gear_tech : matériel, logiciel, plugin, contrôleur, synthé, IA musicale, \
+outils de production.
+  7. industry : le business — labels, streaming, droits, chiffres de vente, \
+rachats, nominations, plateformes, réglementation.
+  8. culture : analyse, portrait, interview, rétrospective, tendance de fond, \
+histoire d'un genre. Du contenu de fond, pas une actu chaude.
+  9. other : rien de ce qui précède.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
 - artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \
@@ -139,7 +161,24 @@ l'engagement décolle, relevance 60-80 même si le texte du tweet est trivial \
 ("c'était fou hier soir"). Ne les traite jamais en bruit personnel.
 
 Sois sévère sur relevance : la majorité des posts de forums sont du bruit (<40). \
-Ne sur-note pas la hotness : réserve 80+ aux actus qui ne peuvent pas attendre demain.\
+Ne sur-note pas la hotness : réserve 80+ aux actus qui ne peuvent pas attendre demain.
+
+RÈGLE DE DÉPARTAGE, à appliquer avant de rendre tes notes. Quand tu hésites entre \
+deux tranches, prends TOUJOURS LA PLUS BASSE. Ce filtre existe pour ÉCARTER du \
+bruit : une actu moyenne notée trop haut pollue le feed, alors qu'une bonne actu \
+notée un peu bas reste visible dans le classement. Le coût des deux erreurs n'est \
+pas le même, ne les traite pas de la même façon.
+
+Concrètement, les trois bornes qui comptent :
+- 60 sépare ce qui MÉRITE D'ÊTRE VU de ce qui ne le mérite pas. Ne mets 60 ou plus \
+que si tu peux dire en une phrase pourquoi l'abonné devrait s'y arrêter. « C'est \
+de la musique électro » ne suffit pas — il faut un fait : un nom connu, une date, \
+un chiffre, un lieu, un événement.
+- 80 sépare la grosse actu du reste. Une annonce ordinaire, même parfaitement dans \
+la ligne, vaut 65-75 : 80+ est réservé à ce qui fait réagir tout le monde.
+- Sur hotness, 80 déclenche une notification immédiate. Demande-toi : est-ce que ça \
+justifie de réveiller quelqu'un maintenant ? Si la réponse est « ça peut attendre \
+demain », alors c'est en dessous de 80, quelle que soit la qualité de l'actu.\
 """
 
 
@@ -198,16 +237,48 @@ def apply_score(article: Article, score: ArticleScore) -> None:
 class ScoringStats:
     scored: int = 0
     errors: int = 0
+    # Articles écartés par le pré-filtre local, donc jamais soumis à Claude.
+    prefiltered: int = 0
 
 
-def score_pending(db: Session, scorer=None, limit: int | None = None) -> ScoringStats:
+def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
+    """La note du pré-filtre, ou None s'il n'a rien à dire.
+
+    `make_local_scorer` promet déjà de ne jamais lever, mais un pré-filtre injecté
+    par un test ou une future implémentation ne tient pas forcément cette promesse.
+    On l'isole ici : le pré-filtre est une OPTIMISATION de coût, jamais une raison
+    de perdre un article — quoi qu'il arrive, on retombe sur Claude.
+    """
+    if prefilter is None:
+        return None
+    try:
+        return prefilter(article)
+    except Exception:
+        logger.warning(
+            "Pré-filtre en échec sur l'article %s : on passe par Claude", article.id
+        )
+        return None
+
+
+def score_pending(
+    db: Session, scorer=None, limit: int | None = None, prefilter=None
+) -> ScoringStats:
     """Score tous les articles pas encore évalués (relevance_score IS NULL).
+
+    Cascade à deux étages quand un pré-filtre est disponible : un petit modèle
+    local note d'abord, et l'article n'atteint Claude que si sa note atteint
+    `local_prefilter_threshold`. Sous le seuil, on garde la note locale et on
+    n'appelle jamais l'API payante.
 
     Commit après chaque article : un run interrompu ne perd pas les appels API
     déjà payés, et un article qui échoue n'annule pas les autres.
     """
     if scorer is None:
         scorer = make_claude_scorer()
+    if prefilter is None and settings.local_scoring_enabled:
+        from app.pipeline.prefilter import make_local_scorer
+
+        prefilter = make_local_scorer()
     # Les doublons d'une actu déjà couverte ne sont pas scorés : ils seraient
     # payés deux fois pour la même information (cf. pipeline/cluster.py)
     stmt = (
@@ -223,9 +294,18 @@ def score_pending(db: Session, scorer=None, limit: int | None = None) -> Scoring
     stats = ScoringStats()
     for article in articles:
         try:
-            apply_score(article, scorer(article))
+            note = _note_du_prefiltre(prefilter, article)
+            # Seuil STRICT : une note égale au seuil passe chez Claude. Le seuil
+            # dit « en dessous, ça ne mérite pas qu'on paie », pas « à partir de ».
+            if note is not None and note.relevance < settings.local_prefilter_threshold:
+                apply_score(article, note)
+                article.scored_by = ScoredBy.LOCAL
+                stats.prefiltered += 1
+            else:
+                apply_score(article, scorer(article))
+                article.scored_by = ScoredBy.CLAUDE
+                stats.scored += 1
             db.commit()
-            stats.scored += 1
         except Exception:
             logger.exception("Scoring échoué pour l'article %s (%s)", article.id, article.title)
             db.rollback()
