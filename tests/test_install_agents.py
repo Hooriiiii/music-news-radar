@@ -406,3 +406,60 @@ def test_tronquer_les_logs_libere_la_place_sans_supprimer_les_fichiers(chemins, 
     assert libere == 4096
     assert gros.exists()
     assert gros.stat().st_size == 0
+
+
+# --- Race de launchd : bootout est asynchrone ---
+
+
+class ExecuteurLent(FauxExecuteur):
+    """Simule un service qui met du temps à se démonter.
+
+    `launchctl print` continue de répondre tant que le service existe encore ;
+    il ne rend une sortie vide qu'une fois le démontage terminé.
+    """
+
+    def __init__(self, prints_avant_disparition: int = 2) -> None:
+        super().__init__()
+        self.restants = prints_avant_disparition
+
+    def __call__(self, commande: list[str], tolere_echec: bool = False) -> str:
+        self.commandes.append(commande)
+        if "print" in commande:
+            if self.restants > 0:
+                self.restants -= 1
+                return "state = running"
+            return ""
+        return ""
+
+
+def test_installer_attend_le_dechargement_avant_de_recharger(chemins, monkeypatch):
+    """`bootout` rend la main AVANT que launchd ait démonté le service.
+
+    Observé le 2026-08-18 : le `bootstrap` qui suivait échouait en « Bootstrap
+    failed: 5: Input/output error », l'ancien dashboard était déjà déconnecté et
+    le nouveau refusé — `--apply` laissait donc le dashboard MORT. On attend que
+    `launchctl print` ne réponde plus avant de recharger.
+    """
+    import scripts.install_agents as mod
+
+    pauses = []
+    monkeypatch.setattr(mod, "_dormir", pauses.append)
+    executeur = ExecuteurLent(prints_avant_disparition=2)
+
+    installer(chemins, executer=executeur)
+
+    verbes = [c[1] for c in executeur.commandes if c[0] == "launchctl"]
+    for i, verbe in enumerate(verbes):
+        if verbe == "bootstrap":
+            assert "print" in verbes[:i], "un bootstrap doit être précédé d'une vérification"
+    assert pauses, "le démontage lent doit avoir provoqué au moins une attente"
+
+
+def test_installer_n_attend_pas_quand_le_service_est_deja_parti(chemins, monkeypatch):
+    """Cas normal : rien n'est chargé, on ne doit pas ralentir --apply pour rien."""
+    import scripts.install_agents as mod
+
+    pauses = []
+    monkeypatch.setattr(mod, "_dormir", pauses.append)
+    installer(chemins, executer=FauxExecuteur())
+    assert pauses == []

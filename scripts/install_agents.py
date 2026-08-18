@@ -28,6 +28,7 @@ import os
 import plistlib
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -272,8 +273,38 @@ def _domaine() -> str:
     return f"gui/{os.getuid()}"
 
 
+# launchd decharge de facon ASYNCHRONE : `bootout` rend la main avant que le
+# service soit reellement demonte. Le `bootstrap` qui suit echoue alors en
+# « Bootstrap failed: 5: Input/output error » -- et comme l'ancien service est
+# deja deconnecte, --apply laisse le service MORT. Observe le 2026-08-18 sur
+# l'agent dashboard : localhost:8000 ne repondait plus apres un --apply reussi
+# par ailleurs. On attend donc que `launchctl print` ne reponde plus.
+ATTENTE_ESSAIS = 20
+ATTENTE_PAUSE = 0.5
+
+
+def _dormir(secondes: float) -> None:
+    """Isole la pause pour que les tests n'attendent pas vraiment."""
+    time.sleep(secondes)
+
+
+def _attendre_dechargement(label: str, executer) -> None:
+    """Bloque tant que launchd connait encore ce label.
+
+    `launchctl print` repond tant que le service existe ; sa sortie devient vide
+    une fois le demontage termine. On se fie a la SORTIE et non au code de
+    retour, que `_executer` n'expose pas.
+    """
+    for _ in range(ATTENTE_ESSAIS):
+        sortie = executer(["launchctl", "print", f"{_domaine()}/{label}"], tolere_echec=True)
+        if not sortie.strip():
+            return
+        _dormir(ATTENTE_PAUSE)
+
+
 def _bootout(label: str, executer) -> None:
     executer(["launchctl", "bootout", f"{_domaine()}/{label}"], tolere_echec=True)
+    _attendre_dechargement(label, executer)
 
 
 def _supprimer_plist(fichier: Path, label: str) -> None:
