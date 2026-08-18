@@ -268,6 +268,30 @@ minimale n'est PLUS rendue coupée en silence : le rendu est marqué `overflow`
 (retourné par `render_post`, persisté dans `posts.render_report` via
 `POST /posts/{id}/render`) plutôt que publié tel quel.
 
+**Le reel est une VIDÉO, assemblée par ffmpeg** (`app/content/video.py`). Le
+gabarit `kinda_reel` produit une cover ; `assembler_reel()` en fait la première
+frame d'un MP4 1080×1920 qui enchaîne sur la vidéo de l'actu. L'export d'un post
+`kinda_reel` contient donc `01_reel.mp4` et NON la cover et la vidéo à recoller.
+
+Trois pièges ffmpeg traités, et chacun casse l'assemblage : une image fixe n'a
+pas de piste audio et une vidéo X en est souvent dépourvue, or le filtre `concat`
+refuse d'assembler deux flux dont un seul en porte une (d'où un silence fabriqué
+des deux côtés, et un sondage préalable de la source — un graphe qui référence
+`[1:a]` sur une vidéo muette est INVALIDE, pas vide) ; on passe par le FILTRE
+`concat` et non par le démultiplexeur, qui exige des flux strictement identiques ;
+et les dimensions impaires font échouer `libx264`, d'où les arrondis au pair dans
+les `scale` intermédiaires.
+
+Le cadrage est un **fond flouté** : la vidéo entière au centre, sur elle-même
+agrandie et floutée. Rien n'est perdu de l'image, contrairement au recadrage
+centré — sur une vidéo de concert, ce qui compte est souvent hors du centre.
+
+La cover ne dure qu'**une frame** : elle sert de vignette de couverture, pas de
+carton d'introduction. `frames_cover` est paramétrable parce qu'Instagram
+réencode à l'import et qu'une frame unique peut ne pas survivre. Le moyen fiable
+viendra de l'API Meta, qui permet de fournir explicitement l'image de couverture
+d'un reel.
+
 **Figma n'est jamais appelé à l'exécution.** Son API REST est en lecture seule sur
 le contenu d'un fichier ; l'écriture passe par l'API Plugin, qui n'existe que dans
 l'éditeur ouvert. Chaque gabarit est donc extrait UNE FOIS en HTML/CSS dans

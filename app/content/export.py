@@ -7,6 +7,8 @@ module telecharge ces medias et assemble l'archive prete a deposer dans Instagra
 
 import io
 import zipfile
+
+from app.content.media import VIDEO
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -86,11 +88,26 @@ def telecharger(
             client.close()
 
 
+def _video_du_reel(post) -> dict | None:
+    """La slide video qu'un reel doit absorber, ou None.
+
+    Seul le gabarit reel assemble : un post est un carrousel d'images, sa video
+    eventuelle reste un media a part.
+    """
+    if getattr(post, "template", None) != "kinda_reel":
+        return None
+    return next(
+        (s for s in post.slides if s.get("kind") == "media" and s.get("type") == VIDEO),
+        None,
+    )
+
+
 def construire_zip(
     post,
     cover_pngs: list[bytes],
     texte_legende: str,
     telecharger=telecharger,
+    assembler=None,
 ) -> bytes:
     """Assemble l'archive : covers puis medias, dans l'ordre de publication.
 
@@ -98,16 +115,42 @@ def construire_zip(
     l'image de secours du rendu (app/content/render.py::fetch_image_data_uri) :
     un export partiel vaut mieux qu'une erreur, surtout a 23 h.
     """
+    if assembler is None:
+        from app.content.video import assembler_reel
+
+        assembler = assembler_reel
+
     manquants: list[str] = []
     tampon = io.BytesIO()
+    # La video que l'assemblage a absorbee : on ne la remet pas a part, elle
+    # doublerait le poids du zip et laisserait croire a deux medias a publier.
+    absorbee = None
+
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
         numero = 1
+        slide_video = _video_du_reel(post)
+        if slide_video is not None and cover_pngs:
+            octets, raison = telecharger(slide_video["url"])
+            if octets is None:
+                manquants.append(f"{slide_video['url']} : {raison}")
+            else:
+                try:
+                    archive.writestr(f"{numero:02d}_reel.mp4", assembler(cover_pngs[0], octets))
+                    absorbee = slide_video["url"]
+                    numero += 1
+                except Exception as exc:
+                    # Un export partiel vaut mieux qu'une erreur, surtout a 23 h :
+                    # on retombe sur cover + video separees, en NOMMANT l'echec.
+                    manquants.append(f"assemblage du reel impossible : {exc}")
+
         for png in cover_pngs:
             archive.writestr(f"{numero:02d}_cover.png", png)
             numero += 1
 
         for slide in post.slides:
             if slide.get("kind") != "media":
+                continue
+            if slide.get("url") == absorbee:
                 continue
             url = slide["url"]
             contenu, extension_ou_raison = telecharger(url)

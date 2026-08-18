@@ -39,6 +39,7 @@ class FauxClient:
 
 def _post_avec_medias():
     return SimpleNamespace(
+        template="kinda_post",
         slides=[
             {"kind": "cover", "headline": "x", "title": "x", "subtitle": "x"},
             {"kind": "media", "type": "photo", "url": "https://p.jpg"},
@@ -167,3 +168,77 @@ def test_telecharger_capture_lechec_reseau():
 
 def test_plafond_par_defaut_est_80_mo():
     assert PLAFOND_OCTETS == 80 * 1024 * 1024
+
+
+# --- Gabarit reel : le zip porte la video assemblee, pas ses morceaux ---
+
+
+def _post_reel():
+    return SimpleNamespace(
+        template="kinda_reel",
+        slides=[
+            {"kind": "cover", "headline": "x", "title": "x", "subtitle": "x"},
+            {"kind": "media", "type": "video", "url": "https://v.mp4"},
+        ],
+    )
+
+
+def test_un_post_reel_contient_le_mp4_assemble(): 
+    """Le livrable d'un reel est UNE video, pas une cover et une video a
+    recoller a la main."""
+    appels = []
+
+    def assembler(cover, video):
+        appels.append((cover, video))
+        return b"REELASSEMBLE"
+
+    zip_octets = construire_zip(
+        _post_reel(), [b"PNG"], "legende",
+        telecharger=_telecharger_factice, assembler=assembler,
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_octets)) as archive:
+        noms = archive.namelist()
+        assert any(n.endswith("_reel.mp4") for n in noms), noms
+        assert archive.read("01_reel.mp4") == b"REELASSEMBLE"
+    assert appels == [(b"PNG", b"MP4DATA")], "la cover et la video source sont passees telles quelles"
+
+
+def test_la_video_source_n_est_pas_dupliquee_dans_le_zip():
+    """Elle est deja DANS le reel : la remettre a part doublerait le poids et
+    laisserait croire qu'il y a deux medias a publier."""
+    zip_octets = construire_zip(
+        _post_reel(), [b"PNG"], "legende",
+        telecharger=_telecharger_factice, assembler=lambda c, v: b"REEL",
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_octets)) as archive:
+        assert not any(n.endswith("_video.mp4") for n in archive.namelist())
+
+
+def test_un_assemblage_qui_echoue_laisse_un_zip_utilisable():
+    """Meme philosophie que le reste du module : un export partiel vaut mieux
+    qu'une erreur, surtout a 23 h. On retombe sur cover + video separees, et on
+    NOMME l'echec."""
+    def assembler_casse(cover, video):
+        raise RuntimeError("ffmpeg est introuvable")
+
+    zip_octets = construire_zip(
+        _post_reel(), [b"PNG"], "legende",
+        telecharger=_telecharger_factice, assembler=assembler_casse,
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_octets)) as archive:
+        noms = archive.namelist()
+        assert not any(n.endswith("_reel.mp4") for n in noms)
+        assert any(n.endswith("_video.mp4") for n in noms), "la video brute doit rester"
+        assert "ffmpeg est introuvable" in archive.read("medias_manquants.txt").decode()
+
+
+def test_un_post_normal_n_assemble_rien():
+    """Le gabarit post ne produit pas de video : l'assembleur ne doit meme pas
+    etre appele."""
+    def assembler_interdit(cover, video):
+        raise AssertionError("ne doit pas etre appele pour un post")
+
+    construire_zip(
+        _post_avec_medias(), [b"PNG"], "legende",
+        telecharger=_telecharger_factice, assembler=assembler_interdit,
+    )
