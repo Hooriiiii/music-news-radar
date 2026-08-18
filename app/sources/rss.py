@@ -9,6 +9,36 @@ import httpx
 from app.content.media import PHOTO, entree
 from app.sources.base import RawItem, SourceAdapter
 
+
+# Un pixel de suivi passerait pour un media valide dans tout le reste du
+# pipeline -- et finirait en fond de cover.
+_MINIATURE_MAX = 32
+_IMG = re.compile(r"<img\b([^>]*)>", re.IGNORECASE)
+_SRC = re.compile(r"""\bsrc=["']([^"']+)""", re.IGNORECASE)
+_DIMENSION = re.compile(r"""\b(?:width|height)=["']?(\d+)""", re.IGNORECASE)
+
+
+def _html_de(entry) -> str:
+    """Le HTML d'une entree : `summary` et `content` peuvent porter l'image, et
+    les flux ne s'accordent pas sur lequel des deux ils remplissent."""
+    morceaux = [entry.get("summary") or ""]
+    morceaux += [c.get("value") or "" for c in entry.get("content") or []]
+    return "".join(morceaux)
+
+
+def _images_du_html(html: str) -> list[str]:
+    trouvees = []
+    for attributs in _IMG.findall(html):
+        src = _SRC.search(attributs)
+        if not src:
+            continue
+        dimensions = [int(d) for d in _DIMENSION.findall(attributs)]
+        if dimensions and min(dimensions) <= _MINIATURE_MAX:
+            continue
+        trouvees.append(src.group(1))
+    return trouvees
+
+
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -89,6 +119,11 @@ class RssAdapter(SourceAdapter):
         for enclosure in entry.get("enclosures", []):
             if enclosure.get("type", "").startswith("image/") and enclosure.get("href"):
                 urls.append(enclosure["href"])
+        # En DERNIER, donc de moindre priorite : un <img> du corps peut etre un
+        # logo, une pub ou un mouchard, la ou media_content est choisi par
+        # l'editeur. Mesure sur 12 flux reels : 12 % d'articles illustres en
+        # plus (Bandcamp Daily, XLR8R n'exposent RIEN d'autre).
+        urls.extend(_images_du_html(_html_de(entry)))
         seen = set()
         deduped = [u for u in urls if not (u in seen or seen.add(u))]
         return [entree(PHOTO, u) for u in deduped]

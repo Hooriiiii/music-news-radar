@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     # court pour attraper une panne avant qu'elle s'installe.
     source_muette_jours: int = 7
 
+    # --- Illustration des articles (og:image) ---
+    # 57 % des articles arrivaient sans média, dont 81 % des articles RSS. La
+    # balise og:image des éditeurs couvre 100 % des cas mesurés.
+    # Seuil : celui du digest. Un article sous la barre ne sera jamais posté,
+    # lui chercher une image serait une requête réseau pour rien.
+    illustration_min_relevance: int = 60
+    illustration_timeout: float = 20.0
+    # Borne le coût réseau d'un run -- surtout au premier passage, où l'arriéré
+    # se compte en centaines d'articles.
+    illustration_max_par_run: int = 40
+
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
     # Mention ajoutée aux alertes pour déclencher une vraie notification
