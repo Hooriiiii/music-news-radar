@@ -244,3 +244,23 @@ def test_l_etat_est_reassigne_en_entier(monkeypatch):
     adapter.fetch()
     assert adapter.source.state is not etat_initial
     assert adapter.source.state["autre"] == "valeur"
+
+
+def test_une_source_instagram_se_cree_et_se_relit(db_session):
+    """De bout en bout sur la base : le type passe le CHECK, l'adapter se
+    resout, l'etat se persiste."""
+    from app.sources import get_adapter
+
+    source = Source(name="Tsugi IG", type=SourceType.INSTAGRAM, url="ig:tsugimag")
+    db_session.add(source)
+    db_session.commit()
+
+    relue = db_session.get(Source, source.id)
+    adapter = get_adapter(relue)
+    assert isinstance(adapter, InstagramAdapter)
+    assert adapter.compte == "tsugimag"
+
+    adapter.source.state = {"dernier_post": "2026-09-10T14:30:00"}
+    db_session.commit()
+    db_session.expire_all()
+    assert db_session.get(Source, source.id).state["dernier_post"] == "2026-09-10T14:30:00"

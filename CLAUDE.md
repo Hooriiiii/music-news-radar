@@ -64,7 +64,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
-- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
+- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...]`
 - Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
   (sans `--apply` : affiche le plan ; idempotent par URL)
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
@@ -141,7 +141,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
   restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
-- Tests : `uv run pytest` (un seul test : `uv run pytest tests/test_api.py::test_health`)
+- Tests : `uv run pytest`
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
 - Parité modèles ↔ migrations : `uv run alembic check` (nécessite une base à jour)
@@ -158,7 +158,7 @@ Le principe central : la couche `app/sources/` est PLUGGABLE (un adapter par sou
 contrat défini dans `sources/base.py` : `fetch() -> list[RawItem]`), tout le reste du
 pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
 `sources/__init__.py` mappe le champ `sources.type` en base (`rss`, `reddit_rss`,
-`bluesky`, `x`) vers la classe adapter.
+`bluesky`, `x`, `instagram`) vers la classe adapter.
 
 - `app/models.py` — les 3 tables (Source, Article, Digest). Enums stockés en VARCHAR +
   CHECK (`native_enum=False`), pas d'enum natif Postgres. JSONB via `JSONVariant`
@@ -555,6 +555,24 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   seulement en vérifiant la transformation à la main sur un cluster jetable, pas
   par une erreur SQL. Nommer l'alias différemment de toute colonne existante
   (`media_url`, pas `url`) évite le piège.
+- **`business_discovery` ne voit que les comptes PROFESSIONNELS** (business ou
+  creator). Un artiste emergent en profil perso — soit une bonne part du deal-flow
+  A&R — est invisible de cette API. La source Instagram COMPLETE les RSS, elle ne
+  les remplace pas. Et les `media_url` du CDN Instagram sont SIGNEES et EXPIRENT
+  en quelques jours : stocker l'URL puis la servir plus tard donne un 404
+  silencieux, d'ou le telechargement de l'asset au moment du gel (chantier C).
+- **Les sources X sont eteintes** (2026-09-11) : la facturation developer.x.com
+  n'est plus active, les 100 sources renvoyaient 402 a chaque run et noyaient la
+  supervision. `scripts/desactiver_sources_x.py` les eteint sans les supprimer —
+  leur `since_id` est conserve.
+- **`op.f()` ne s'appelle QUE dans un callable de migration.** Pose au niveau
+  module, il leve `NameError: Can't invoke function 'f', as the proxy object
+  has not yet been established` — mais seulement sur les chemins qui chargent
+  les revisions hors contexte de migration (`alembic history`, `alembic check`) ;
+  `alembic upgrade` passe, ce qui rend le defaut invisible a l'usage courant.
+  Aucun test n'importait les migrations, si bien que la suite entiere passait
+  au vert dessus : d'ou la sentinelle `tests/test_migrations.py`, qui les fait
+  toutes charger sans base de donnees.
 
 ## Conventions
 
