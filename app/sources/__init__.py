@@ -1,5 +1,6 @@
 from app.models import Source, SourceType
 from app.sources.base import RawItem, SourceAdapter
+from app.sources.instagram import InstagramAdapter
 from app.sources.reddit_rss import RedditRssAdapter
 from app.sources.rss import RssAdapter
 from app.sources.x_api import XApiAdapter
@@ -13,6 +14,7 @@ ADAPTERS: dict[SourceType, type[SourceAdapter]] = {
     SourceType.RSS: RssAdapter,
     SourceType.REDDIT_RSS: RedditRssAdapter,
     SourceType.X: XApiAdapter,
+    SourceType.INSTAGRAM: InstagramAdapter,
 }
 
 
@@ -25,6 +27,7 @@ def get_adapter(source: Source) -> SourceAdapter:
 
 __all__ = [
     "ADAPTERS",
+    "InstagramAdapter",
     "RawItem",
     "RedditRssAdapter",
     "RssAdapter",
