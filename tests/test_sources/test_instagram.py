@@ -2,6 +2,7 @@ import datetime as dt
 
 import pytest
 
+from app.config import settings
 from app.models import Source, SourceType
 from app.sources.instagram import InstagramAdapter, titre_depuis_caption
 
@@ -169,3 +170,77 @@ def test_un_payload_sans_business_discovery_rend_une_liste_vide():
 )
 def test_titre_depuis_caption(caption, attendu):
     assert titre_depuis_caption(caption) == attendu
+
+
+class FauxReponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_l_url_cible_le_compte_et_demande_les_bons_champs(monkeypatch):
+    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "17841400000000000")
+    url, params = make_adapter().construire_url()
+
+    assert url.endswith("/17841400000000000")
+    assert "business_discovery.username(tsugimag)" in params["fields"]
+    for champ in ("permalink", "caption", "timestamp", "media_url", "media_type"):
+        assert champ in params["fields"]
+    assert params["access_token"] == "TOK"
+
+
+def test_le_carrousel_est_demande_explicitement(monkeypatch):
+    """Sans `children`, un carrousel revient sans aucun media."""
+    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    _, params = make_adapter().construire_url()
+    assert "children" in params["fields"]
+
+
+def test_fetch_sans_token_dit_quoi_faire(monkeypatch):
+    monkeypatch.setattr(settings, "meta_access_token", None)
+    with pytest.raises(RuntimeError, match="META_ACCESS_TOKEN"):
+        make_adapter().fetch()
+
+
+def test_fetch_note_le_dernier_post_vu(monkeypatch):
+    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    adapter = make_adapter()
+    monkeypatch.setattr(adapter, "_appeler", lambda: PAYLOAD)
+
+    adapter.fetch()
+    assert adapter.source.state["dernier_post"] == "2026-09-10T14:30:00"
+
+
+def test_fetch_ne_rend_que_les_posts_plus_recents_que_l_etat(monkeypatch):
+    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    adapter = make_adapter()
+    adapter.source.state = {"dernier_post": "2026-09-09T22:05:00"}
+    monkeypatch.setattr(adapter, "_appeler", lambda: PAYLOAD)
+
+    items = adapter.fetch()
+    assert [i.url for i in items] == ["https://www.instagram.com/p/AAA/"]
+
+
+def test_l_etat_est_reassigne_en_entier(monkeypatch):
+    """Piege SQLAlchemy documente : muter un JSONB en place ne persiste pas."""
+    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    adapter = make_adapter()
+    etat_initial = {"autre": "valeur"}
+    adapter.source.state = etat_initial
+    monkeypatch.setattr(adapter, "_appeler", lambda: PAYLOAD)
+
+    adapter.fetch()
+    assert adapter.source.state is not etat_initial
+    assert adapter.source.state["autre"] == "valeur"

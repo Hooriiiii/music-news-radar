@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     apify_max_charge_usd: float = 0.25
     x_min_fetch_interval_hours: int = 6
 
+    # --- Meta / Instagram (business_discovery) ---
+    # Gratuit, contrairement a X. Un seul token et un seul IG user id servent
+    # TOUTES les sources Instagram : l'API interroge les comptes cibles a travers
+    # le notre.
+    meta_access_token: str | None = None
+    meta_ig_user_id: str | None = None
+    # Epinglee : une version d'API Graph reste servie environ deux ans, et une
+    # montee de version doit etre un choix, jamais une surprise un matin.
+    meta_api_version: str = "v21.0"
+    # Nombre de posts recents lus par compte et par run. L'appel est gratuit, mais
+    # il consomme le quota Graph de l'app (~200 appels/heure) : inutile d'aller
+    # chercher loin a chaque passage horaire.
+    instagram_max_items: int = 12
+
     # --- Supervision : notifications macOS ---
     # Le canal d'alerte du socle local. Discord est coupé et l'utilisateur ne
     # veut pas de mail : sans ça, une panne ne se signale nulle part -- trois
