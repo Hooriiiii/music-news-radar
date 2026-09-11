@@ -21,24 +21,30 @@ branch_labels = None
 depends_on = None
 
 # `op.f()` est indispensable : sans lui, la naming convention de `app/db.py`
-# redouble le prefixe et produit `ck_sources_ck_sources_source_type`.
-CONTRAINTE = op.f("ck_sources_source_type")
+# redouble le prefixe et produit `ck_sources_ck_sources_source_type`. Mais
+# l'appel doit rester DANS une fonction : au niveau module, il s'execute a
+# l'IMPORT du fichier, avant que le proxy `Operations` d'Alembic ne soit
+# etabli (ce qui n'arrive qu'au moment de context.configure()) -- une commande
+# qui se contente de charger les scripts sans jouer de migration (`alembic
+# history`, ou tout chargement direct via `ScriptDirectory`) leve alors
+# `NameError: Can't invoke function 'f' ...`.
 
 AVANT = ("rss", "reddit_rss", "bluesky", "x")
 APRES = ("rss", "reddit_rss", "bluesky", "x", "instagram")
 
 
 def _poser(valeurs):
-    op.create_check_constraint(CONTRAINTE, "sources", sa.column("type").in_(valeurs))
+    contrainte = op.f("ck_sources_source_type")
+    op.create_check_constraint(contrainte, "sources", sa.column("type").in_(valeurs))
 
 
 def upgrade() -> None:
-    op.drop_constraint(CONTRAINTE, "sources", type_="check")
+    op.drop_constraint(op.f("ck_sources_source_type"), "sources", type_="check")
     _poser(APRES)
 
 
 def downgrade() -> None:
     # Les sources Instagram violeraient le CHECK restaure : les eteindre d'abord.
     op.execute("DELETE FROM sources WHERE type = 'instagram'")
-    op.drop_constraint(CONTRAINTE, "sources", type_="check")
+    op.drop_constraint(op.f("ck_sources_source_type"), "sources", type_="check")
     _poser(AVANT)
