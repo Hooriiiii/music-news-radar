@@ -44,7 +44,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Les sources Instagram violeraient le CHECK restaure : les eteindre d'abord.
+    # Les sources Instagram violeraient le CHECK restaure : les supprimer d'abord.
+    # `articles.source_id` et `artist_mentions.source_id` sont des FK SANS
+    # `ON DELETE` (contrairement a `artist_mentions.article_id`, en SET NULL) :
+    # supprimer une source Instagram encore referencee leve ForeignKeyViolation
+    # et bloque le downgrade en 0014. On supprime donc les lignes dependantes
+    # AVANT la source elle-meme -- articles puis artist_mentions, dans cet
+    # ordre pour ne violer aucune contrainte au passage.
+    op.execute(
+        "DELETE FROM articles WHERE source_id IN "
+        "(SELECT id FROM sources WHERE type = 'instagram')"
+    )
+    op.execute(
+        "DELETE FROM artist_mentions WHERE source_id IN "
+        "(SELECT id FROM sources WHERE type = 'instagram')"
+    )
     op.execute("DELETE FROM sources WHERE type = 'instagram'")
     op.drop_constraint(op.f("ck_sources_source_type"), "sources", type_="check")
     _poser(AVANT)
