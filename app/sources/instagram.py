@@ -47,20 +47,38 @@ def titre_depuis_caption(caption: str | None) -> str:
     return phrase
 
 
-def _date(timestamp: str | None) -> dt.datetime | None:
-    """L'horodatage Meta ("2026-09-10T14:30:00+0000") en UTC naif.
+def _summary_with_metrics(caption: str | None, noeud: dict, followers: int | None) -> str | None:
+    """La caption, plus les metriques d'engagement -- meme idee que
+    `_summary_with_metrics` de `x_api.py` : le scoring Claude juge la hotness
+    sur ces chiffres, qu'on demande deja a l'API (`like_count,comments_count,
+    followers_count`) sans jamais les exploiter jusqu'ici. Un post a 8000 likes
+    et un post a 3 likes du meme compte arrivaient sinon indistinguables.
+    """
+    likes = noeud.get("like_count")
+    comments = noeud.get("comments_count")
+    if likes is None and comments is None and followers is None:
+        return caption or None
+    parts = [f"{likes or 0} likes", f"{comments or 0} commentaires"]
+    if followers is not None:
+        parts.append(f"{followers} abonnes")
+    bandeau = f"[Instagram : {' · '.join(parts)}]"
+    return f"{caption}\n\n{bandeau}" if caption else bandeau
 
-    Le reste du projet stocke des datetimes naifs en UTC ; laisser passer un
-    datetime aware provoquerait des comparaisons impossibles cote retention.
+
+def _date(timestamp: str | None) -> dt.datetime | None:
+    """L'horodatage Meta ("2026-09-10T14:30:00+0000") en datetime aware UTC.
+
+    Le reste du projet stocke des datetimes AWARE en UTC (`rss.py` pose
+    `tzinfo=dt.timezone.utc`, `x_api.py` garde l'offset de `fromisoformat`,
+    et `articles.published_at` est un `DateTime(timezone=True)`) : rendre un
+    naif ici casserait la comparaison faite par `app/pipeline/ingest.py` a
+    chaque item (`TypeError: can't compare offset-naive and offset-aware
+    datetimes`), et la source ne pourrait plus jamais rien inserer.
     """
     if not timestamp:
         return None
     try:
-        return (
-            dt.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S%z")
-            .astimezone(dt.UTC)
-            .replace(tzinfo=None)
-        )
+        return dt.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S%z").astimezone(dt.UTC)
     except ValueError:
         return None
 
@@ -113,6 +131,7 @@ class InstagramAdapter(SourceAdapter):
 
     def parse(self, payload: dict) -> list[RawItem]:
         decouverte = payload.get("business_discovery") or {}
+        followers = decouverte.get("followers_count")
         items = []
         for noeud in (decouverte.get("media") or {}).get("data", []):
             permalink = noeud.get("permalink")
@@ -125,7 +144,7 @@ class InstagramAdapter(SourceAdapter):
                 RawItem(
                     url=permalink,
                     title=titre_depuis_caption(caption),
-                    summary=caption or None,
+                    summary=_summary_with_metrics(caption, noeud, followers),
                     published_at=_date(noeud.get("timestamp")),
                     media=_media(noeud),
                 )
