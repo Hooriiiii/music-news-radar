@@ -1,10 +1,11 @@
 """Eteindre les sources X, devenues inutilisables.
 
-La facturation developer.x.com n'est plus active : les 100 sources X renvoient
-toutes 402 Payment Required, soit un millier d'erreurs par run. Le probleme n'est
-pas le cout de ces appels (ils echouent avant d'etre factures) mais le BRUIT :
-`diagnostiquer()` remonte 86 sources en erreur a chaque passage, ce qui rend la
-supervision inutile au moment precis ou on s'apprete a lui confier la publication.
+La facturation developer.x.com n'est plus active : les 85 sources X actives (sur
+100 au total) renvoient toutes 402 Payment Required, soit un millier d'erreurs
+par run. Le probleme n'est pas le cout de ces appels (ils echouent avant d'etre
+factures) mais le BRUIT : `diagnostiquer()` remonte ces sources en erreur a
+chaque passage, ce qui rend la supervision inutile au moment precis ou on
+s'apprete a lui confier la publication.
 
 Reversible : on desactive, on ne supprime pas. Le `state` de chaque source garde
 son since_id, donc rallumer la facturation suffirait a reprendre ou on s'est

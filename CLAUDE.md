@@ -65,6 +65,8 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
 - Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...]`
+  (Instagram : URL au format `ig:<compte>`, ex. `ig:tsugimag` — compte professionnel
+  business/creator uniquement, `business_discovery` ne voit pas les profils perso)
 - Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
   (sans `--apply` : affiche le plan ; idempotent par URL)
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
@@ -562,9 +564,9 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   en quelques jours : stocker l'URL puis la servir plus tard donne un 404
   silencieux, d'ou le telechargement de l'asset au moment du gel (chantier C).
 - **Les sources X sont eteintes** (2026-09-11) : la facturation developer.x.com
-  n'est plus active, les 100 sources renvoyaient 402 a chaque run et noyaient la
-  supervision. `scripts/desactiver_sources_x.py` les eteint sans les supprimer —
-  leur `since_id` est conserve.
+  n'est plus active, les 85 sources actives (sur 100 au total) renvoyaient 402 a
+  chaque run et noyaient la supervision. `scripts/desactiver_sources_x.py` les
+  eteint sans les supprimer — leur `since_id` est conserve.
 - **`op.f()` ne s'appelle QUE dans un callable de migration.** Pose au niveau
   module, il leve `NameError: Can't invoke function 'f', as the proxy object
   has not yet been established` — mais seulement sur les chemins qui chargent
