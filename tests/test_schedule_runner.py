@@ -5,6 +5,8 @@ import datetime as dt
 import pytest
 from sqlalchemy.orm import sessionmaker
 
+import app.schedule.runner as runner
+
 from app.config import settings
 from app.content.compose import CompositionError, CoverVariante, PostDraft
 from app.content.render import RenduIndisponible
@@ -50,9 +52,12 @@ class Outils:
     def notifier(self, titre, message):
         self.notifications.append(message)
 
-    def tourner(self, db, maintenant, mode="reel"):
+    def tourner(self, db, maintenant, mode="reel", horloge=None):
+        # Horloge fraiche figee sur `maintenant` : l'horloge reelle ferait
+        # basculer ces tests en MANQUE une fois leur date passee.
         return tourner(db, maintenant, mode=mode, composer=self.composer, preparer=self.preparer,
-                       publier=self.publier, notifier=self.notifier)
+                       publier=self.publier, notifier=self.notifier,
+                       horloge=horloge or (lambda: maintenant))
 
 
 @pytest.fixture()
@@ -324,3 +329,242 @@ def test_chromium_absent_au_gel_n_exclut_pas_l_article(db_session, article, monk
     assert "Chromium" in creneau.erreur
     assert len(outils.notifications) == 1
     assert len(outils.prepares) == 1
+
+
+# --- Le dashboard modifie la file pendant un passage (session perimee) --------------------
+
+
+def _dashboard(db):
+    """Une seconde session sur le meme moteur : ce que voit et ecrit le dashboard."""
+    return sessionmaker(bind=db.get_bind())()
+
+
+def test_un_remplacement_pendant_la_composition_n_ecrase_pas_le_choix_du_dashboard(db_session, article):
+    autre = _second_article(db_session, article)
+    outils = Outils()
+    composer = outils.composer
+
+    def composer_pendant_un_remplacement(art):
+        if art.id == article.id:
+            with _dashboard(db_session) as dashboard:
+                h0, h1 = (_creneau(dashboard, h) for h in (H0, H1))
+                h1.article_id, h1.etat = None, EtatCreneau.LIBRE
+                h0.article_id, h0.post_id, h0.epingle = autre.id, None, True
+                dashboard.commit()
+        return composer(art)
+
+    outils.composer = composer_pendant_un_remplacement
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    db_session.expire_all()
+    h0 = _creneau_h0(db_session)
+    assert (h0.article_id, h0.post_id) == (autre.id, None)
+    # Le post compose pour rien reste un brouillon, reutilisable.
+    (post,) = db_session.query(Post).all()
+    assert (post.article_id, post.status) == (article.id, PostStatus.DRAFT)
+    # Le creneau H1, libere par le dashboard, n'a pas ete compose sur une vue perimee.
+    assert outils.composes == [article.id]
+
+
+def test_un_saut_pendant_le_gel_n_est_pas_ecrase(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    preparer = outils.preparer
+
+    def preparer_pendant_un_saut(post, art, dossier):
+        with _dashboard(db_session) as dashboard:
+            creneau = _creneau(dashboard, H0)
+            creneau.article_id, creneau.post_id, creneau.etat = None, None, EtatCreneau.LIBRE
+            dashboard.commit()
+        return preparer(post, art, dossier)
+
+    outils.preparer = preparer_pendant_un_saut
+    rapport = outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    db_session.expire_all()
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.fichiers, rapport.geles) == (EtatCreneau.LIBRE, None, 0)
+
+
+def _l_autre(creneau, article, autre):
+    # L'arbitrage choisit lui-meme quel article va sur H0.
+    return autre.id if creneau.article_id == article.id else article.id
+
+
+def test_un_post_d_un_autre_article_n_est_ni_gele_ni_publie(db_session, article):
+    autre = _second_article(db_session, article)
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    creneau = _creneau_h0(db_session)
+    with _dashboard(db_session) as dashboard:
+        # Epingle : sinon l'arbitrage reattribue le creneau a l'autre article.
+        dashboard.get(Creneau, creneau.id).epingle = True
+        dashboard.get(Post, creneau.post_id).article_id = _l_autre(creneau, article, autre)
+        dashboard.commit()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    db_session.expire_all()
+    creneau = _creneau_h0(db_session)
+    assert outils.prepares == [] and creneau.etat == EtatCreneau.PROGRAMME and creneau.erreur
+    assert {db_session.get(Article, a.id).file_exclu_raison for a in (article, autre)} == {None}
+
+
+def test_un_post_change_apres_le_gel_n_est_pas_publie(db_session, article):
+    autre = _second_article(db_session, article)
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    creneau = _creneau_h0(db_session)
+    assert creneau.etat == EtatCreneau.GELE
+    with _dashboard(db_session) as dashboard:
+        dashboard.get(Post, creneau.post_id).article_id = _l_autre(creneau, article, autre)
+        dashboard.commit()
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    db_session.expire_all()
+    creneau = _creneau_h0(db_session)
+    assert outils.publies == []
+    assert creneau.etat == EtatCreneau.ECHEC and creneau.erreur
+    assert {db_session.get(Article, a.id).file_exclu_raison for a in (article, autre)} == {None}
+
+
+# --- Reclamation atomique et articles deja publies --------------------------------------
+
+
+def test_un_creneau_reclame_par_un_autre_passage_n_est_pas_publie(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    maintenant = H0 + dt.timedelta(minutes=20)
+
+    def horloge_puis_reclamation():
+        # Un second passage concurrent reclame le creneau juste avant nous.
+        with _dashboard(db_session) as autre_passage:
+            creneau = _creneau(autre_passage, H0)
+            if creneau.etat == EtatCreneau.GELE:
+                creneau.etat = EtatCreneau.ECHEC
+                creneau.erreur = "publication interrompue avant confirmation"
+                autre_passage.commit()
+        return maintenant
+
+    outils.tourner(db_session, maintenant, horloge=horloge_puis_reclamation)
+    assert outils.publies == []
+
+
+def test_un_article_deja_publie_libere_son_creneau_epingle_sans_composer(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=30))
+    creneau = next(c for c in db_session.query(Creneau).all() if c.article_id == article.id)
+    # Publie a la main entre deux passages ; le post compose a disparu.
+    db_session.delete(db_session.get(Post, creneau.post_id))
+    creneau.post_id, creneau.epingle = None, True
+    db_session.get(Article, article.id).status = ArticleStatus.USED
+    db_session.commit()
+    outils.composes = []
+    outils.tourner(db_session, utc(creneau.publier_a) - dt.timedelta(hours=3))
+    assert outils.composes == []
+    assert (creneau.etat, creneau.article_id, creneau.epingle) == (EtatCreneau.LIBRE, None, False)
+
+
+def test_un_post_publie_a_la_main_n_est_ni_gele_ni_publie(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    creneau = _creneau_h0(db_session)
+    creneau.epingle = True
+    db_session.get(Post, creneau.post_id).status = PostStatus.PUBLISHED
+    db_session.commit()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert (outils.prepares, outils.publies) == ([], [])
+    assert creneau.article_id is None
+
+
+def test_un_post_publie_a_la_main_apres_le_gel_n_est_pas_republie(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    creneau = _creneau_h0(db_session)
+    db_session.get(Post, creneau.post_id).status = PostStatus.PUBLISHED
+    db_session.commit()
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert outils.publies == []
+
+
+# --- Horloge fraiche, dossiers figes, etapes isolees ------------------------------------
+
+
+def test_un_retard_accumule_pendant_le_passage_devient_un_manque(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    maintenant = H0 + dt.timedelta(minutes=20)
+    # Les publications precedentes du passage ont pris 80 minutes.
+    rapport = outils.tourner(db_session, maintenant, horloge=lambda: maintenant + dt.timedelta(minutes=80))
+    assert outils.publies == []
+    assert (_creneau_h0(db_session).etat, rapport.manques) == (EtatCreneau.MANQUE, 1)
+
+
+def _preparer_sur_disque(outils):
+    def preparer(post, art, dossier):
+        outils.prepares.append(post.id)
+        dossier.mkdir(parents=True, exist_ok=True)
+        (dossier / "p_01.jpg").write_bytes(b"jpeg")
+        return ["p_01.jpg"]
+    return preparer
+
+
+@pytest.mark.parametrize("erreur", [None, ErreurInstagram("media refuse")])
+def test_le_dossier_fige_disparait_apres_la_publication(db_session, article, tmp_path, erreur):
+    outils = Outils()
+    outils.preparer = _preparer_sur_disque(outils)
+    outils.erreur_publication = erreur
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    dossier = tmp_path / str(_creneau_h0(db_session).id)
+    assert dossier.exists()
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert not dossier.exists()
+
+
+def test_le_dossier_fige_disparait_pour_un_manque(db_session, article, tmp_path):
+    outils = Outils()
+    outils.preparer = _preparer_sur_disque(outils)
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    dossier = tmp_path / str(_creneau_h0(db_session).id)
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
+    assert not dossier.exists()
+
+
+def test_un_manque_previent(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
+    assert len(outils.notifications) == 1 and "manque" in outils.notifications[0]
+
+
+def test_une_panne_inattendue_de_composition_ne_bloque_pas_un_creneau_gele(db_session, article, monkeypatch):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    assert _creneau_h0(db_session).etat == EtatCreneau.GELE
+    _second_article(db_session, article)
+
+    def create_post_en_panne(db, art, draft):
+        raise ValueError("bug inattendu")
+
+    monkeypatch.setattr(runner, "create_post", create_post_en_panne)
+    rapport = outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert _creneau_h0(db_session).etat == EtatCreneau.PUBLIE
+    assert any("bug inattendu" in erreur for erreur in rapport.erreurs)
+    assert any("bug inattendu" in message for message in outils.notifications)
+
+
+def test_un_arbitrage_en_panne_ne_bloque_pas_un_creneau_gele(db_session, article, monkeypatch):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+
+    def arbitrage_en_panne(db, maintenant):
+        raise RuntimeError("arbitrage casse")
+
+    monkeypatch.setattr(runner, "appliquer_arbitrage", arbitrage_en_panne)
+    rapport = outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert _creneau_h0(db_session).etat == EtatCreneau.PUBLIE
+    assert any("arbitrage casse" in erreur for erreur in rapport.erreurs)
