@@ -3,6 +3,51 @@
 Date : 2026-09-11
 Chantiers : **A** (source Instagram), **B** (publication), **C** (file programmée)
 État : validé avec l'utilisateur, prêt pour le plan d'implémentation
+Révisé : **2026-09-16 — connexion Instagram seule, sans Facebook** (voir ci-dessous)
+
+## Révision du 2026-09-16 : connexion Instagram, pas de Facebook
+
+La première version supposait la **connexion Facebook** (compte Facebook, Page reliée
+au compte Kinda, jeton `EAA…`, `graph.facebook.com`). Elle est tombée à l'exécution :
+la création du compte Facebook échoue sur « Une erreur s'est produite lors de
+l'inscription », message générique de Meta, et l'utilisateur a choisi de ne pas
+s'acharner.
+
+Meta propose une seconde variante, **l'API Instagram avec connexion Instagram** : ni
+compte ni Page Facebook, jeton `IG…`, hôte `graph.instagram.com`. Elle est en place :
+
+| Élément | Valeur |
+|---|---|
+| App Meta | « Kinda Radar », cas d'usage « Gérer les messages et les contenus sur Instagram », sans portefeuille business |
+| Compte | `kindanewsfrance`, type BUSINESS, déclaré testeur Instagram de l'app |
+| `.env` | `META_ACCESS_TOKEN` (jeton `IG`, ~60 jours) et `META_IG_USER_ID=17841441705212514` |
+
+**Vérifié en direct le 2026-09-16, en lecture seule** : `GET /me` rend le bon compte et
+un `user_id` identique au `.env` ; `GET /{ig-user-id}/content_publishing_limit` rend
+un quota de **100 publications / 24 h, 0 utilisée** — donc le droit de publier est
+actif. Rien n'a été publié pendant la vérification.
+
+Ce que la variante change, chantier par chantier :
+
+- **A — la source Instagram est ABANDONNÉE.** `business_discovery` (lire les posts
+  d'AUTRES comptes) n'existe qu'avec la connexion Facebook. Seul survit le nettoyage
+  des sources X, indépendant de Meta.
+- **B — publication : inchangée sur le fond.** Mêmes conteneurs, même sondage de
+  `status_code`, mais sur `graph.instagram.com` avec le jeton `IG`. Le rafraîchissement
+  du jeton passe par `GET graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token`
+  — possible seulement pour un jeton âgé d'au moins 24 h et non expiré, d'où l'alerte
+  à J-7 qui devient indispensable.
+- **C — file et arbitrage : inchangé.**
+
+**Conséquence directe pour les reels.** `CLAUDE.md` acte que les MP4 ne viennent que
+de X. X est à sec (402) et la source Instagram ne se fera pas : **aucune nouvelle
+vidéo n'entre plus dans la base**, et au 2026-09-16 il ne reste aucun article
+pertinent avec vidéo. Tant que rien ne change, la file ne produira que des **posts
+carrousel** ; le chemin reel du chantier B reste à coder, mais n'aura pas de matière.
+Deux issues, à trancher plus tard par l'utilisateur : réactiver la facturation X pour
+les seules sources vidéo (UGC et radar), ou accepter une file sans reels.
+
+---
 
 ## L'objectif, dans les mots de l'utilisateur
 
@@ -43,10 +88,12 @@ Vérifié dans la documentation Meta le 2026-09-11, pas de mémoire.
 **`business_discovery` fonctionne et est gratuit.** Pour n'importe quel compte
 **professionnel** (business ou creator), il rend les posts récents avec `caption`,
 `media_url`, `permalink`, `timestamp`, `like_count`, `comments_count`,
-`media_type`. Facebook Login obligatoire.
+`media_type`. **Facebook Login obligatoire — d'où l'abandon du chantier A en révision
+du 2026-09-16.**
 
 **Le Content Publishing API fonctionne.** 100 posts publiés par période glissante de
-24 h — très au-dessus des 2/jour visés. Compte professionnel lié à une Page.
+24 h — très au-dessus des 2/jour visés. Avec la connexion Instagram, un compte
+professionnel suffit : pas de Page Facebook (quota vérifié en direct le 2026-09-16).
 
 **`cover_url` existe.** Le pari écrit dans `CLAUDE.md` (« le moyen fiable viendra de
 l'API Meta ») est confirmé : on peut fournir explicitement l'image de couverture
@@ -77,57 +124,18 @@ compte source en légende est intégrée par défaut, comme minimum de bonne foi
 
 ---
 
-# Chantier A — Source Instagram
+# Chantier A — Source Instagram (ABANDONNÉE le 2026-09-16)
 
-## Principe
+`business_discovery` exige la connexion Facebook, que l'utilisateur n'a pas pu mettre
+en place. L'adapter, le type `instagram`, la migration et les comptes cibles ne sont
+donc pas construits. La conception d'origine reste lisible dans l'historique git
+(commit `8a4cddb`) si la connexion Facebook redevient possible un jour.
 
-Un adapter de plus dans la couche pluggable. Le contrat `fetch() -> list[RawItem]`
-ne bouge pas, donc **rien en aval ne change** : dédup, clustering, scoring,
-illustrations et mentions A&R fonctionnent tels quels.
-
-- `app/sources/instagram.py` : `InstagramAdapter`
-- `SourceType.INSTAGRAM` + entrée au registry de `sources/__init__.py`
-- `source.url = "ig:<username>"` — même convention que le préfixe `ugc:` et
-  `radar:` déjà en place côté X
-- Config : `meta_access_token`, `meta_ig_user_id`
-
-## Mapping vers `RawItem`
-
-| `RawItem` | Source |
-|---|---|
-| `url` | `permalink` |
-| `title` | première phrase de la `caption`, tronquée |
-| `summary` | `caption` entière |
-| `published_at` | `timestamp` |
-| `media` | `[{type, url, preview_url, width, height}]` — `media_type` IMAGE/VIDEO/CAROUSEL_ALBUM |
-
-Le champ `type` du média — celui dont `CLAUDE.md` explique qu'il rendait le format
-REELS décidable — est rempli d'office ici, ce que X ne donnait qu'au prix des
-`variants`.
-
-## Deux pièges identifiés, et leur traitement
-
-**Les URL du CDN Instagram sont signées et expirent** (quelques jours). Stocker
-`media_url` à l'ingestion puis publier trois jours plus tard donnerait un 404
-silencieux. → l'asset est **téléchargé localement au moment du gel** (chantier C),
-jamais servi depuis l'URL d'origine. Si l'URL est morte au gel, le post est marqué
-en défaut et le créneau repart à l'arbitrage.
-
-**Un compte cible en profil personnel est invisible de l'API.** Or les artistes
-émergents — précisément le deal-flow A&R que décrit `CLAUDE.md` — sont souvent en
-perso. **L'ingestion Instagram complète les RSS, elle ne les remplace pas.** Écrire
-ça noir sur blanc évite d'attendre d'elle une couverture qu'elle ne peut pas donner.
-
-## Quota et état
-
-`business_discovery` consomme le quota Graph API de l'app (de l'ordre de 200
-appels/heure). Un appel par source et par run horaire reste très en dessous. L'état
-`sources.state` porte le `timestamp` du dernier post vu, pour ne pas réingérer —
-**réassigné en entier, jamais muté en place**, piège SQLAlchemy déjà documenté.
+Ce qui en reste :
 
 ## Nettoyage joint
 
-Les 100 sources X sont désactivées dans le même chantier
+Les sources X — **85 encore actives au 2026-09-16**, 15 déjà coupées — sont désactivées
 (`scripts/desactiver_sources_x.py`, idempotent, réversible). Sans ça chaque run
 continue de produire un millier d'erreurs 402 qui noient la supervision — celle-là
 même qui doit rester lisible pour signaler les vraies pannes.
@@ -139,6 +147,8 @@ même qui doit rester lisible pour signaler les vraies pannes.
 ## `app/publish/instagram.py`
 
 Deux chemins, un seul motif : créer un conteneur, attendre qu'il soit prêt, publier.
+Tous les appels partent de `https://graph.instagram.com/{META_IG_USER_ID}` avec le
+jeton `IG` (révision du 2026-09-16).
 
 - **Carrousel** (gabarit `kinda_post`) : un conteneur enfant par slide avec
   `is_carousel_item=true`, puis un conteneur `CAROUSEL`, puis `media_publish`.
@@ -243,11 +253,12 @@ décaler, sauter**.
 
 # Ce qui dépend de l'utilisateur, pas du code
 
-1. **App Review Meta.** `instagram_business_content_publish` et `business_discovery`
-   exigent une revue pour une app en production. En mode dev, tout fonctionne sur
-   ses propres comptes — assez pour construire et tester l'intégralité — mais la
-   mise en service réelle passe par un formulaire que lui seul peut remplir.
-2. **Le token long-lived expire à 60 jours.** Rafraîchissement automatique prévu,
+1. **Contrôle app Meta.** `instagram_business_content_publish` exige une revue pour
+   une app en production. Tant qu'elle n'est pas faite, l'app ne publie que sur ses
+   comptes **testeurs** — or `kindanewsfrance` en est un, ce qui suffit à Kinda. La
+   revue ne devient nécessaire que pour publier sur un compte qui n'est pas testeur.
+2. **Le jeton `IG` expire à 60 jours** (généré le 2026-09-16). Rafraîchissement
+   automatique prévu via `refresh_access_token`,
    **plus une alerte de supervision à J-7**. Sans elle, la publication s'arrêterait
    en silence exactement comme l'agent digest pendant cinq semaines.
 3. **Les crédits Anthropic.** Sans scoring, pas de file.
@@ -260,8 +271,7 @@ est concentré exprès, et s'y teste à fond : déterminisme du tirage sur une m
 date, bornes des fenêtres, cascade de substitution, inviolabilité d'un créneau gelé
 ou épinglé, sortie de file au-delà de trois jours.
 
-L'adapter Instagram se teste sur des fixtures JSON de réponse `business_discovery`,
-y compris le cas du compte non professionnel. La publication se teste sur un faux
+La publication se teste sur un faux
 client HTTP, avec le scénario `IN_PROGRESS` puis `FINISHED` — celui qui casse en
 production si on ne le sonde pas.
 
@@ -270,5 +280,5 @@ et réarbitré à +120 min.
 
 # Ordre de livraison
 
-**A** est livrable seul et a une valeur immédiate : il remplace une source d'assets
-morte. **B** est inutile sans hébergement public. **C** dépend des deux.
+**A**, réduit au nettoyage des sources X, est livrable seul et rend la supervision
+lisible. **B** est inutile sans hébergement public. **C** dépend de **B**.
