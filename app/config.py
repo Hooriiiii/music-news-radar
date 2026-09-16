@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     # la cover 3:4 est recadree en 4:5. A passer a 0.75 seulement si un essai reel
     # montre que Meta accepte le 3:4.
     publication_ratio_min: float = 0.8
+    # Fenetres de publication, heure de Paris. L'heure exacte est tiree au hasard
+    # dans chaque fenetre, pour ne pas publier comme une horloge.
+    publication_fuseau: str = "Europe/Paris"
+    publication_fenetre_matin: str = "08:30-11:00"
+    publication_fenetre_apres_midi: str = "17:00-19:30"
+    # 3 jours x 2 creneaux.
+    publication_creneaux: int = 6
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
