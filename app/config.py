@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     publication_fenetre_apres_midi: str = "17:00-19:30"
     # 3 jours x 2 creneaux.
     publication_creneaux: int = 6
+    # Eligibilite a la file : la barre du digest, et une actu de moins de 3 jours.
+    publication_min_relevance: int = 60
+    publication_fraicheur_jours: int = 3
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
