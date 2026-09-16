@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     meta_api_version: str = "v23.0"
     meta_token_path: Path = Path.home() / "Library/Application Support/Kinda/instagram_token.json"
 
+    # --- Publication automatique ---
+    # Les fichiers figes au gel (T-2h), un sous-dossier par creneau.
+    publication_dir: Path = Path.home() / "Library/Application Support/Kinda/publication"
+    # Meta exige des proportions entre 4:5 et 1,91:1 (documentation, 2026-09-16) :
+    # la cover 3:4 est recadree en 4:5. A passer a 0.75 seulement si un essai reel
+    # montre que Meta accepte le 3:4.
+    publication_ratio_min: float = 0.8
+
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
     # Mention ajoutée aux alertes pour déclencher une vraie notification
