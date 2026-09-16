@@ -46,8 +46,6 @@ def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
         image = fond
 
     largeur, hauteur = image.size
-    if largeur < LARGEUR_MIN:
-        raise ImageInexploitable(f"trop petite : {largeur} px de large, minimum {LARGEUR_MIN}")
 
     ratio = largeur / hauteur
     if ratio < ratio_min:
@@ -60,6 +58,11 @@ def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
         nouvelle_largeur = int(hauteur * RATIO_MAX)
         gauche = (largeur - nouvelle_largeur) // 2
         image = image.crop((gauche, 0, gauche + nouvelle_largeur, hauteur))
+
+    # Verifier la largeur minimale APRES le recadrage de ratio, qui peut
+    # l'avoir diminuee.
+    if image.width < LARGEUR_MIN:
+        raise ImageInexploitable(f"trop petite apres recadrage : {image.width} px de large, minimum {LARGEUR_MIN}")
 
     if image.width > LARGEUR_MAX:
         nouvelle_hauteur = round(image.height * LARGEUR_MAX / image.width)

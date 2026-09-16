@@ -55,3 +55,9 @@ def test_des_octets_qui_ne_sont_pas_une_image_sont_refuses():
 def test_une_image_trop_petite_est_refusee():
     with pytest.raises(ImageInexploitable):
         normaliser(_image(100, 100))
+
+
+def test_une_banniere_trop_etroite_apres_recadrage_est_refusee():
+    """Une banniere 728x90 (8.09:1) est recadree a 171x90, sous les 320 px."""
+    with pytest.raises(ImageInexploitable):
+        normaliser(_image(728, 90))
