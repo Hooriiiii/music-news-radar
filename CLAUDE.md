@@ -111,7 +111,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
     `localhost:8000` soit debout. `KeepAlive`, sans `--reload`, sur `127.0.0.1`.
   - `com.musicnewsradar.publication` — `run_publication` toutes les **10 minutes** :
     la file de publication Instagram. Sort immédiatement en mode `arret`, le défaut
-    (`PUBLICATION_MODE` dans `.env`).
+    (`PUBLICATION_MODE` dans `.env`). Une exception inattendue est notifiée (au plus
+    une fois par heure, état dans `publication_panne.json` à côté du jeton) et le
+    script sort en code 1.
 
   **Renommage de l'agent, et son piège.** L'agent s'appelait
   `com.musicnewsradar.ingest`. launchd identifie un agent par son LABEL, pas par
@@ -131,7 +133,10 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   semaines avant ce socle). `--status` dit si la conf `newsyslog` est en place et
   affiche la commande `sudo` à passer une fois — `/etc/newsyslog.d` est hors de
   portée du script. Après le renommage `ingest.log` → `pipeline.log`, la conf
-  posée précédemment est signalée « obsolète » et doit être re-posée.
+  posée précédemment est signalée « obsolète » et doit être re-posée. **Idem
+  depuis l'ajout de `publication.log`** : une conf posée avant ne fait pas
+  tourner ce log — `--status` la dit « obsolète », re-passer la commande `sudo`
+  qu'il affiche.
 
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
@@ -163,8 +168,10 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
 - `app/delivery/` — restitution : digest (Jinja2 + SMTP), alertes Discord (webhook).
   Communique avec le pipeline uniquement via la base.
 - `app/api/` — endpoints REST (`/articles`, `/digests`) pour une future UI web.
-- `scripts/` — points d'entrée. Seul `run_pipeline.py` est planifié : il enchaîne
-  ingestion → dédup → scoring → mentions → purge (via `app/pipeline/run.py`).
+- `scripts/` — points d'entrée. Deux sont planifiés : `run_pipeline.py` enchaîne
+  ingestion → dédup → scoring → mentions → purge (via `app/pipeline/run.py`), et
+  `run_publication.py` fait un passage de la file de publication (voir
+  « Publication automatique »).
   `run_ingest.py` fait de l'ingestion **et rien d'autre** et reste utilisable à la
   main (déboguer une source sans payer de scoring) — il n'est plus branché à aucun
   ordonnanceur depuis le passage au tout-local.
@@ -335,7 +342,9 @@ on ne publie pas** : un Mac rouvert le soir lâcherait sinon la journée d'un co
 **Trois modes** (`PUBLICATION_MODE`) : `arret`, `apercu` (tout, y compris le
 conteneur chez Meta, sauf `media_publish`), `reel`. Publier est public et
 irréversible : passer à `reel` est une décision de l'utilisateur. En `apercu`, un
-article reste éligible et revient donc sur les créneaux suivants.
+article passé en aperçu devient **inéligible** (comme un article publié : son
+créneau APERCU le retire de `candidats_eligibles`), sinon le même article
+reviendrait à chaque créneau — la file avance donc comme en `reel`.
 
 **Règles Meta vérifiées dans la documentation (2026-09-16)** : JPEG uniquement,
 8 Mo, 320 à 1440 px de large, proportions 4:5 à 1,91:1, carrousel de 10, légende de
@@ -348,8 +357,26 @@ rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashb
 n'est jamais exposé. `cloudflared` est cherché hors du PATH de launchd, comme ffmpeg.
 
 **Exclusion.** Un article dont la composition ou le gel échoue, ou que l'utilisateur
-« saute », reçoit `articles.file_exclu_raison` et ne revient plus. Une panne
-systémique (crédits Anthropic, réseau) n'exclut rien.
+« saute », reçoit `articles.file_exclu_raison` et ne revient plus. C'est aussi le
+cas dès qu'un créneau est **réclamé** pour publication (GELE → ECHEC committé
+avant l'appel à Meta, raison « publication interrompue avant confirmation ») :
+l'exclusion n'est levée que si Meta confirme ; un refus de Meta la remplace par
+« echec de publication : … ». Un article ainsi exclu ne repart jamais, même après
+un crash — mieux vaut un post manqué qu'un post publié deux fois. Une panne
+systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'un
+post qui ne porte plus l'article de son créneau (gel ou publication refusés,
+erreur posée).
+
+**Le dashboard édite pendant un passage.** L'agent relit chaque créneau avant de
+le modifier et n'écrit le résultat d'une composition, d'un gel ou d'une
+réclamation que par un UPDATE conditionnel (état, article, post attendus) ; si le
+dashboard est passé entre-temps, son choix prime et le post composé reste un
+brouillon. Un article publié à la main (USED, post PUBLISHED) libère et
+désépingle son créneau. Un post sur un créneau GELE refuse toute édition de
+contenu (409). Les créneaux déjà gelés sont publiés AVANT composition et gel, et
+chaque étape est isolée : une panne amont ne bloque jamais un post prêt. L'heure
+est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié), et
+le dossier figé est supprimé une fois le créneau terminé.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
