@@ -70,11 +70,13 @@ def test_une_cover_qui_deborde_n_est_jamais_publiee(tmp_path):
         preparer_fichiers(_post(), None, tmp_path, rendre=_rendre(overflow=True), telecharger=_telecharger())
 
 
-def test_chromium_absent_est_une_preparation_impossible(tmp_path):
+def test_chromium_absent_n_est_pas_une_preparation_impossible(tmp_path):
+    # Panne systemique : elle doit remonter telle quelle, sinon le runner
+    # exclurait les articles un par un pour une faute qui n'est pas la leur.
     def rendre(slides, template):
         raise RenduIndisponible("Chromium Playwright est absent")
 
-    with pytest.raises(PreparationImpossible, match="Chromium"):
+    with pytest.raises(RenduIndisponible, match="Chromium"):
         preparer_fichiers(_post(), None, tmp_path, rendre=rendre, telecharger=_telecharger())
 
 

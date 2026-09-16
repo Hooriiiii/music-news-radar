@@ -2,8 +2,8 @@
 
 A T-2h, on rend la cover, on telecharge les photos de l'actu et on les met aux
 regles de Meta. Deux raisons de le faire en avance plutot qu'a l'heure : une
-panne (Chromium absent, image morte) laisse le temps de remplacer l'article, et
-l'heure de publication ne depend plus de la lenteur d'un telechargement.
+panne laisse le temps de reagir (remplacer l'article sur une cover qui deborde,
+retenter sur un Chromium absent), et l'heure de publication ne depend plus de la lenteur d'un telechargement.
 
 Ordre du carrousel : la cover d'abord, puis les photos de l'actu. Pas de video :
 la publication ne fait pas de reel.
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.content.export import telecharger as telecharger_media
-from app.content.render import RenduIndisponible, render_post
+from app.content.render import render_post
 from app.publish.images import ImageInexploitable, normaliser
 
 CARROUSEL_MAX = 10
@@ -50,10 +50,9 @@ def preparer_fichiers(
     for ancien in dossier.glob("*.jpg"):
         ancien.unlink()
 
-    try:
-        rendus = rendre(post.slides, "kinda_post")
-    except RenduIndisponible as exc:
-        raise PreparationImpossible(str(exc)) from exc
+    # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
+    # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.
+    rendus = rendre(post.slides, "kinda_post")
     if not rendus:
         raise PreparationImpossible("la cover n'a pas pu etre rendue")
     if rendus[0].overflow:

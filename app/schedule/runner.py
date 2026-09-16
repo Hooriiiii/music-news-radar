@@ -204,7 +204,7 @@ def _publier(db, maintenant: dt.datetime, mode: str, publier, notifier, rapport:
         except Exception as exc:  # noqa: BLE001 -- tout echec doit se voir
             creneau.etat = EtatCreneau.ECHEC
             creneau.erreur = str(exc)[:1000]
-            article = db.get(Article, creneau.article_id) if creneau.article_id else None
+            article = db.get(Article, post.article_id) if post is not None and post.article_id else None
             if article is not None:
                 # Un article refuse par Meta ne revient pas dans la file.
                 article.file_exclu_raison = f"echec de publication : {exc}"[:500]

@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.content.compose import CompositionError, CoverVariante, PostDraft
+from app.content.render import RenduIndisponible
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
 from app.publish.instagram import ErreurInstagram
 from app.publish.preparation import PreparationImpossible
@@ -308,3 +309,18 @@ def test_une_notification_en_panne_n_interrompt_pas_le_passage(db_session, artic
     outils.notifier = notifier_en_panne
     _jusqu_a_publication(outils, db_session, H0)
     assert _creneau_h0(db_session).etat == EtatCreneau.ECHEC
+
+
+def test_chromium_absent_au_gel_n_exclut_pas_l_article(db_session, article, monkeypatch):
+    _second_article(db_session, article)
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    monkeypatch.setattr(settings, "publication_gel_heures", 12)
+    outils.erreur_preparation = RenduIndisponible("Chromium Playwright est absent")
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    creneau = _creneau_h0(db_session)
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert (creneau.etat, creneau.article_id) == (EtatCreneau.PROGRAMME, article.id)
+    assert "Chromium" in creneau.erreur
+    assert len(outils.notifications) == 1
+    assert len(outils.prepares) == 1
