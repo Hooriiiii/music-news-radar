@@ -1,0 +1,73 @@
+"""Mettre une image aux regles de l'API de publication Instagram.
+
+Regles citees de la documentation Meta le 2026-09-16 : JPEG uniquement, 8 Mo au
+plus, largeur de 320 a 1440 px, proportions entre 4:5 et 1,91:1. Une image hors
+de ces bornes fait echouer le conteneur -- et seulement au moment de publier,
+c'est-a-dire trop tard. D'ou une normalisation systematique au gel.
+
+La cover `kinda_post` (1080x1440, soit 3:4) est elle-meme hors bornes : elle est
+recadree AU CENTRE en 1080x1350. 45 px partent en haut et en bas ; le logo (87 px
+du haut) et le bloc d'accroche (76 px du bas) restent dans l'image.
+"""
+
+import io
+
+from PIL import Image, ImageOps
+
+RATIO_MIN = 4 / 5
+RATIO_MAX = 1.91
+LARGEUR_MIN = 320
+LARGEUR_MAX = 1440
+POIDS_MAX = 8 * 1024 * 1024
+# Qualites essayees dans l'ordre, jusqu'a passer sous les 8 Mo.
+QUALITES = (92, 85, 75, 65)
+# Fond des images transparentes : le noir de la charte Kinda.
+FOND = (0x1D, 0x1D, 0x1D)
+
+
+class ImageInexploitable(ValueError):
+    """L'image ne peut pas etre mise aux regles de Meta. Message affichable."""
+
+
+def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
+    try:
+        image = Image.open(io.BytesIO(octets))
+        image.load()
+    except Exception as exc:  # noqa: BLE001 -- Pillow leve des types tres varies
+        raise ImageInexploitable(f"image illisible : {exc}") from exc
+
+    # Une photo de telephone porte souvent son orientation en EXIF : sans ca,
+    # elle partirait couchee.
+    image = ImageOps.exif_transpose(image)
+    if image.mode != "RGB":
+        rgba = image.convert("RGBA")
+        fond = Image.new("RGB", rgba.size, FOND)
+        fond.paste(rgba, mask=rgba.getchannel("A"))
+        image = fond
+
+    largeur, hauteur = image.size
+    if largeur < LARGEUR_MIN:
+        raise ImageInexploitable(f"trop petite : {largeur} px de large, minimum {LARGEUR_MIN}")
+
+    ratio = largeur / hauteur
+    if ratio < ratio_min:
+        # int() et pas round() : arrondir vers le haut donnerait une hauteur a
+        # peine trop grande, donc un ratio a peine sous le minimum.
+        nouvelle_hauteur = int(largeur / ratio_min)
+        haut = (hauteur - nouvelle_hauteur) // 2
+        image = image.crop((0, haut, largeur, haut + nouvelle_hauteur))
+    elif ratio > RATIO_MAX:
+        nouvelle_largeur = int(hauteur * RATIO_MAX)
+        gauche = (largeur - nouvelle_largeur) // 2
+        image = image.crop((gauche, 0, gauche + nouvelle_largeur, hauteur))
+
+    if image.width > LARGEUR_MAX:
+        nouvelle_hauteur = round(image.height * LARGEUR_MAX / image.width)
+        image = image.resize((LARGEUR_MAX, nouvelle_hauteur), Image.LANCZOS)
+
+    for qualite in QUALITES:
+        tampon = io.BytesIO()
+        image.save(tampon, "JPEG", quality=qualite, optimize=True)
+        if tampon.tell() <= POIDS_MAX:
+            return tampon.getvalue()
+    raise ImageInexploitable("plus de 8 Mo meme compressee")
