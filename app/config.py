@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,6 +106,16 @@ class Settings(BaseSettings):
     # Borne le coût réseau d'un run -- surtout au premier passage, où l'arriéré
     # se compte en centaines d'articles.
     illustration_max_par_run: int = 40
+
+    # --- Instagram (connexion Instagram, sans Facebook) ---
+    # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
+    # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant
+    # vit dans `meta_token_path` -- le code ne reecrit jamais .env.
+    meta_access_token: str | None = None
+    meta_ig_user_id: str | None = None
+    # Verifie en lecture seule le 2026-09-16 : v21.0 et v23.0 repondent.
+    meta_api_version: str = "v23.0"
+    meta_token_path: Path = Path.home() / "Library/Application Support/Kinda/instagram_token.json"
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
