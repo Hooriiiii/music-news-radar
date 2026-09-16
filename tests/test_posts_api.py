@@ -1,8 +1,10 @@
 import datetime as dt
 
+import pytest
+
 from app.content.compose import CoverVariante, PostDraft
 from app.content.render import RenduSlide
-from app.models import Article, ArticleStatus, Post, PostStatus, Source, SourceType
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
 from app.schemas import PostOut
 
 
@@ -641,3 +643,35 @@ def test_une_slide_legacy_migree_valide_postout(client, db_session):
 
     reponse_liste = client.get("/posts")
     assert reponse_liste.status_code == 200
+
+
+def _post_sur_un_creneau(db, etat):
+    article = _article(db)
+    post = _post(db, article, variants=_quatre_variantes())
+    db.add(Creneau(
+        publier_a=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1),
+        article_id=article.id, post_id=post.id, etat=EtatCreneau(etat),
+    ))
+    db.commit()
+    return post
+
+
+@pytest.mark.parametrize("modification", [
+    {"caption": "Autre legende"},
+    {"hashtags": ["#pop"]},
+    {"variante_retenue": 1},
+    {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**"}]},
+])
+def test_un_post_gele_ne_se_modifie_plus(client, db_session, modification):
+    """Les fichiers et la legende du creneau gele sont ceux qui partiront : une
+    edition apres le gel publierait autre chose que ce que l'utilisateur voit."""
+    post = _post_sur_un_creneau(db_session, "gele")
+    reponse = client.patch(f"/posts/{post.id}", json=modification)
+    assert reponse.status_code == 409
+    db_session.refresh(post)
+    assert post.caption == "Une legende." and post.hashtags == ["#electro"]
+
+
+def test_un_post_programme_non_gele_se_modifie(client, db_session):
+    post = _post_sur_un_creneau(db_session, "programme")
+    assert client.patch(f"/posts/{post.id}", json={"caption": "Autre"}).status_code == 200

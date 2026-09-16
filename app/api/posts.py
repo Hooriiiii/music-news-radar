@@ -10,7 +10,7 @@ from app.content.export import construire_zip
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.db import get_db
-from app.models import Article, ArticleStatus, Post, PostStatus
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
 from app.schemas import CoversOut, PostOut, PostUpdate
 
 router = APIRouter(tags=["posts"])
@@ -59,6 +59,19 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
     post = db.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    edite_le_contenu = any(
+        valeur is not None
+        for valeur in (payload.slides, payload.variante_retenue, payload.caption, payload.hashtags)
+    )
+    if edite_le_contenu and db.scalar(
+        select(Creneau.id).where(Creneau.post_id == post.id, Creneau.etat == EtatCreneau.GELE)
+    ):
+        # Les fichiers sont figes et la legende part telle quelle a l'heure dite :
+        # une edition maintenant ne correspondrait plus a ce qui a ete fige.
+        raise HTTPException(
+            status_code=409, detail="Post gele sur un creneau de publication : il ne se modifie plus"
+        )
 
     if payload.caption is not None:
         post.caption = payload.caption
