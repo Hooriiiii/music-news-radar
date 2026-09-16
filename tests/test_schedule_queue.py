@@ -68,3 +68,9 @@ def test_egalite_departagee_par_identifiant():
 
 def test_un_age_inconnu_compte_pour_un_jour():
     assert score(Candidat(1, 80, 0, None), T0) == 65.0
+
+
+def test_un_article_en_double_n_occupe_qu_une_place():
+    """Un article ne peut occuper qu'une seule place, meme s'il apparait deux fois."""
+    candidats = [_candidat(1, 50), _candidat(1, 90), _candidat(2, 60)]
+    assert _ordre(arbitrer(_places(3), candidats, T0)) == [1, 2, None]

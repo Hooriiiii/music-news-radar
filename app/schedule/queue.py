@@ -53,6 +53,13 @@ def arbitrer(
         (c for c in candidats if c.article_id not in pris),
         key=lambda c: (-(score(c, maintenant) + (MARGE_TITULAIRE if c.compose else 0.0)), c.article_id),
     )
+    # Deduplication: keep only the first (best-ranked) occurrence of each article_id
+    vu = set()
+    classement_unique = []
+    for candidat in classement:
+        if candidat.article_id not in vu:
+            classement_unique.append(candidat)
+            vu.add(candidat.article_id)
     for rang, place in enumerate(libres):
-        affectation[place.publier_a] = classement[rang].article_id if rang < len(classement) else None
+        affectation[place.publier_a] = classement_unique[rang].article_id if rang < len(classement_unique) else None
     return affectation
