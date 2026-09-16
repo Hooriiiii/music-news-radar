@@ -109,6 +109,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
     n'exige du temps réel.
   - `com.musicnewsradar.dashboard` — uvicorn en permanence, pour que
     `localhost:8000` soit debout. `KeepAlive`, sans `--reload`, sur `127.0.0.1`.
+  - `com.musicnewsradar.publication` — `run_publication` toutes les **10 minutes** :
+    la file de publication Instagram. Sort immédiatement en mode `arret`, le défaut
+    (`PUBLICATION_MODE` dans `.env`).
 
   **Renommage de l'agent, et son piège.** L'agent s'appelait
   `com.musicnewsradar.ingest`. launchd identifie un agent par son LABEL, pas par
@@ -310,6 +313,45 @@ protège aussi.
 Le modèle de composition est `composer_model` (défaut `claude-sonnet-5`), plus fort
 que celui du scoring : la composition tourne quelques fois par jour et sa qualité
 se voit directement sur le feed.
+
+## Publication automatique (`app/publish/`, `app/schedule/`)
+
+Kinda publie seul deux carrousels par jour, choisis dans le flux scoré. Pas de reel :
+aucune source ne fournit plus de vidéo (X à sec, source Instagram abandonnée).
+Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révision du
+2026-09-16.
+
+**Connexion Instagram, sans Facebook.** App Meta « Kinda Radar », compte
+`kindanewsfrance` déclaré testeur : une app non revue publie sur ses comptes
+testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine dans
+`meta_token_path` (droits 600) ; `.env` n'est que la valeur initiale. Alerte à J-7.
+
+**La file.** 6 créneaux (3 jours × 2), heure tirée dans 08:30-11:00 et 17:00-19:30
+(Paris) avec une graine dérivée de la date — sinon l'heure glisserait à chaque
+passage. Le coût dicte le calendrier : composition Claude à J-1, gel (rendu et
+téléchargements) à T-2h, publication à l'heure. **Au-delà de 90 minutes de retard,
+on ne publie pas** : un Mac rouvert le soir lâcherait sinon la journée d'un coup.
+
+**Trois modes** (`PUBLICATION_MODE`) : `arret`, `apercu` (tout, y compris le
+conteneur chez Meta, sauf `media_publish`), `reel`. Publier est public et
+irréversible : passer à `reel` est une décision de l'utilisateur. En `apercu`, un
+article reste éligible et revient donc sur les créneaux suivants.
+
+**Règles Meta vérifiées dans la documentation (2026-09-16)** : JPEG uniquement,
+8 Mo, 320 à 1440 px de large, proportions 4:5 à 1,91:1, carrousel de 10, légende de
+2200 caractères et 30 hashtags. La cover `kinda_post` (3:4) est donc recadrée au
+centre en 1080×1350 par `app/publish/images.py` (`publication_ratio_min`).
+
+**Hébergement éphémère.** Meta télécharge les images en cURL. Au moment de publier
+seulement, un mini-serveur local sert le dossier du post (sans listing) et un tunnel
+rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashboard
+n'est jamais exposé. `cloudflared` est cherché hors du PATH de launchd, comme ffmpeg.
+
+**Exclusion.** Un article dont la composition ou le gel échoue, ou que l'utilisateur
+« saute », reçoit `articles.file_exclu_raison` et ne revient plus. Une panne
+systémique (crédits Anthropic, réseau) n'exclut rien.
+
+Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
