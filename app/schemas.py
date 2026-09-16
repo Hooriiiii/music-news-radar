@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.content import layout
 from app.content.highlight import validate_headline
-from app.models import ArticleStatus, PostStatus, SourceType
+from app.models import ArticleStatus, EtatCreneau, PostStatus, SourceType
 
 
 class SourceOut(BaseModel):
@@ -201,3 +201,25 @@ class CoversOut(BaseModel):
 
     covers: list[str]
     overflow: list[bool]
+
+
+class CreneauOut(BaseModel):
+    id: int
+    publier_a: dt.datetime
+    etat: EtatCreneau
+    epingle: bool
+    article_id: int | None
+    article_title: str | None = None
+    relevance: int | None = None
+    post_id: int | None
+    ig_media_id: str | None
+    erreur: str | None
+
+
+class CreneauUpdate(BaseModel):
+    """Une seule action par appel : le routeur refuse en 422 zero ou plusieurs."""
+
+    epingle: bool | None = None
+    article_id: int | None = None
+    sauter: bool = False
+    decaler: bool = False
