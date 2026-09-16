@@ -69,6 +69,16 @@
 
   /* --- Panneau Posts --- */
   #posts-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  #schedule-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .slot-actions { display: flex; gap: 4px; }
+  .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px; cursor: pointer; padding: 2px 6px; }
+  .status-pill.libre { background: #23232d; color: var(--muted); }
+  .status-pill.programme { background: #241f3d; color: #b9a6ff; }
+  .status-pill.gele { background: #1f2f3d; color: #8fd0ff; }
+  .status-pill.publie { background: #1d3325; color: #7ee2a0; }
+  .status-pill.apercu { background: #33301d; color: #e8d27a; }
+  .status-pill.echec { background: #3d1f23; color: #ff9aa5; }
+  .status-pill.manque { background: #2d2323; color: #c9a3a3; }
   .posts-bar { display: flex; gap: 8px; margin-bottom: 14px; }
   .post-row { display: flex; align-items: center; gap: 12px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; cursor: pointer; }
@@ -171,6 +181,7 @@
       <option value="relevance">Tri : pertinence</option>
       <option value="date">Tri : plus récent</option>
     </select>
+    <button class="chip" data-preset="schedule">🗓 Programmation</button>
     <button class="chip" data-preset="posts">🖼 Posts</button>
     <button class="chip right" data-preset="sources">⚙️ Sources</button>
   </div>
@@ -203,6 +214,13 @@
     </select>
   </div>
   <div id="posts-list"></div>
+</section>
+
+<section id="schedule-panel" hidden>
+  <div class="posts-bar">
+    <button id="schedule-rebuild">🔄 Recalculer la file</button>
+  </div>
+  <div id="schedule-list"></div>
 </section>
 
 <div id="post-detail" hidden></div>
@@ -287,12 +305,13 @@ function sourceName(id) { return sourceNames[id] || "?"; }
 const gridEl = document.getElementById("grid");
 const panelEl = document.getElementById("sources-panel");
 const postsPanelEl = document.getElementById("posts-panel");
+const schedulePanelEl = document.getElementById("schedule-panel");
 
 document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
   chip.classList.add("on");
   preset = chip.dataset.preset;
-  gridEl.hidden = true; panelEl.hidden = true; postsPanelEl.hidden = true;
+  gridEl.hidden = true; panelEl.hidden = true; postsPanelEl.hidden = true; schedulePanelEl.hidden = true;
   document.getElementById("count").textContent = "";
   if (preset === "sources") {
     panelEl.hidden = false;
@@ -300,6 +319,9 @@ document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   } else if (preset === "posts") {
     postsPanelEl.hidden = false;
     loadPostsPanel();
+  } else if (preset === "schedule") {
+    schedulePanelEl.hidden = false;
+    loadSchedulePanel();
   } else {
     gridEl.hidden = false;
     load();
@@ -388,6 +410,95 @@ async function genererPost(articleId, bouton) {
 const STATUS_LABELS = { draft: "Brouillon", approved: "Validé", published: "Publié" };
 
 document.getElementById("post-status").onchange = loadPostsPanel;
+
+// --- Panneau Programmation ---
+
+const ETATS_CRENEAU = {
+  libre: "Libre", programme: "Programmé", gele: "Gelé", publie: "Publié",
+  apercu: "Aperçu, non publié", echec: "Échec", manque: "Manqué",
+};
+const CRENEAUX_MODIFIABLES = new Set(["libre", "programme"]);
+
+async function loadSchedulePanel() {
+  const list = document.getElementById("schedule-list");
+  list.innerHTML = "Chargement…";
+  let creneaux;
+  try {
+    const reponse = await fetch("/schedule");
+    if (!reponse.ok) throw new Error(await reponse.text());
+    creneaux = await reponse.json();
+  } catch (erreur) {
+    list.innerHTML = '<div id="empty">Échec du chargement de la file.</div>';
+    document.getElementById("count").textContent = "";
+    return;
+  }
+  document.getElementById("count").textContent = `${creneaux.length} créneau${creneaux.length > 1 ? "x" : ""}`;
+  if (!creneaux.length) {
+    list.innerHTML = '<div id="empty">Aucun créneau : cliquez sur « Recalculer la file ».</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const c of creneaux) {
+    const row = document.createElement("div");
+    row.className = "post-row";
+    row.innerHTML = `
+      <div class="grow"><div class="hl"></div><div class="sub"></div></div>
+      <span class="status-pill"></span>
+      <span class="slot-actions"></span>`;
+    row.querySelector(".hl").textContent = c.article_title || "(créneau libre)";
+    const details = [fmtDate(c.publier_a)];
+    if (c.relevance != null) details.push(`pertinence ${c.relevance}`);
+    if (c.epingle) details.push("📌 épinglé");
+    if (c.erreur) details.push(`⚠ ${c.erreur}`);
+    row.querySelector(".sub").textContent = details.join(" · ");
+    const pastille = row.querySelector(".status-pill");
+    pastille.classList.add(c.etat);
+    pastille.textContent = ETATS_CRENEAU[c.etat] || c.etat;
+    if (CRENEAUX_MODIFIABLES.has(c.etat)) {
+      const actions = row.querySelector(".slot-actions");
+      const bouton = (libelle, titre, donnees) => {
+        const b = document.createElement("button");
+        b.textContent = libelle;
+        b.title = titre;
+        b.onclick = () => modifierCreneau(c.id, donnees);
+        actions.appendChild(b);
+      };
+      if (c.article_id) {
+        bouton(c.epingle ? "📍" : "📌", c.epingle ? "Désépingler" : "Épingler", { epingle: !c.epingle });
+      }
+      bouton("✏️", "Remplacer par un autre article (identifiant)", "remplacer");
+      if (c.article_id) {
+        bouton("⏬", "Décaler au créneau suivant", { decaler: true });
+        bouton("🚫", "Sauter cet article", { sauter: true });
+      }
+    }
+    list.appendChild(row);
+  }
+}
+
+async function modifierCreneau(id, donnees) {
+  if (donnees === "remplacer") {
+    const saisie = prompt("Identifiant de l'article à programmer ici :");
+    if (!saisie) return;
+    donnees = { article_id: Number(saisie) };
+  }
+  const reponse = await fetch(`/schedule/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(donnees),
+  });
+  if (!reponse.ok) {
+    const corps = await reponse.json().catch(() => ({}));
+    alert("Action refusée : " + (corps.detail || reponse.status));
+  }
+  loadSchedulePanel();
+}
+
+document.getElementById("schedule-rebuild").onclick = async () => {
+  const reponse = await fetch("/schedule/rebuild", { method: "POST" });
+  if (!reponse.ok) alert("Échec du recalcul de la file : " + reponse.status);
+  loadSchedulePanel();
+};
 
 async function loadPostsPanel() {
   const list = document.getElementById("posts-list");

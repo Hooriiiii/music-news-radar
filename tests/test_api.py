@@ -260,3 +260,10 @@ def test_track_artist(client, db_session):
     artist = _seed_artist(db_session, name="Pepite")
     body = client.patch(f"/artists/{artist.id}", json={"tracked": True}).json()
     assert body["tracked"] is True
+
+
+def test_le_dashboard_porte_le_panneau_de_programmation(client):
+    html = client.get("/").text
+    assert 'data-preset="schedule"' in html
+    assert 'id="schedule-panel"' in html
+    assert 'fetch("/schedule")' in html
