@@ -104,3 +104,48 @@ def test_recalculer_cree_la_file(client, db_session):
     reponse = client.post("/schedule/rebuild")
     assert reponse.status_code == 200
     assert len(reponse.json()) == 6
+
+
+def test_epingler_un_creneau_vide_est_refuse(client, db_session):
+    creneau = _creneau(db_session, 5)
+    assert client.patch(f"/schedule/{creneau.id}", json={"epingle": True}).status_code == 409
+
+
+def test_remplacer_par_un_article_deja_sur_un_creneau_gele_est_refuse(client, db_session):
+    (article,) = _articles(db_session, 80)
+    _creneau(db_session, 1, article, etat=EtatCreneau.GELE)
+    cible = _creneau(db_session, 5)
+    assert client.patch(f"/schedule/{cible.id}", json={"article_id": article.id}).status_code == 409
+
+
+def test_remplacer_par_un_article_deja_sur_un_creneau_apercu_est_refuse(client, db_session):
+    (article,) = _articles(db_session, 80)
+    _creneau(db_session, 1, article, etat=EtatCreneau.APERCU)
+    cible = _creneau(db_session, 5)
+    assert client.patch(f"/schedule/{cible.id}", json={"article_id": article.id}).status_code == 409
+
+
+def test_remplacer_par_un_article_duplique_est_refuse(client, db_session):
+    original, article = _articles(db_session, 80, 75)
+    article.duplicate_of_id = original.id
+    db_session.commit()
+    cible = _creneau(db_session, 5)
+    assert client.patch(f"/schedule/{cible.id}", json={"article_id": article.id}).status_code == 409
+
+
+def test_remplacer_par_un_article_exclu_est_refuse(client, db_session):
+    (article,) = _articles(db_session, 80)
+    article.file_exclu_raison = "saute depuis le dashboard"
+    db_session.commit()
+    cible = _creneau(db_session, 5)
+    assert client.patch(f"/schedule/{cible.id}", json={"article_id": article.id}).status_code == 409
+
+
+def test_remplacer_libere_un_ancien_creneau_programme_passe(client, db_session):
+    (article,) = _articles(db_session, 80)
+    ancien = _creneau(db_session, -3, article)
+    cible = _creneau(db_session, 5)
+    vue = client.patch(f"/schedule/{cible.id}", json={"article_id": article.id}).json()
+    assert vue["article_id"] == article.id
+    db_session.refresh(ancien)
+    assert (ancien.article_id, ancien.etat) == (None, EtatCreneau.LIBRE)

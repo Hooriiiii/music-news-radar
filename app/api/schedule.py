@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau
-from app.schedule.store import MODIFIABLES, appliquer_arbitrage, post_a_reprendre, utc
+from app.schedule.store import MODIFIABLES, VERROUILLES, appliquer_arbitrage, post_a_reprendre, utc
 from app.schemas import CreneauOut, CreneauUpdate
 
 router = APIRouter(tags=["schedule"])
@@ -76,6 +76,8 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou decaler")
 
     if payload.epingle is not None:
+        if payload.epingle and creneau.article_id is None:
+            raise HTTPException(status_code=409, detail="rien a epingler")
         creneau.epingle = payload.epingle
     elif payload.article_id is not None:
         article = db.get(Article, payload.article_id)
@@ -83,20 +85,32 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
             raise HTTPException(status_code=404, detail="Article introuvable")
         if article.status == ArticleStatus.USED:
             raise HTTPException(status_code=409, detail="Article deja publie")
-        # Un article n'occupe qu'un creneau a la fois.
+        if article.duplicate_of_id is not None:
+            raise HTTPException(status_code=409, detail="Article duplique")
+        if article.file_exclu_raison is not None:
+            # Choisi a la main, un article exclu reste refuse : la securite
+            # prime, l'exclusion se leve separement si besoin.
+            raise HTTPException(status_code=409, detail="Article exclu de la file")
+        if db.scalar(
+            select(Creneau.id).where(
+                Creneau.article_id == article.id,
+                Creneau.id != creneau.id,
+                Creneau.etat.in_(VERROUILLES),
+            )
+        ):
+            raise HTTPException(status_code=409, detail="Article deja engage sur un autre creneau")
+        # Un article n'occupe qu'un creneau a la fois : les autres creneaux
+        # modifiables qui le portaient sont liberes, passes ou futurs.
         for autre in db.scalars(
             select(Creneau).where(
                 Creneau.article_id == article.id,
                 Creneau.id != creneau.id,
                 Creneau.etat.in_(MODIFIABLES),
-                Creneau.publier_a > maintenant,
             )
         ):
             autre.article_id = None
             autre.post_id = None
             _reprogrammer(autre)
-        # Le choisir a la main le reintegre s'il avait ete exclu.
-        article.file_exclu_raison = None
         creneau.article_id = article.id
         creneau.post_id = post_a_reprendre(db, article.id)
         _reprogrammer(creneau)
