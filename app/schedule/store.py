@@ -64,6 +64,16 @@ def candidats_eligibles(db: Session, maintenant: dt.datetime) -> list[Candidat]:
         .where(Article.duplicate_of_id.is_(None))
         .where(Article.status != ArticleStatus.USED)
         .where(Article.file_exclu_raison.is_(None))
+        # Un article deja parti (pour de vrai ou en apercu) fait avancer la file :
+        # sans ce filtre, le mode apercu reprendrait le meme article a chaque creneau.
+        .where(
+            ~Article.id.in_(
+                select(Creneau.article_id).where(
+                    Creneau.etat.in_([EtatCreneau.APERCU, EtatCreneau.PUBLIE]),
+                    Creneau.article_id.is_not(None),
+                )
+            )
+        )
         .where(func.coalesce(Article.published_at, Article.fetched_at) >= depuis)
         .order_by(Article.relevance_score.desc(), Article.id)
         .limit(60)

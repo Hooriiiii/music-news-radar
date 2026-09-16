@@ -124,3 +124,17 @@ def test_deux_passages_donnent_la_meme_file(db_session):
     seconde = [c.article_id for c in appliquer_arbitrage(db_session, MAINTENANT)]
     assert premiere == seconde
     assert db_session.query(Creneau).count() == 6
+
+
+def test_un_article_deja_parti_en_apercu_ou_publie_n_est_plus_candidat(db_session):
+    source = _source(db_session)
+    apercu = _article(db_session, source, 1)
+    publie = _article(db_session, source, 2)
+    libre = _article(db_session, source, 3)
+    passe = MAINTENANT - dt.timedelta(hours=5)
+    db_session.add_all([
+        Creneau(publier_a=passe, article_id=apercu.id, etat=EtatCreneau.APERCU),
+        Creneau(publier_a=passe - dt.timedelta(hours=1), article_id=publie.id, etat=EtatCreneau.PUBLIE),
+    ])
+    db_session.commit()
+    assert [c.article_id for c in candidats_eligibles(db_session, MAINTENANT)] == [libre.id]

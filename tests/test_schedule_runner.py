@@ -3,6 +3,7 @@
 import datetime as dt
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.content.compose import CompositionError, CoverVariante, PostDraft
@@ -14,7 +15,7 @@ from app.schedule.slots import prochains_horaires
 from app.schedule.store import utc
 
 BASE = dt.datetime(2026, 9, 20, 4, 0, tzinfo=dt.timezone.utc)
-H0 = prochains_horaires(BASE, 1)[0]
+H0, H1 = prochains_horaires(BASE, 2)
 
 
 def _draft():
@@ -67,8 +68,26 @@ def article(db_session, tmp_path, monkeypatch):
     return article
 
 
+def _creneau(db, heure):
+    return next(c for c in db.query(Creneau).all() if utc(c.publier_a) == heure)
+
+
 def _creneau_h0(db):
-    return next(c for c in db.query(Creneau).all() if utc(c.publier_a) == H0)
+    return _creneau(db, H0)
+
+
+def _second_article(db, article):
+    autre = Article(source_id=article.source_id, url="https://t/2", title="Autre actu", raw_hash="h2",
+                    relevance_score=80, hotness_score=20, published_at=BASE - dt.timedelta(hours=2),
+                    media=[{"type": "photo", "url": "https://img/2.jpg"}])
+    db.add(autre)
+    db.commit()
+    return autre
+
+
+def _jusqu_a_publication(outils, db, heure, mode="reel"):
+    for decalage in (-180, -60, 20):
+        outils.tourner(db, heure + dt.timedelta(minutes=decalage), mode=mode)
 
 
 def test_en_arret_l_agent_ne_fait_rien(db_session, article):
@@ -174,3 +193,118 @@ def test_on_ne_compose_que_les_creneaux_a_moins_de_24_heures(db_session, article
     outils.tourner(db_session, maintenant)
     attendus = [h for h in prochains_horaires(maintenant, 6) if h <= maintenant + dt.timedelta(hours=24)]
     assert 0 < len(outils.composes) == len(attendus) < 6
+
+
+def test_une_publication_interrompue_n_est_jamais_retentee(db_session, article):
+    outils = Outils()
+    etats_vus = []
+
+    def publier_puis_crash(dossier, noms, legende, publier_vraiment):
+        outils.publies.append((noms, publier_vraiment))
+        # Une autre session voit ce qui est COMMITTE au moment de l'appel.
+        with sessionmaker(bind=db_session.get_bind())() as autre:
+            etats_vus.append(autre.get(Creneau, _creneau_h0(db_session).id).etat)
+        raise KeyboardInterrupt
+
+    outils.publier = publier_puis_crash
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    with pytest.raises(KeyboardInterrupt):
+        outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    assert etats_vus == [EtatCreneau.ECHEC]
+
+    db_session.rollback()
+    db_session.expire_all()
+    for decalage in (30, 40):
+        outils.tourner(db_session, H0 + dt.timedelta(minutes=decalage))
+    _jusqu_a_publication(outils, db_session, H1)
+    assert len(outils.publies) == 1
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.erreur) == (EtatCreneau.ECHEC, "publication interrompue avant confirmation")
+
+
+def test_un_article_en_echec_de_publication_n_est_pas_remis_en_file(db_session, article):
+    outils = Outils()
+    outils.erreur_publication = ErreurInstagram("media refuse")
+    _jusqu_a_publication(outils, db_session, H0)
+    assert "echec de publication : media refuse" == db_session.get(Article, article.id).file_exclu_raison
+    _jusqu_a_publication(outils, db_session, H1)
+    assert len(outils.publies) == 1
+    assert _creneau(db_session, H1).article_id is None
+
+
+def test_un_gel_en_panne_systemique_n_exclut_pas_l_article(db_session, article):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.erreur_preparation = OSError("disque plein")
+    rapport = outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    creneau = _creneau_h0(db_session)
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert (creneau.etat, creneau.article_id) == (EtatCreneau.PROGRAMME, article.id)
+    assert "disque plein" in creneau.erreur and rapport.erreurs
+    assert len(outils.notifications) == 1
+
+    outils.erreur_preparation = None
+    outils.tourner(db_session, H0 - dt.timedelta(minutes=50))
+    assert (creneau.etat, len(outils.prepares)) == (EtatCreneau.GELE, 2)
+
+
+def test_un_gel_en_panne_systemique_s_arrete_au_premier_creneau(db_session, article, monkeypatch):
+    _second_article(db_session, article)
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    assert len(outils.composes) == 2
+    # Fenetre de gel elargie : les deux creneaux du jour sont a geler dans ce passage.
+    monkeypatch.setattr(settings, "publication_gel_heures", 12)
+    outils.erreur_preparation = OSError("disque plein")
+    outils.tourner(db_session, H0 - dt.timedelta(hours=1))
+    assert len(outils.prepares) == 1
+    assert len(outils.notifications) == 1
+
+
+def test_en_apercu_la_file_avance(db_session, article):
+    autre = _second_article(db_session, article)
+    outils = Outils()
+    _jusqu_a_publication(outils, db_session, H0, mode="apercu")
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.publie_le, creneau.ig_media_id) == (EtatCreneau.APERCU, None, "ig42")
+    _jusqu_a_publication(outils, db_session, H1, mode="apercu")
+    assert _creneau(db_session, H1).article_id == autre.id
+    assert _creneau(db_session, H1).etat == EtatCreneau.APERCU
+    assert outils.composes == [article.id, autre.id]
+
+
+def test_un_second_passage_apres_publication_ne_republie_pas(db_session, article):
+    outils = Outils()
+    _jusqu_a_publication(outils, db_session, H0)
+    for decalage in (30, 60, 120):
+        outils.tourner(db_session, H0 + dt.timedelta(minutes=decalage))
+    assert len(outils.publies) == 1
+
+
+@pytest.mark.parametrize(("retard", "publie"), [(89, True), (91, False)])
+def test_la_borne_de_retard(db_session, article, retard, publie):
+    outils = Outils()
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=retard))
+    assert bool(outils.publies) is publie
+    assert _creneau_h0(db_session).etat == (EtatCreneau.PUBLIE if publie else EtatCreneau.MANQUE)
+
+
+def test_une_panne_systemique_de_composition_previent(db_session, article):
+    outils = Outils()
+    outils.erreur_composition = RuntimeError("Your credit balance is too low")
+    outils.tourner(db_session, H0 - dt.timedelta(hours=3))
+    assert len(outils.notifications) == 1 and "credit" in outils.notifications[0]
+
+
+def test_une_notification_en_panne_n_interrompt_pas_le_passage(db_session, article):
+    outils = Outils()
+    outils.erreur_publication = ErreurInstagram("jeton expire")
+
+    def notifier_en_panne(titre, message):
+        raise RuntimeError("osascript absent")
+
+    outils.notifier = notifier_en_panne
+    _jusqu_a_publication(outils, db_session, H0)
+    assert _creneau_h0(db_session).etat == EtatCreneau.ECHEC

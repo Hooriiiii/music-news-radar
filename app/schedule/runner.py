@@ -9,8 +9,12 @@ Dans l'ordre :
 5. publication des creneaux geles dont l'heure est venue.
 
 Un article en defaut (composition ou gel impossible) est EXCLU de la file et son
-creneau libere. Une panne systemique (credits, reseau) n'exclut rien : la faute
-n'est pas a l'article.
+creneau libere. Une panne systemique (credits, reseau, disque) n'exclut rien : la
+faute n'est pas a l'article.
+
+Aucune double publication : le creneau est committe en ECHEC AVANT l'appel a
+Meta. Un crash entre la publication et la confirmation laisse donc un ECHEC, jamais
+retente -- mieux vaut un post manque qu'un post publie deux fois.
 """
 
 import datetime as dt
@@ -24,6 +28,7 @@ from app.config import settings
 from app.content.compose import CompositionError, create_post
 from app.content.legende import texte_legende
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
+from app.publish.preparation import PreparationImpossible
 from app.schedule.store import appliquer_arbitrage, post_a_reprendre, utc
 
 logger = logging.getLogger(__name__)
@@ -44,6 +49,14 @@ class RapportPublication:
 
 def _heure_locale(moment: dt.datetime) -> str:
     return utc(moment).astimezone(ZoneInfo(settings.publication_fuseau)).strftime("%d/%m %H:%M")
+
+
+def _prevenir(notifier, message: str) -> None:
+    # Une notification en panne ne doit pas interrompre le passage.
+    try:
+        notifier("Kinda", message)
+    except Exception:  # noqa: BLE001
+        logger.exception("notification impossible : %s", message)
 
 
 def _liberer(creneau: Creneau, raison: str) -> None:
@@ -77,7 +90,7 @@ def _marquer_manques(db, maintenant: dt.datetime, rapport: RapportPublication) -
     db.commit()
 
 
-def _composer(db, maintenant: dt.datetime, composer, rapport: RapportPublication) -> bool:
+def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication) -> bool:
     horizon = maintenant + dt.timedelta(hours=settings.publication_composition_heures)
     creneaux = db.scalars(
         select(Creneau)
@@ -108,6 +121,7 @@ def _composer(db, maintenant: dt.datetime, composer, rapport: RapportPublication
                 creneau.erreur = f"composition interrompue : {exc}"[:1000]
                 rapport.erreurs.append(creneau.erreur)
                 db.commit()
+                _prevenir(notifier, creneau.erreur)
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
             post_id = create_post(db, article, draft).id
@@ -118,7 +132,7 @@ def _composer(db, maintenant: dt.datetime, composer, rapport: RapportPublication
     return exclusions
 
 
-def _geler(db, maintenant: dt.datetime, preparer, rapport: RapportPublication) -> bool:
+def _geler(db, maintenant: dt.datetime, preparer, notifier, rapport: RapportPublication) -> bool:
     seuil = maintenant + dt.timedelta(hours=settings.publication_gel_heures)
     creneaux = db.scalars(
         select(Creneau)
@@ -139,10 +153,18 @@ def _geler(db, maintenant: dt.datetime, preparer, rapport: RapportPublication) -
         article = db.get(Article, creneau.article_id) if creneau.article_id else None
         try:
             noms = preparer(post, article, settings.publication_dir / str(creneau.id))
-        except Exception as exc:  # noqa: BLE001 -- tout echec de gel exclut l'article
+        except PreparationImpossible as exc:
             _exclure(db, creneau, f"gel impossible : {exc}", rapport)
             exclusions = True
             continue
+        except Exception as exc:  # noqa: BLE001 -- rendu, disque, reseau : panne systemique
+            # Le creneau reste PROGRAMME : retente au passage suivant, tant que le
+            # delai de retard le permet.
+            creneau.erreur = f"gel interrompu : {exc}"[:1000]
+            rapport.erreurs.append(creneau.erreur)
+            db.commit()
+            _prevenir(notifier, creneau.erreur)
+            break
         creneau.fichiers = noms
         creneau.etat = EtatCreneau.GELE
         creneau.gele_le = maintenant
@@ -160,6 +182,16 @@ def _publier(db, maintenant: dt.datetime, mode: str, publier, notifier, rapport:
     ).all()
     for creneau in creneaux:
         post = db.get(Post, creneau.post_id) if creneau.post_id else None
+        if post is not None:
+            # Committe AVANT l'appel : si le processus meurt pendant ou juste apres
+            # la publication, le creneau reste en ECHEC et n'est jamais retente.
+            # L'article est exclu de meme, sinon il repartirait sur un autre creneau.
+            creneau.etat = EtatCreneau.ECHEC
+            creneau.erreur = "publication interrompue avant confirmation"
+            article = db.get(Article, post.article_id) if post.article_id else None
+            if article is not None:
+                article.file_exclu_raison = creneau.erreur
+            db.commit()
         try:
             if post is None:
                 raise RuntimeError("post supprime apres le gel")
@@ -172,23 +204,31 @@ def _publier(db, maintenant: dt.datetime, mode: str, publier, notifier, rapport:
         except Exception as exc:  # noqa: BLE001 -- tout echec doit se voir
             creneau.etat = EtatCreneau.ECHEC
             creneau.erreur = str(exc)[:1000]
+            article = db.get(Article, creneau.article_id) if creneau.article_id else None
+            if article is not None:
+                # Un article refuse par Meta ne revient pas dans la file.
+                article.file_exclu_raison = f"echec de publication : {exc}"[:500]
             db.commit()
             rapport.echecs += 1
-            notifier("Kinda", f"publication de {_heure_locale(creneau.publier_a)} en echec : {exc}")
+            _prevenir(notifier, f"publication de {_heure_locale(creneau.publier_a)} en echec : {exc}")
             continue
         creneau.ig_media_id = identifiant
-        creneau.publie_le = maintenant
         creneau.erreur = None
+        article = db.get(Article, post.article_id) if post.article_id else None
+        if article is not None:
+            article.file_exclu_raison = None
         if mode == "reel":
             creneau.etat = EtatCreneau.PUBLIE
+            creneau.publie_le = maintenant
             post.status = PostStatus.PUBLISHED
             post.published_at = maintenant
-            article = db.get(Article, post.article_id) if post.article_id else None
             if article is not None:
                 # USED protege l'article de la purge et l'ecarte de la file.
                 article.status = ArticleStatus.USED
             rapport.publies += 1
         else:
+            # Pas de publie_le : rien n'est parti. L'etat APERCU suffit a faire
+            # avancer la file (voir candidats_eligibles).
             creneau.etat = EtatCreneau.APERCU
             rapport.apercus += 1
         db.commit()
@@ -202,8 +242,8 @@ def tourner(db, maintenant: dt.datetime, *, mode: str, composer, preparer, publi
         return rapport
     _marquer_manques(db, maintenant, rapport)
     appliquer_arbitrage(db, maintenant)
-    exclusions = _composer(db, maintenant, composer, rapport)
-    exclusions = _geler(db, maintenant, preparer, rapport) or exclusions
+    exclusions = _composer(db, maintenant, composer, notifier, rapport)
+    exclusions = _geler(db, maintenant, preparer, notifier, rapport) or exclusions
     if exclusions:
         # Le creneau libere se remplit tout de suite ; sa composition viendra au
         # passage suivant.
