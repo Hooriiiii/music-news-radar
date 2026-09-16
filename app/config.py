@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -134,6 +135,18 @@ class Settings(BaseSettings):
     # Eligibilite a la file : la barre du digest, et une actu de moins de 3 jours.
     publication_min_relevance: int = 60
     publication_fraicheur_jours: int = 3
+    # arret : l'agent ne fait rien. apercu : tout, jusqu'au conteneur cree chez
+    # Meta, SAUF la publication. reel : publie. Publier est public et
+    # irreversible : le passage a « reel » est une decision de l'utilisateur.
+    publication_mode: Literal["arret", "apercu", "reel"] = "arret"
+    # La composition (appel Claude paye) n'a lieu qu'a J-1 : on ne paie jamais
+    # un post qui se fait doubler avant demain.
+    publication_composition_heures: int = 24
+    # Gel a T-2h : rendu et telechargements faits d'avance.
+    publication_gel_heures: int = 2
+    # Au-dela, on ne publie pas : un Mac rouvert le soir lacherait sinon la
+    # journee entiere d'un coup.
+    publication_retard_max_minutes: int = 90
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
