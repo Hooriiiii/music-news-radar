@@ -1,6 +1,7 @@
 """L'hebergement ephemere, sans jamais lancer le vrai cloudflared."""
 
 import contextlib
+import socket
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from app.publish.hosting import (
     attendre_joignable,
     chemin_cloudflared,
     extraire_url,
+    resoudre_publiquement,
     serveur_local,
     tunnel,
 )
@@ -108,28 +110,75 @@ def test_un_cloudflared_qui_s_arrete_sans_url_leve_et_se_ferme(monkeypatch):
     assert processus.termine
 
 
-def test_attendre_joignable_patiente_le_temps_que_le_dns_suive():
-    reponses = [httpx.ConnectError("dns"), httpx.Response(404), httpx.Response(200)]
+def _reponse_dns(adresses):
+    return httpx.Response(200, json={"Answer": [{"type": 1, "data": ip} for ip in adresses]})
 
-    def get(url, timeout=None):
-        reponse = reponses.pop(0)
+
+class FauxClientDns:
+    """Un client DoH+sonde jetable : jamais de vrai reseau, jamais le resolveur systeme."""
+
+    def __init__(self, sequence_dns, sequence_sondes=None):
+        self.sequence_dns = sequence_dns
+        self.sequence_sondes = sequence_sondes if sequence_sondes is not None else []
+        self.appels_dns = []
+        self.appels_sonde = []
+
+    def get(self, url, params=None, headers=None):
+        assert url == mod.URL_DOH
+        self.appels_dns.append(params)
+        reponse = self.sequence_dns.pop(0)
         if isinstance(reponse, Exception):
             raise reponse
         return reponse
 
+    def request(self, methode, url, headers=None, extensions=None):
+        self.appels_sonde.append((methode, url, headers, extensions))
+        reponse = self.sequence_sondes.pop(0)
+        if isinstance(reponse, Exception):
+            raise reponse
+        return reponse
+
+
+def test_attendre_joignable_patiente_que_le_dns_public_suive_puis_sonde():
+    client = FauxClientDns(
+        sequence_dns=[_reponse_dns([]), _reponse_dns([]), _reponse_dns(["203.0.113.9"])],
+        sequence_sondes=[httpx.Response(200)],
+    )
     pauses = []
-    attendre_joignable("https://x.trycloudflare.com/a.jpg", get=get, dormir=pauses.append)
+    attendre_joignable("https://x.trycloudflare.com/a.jpg", client=client, dormir=pauses.append)
     assert len(pauses) == 2
+    methode, url, headers, extensions = client.appels_sonde[0]
+    assert (methode, url) == ("GET", "https://203.0.113.9/a.jpg")
+    assert headers == {"Host": "x.trycloudflare.com"}
+    assert extensions == {"sni_hostname": "x.trycloudflare.com"}
 
 
 def test_attendre_joignable_abandonne_apres_le_delai():
+    client = FauxClientDns(sequence_dns=[_reponse_dns([]) for _ in range(10)])
     with pytest.raises(HebergementIndisponible, match="injoignable"):
         attendre_joignable(
             "https://x.trycloudflare.com/a.jpg",
-            get=lambda url, timeout=None: httpx.Response(502),
+            client=client,
             dormir=lambda s: None,
             delai=9,
         )
+
+
+def test_attendre_joignable_n_utilise_jamais_le_resolveur_systeme(monkeypatch):
+    def echoue(*args, **kwargs):
+        raise AssertionError("le resolveur systeme ne doit jamais etre appele")
+
+    monkeypatch.setattr(socket, "getaddrinfo", echoue)
+    client = FauxClientDns(
+        sequence_dns=[_reponse_dns(["203.0.113.9"])],
+        sequence_sondes=[httpx.Response(200)],
+    )
+    attendre_joignable("https://x.trycloudflare.com/a.jpg", client=client, dormir=lambda s: None)
+
+
+def test_resoudre_publiquement_renvoie_une_liste_vide_si_le_doh_echoue():
+    client = FauxClientDns(sequence_dns=[httpx.ConnectError("reseau coupe")])
+    assert resoudre_publiquement("x.trycloudflare.com", client=client) == []
 
 
 def test_heberger_combine_serveur_tunnel_et_verification(tmp_path, monkeypatch):

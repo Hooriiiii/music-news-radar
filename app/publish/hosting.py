@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -33,6 +34,7 @@ _URL_TUNNEL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 DELAI_URL_S = 45.0
 DELAI_JOIGNABLE_S = 90.0
 PAS_JOIGNABLE_S = 3.0
+URL_DOH = "https://1.1.1.1/dns-query"
 
 
 class HebergementIndisponible(RuntimeError):
@@ -126,19 +128,58 @@ def tunnel(port: int, *, lancer=subprocess.Popen):
             processus.kill()
 
 
+def resoudre_publiquement(hote: str, *, client) -> list[str]:
+    try:
+        reponse = client.get(
+            URL_DOH,
+            params={"name": hote, "type": "A"},
+            headers={"accept": "application/dns-json"},
+        )
+        donnees = reponse.json()
+    except Exception:  # noqa: BLE001 -- reseau ou JSON illisible : pas d'adresse
+        return []
+    return [reponse_dns["data"] for reponse_dns in donnees.get("Answer", []) if reponse_dns.get("type") == 1]
+
+
 def attendre_joignable(
-    url: str, *, get=httpx.get, dormir=time.sleep, delai: float = DELAI_JOIGNABLE_S
+    url: str, *, client=None, dormir=time.sleep, delai: float = DELAI_JOIGNABLE_S
 ) -> None:
-    ecoule = 0.0
-    while ecoule < delai:
-        try:
-            if get(url, timeout=10).status_code == 200:
-                return
-        except httpx.HTTPError:
-            pass
-        dormir(PAS_JOIGNABLE_S)
-        ecoule += PAS_JOIGNABLE_S
-    raise HebergementIndisponible(f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s")
+    # Le sous-domaine trycloudflare.com est fraichement cree : le resolveur
+    # systeme de macOS met en cache un NXDOMAIN observe une fraction de
+    # seconde avant que le DNS ne suive, et le sert ensuite pendant plus de
+    # 55 s meme quand `curl` (qui ne partage pas ce cache) obtient deja un
+    # 200. Meta, lui, resout depuis ses propres serveurs et n'a jamais ce
+    # probleme : la seule question qui compte est « le DNS PUBLIC voit-il
+    # deja le sous-domaine ? », jamais ce que macOS a en cache. D'ou une
+    # resolution forcee par DNS-over-HTTPS (Cloudflare 1.1.1.1), et une
+    # requete adressee directement a l'IP (Host + SNI poses a la main) pour
+    # ne jamais repasser par `socket.getaddrinfo`.
+    morceaux = urlsplit(url)
+    hote, chemin = morceaux.hostname, morceaux.path or "/"
+    propre = client is None
+    client = client or httpx.Client(timeout=10)
+    try:
+        ecoule = 0.0
+        while ecoule < delai:
+            adresses = resoudre_publiquement(hote, client=client)
+            if adresses:
+                try:
+                    reponse = client.request(
+                        "GET",
+                        f"https://{adresses[0]}{chemin}",
+                        headers={"Host": hote},
+                        extensions={"sni_hostname": hote},
+                    )
+                    if reponse.status_code == 200:
+                        return
+                except httpx.HTTPError:
+                    pass
+            dormir(PAS_JOIGNABLE_S)
+            ecoule += PAS_JOIGNABLE_S
+        raise HebergementIndisponible(f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s")
+    finally:
+        if propre:
+            client.close()
 
 
 @contextlib.contextmanager
