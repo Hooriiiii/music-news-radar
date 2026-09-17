@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from app.content.legende import HASHTAGS_MAX, LEGENDE_MAX, aerer_legende, texte_legende
+import pytest
+
+from app.content.legende import HASHTAGS_MAX, LEGENDE_MARGE, LEGENDE_MAX, aerer_legende, texte_legende
 
 
 def _post(caption="Une legende 🎧 ✨", hashtags=("#electro",), url="https://tsugi.fr/a"):
@@ -57,7 +59,7 @@ def test_le_credit_n_est_jamais_coupe():
 
 def test_une_legende_seule_trop_longue_ne_finit_pas_par_des_lignes_vides():
     texte = texte_legende(_post(caption="x" * 3000, hashtags=()))
-    assert len(texte) == LEGENDE_MAX
+    assert len(texte) == LEGENDE_MARGE
     assert texte.endswith("x…")
 
 
@@ -107,3 +109,51 @@ def test_la_publication_aere_la_legende_et_respecte_la_limite():
     texte = texte_legende(_post(caption=longue))
     assert len(texte) <= LEGENDE_MAX
     assert "\n\n" in texte and texte.endswith("#electro")
+
+
+# --- Abreviations, listes, marge de longueur ----------------------------------------
+
+
+@pytest.mark.parametrize("texte", [
+    "J. Cole feat. Travis Scott sortent un titre. Il arrive vendredi. Vous validez ?",
+    "La compilation Vol. 2 arrive. Elle est signee Dr. Dre. On en parle ?",
+    "Les U.S. Girls reviennent. Nouvel album en mars. Impatients ?",
+])
+def test_une_abreviation_ne_coupe_pas_la_phrase(texte):
+    paragraphes = aerer_legende(texte).split("\n\n")
+    assert len(paragraphes) == 2
+    assert "\n" not in paragraphes[0].split(". ")[0]
+    for abreviation in ("J. Cole", "feat. Travis", "Vol. 2", "Dr. Dre", "U.S. Girls"):
+        if abreviation in texte:
+            assert abreviation in aerer_legende(texte)
+
+
+def test_les_abreviations_sont_prises_en_entier():
+    assert aerer_legende("J. Cole feat. Travis Scott sortent un titre. Il arrive vendredi. Vous validez ?") == (
+        "J. Cole feat. Travis Scott sortent un titre. Il arrive vendredi.\n\nVous validez ?"
+    )
+
+
+def test_une_liste_a_emojis_garde_ses_retours_simples():
+    texte = "Charlotte de Witte a Paris.\n📅 24.09\n📍 Paris\n- Zenith"
+    assert aerer_legende(texte) == "Charlotte de Witte a Paris.\n📅 24.09\n📍 Paris\n- Zenith"
+
+
+def test_une_marge_sous_la_limite_de_meta_compte_tout_le_texte():
+    post = _post(caption="x" * 3000, hashtags=[f"#tag{i}" for i in range(30)])
+    post.credit, post.template = "@saralandry", "kinda_reel"
+    texte = texte_legende(post)
+    assert len(texte) <= LEGENDE_MARGE < LEGENDE_MAX
+    assert "🎥 via @saralandry" in texte
+
+
+def test_credit_et_hashtags_trop_longs_retirent_des_hashtags_par_la_fin():
+    post = _post(caption="Courte.", hashtags=["#" + "h" * 100 + str(i) for i in range(30)])
+    texte = texte_legende(post)
+    assert len(texte) <= LEGENDE_MARGE
+    assert "#" + "h" * 100 + "0" in texte
+    assert "#" + "h" * 100 + "29" not in texte
+
+
+def test_une_ligne_ordinaire_apres_une_liste_reprend_un_paragraphe():
+    assert aerer_legende("📅 24.09\n📍 Paris\nOn y va ?") == "📅 24.09\n📍 Paris\n\nOn y va ?"

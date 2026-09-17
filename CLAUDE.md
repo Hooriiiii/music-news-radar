@@ -599,10 +599,16 @@ obligatoire (`posts.credit`), jamais coupé. **Plus de ligne « Source : <url> �
 **Légende aérée** (2026-09-17) : le prompt demande 2 à 4 paragraphes courts (1-2
 phrases) séparés par une ligne vide ; filet déterministe `aerer_legende()` dans
 `texte_legende` (publication ET export) — une légende sans ligne vide voit ses
-retours à la ligne simples doublés, ou, en bloc de plus de deux phrases, est
-coupée par paires de phrases (les emojis de fin restent avec leur phrase ; « ... »
-suivi d'une minuscule ne coupe pas). Ordre publié : légende, crédit, puis les
-hashtags en dernier bloc ; la coupe à 2200 caractères compte les lignes ajoutées. ffmpeg absent = panne systémique qui
+retours à la ligne simples doublés (sauf devant une ligne de liste — emoji ou
+puce, « 📅 24.09 » —, qui garde son retour simple), ou, en bloc de plus de deux
+phrases, est coupée par paires de phrases (les emojis de fin restent avec leur
+phrase ; « ... » suivi d'une minuscule ne coupe pas ; pas de coupe après une
+abréviation : initiales « J. », « U.S. », et feat, ft, Vol, Dr, St, Mr, Mme, No,
+vs). Ordre publié : légende, crédit, puis les hashtags en dernier bloc. Longueur :
+marge de **2150** points de code sur TOUT le texte (Meta : 2200, unité non
+documentée) ; si crédit + hashtags débordent à eux seuls, des hashtags partent par
+la fin (500 caractères gardés à la légende), puis la légende est coupée — le
+crédit jamais. ffmpeg absent = panne systémique qui
 ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
