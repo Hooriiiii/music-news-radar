@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 
 from app.config import settings
 from app.content.media import CLES, PHOTO
+from app.content.urls import url_propre
 from app.models import SourceCategorie, SourceType
 
 ORIGINE_ARTICLE = "article"
@@ -42,7 +43,17 @@ def urls_interdites(article) -> set[str]:
     Sert aux ceintures (slides choisies au dashboard, fond d'un brouillon ancien)."""
     if article is None or not origine_interdite(getattr(article, "source", None)):
         return set()
-    return {url for m in article.media or [] for url in (m.get("url"), m.get("preview_url")) if url}
+    # Les deux formes de chaque URL : les lignes posees avant le nettoyage a
+    # l'ingestion portent encore `&amp;`, celles d'apres la forme propre -- une
+    # slide ou un fond ne doit echapper a l'interdit sous aucune des deux.
+    return {
+        forme
+        for m in article.media or []
+        for url in (m.get("url"), m.get("preview_url"))
+        if url
+        for forme in (url, url_propre(url))
+        if forme
+    }
 
 
 def raison_sans_artiste(article) -> str:
@@ -80,8 +91,8 @@ def image_de(entree_media: dict) -> str | None:
     if entree_media.get("fichier"):
         return entree_media["fichier"]
     if entree_media.get("type") == PHOTO and entree_media.get("url"):
-        return entree_media["url"]
-    return entree_media.get("preview_url")
+        return url_propre(entree_media["url"])
+    return url_propre(entree_media.get("preview_url"))
 
 
 def image_de_fond(actifs: list[dict] | None) -> str | None:
@@ -114,7 +125,11 @@ def credit_des_actifs(actifs: list[dict] | None) -> str | None:
 def chemin_cache(url: str, extension: str = ".jpg") -> Path:
     """La copie locale d'une image d'artiste : les URL du CDN Instagram sont
     signees et expirent en quelques jours, la composition precede le gel de ~22 h."""
-    return settings.visuels_cache_dir / f"{hashlib.sha256(url.encode()).hexdigest()[:32]}{extension}"
+    # Cle sur l'URL NETTOYEE : sans cela, la meme image occuperait deux copies
+    # selon qu'on vient d'une ligne echappee ou propre, et la copie posee depuis
+    # l'une ne serait jamais retrouvee depuis l'autre.
+    propre = url_propre(url) or url
+    return settings.visuels_cache_dir / f"{hashlib.sha256(propre.encode()).hexdigest()[:32]}{extension}"
 
 
 def lire_fichier_cache(uri: str | None) -> bytes | None:

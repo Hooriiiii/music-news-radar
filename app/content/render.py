@@ -22,6 +22,7 @@ from markupsafe import Markup
 from playwright.sync_api import Browser, sync_playwright
 
 from app.content.highlight import to_html
+from app.content.urls import url_propre, url_telechargeable
 from app.content.visuels import lire_fichier_cache
 from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 
@@ -101,13 +102,24 @@ def fetch_image_data_uri(url: str | None) -> str:
 
     Une copie locale (`file://`) est lue dans le cache des visuels seulement ;
     hors du cache ou disparue, elle n'est jamais lue et le secours la remplace.
+
+    Ceinture sur l'URL : les entites HTML sont retirees (une ligne posee en base
+    avant le nettoyage a l'ingestion porte encore `&amp;`, et le CDN Instagram
+    refuse une URL signee ainsi deformee -- c'est le bug du fond de secours du
+    2026-09-17), et seul du http(s) part sur le reseau.
     """
+    url = url_propre(url)
     locale = lire_fichier_cache(url)
     if locale is not None:
         return _data_uri(locale, mimetypes.guess_type(url)[0] or "image/jpeg")
     if url and url.startswith("file://"):
         logger.warning("copie locale introuvable ou hors cache : %s", url)
         url = None
+    elif url:
+        reseau = url_telechargeable(url)
+        if reseau is None:
+            logger.warning("URL de fond hors http(s) : le secours la remplace")
+        url = reseau
     if url:
         try:
             response = httpx.get(

@@ -147,6 +147,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
   restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
+- Nettoyage des URL de médias déjà en base (entités HTML) :
+  `uv run python -m scripts.nettoyer_urls_medias [--apply]` (sans `--apply` :
+  le plan ; idempotent — voir « URL de médias » dans les contraintes)
 - Tests : `uv run pytest`
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
@@ -966,6 +969,41 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   `~/Library/Application Support/Kinda/sources_x_desactivees.json`). Le script
   reste, idempotent : le relancer ne touche rien. Le code de l'adapter X est
   conservé intact.
+- **Une URL de média qui traverse du HTML en ressort ÉCHAPPÉE.** `&` y devient
+  `&amp;` — c'est la norme d'un attribut (`<img src>` d'une description RSS,
+  `<meta og:image>`). Stockée telle quelle, elle n'est plus la même URL, et le CDN
+  Instagram, dont les liens signés portent `_nc_cat`, `ccb`, `oh`, `oe` séparés par
+  des `&`, la refuse. Le reel du 2026-09-17 20:24 (post 29, article 17974) est
+  ainsi parti sur le FOND DE SECOURS du gabarit : Chromium demandait l'URL
+  échappée, recevait une erreur, et `fetch_image_data_uri` retombait EN SILENCE
+  sur `fallback.jpg`. D'où `app/content/urls.py` et deux étages : nettoyage à
+  l'ingestion dans `media.entree()` — le point de passage de TOUTES les sources,
+  plutôt qu'une fois par adapter —, et ceinture à l'usage partout où une URL part
+  sur le réseau (rendu, export, gel des photos et des vidéos, clé du cache des
+  visuels — sinon la même image occupe deux copies et celle posée depuis l'URL
+  échappée n'est jamais retrouvée). Le schéma est vérifié au passage : http(s)
+  seulement, jamais un `file://` qui lirait un fichier de la machine.
+  `urls_interdites` rend les DEUX formes de chaque URL, pour que la règle
+  « jamais le visuel d'un compte média » vaille sur les lignes anciennes comme
+  sur les neuves. Les lignes déjà en base se rattrapent avec
+  `scripts/nettoyer_urls_medias.py`.
+- **Une transaction ouverte pendant une attente, c'est une session tuée par
+  Neon.** Une session qui a LU garde sa transaction ouverte tant qu'on ne la
+  clôt pas : la publication à l'heure lisait le créneau, puis dormait jusqu'à
+  l'heure affichée et appelait Meta, connexion « idle in transaction » pendant
+  tout ce temps. Le 2026-09-17, le reel était EN LIGNE et l'écriture d'après
+  publication tombait sur un `IdleInTransactionSessionTimeout` : créneau resté
+  ECHEC, `ig_media_id` NULL, article exclu et jamais USED — la base ne disait
+  plus la réalité, et l'utilisateur voyait un faux échec. `pool_pre_ping` ne
+  couvre PAS ce cas (il remplace une connexion morte, pas une transaction
+  avortée). D'où, dans `app/schedule/runner.py`, `_clore_transaction()` avant
+  l'attente (tout ce dont l'appel a besoin est lu avant, `expire_on_commit=False`
+  garde les valeurs) et `_ecrire_apres_publication()`, qui rejoue UNE fois
+  l'écriture après un `rollback()` si la connexion est tombée. Ce second essai ne
+  republie rien : seule la base est retouchée, la réclamation committée avant
+  l'appel reste le garde-fou contre le doublon. À savoir : le gel et la
+  composition tiennent encore une transaction pendant leurs minutes de travail
+  (yt-dlp, ffmpeg, Claude) — même risque, non traité.
 - **`op.f()` ne s'appelle QUE dans un callable de migration.** Pose au niveau
   module, il leve `NameError: Can't invoke function 'f', as the proxy object
   has not yet been established` — mais seulement sur les chemins qui chargent

@@ -30,6 +30,7 @@ import httpx
 from app.config import settings
 from app.content.media import CLES, VIDEO, lien_de_reel, video_recuperable, videos_exploitables
 from app.content.render import _USER_AGENT, render_post
+from app.content.urls import url_propre
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
 from app.content.visuels import ORIGINE_ARTICLE, origine_interdite, urls_interdites
 from app.publish.images import ImageInexploitable, en_jpeg
@@ -82,6 +83,8 @@ def _porteur_video(post, article):
 
 
 def source_de_la_video(post, article) -> tuple[str, str] | None:
+    """(origine, URL) de la video du reel. L'URL est NETTOYEE de ses entites HTML :
+    telle quelle, un `&amp;` d'une URL signee du CDN Instagram la fait refuser."""
     interdites = urls_interdites(article)
     for slide in post.slides[1:]:
         if (
@@ -90,15 +93,15 @@ def source_de_la_video(post, article) -> tuple[str, str] | None:
             and slide.get("url")
             and slide["url"] not in interdites
         ):
-            return API, slide["url"]
+            return API, url_propre(slide["url"])
     porteur = _porteur_video(post, article)
     if porteur is None:
         return None
     videos = videos_exploitables(porteur.media, int(settings.publication_reel_duree_max_s * 1000))
     if videos:
-        return API, videos[0]["url"]
+        return API, url_propre(videos[0]["url"])
     if video_recuperable(porteur.media, porteur.url):
-        return YTDLP, porteur.url
+        return YTDLP, url_propre(porteur.url)
     return None
 
 

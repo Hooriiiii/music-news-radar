@@ -10,6 +10,8 @@ types, dont ce module est le consommateur principal.
 
 from urllib.parse import urlsplit
 
+from app.content.urls import url_propre
+
 PHOTO = "photo"
 VIDEO = "video"
 GIF = "gif"
@@ -27,8 +29,17 @@ CLES = ("type", "url", "preview_url", "duration_ms", "width", "height")
 
 
 def entree(type_: str, url: str | None, **extras) -> dict:
-    """Une entree de media a la forme complete, champs absents a None."""
-    return {"type": type_, "url": url, **{c: extras.get(c) for c in CLES[2:]}}
+    """Une entree de media a la forme complete, champs absents a None.
+
+    LE point de passage de toute source (RSS, Instagram, X, illustrations) : les
+    deux URL y sont nettoyees de leurs entites HTML une fois pour toutes, plutot
+    qu'une fois par adapter. Un `&amp;` venu d'un attribut HTML ne descend donc
+    jamais dans `articles.media` (voir `app.content.urls`).
+    """
+    valeurs = {"type": type_, "url": url_propre(url), **{c: extras.get(c) for c in CLES[2:]}}
+    # Reassignation d'une cle existante : l'ordre des six cles est conserve.
+    valeurs["preview_url"] = url_propre(valeurs["preview_url"])
+    return valeurs
 
 
 def videos_exploitables(media: list[dict] | None, duree_max_ms: int = DUREE_MAX_REEL_MS):

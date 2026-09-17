@@ -3,6 +3,7 @@
 import datetime as dt
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import app.schedule.runner as runner
@@ -816,3 +817,96 @@ def test_le_retour_en_gele_ne_passe_pas_sur_un_changement_du_dashboard(db_sessio
 
 def _dossier_de(creneau):
     return settings.publication_dir / str(creneau.id)
+
+
+# --- La session pendant l'attente et l'appel a Meta ---------------------------------------
+
+
+class OutilsSansTransaction(OutilsPonctuels):
+    """Publieur qui note si la session de l'agent a une transaction ouverte.
+
+    Aucune requete de son cote (contrairement a `OutilsPonctuels.publier`, qui
+    interroge la base pendant le conteneur) : ce qui est observe est donc bien
+    l'etat laisse par le runner.
+    """
+
+    def __init__(self, horloge):
+        super().__init__(horloge)
+        self.transactions = []
+
+    def publier(self, dossier, noms, legende, publier_vraiment, *, attendre_jusqu_a=None,
+                encore_publier=None):
+        self.transactions.append(("conteneur", self.db.in_transaction()))
+        if attendre_jusqu_a is not None:
+            attendre_jusqu_a()
+        if encore_publier is not None and not encore_publier():
+            return "conteneur1"
+        self.publies.append((noms, publier_vraiment))
+        return "ig42"
+
+    def dormir(self, secondes):
+        self.transactions.append(("attente", self.db.in_transaction()))
+        self.horloge.dormir(secondes)
+
+    def tourner_ponctuel(self, db, mode="reel"):
+        self.db = db
+        return tourner(db, self.horloge(), mode=mode, composer=self.composer, preparer=self.preparer,
+                       publier=self.publier, notifier=self.notifier, horloge=self.horloge,
+                       lire_mode=lambda: self.mode, dormir=self.dormir)
+
+
+def test_aucune_transaction_n_est_ouverte_pendant_l_attente_ni_l_appel_a_meta(db_session, article):
+    """Neon coupe une session restee « idle in transaction » : l'ecriture d'apres
+    publication echouait alors, et le creneau restait ECHEC alors que le reel
+    etait bel et bien en ligne (17/09, article 17974)."""
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsSansTransaction(horloge)
+    creneau = _gele_h0(db_session, outils)
+
+    outils.tourner_ponctuel(db_session)
+
+    assert outils.transactions, "le publieur n'a pas ete appele"
+    assert all(ouverte is False for _, ouverte in outils.transactions), outils.transactions
+    assert creneau.etat == EtatCreneau.PUBLIE
+
+
+def test_une_connexion_coupee_pendant_la_publication_est_rattrapee(db_session, article, monkeypatch):
+    """Le reel est parti : la base doit le dire, meme si la connexion est morte
+    entre-temps. Un post publie enregistre en ECHEC est le pire des etats."""
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    vrai_commit = db_session.commit
+    etat = {"publie": False, "coupures": 0}
+
+    def publier(dossier, noms, legende, publier_vraiment, **crochets):
+        identifiant = OutilsPonctuels.publier(outils, dossier, noms, legende, publier_vraiment, **crochets)
+        etat["publie"] = True
+        return identifiant
+
+    def commit_capricieux():
+        # La premiere ecriture d'APRES publication tombe sur la connexion coupee.
+        if etat["publie"] and not etat["coupures"]:
+            etat["coupures"] += 1
+            raise OperationalError(
+                "UPDATE articles SET status=%(status)s WHERE articles.id = %(id)s",
+                {},
+                Exception("terminating connection due to idle-in-transaction timeout"),
+            )
+        vrai_commit()
+
+    outils.publier = publier
+    monkeypatch.setattr(db_session, "commit", commit_capricieux)
+
+    rapport = outils.tourner_ponctuel(db_session)
+
+    monkeypatch.undo()
+    db_session.expire_all()
+    assert etat["coupures"] == 1
+    assert (creneau.etat, creneau.ig_media_id) == (EtatCreneau.PUBLIE, "ig42")
+    assert db_session.get(Article, article.id).status == ArticleStatus.USED
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert db_session.get(Post, creneau.post_id).status == PostStatus.PUBLISHED
+    # Une seule publication, comptee une fois : la reprise ne touche que la base.
+    assert (rapport.publies, len(outils.publies)) == (1, 1)
+    assert not rapport.erreurs

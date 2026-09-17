@@ -9,6 +9,7 @@ import io
 import zipfile
 
 from app.content.media import VIDEO
+from app.content.urls import url_telechargeable
 from app.content.visuels import urls_interdites
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
@@ -83,7 +84,15 @@ def telecharger(
     Le deuxieme element sert double emploi expres : extension sur succes,
     raison lisible sur echec -- l'appelant discrimine juste sur `contenu is
     None`, sans avoir a porter un troisieme champ partout.
+
+    L'URL est nettoyee de ses entites HTML avant la requete (un `&amp;` dans une
+    URL signee du CDN Instagram la fait refuser) et doit etre du http(s) : une
+    `file://` lirait un fichier de la machine, une `data:` n'a rien a faire ici.
     """
+    url_reseau = url_telechargeable(url)
+    if url_reseau is None:
+        return None, "URL de media invalide (hors http/https)"
+    url = url_reseau
     gere_client = client is None
     client = client or httpx.Client(follow_redirects=True)
     try:
