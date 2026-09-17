@@ -42,6 +42,12 @@ PAYLOAD = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _chaque_passage_lit_tout(monkeypatch):
+    # L'espacement a ses propres tests ; ailleurs, chaque fetch doit appeler Meta.
+    monkeypatch.setattr(settings, "instagram_intervalle_heures", 1)
+
+
 def make_adapter(url="ig:tsugimag"):
     source = Source(id=1, name="Tsugi IG", type=SourceType.INSTAGRAM, url=url)
     return InstagramAdapter(source)
@@ -404,3 +410,53 @@ def test_ingest_source_insere_les_articles(db_session, monkeypatch):
     urls = set(db_session.scalars(select(Article.url)))
     assert "https://www.instagram.com/p/AAA/" in urls
     assert "https://www.instagram.com/reel/BBB/" in urls
+
+
+def _heure(n):
+    return dt.datetime(2026, 9, 17, tzinfo=dt.timezone.utc) + dt.timedelta(hours=n)
+
+
+def _source_espacee(monkeypatch, source_id, etat=None):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    monkeypatch.setattr(settings, "instagram_intervalle_heures", 3)
+    adapter = make_adapter()
+    adapter.source.id = source_id
+    adapter.source.state = etat
+    appels = []
+    monkeypatch.setattr(adapter, "_appeler", lambda: appels.append(1) or PAYLOAD)
+    return adapter, appels
+
+
+def test_un_compte_jamais_lu_attend_son_creneau(monkeypatch):
+    depart = int(_heure(0).timestamp() // 3600)
+    adapter, appels = _source_espacee(monkeypatch, source_id=depart % 3 + 1)
+    assert adapter.fetch(_heure(0)) == []
+    assert appels == []
+    adapter.fetch(_heure(1))
+    assert appels == [1]
+
+
+def test_les_comptes_se_repartissent_sur_les_passages(monkeypatch):
+    lus = []
+    for source_id in range(1, 10):
+        adapter, appels = _source_espacee(monkeypatch, source_id)
+        adapter.fetch(_heure(0))
+        lus.append(bool(appels))
+    assert sum(lus) == 3
+
+
+def test_un_compte_lu_ne_l_est_plus_avant_l_intervalle(monkeypatch):
+    adapter, appels = _source_espacee(monkeypatch, 1, {"dernier_appel": _heure(0).isoformat()})
+    adapter.fetch(_heure(2))
+    assert appels == []
+    adapter.fetch(_heure(3) - dt.timedelta(minutes=10))
+    assert appels == [1]
+
+
+def test_l_appel_est_note_meme_sans_nouveau_post(monkeypatch):
+    vide = {"business_discovery": {"media": {"data": []}}}
+    adapter, _ = _source_espacee(monkeypatch, 1, {"dernier_appel": _heure(0).isoformat()})
+    monkeypatch.setattr(adapter, "_appeler", lambda: vide)
+    adapter.fetch(_heure(5))
+    assert adapter.source.state["dernier_appel"] == _heure(5).isoformat()

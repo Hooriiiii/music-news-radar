@@ -592,6 +592,14 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   les remplace pas. Et les `media_url` du CDN Instagram sont SIGNEES et EXPIRENT
   en quelques jours : stocker l'URL puis la servir plus tard donne un 404
   silencieux, d'ou le telechargement de l'asset au moment du gel.
+- **Le quota Graph de l'app est partagé et vite atteint** : le 2026-09-17, ~310
+  appels de vérification plus un passage sur 120 comptes dans la même heure ont
+  rendu l'erreur code 4 (« Application request limit reached ») pendant une heure.
+  D'où `instagram_intervalle_heures` (3) : chaque compte n'est lu qu'une fois
+  toutes les 3 h, et les comptes jamais lus attendent leur créneau (heure modulo
+  3 == id modulo 3) pour qu'un lot ajouté d'un coup ne parte pas dans la même
+  heure. Vérifier des comptes en masse (`x-app-usage` à surveiller) consomme le
+  même quota que le pipeline.
 - **Source Instagram** (`app/sources/instagram.py`) : jeton `meta_fb_access_token`
   UNIQUEMENT (voir « Deux jetons Meta »). Absent (ou `META_IG_USER_ID` absent), la
   source est SAUTÉE en silence et rend zéro item — comme les alertes sans webhook ;

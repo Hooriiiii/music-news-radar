@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     # il consomme le quota Graph de l'app (~200 appels/heure) : inutile d'aller
     # chercher loin a chaque passage horaire.
     instagram_max_items: int = 12
+    # Chaque compte n'est lu qu'une fois toutes les N heures, et les comptes sont
+    # REPARTIS sur les passages (source.id modulo N) : lire 250 comptes a chaque
+    # passage horaire depasserait le quota Graph de l'app, et un artiste ne poste
+    # pas plusieurs fois par heure. Mesure du 2026-09-17 : ~310 appels + un
+    # passage de 120 comptes dans la meme heure ont epuise le quota (code 4).
+    instagram_intervalle_heures: int = 3
 
     # --- Supervision : notifications macOS ---
     # Le canal d'alerte du socle local. Discord est coupé et l'utilisateur ne

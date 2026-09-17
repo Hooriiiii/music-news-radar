@@ -205,7 +205,22 @@ class InstagramAdapter(SourceAdapter):
                 raise RuntimeError(_message_erreur(reponse))
             return reponse.json()
 
-    def fetch(self) -> list[RawItem]:
+    def a_lire(self, maintenant: dt.datetime) -> bool:
+        """Le compte est-il du a ce passage ?
+
+        Jamais lu : seulement sur son creneau (heure modulo N == id modulo N),
+        pour qu'un lot de comptes ajoutes d'un coup ne parte pas dans la meme
+        heure. Deja lu : quand N heures (moins un quart d'heure de marge, les
+        passages launchd ne tombent pas pile) se sont ecoulees.
+        """
+        intervalle = max(1, settings.instagram_intervalle_heures)
+        dernier = _date_iso((self.source.state or {}).get("dernier_appel"))
+        if dernier is None:
+            heure = int(maintenant.timestamp() // 3600)
+            return heure % intervalle == (self.source.id or 0) % intervalle
+        return maintenant - dernier >= dt.timedelta(hours=intervalle, minutes=-15)
+
+    def fetch(self, maintenant: dt.datetime | None = None) -> list[RawItem]:
         # Sans jeton, la source est SAUTEE comme le sont les alertes sans
         # webhook : l'absence est un choix de configuration, pas une panne.
         if not settings.meta_fb_access_token or not settings.meta_ig_user_id:
@@ -214,16 +229,20 @@ class InstagramAdapter(SourceAdapter):
                 self.source.name,
             )
             return []
+        maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+        if not self.a_lire(maintenant):
+            return []
         etat = dict(self.source.state or {})
         depuis = _date_iso(etat.get("dernier_post"))
 
         items = self.parse(self._appeler())
+        etat["dernier_appel"] = maintenant.isoformat()
         if depuis is not None:
             items = [i for i in items if i.published_at is None or i.published_at > depuis]
 
         dates = [i.published_at for i in items if i.published_at]
         if dates:
-            # Reassignation ENTIERE : muter le dict en place ne persiste pas.
             etat["dernier_post"] = max(dates).isoformat()
-            self.source.state = etat
+        # Reassignation ENTIERE : muter le dict en place ne persiste pas.
+        self.source.state = etat
         return items
