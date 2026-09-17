@@ -28,9 +28,17 @@ SCHEMAS_RESEAU = ("http", "https")
 # reconstruit pas indefiniment, mais on ne veut pas dependre de cette intuition.
 _PASSES_MAX = 3
 
+# Un `str(None)` ecrit a la place d'un vide : des brouillons de production (posts
+# 34 et 35, article 17974) portent `slides[0].image_url == "None"`. Chaine non
+# vide, elle passe toutes les gardes « pas de fond » et le rendu retombe EN
+# SILENCE sur `fallback.jpg` -- exactement le bug du 2026-09-17. Lue comme absente
+# ici, une fois pour toutes : aucune de ces valeurs n'est une URL.
+_ABSENTES = frozenset({"none", "null"})
+
 
 def url_propre(url: str | None) -> str | None:
-    """L'URL debarrassee de ses entites HTML et de ses espaces, ou None si vide."""
+    """L'URL debarrassee de ses entites HTML et de ses espaces, ou None si vide
+    (ou litteralement « None » / « null », cf. `_ABSENTES`)."""
     if not url:
         return None
     propre = url.strip()
@@ -39,6 +47,8 @@ def url_propre(url: str | None) -> str | None:
         if suivant == propre:
             break
         propre = suivant
+    if propre.lower() in _ABSENTES:
+        return None
     return propre or None
 
 

@@ -23,7 +23,6 @@ from app.config import settings
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
-from app.content.media import PHOTO
 from app.content.visuels import image_de_fond, visuels_autorises
 from app.models import Article, Post
 
@@ -347,13 +346,9 @@ def _fond_par_defaut(article: Article) -> str | None:
     parfaitement valable -- c'est meme le cas normal pour ce type d'actu. Jamais
     le visuel d'un compte media Instagram.
     """
-    for entree in visuels_autorises(article):
-        if entree.get("type") == PHOTO and entree.get("url"):
-            return entree["url"]
-    for entree in visuels_autorises(article):
-        if entree.get("preview_url"):
-            return entree["preview_url"]
-    return None
+    # DELEGUE a `image_de_fond`, meme regle et meme nettoyage d'URL que pour les
+    # actifs choisis : deux definitions du fond finiraient par diverger.
+    return image_de_fond(visuels_autorises(article))
 
 
 def create_post(
@@ -380,6 +375,16 @@ def create_post(
     premiere = draft.variantes[0]
     if visuels is not None:
         actifs, credit, fond = list(visuels.actifs), visuels.credit, image_de_fond(visuels.actifs)
+        if actifs and fond is None:
+            # Des actifs choisis mais aucun fond extractible : la cover partirait
+            # sur l'image de secours du gabarit, et le gel refuserait le post a
+            # chaque passage (le creneau bloque de l'article 17974). Le choix des
+            # visuels garantit un fond -- si on est ici, c'est lui qui est casse,
+            # et il vaut mieux une erreur bruyante qu'une slide inpubliable en
+            # base. `assets == []` reste legitime (composition a la main).
+            raise ValueError(
+                f"visuels sans image de fond pour l'article {article.id} : {len(actifs)} actif(s)"
+            )
     else:
         actifs, credit, fond = None, credit_video(article), _fond_par_defaut(article)
     post = Post(

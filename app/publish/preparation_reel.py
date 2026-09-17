@@ -34,7 +34,7 @@ from app.content.urls import url_propre
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
 from app.content.visuels import ORIGINE_ARTICLE, origine_interdite, urls_interdites
 from app.publish.images import ImageInexploitable, en_jpeg
-from app.publish.preparation import PreparationDifferee, PreparationImpossible
+from app.publish.preparation import PreparationDifferee, PreparationImpossible, verifier_fond
 
 MO = 1024 * 1024
 DELAI_TELECHARGEMENT_S = 120.0
@@ -266,6 +266,12 @@ def preparer_reel(
     dossier.mkdir(parents=True, exist_ok=True)
     for ancien in [*dossier.glob("*.mp4"), *dossier.glob("*.jpg")]:
         ancien.unlink()
+
+    # Le fond AVANT le rendu : la cover d'un reel est une image rendue par
+    # Chromium comme celle d'un carrousel. Sans fond verifie, elle partirait sur
+    # l'image de secours du gabarit -- et c'est elle que Meta affiche en
+    # couverture du reel (`cover_url`).
+    verifier_fond(post, article)
 
     # La cover AVANT la video : une cover fautive ne doit pas consommer le
     # telechargement yt-dlp du passage. RenduIndisponible (Chromium absent) remonte.

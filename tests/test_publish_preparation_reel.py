@@ -47,8 +47,15 @@ def _rendre(overflow=False):
     return rendre
 
 
-def _post(template="kinda_reel", credit="@saralandry", *medias):
-    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**", "image_url": None}
+# La cover d'un reel est une IMAGE rendue par Chromium (elle sert de `cover_url`
+# chez Meta) : un brouillon de reel porte donc toujours un fond, comme un
+# carrousel.
+FOND = "https://cdn/fond.jpg"
+
+
+def _post(template="kinda_reel", credit="@saralandry", *medias, fond=FOND):
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": fond}
     return SimpleNamespace(template=template, credit=credit, slides=[cover, *medias])
 
 
@@ -546,3 +553,15 @@ def test_une_pause_yt_dlp_ne_bloque_pas_une_video_directe(tmp_path):
     recuperer = Recuperer()
     recuperer.attente = lambda: YtdlpEnAttente("yt-dlp en pause")
     preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **_outils())
+
+
+@pytest.mark.parametrize("fond", [None, "", "None"])
+def test_un_reel_sans_fond_de_cover_n_est_jamais_gele(tmp_path, fond):
+    """La cover d'un reel est l'image de couverture envoyee a Meta (`cover_url`).
+    Sans fond -- efface au dashboard, ou reduit au `str(None)` de brouillons de
+    production --, elle partirait sur l'image de secours du gabarit. Refuse AVANT
+    le rendu et avant le telechargement de la video."""
+    outils = {**_outils(), "rendre": _interdit, "telecharger": _interdit}
+    with pytest.raises(PreparationImpossible, match="aucun fond de cover"):
+        preparer_reel(_post(fond=fond), _article(VIDEO, url=REEL), tmp_path,
+                      recuperer_ytdlp=_interdit, **outils)

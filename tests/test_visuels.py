@@ -312,3 +312,44 @@ def test_le_gel_differe_quand_la_copie_locale_du_fond_a_disparu(tmp_path):
     with pytest.raises(PreparationDifferee, match="copie locale du fond"):
         preparer_fichiers(post, _article(_source(SourceType.RSS)), tmp_path,
                           rendre=_interdit, telecharger=_interdit)
+
+
+def test_le_fond_ignore_un_porteur_de_video_et_prefere_la_vraie_photo():
+    """Les deux regles du fond, ensemble : un porteur de video NU (Meta omet
+    `media_url` et la vignette) ne donne aucune image -- c'est lui qui bloquait
+    les reels --, et une vraie photo passe devant la vignette d'une video, meme
+    quand la video vient en premier."""
+    porteur = actif(entree("video", None), origine=ORIGINE_ARTICLE, compte="@cdw")
+    vignette = actif(entree("video", None, preview_url="https://cdn.ig/v.jpg"),
+                     origine=ORIGINE_ARTICLE, compte="@cdw")
+    photo = actif(entree("photo", "https://cdn.ig/p.jpg"), origine=ORIGINE_ARTICLE, compte="@cdw")
+    assert image_de_fond([porteur]) is None
+    assert image_de_fond([porteur, photo]) == "https://cdn.ig/p.jpg"
+    assert image_de_fond([vignette, photo]) == "https://cdn.ig/p.jpg"
+    assert image_de_fond([vignette]) == "https://cdn.ig/v.jpg"
+
+
+def test_un_fichier_de_cache_a_none_n_est_pas_un_fond():
+    """Ceinture defensive : `fichier` litteralement a « None » (brouillons de
+    production) est lu comme absent, jamais comme un chemin."""
+    assert image_de_fond([{"type": "photo", "fichier": "None", "url": None}]) is None
+
+
+def test_create_post_refuse_des_actifs_sans_fond(db_session):
+    """Un choix de visuels qui ne donne aucun fond est un defaut du CHOIX : mieux
+    vaut une erreur bruyante qu'une slide inpubliable persistee (le creneau
+    bloque de l'article 17974)."""
+    source = Source(name="Charlotte de Witte (IG)", type=SourceType.INSTAGRAM,
+                    url="ig:charlottedewittemusic", categorie=SourceCategorie.ARTISTE)
+    db_session.add(source)
+    db_session.commit()
+    article = Article(source_id=source.id, url="https://www.instagram.com/reel/AAA/", title="Set",
+                      raw_hash="cdw1", media=[entree("video", None)])
+    db_session.add(article)
+    db_session.commit()
+    variante = CoverVariante(headline="**x**", title="**x**", subtitle="**x**")
+    draft = PostDraft(variantes=[variante] * 4, caption="Legende 🎧 ✨", hashtags=[])
+    porteur = actif(entree("video", None), origine=ORIGINE_ARTICLE, compte="@charlottedewittemusic")
+    with pytest.raises(ValueError, match="sans image de fond"):
+        create_post(db_session, article, draft, template="kinda_reel",
+                    visuels=SimpleNamespace(actifs=[porteur], credit="@charlottedewittemusic"))
