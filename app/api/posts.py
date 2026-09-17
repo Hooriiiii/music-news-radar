@@ -62,7 +62,9 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
 
     edite_le_contenu = any(
         valeur is not None
-        for valeur in (payload.slides, payload.variante_retenue, payload.caption, payload.hashtags)
+        for valeur in (
+            payload.slides, payload.variante_retenue, payload.caption, payload.hashtags, payload.template
+        )
     )
     if edite_le_contenu and db.scalar(
         select(Creneau.id).where(Creneau.post_id == post.id, Creneau.etat == EtatCreneau.GELE)

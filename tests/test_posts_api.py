@@ -661,6 +661,7 @@ def _post_sur_un_creneau(db, etat):
     {"hashtags": ["#pop"]},
     {"variante_retenue": 1},
     {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**"}]},
+    {"template": "kinda_reel"},
 ])
 def test_un_post_gele_ne_se_modifie_plus(client, db_session, modification):
     """Les fichiers et la legende du creneau gele sont ceux qui partiront : une
@@ -670,6 +671,7 @@ def test_un_post_gele_ne_se_modifie_plus(client, db_session, modification):
     assert reponse.status_code == 409
     db_session.refresh(post)
     assert post.caption == "Une legende." and post.hashtags == ["#electro"]
+    assert post.template == "kinda_post"
 
 
 def test_un_post_programme_non_gele_se_modifie(client, db_session):

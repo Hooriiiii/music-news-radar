@@ -4,6 +4,10 @@ Seuls les creneaux LIBRE ou PROGRAMME et encore a venir se modifient : un crenea
 gele a deja ses fichiers prets, et changer son article a T-2h publierait autre
 chose que ce qui a ete fige. Toute action manuelle EPINGLE le creneau, sinon
 l'arbitrage suivant la defait dans les 10 minutes.
+
+Un creneau reel n'accepte qu'un article eligible en reel, et decaler n'echange
+qu'avec un creneau du meme format. `/publication/reels` coupe ou rallume les reels
+automatiques ; yt-dlp seul se coupe dans `.env`.
 """
 
 import datetime as dt
@@ -13,10 +17,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau
-from app.publish.mode import enregistrer_mode, mode_effectif, source_du_mode
-from app.schedule.store import MODIFIABLES, VERROUILLES, appliquer_arbitrage, post_a_reprendre, utc
-from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate
+from app.config import settings
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau
+from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
+from app.schedule.store import (
+    MODIFIABLES,
+    TEMPLATES,
+    VERROUILLES,
+    appliquer_arbitrage,
+    offre_reels,
+    post_a_reprendre,
+    raison_ineligible_reel,
+    utc,
+)
+from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate, OffreReelsOut, ReelsOut, ReelsUpdate
 
 router = APIRouter(tags=["schedule"])
 
@@ -35,6 +49,7 @@ def _vue(db: Session, creneau: Creneau) -> CreneauOut:
     return CreneauOut(
         id=creneau.id,
         publier_a=utc(creneau.publier_a),
+        format=creneau.format,
         etat=creneau.etat,
         epingle=creneau.epingle,
         article_id=creneau.article_id,
@@ -62,6 +77,11 @@ def lister_file(db: Session = Depends(get_db)):
     return _liste(db, _maintenant())
 
 
+@router.get("/schedule/offre-reels", response_model=OffreReelsOut)
+def lire_offre_reels(db: Session = Depends(get_db)):
+    return OffreReelsOut(**offre_reels(db, _maintenant()))
+
+
 @router.get("/publication/mode", response_model=ModeOut)
 def lire_mode():
     return ModeOut(mode=mode_effectif(), source=source_du_mode())
@@ -76,6 +96,27 @@ def changer_mode(payload: ModeUpdate):
         )
     enregistrer_mode(payload.mode, _maintenant())
     return ModeOut(mode=mode_effectif(), source=source_du_mode())
+
+
+def _etat_reels() -> ReelsOut:
+    return ReelsOut(actifs=reels_actifs(), ytdlp=settings.publication_reel_ytdlp)
+
+
+@router.get("/publication/reels", response_model=ReelsOut)
+def lire_reels():
+    return _etat_reels()
+
+
+@router.put("/publication/reels", response_model=ReelsOut)
+def changer_reels(payload: ReelsUpdate, db: Session = Depends(get_db)):
+    # Pas de confirmation : couper ne publie rien, et rallumer reste soumis au
+    # mode (arret/apercu/reel), qui a la sienne.
+    maintenant = _maintenant()
+    enregistrer_reels(payload.actifs, maintenant)
+    # La file reflete le choix tout de suite, sans attendre l'agent : les
+    # creneaux reel a venir non epingles disparaissent (ou reviennent).
+    appliquer_arbitrage(db, maintenant)
+    return _etat_reels()
 
 
 @router.post("/schedule/rebuild", response_model=list[CreneauOut])
@@ -113,6 +154,12 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
             # Choisi a la main, un article exclu reste refuse : la securite
             # prime, l'exclusion se leve separement si besoin.
             raise HTTPException(status_code=409, detail="Article exclu de la file")
+        if creneau.format == FormatCreneau.REEL:
+            # Meme regle que l'arbitrage : la securite prime sur le choix manuel
+            # (credit obligatoire, jamais un compte media).
+            raison = raison_ineligible_reel(article)
+            if raison is not None:
+                raise HTTPException(status_code=409, detail=f"Article inutilisable en reel : {raison}")
         if db.scalar(
             select(Creneau.id).where(
                 Creneau.article_id == article.id,
@@ -134,7 +181,9 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
             autre.post_id = None
             _reprogrammer(autre)
         creneau.article_id = article.id
-        creneau.post_id = post_a_reprendre(db, article.id)
+        # Le brouillon repris doit etre du gabarit du creneau : jamais un
+        # carrousel accroche a un reel, ni l'inverse.
+        creneau.post_id = post_a_reprendre(db, article.id, TEMPLATES[creneau.format])
         _reprogrammer(creneau)
     elif payload.sauter:
         article = db.get(Article, creneau.article_id) if creneau.article_id else None
@@ -147,7 +196,13 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     else:
         suivant = db.scalar(
             select(Creneau)
-            .where(Creneau.publier_a > creneau.publier_a, Creneau.etat.in_(MODIFIABLES))
+            # Un echange ne change jamais le format d'un article : un reel ne
+            # glisse pas sur un creneau carrousel.
+            .where(
+                Creneau.publier_a > creneau.publier_a,
+                Creneau.format == creneau.format,
+                Creneau.etat.in_(MODIFIABLES),
+            )
             .order_by(Creneau.publier_a)
             .limit(1)
         )

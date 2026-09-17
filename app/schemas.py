@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.content import layout
 from app.content.highlight import validate_headline
-from app.models import ArticleStatus, EtatCreneau, PostStatus, SourceCategorie, SourceType
+from app.models import ArticleStatus, EtatCreneau, FormatCreneau, PostStatus, SourceCategorie, SourceType
 
 
 class SourceOut(BaseModel):
@@ -209,6 +209,7 @@ class CoversOut(BaseModel):
 class CreneauOut(BaseModel):
     id: int
     publier_a: dt.datetime
+    format: FormatCreneau
     etat: EtatCreneau
     epingle: bool
     article_id: int | None
@@ -226,6 +227,27 @@ class CreneauUpdate(BaseModel):
     article_id: int | None = None
     sauter: bool = False
     decaler: bool = False
+
+
+class OffreReelsOut(BaseModel):
+    """La matiere disponible pour les reels sur la fenetre de fraicheur.
+    `directes` : videos que l'API donne ; le reste passe par yt-dlp au gel."""
+
+    avec_video: int
+    directes: int
+    eligibles: int
+    fraicheur_jours: int
+
+
+class ReelsOut(BaseModel):
+    """L'interrupteur des reels (dashboard) et celui de yt-dlp (.env, lecture seule)."""
+
+    actifs: bool
+    ytdlp: bool
+
+
+class ReelsUpdate(BaseModel):
+    actifs: bool
 
 
 class ModeOut(BaseModel):
