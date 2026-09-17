@@ -1,5 +1,9 @@
 """Le texte publie sous un post : legende aeree, credit, hashtags.
 
+Le CREDIT nomme le proprietaire des visuels (« 📸 @artiste », « 🎥 @artiste »
+pour un reel) : c'est le minimum de bonne foi quand on reprend la photo ou la
+video d'un compte. Il n'est jamais coupe.
+
 Commun a l'export zip et a la publication automatique -- un seul endroit ou
 respecter les limites de Meta : 2200 caracteres (marge a 2150) et 30 hashtags.
 
@@ -89,7 +93,8 @@ def texte_legende(post) -> str:
     ligne_credit = None
     if credit:
         pictogramme = "🎥" if getattr(post, "template", None) == "kinda_reel" else "📸"
-        ligne_credit = f"{pictogramme} via {credit}"
+        # « 📸 @artiste », sans « via » : le pictogramme dit deja ce qu'est ce compte.
+        ligne_credit = f"{pictogramme} {credit}"
 
     def fin_du_texte(tags) -> str:
         # Credit puis hashtags, en dernier bloc a part.

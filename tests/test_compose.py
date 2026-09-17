@@ -15,7 +15,9 @@ from app.content.compose import (
     make_claude_composer,
     probleme_emojis,
 )
+from app.content.choix_visuels import ChoixVisuels
 from app.content.media import entree
+from app.content.visuels import actif
 from app.models import Article, Source, SourceType
 
 
@@ -419,3 +421,47 @@ def test_des_sorties_vides_repetees_donnent_une_composition_error(db_session):
     client = _FakeClient([_FakeParsedResponse(None)] * 3)
     with pytest.raises(CompositionError):
         make_claude_composer(client=client, max_attempts=3)(article)
+
+
+def _actif_artiste():
+    return actif(
+        entree("photo", "https://cdn.ig/fred.jpg"),
+        origine="artiste",
+        compte="@fredagain",
+        permalink="https://www.instagram.com/p/F/",
+        fichier="file:///cache/fred.jpg",
+    )
+
+
+def test_create_post_garde_les_visuels_choisis(db_session):
+    """Les actifs choisis AVANT l'appel paye sont ceux que le post publiera : le
+    fond de cover est la copie locale, et le credit en decoule."""
+    article = _article(db_session)
+    choisi = _actif_artiste()
+
+    post = create_post(db_session, article, _draft(), visuels=ChoixVisuels([choisi], "@fredagain"))
+
+    assert post.assets == [choisi]
+    assert post.credit == "@fredagain"
+    assert post.slides[0]["image_url"] == "file:///cache/fred.jpg"
+
+
+def test_create_post_sans_visuel_choisi_laisse_la_cover_sans_fond(db_session):
+    """Un choix VIDE est un choix : les medias de l'article ne reviennent pas par
+    la fenetre servir de fond."""
+    article = _article(db_session)
+    article.media = [entree("photo", "https://tsugi.fr/photo.jpg")]
+    db_session.commit()
+
+    post = create_post(db_session, article, _draft(), visuels=ChoixVisuels())
+
+    assert (post.assets, post.credit, post.slides[0]["image_url"]) == ([], None, None)
+
+
+def test_create_post_sans_choix_reste_historique(db_session):
+    """Sans `visuels` (composition manuelle, tests) : `assets` reste NULL et le
+    fond vient des medias autorises de l'article."""
+    post = create_post(db_session, _article(db_session), _draft())
+
+    assert post.assets is None
+    assert post.slides[0]["image_url"] == "https://tsugi.fr/photo.jpg"

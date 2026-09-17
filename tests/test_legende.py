@@ -40,13 +40,20 @@ def test_une_legende_trop_longue_est_coupee_sans_perdre_les_hashtags():
 def test_les_hashtags_ferment_la_legende_apres_le_credit():
     post = _post()
     post.credit, post.template = "@saralandry", "kinda_reel"
-    assert texte_legende(post) == "Une legende 🎧 ✨\n\n🎥 via @saralandry\n\n#electro"
+    assert texte_legende(post) == "Une legende 🎧 ✨\n\n🎥 @saralandry\n\n#electro"
 
 
 def test_le_credit_d_un_carrousel_a_son_propre_pictogramme():
     post = _post(hashtags=())
     post.credit, post.template = "@tsugimag", "kinda_post"
-    assert texte_legende(post).endswith("📸 via @tsugimag")
+    assert texte_legende(post).endswith("📸 @tsugimag")
+
+
+def test_le_credit_d_un_carrousel_nomme_tous_les_artistes():
+    """Plusieurs photos de comptes differents : tous les comptes sont credites."""
+    post = _post(hashtags=())
+    post.credit, post.template = "@fredagain @pinkpantheress", "kinda_post"
+    assert texte_legende(post).endswith("📸 @fredagain @pinkpantheress")
 
 
 def test_le_credit_n_est_jamais_coupe():
@@ -54,7 +61,7 @@ def test_le_credit_n_est_jamais_coupe():
     post.credit, post.template = "@saralandry", "kinda_reel"
     texte = texte_legende(post)
     assert len(texte) <= LEGENDE_MAX
-    assert texte.endswith("🎥 via @saralandry\n\n#electro")
+    assert texte.endswith("🎥 @saralandry\n\n#electro")
 
 
 def test_une_legende_seule_trop_longue_ne_finit_pas_par_des_lignes_vides():
@@ -144,7 +151,7 @@ def test_une_marge_sous_la_limite_de_meta_compte_tout_le_texte():
     post.credit, post.template = "@saralandry", "kinda_reel"
     texte = texte_legende(post)
     assert len(texte) <= LEGENDE_MARGE < LEGENDE_MAX
-    assert "🎥 via @saralandry" in texte
+    assert "🎥 @saralandry" in texte
 
 
 def test_credit_et_hashtags_trop_longs_retirent_des_hashtags_par_la_fin():

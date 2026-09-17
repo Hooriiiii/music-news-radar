@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.content.render import RenduIndisponible, RenduSlide
 from app.models import SourceCategorie, SourceType
+from app.content.visuels import ORIGINE_ARTICLE, actif
 from app.publish.preparation import PreparationImpossible, medias_du_carrousel, preparer_fichiers
 
 
@@ -228,6 +229,18 @@ def test_les_visuels_d_un_compte_media_instagram_ne_sont_jamais_repris(tmp_path)
     assert len(medias_du_carrousel(_post(), _article_medias(_video(), source=artiste))) == 1
 
 
+def test_un_actif_du_post_devenu_interdit_n_est_plus_repris():
+    """Relecture d'un `assets` pose quand la source etait encore autorisee : si
+    elle est passee en compte media depuis, ses visuels ne partent pas."""
+    source = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.MEDIA)
+    photo = {"type": "photo", "url": "https://img/p.jpg", "preview_url": None,
+             "duration_ms": None, "width": None, "height": None}
+    article = _article_medias(photo, source=source)
+    post = _post()
+    post.assets = [actif(photo, origine=ORIGINE_ARTICLE, permalink="https://www.instagram.com/p/G/")]
+    assert medias_du_carrousel(post, article) == []
+
+
 def test_neuf_medias_au_plus_apres_la_cover(tmp_path):
     _, outils = _outils_video()
     medias = [_video(url=f"https://cdn/{i}.mp4", preview=f"https://cdn/{i}.jpg") for i in range(12)]
@@ -240,3 +253,13 @@ def test_un_nouveau_gel_efface_aussi_les_anciennes_videos(tmp_path):
     (tmp_path / "ancien_02.mp4").write_bytes(b"x")
     _preparer(tmp_path, _post(), None)
     assert not (tmp_path / "ancien_02.mp4").exists()
+
+
+def test_une_cover_sans_fond_n_est_jamais_publiee(tmp_path):
+    """Sans fond, la cover partirait sur l'image de secours : ce n'est pas un
+    post publiable, et c'est le signe d'un brouillon compose sans visuel."""
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": None}
+    post = SimpleNamespace(slides=[cover], assets=[])
+    with pytest.raises(PreparationImpossible, match="aucun fond"):
+        preparer_fichiers(post, _article(), tmp_path, rendre=_rendre(), telecharger=_telecharger())

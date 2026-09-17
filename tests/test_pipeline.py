@@ -1,6 +1,7 @@
 import pytest
 
 from app.config import settings
+from app.pipeline.election import ElectionStats
 from app.pipeline.ingest import IngestStats
 from app.pipeline.run import run_pipeline
 from app.pipeline.scoring import ScoringStats
@@ -111,3 +112,20 @@ def test_une_surveillance_du_jeton_qui_casse_n_arrete_pas_le_run(db_session, ful
         surveiller_jeton=surveiller,
     )
     assert report.alerte_jeton_sourcing is None
+
+
+def test_run_pipeline_elit_avant_le_scoring_et_lie_les_artistes_apres(db_session, full_config):
+    calls = []
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: calls.append("ingest") or [],
+        cluster=lambda db: calls.append("cluster") or 0,
+        elire=lambda db: calls.append("elire") or ElectionStats(reelus=1),
+        score=lambda db: calls.append("score") or ScoringStats(),
+        record=lambda db: calls.append("record") or 0,
+        lier_artistes=lambda db: calls.append("lier") or 2,
+        alert=lambda db: FakeAlertStats(),
+    )
+    assert calls == ["ingest", "cluster", "elire", "score", "record", "lier"]
+    assert report.election.reelus == 1
+    assert report.artistes_lies == 2

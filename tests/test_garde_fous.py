@@ -6,7 +6,6 @@ sont appliquees de facon inegale. Les exemples ci-dessous sont ces cas reels.
 
 import pytest
 
-from app.config import settings
 from app.models import Article, ScoredBy, Source, SourceCategorie, SourceType
 from app.pipeline.scoring import (
     ArticleScore,
@@ -95,61 +94,56 @@ def test_sans_source_rien_ne_change():
     assert appliquer_garde_fous(a, note(80)).relevance == 80
 
 
-# --- Garde-fou 2 : plafond media, sauf actu majeure ---
-
+# --- Plus de plafond media (decision du 2026-09-17) ---
+# L'actu GTA VI x Fred again.. a ete enterree a 45-59 : la decote et le plafond
+# punissaient l'information selon le canal. Le plagiat portait sur les visuels et
+# la formulation, traites ailleurs.
 
 GUETTAPEN_MENTAL = (
     "LA SANTÉ MENTALE DE PETIT BISCUIT AU PLUS BAS 😔\n\nLe producteur francais se confie."
 )
-GUETTAPEN_EVOLUTION = "LE NÉERLANDAIS REVIENT SUR SON ÉVOLUTION"
-GUETTAPEN_RIPOST = "LA LOI RIPOST MET EN DANGER LA SCÈNE ÉLECTRONIQUE FRANÇAISE ⚠️"
 
 
 @pytest.mark.parametrize(
-    "caption, relevance, hotness",
-    [(GUETTAPEN_MENTAL, 68, 70), (GUETTAPEN_EVOLUTION, 70, 45)],
+    "categorie",
+    [SourceCategorie.MEDIA, SourceCategorie.ARTISTE, SourceCategorie.FESTIVAL, None],
 )
-def test_media_ordinaire_plafonne_a_59(caption, relevance, hotness):
-    a = article(caption, categorie=SourceCategorie.MEDIA)
-    resultat = appliquer_garde_fous(a, note(relevance, hotness=hotness, emergence=33))
-    assert resultat.relevance == 59
-    assert resultat.hotness == min(hotness, 59)
-    assert resultat.emergence == 33
-
-
-def test_actu_majeure_d_un_media_garde_sa_note():
-    a = article(GUETTAPEN_RIPOST, categorie=SourceCategorie.MEDIA)
-    resultat = appliquer_garde_fous(a, note(75, hotness=78, actu_majeure=True))
-    assert (resultat.relevance, resultat.hotness) == (75, 78)
-
-
-def test_plafond_media_vaut_aussi_pour_la_presse_rss():
-    a = article("Titre de presse", type_=SourceType.RSS, categorie=SourceCategorie.MEDIA)
-    assert appliquer_garde_fous(a, note(68)).relevance == 59
-
-
-def test_actu_majeure_ne_sauve_pas_un_post_vide():
-    a = article("🚨🚨", categorie=SourceCategorie.MEDIA)
-    assert appliquer_garde_fous(a, note(80, actu_majeure=True)).relevance == 29
-
-
-@pytest.mark.parametrize(
-    "categorie", [SourceCategorie.ARTISTE, SourceCategorie.FESTIVAL, None]
-)
-def test_le_plafond_media_ne_vise_que_les_medias(categorie):
+def test_la_categorie_ne_plafonne_plus_la_note(categorie):
     a = article(GUETTAPEN_MENTAL, categorie=categorie)
+    resultat = appliquer_garde_fous(a, note(68, hotness=70, emergence=33))
+    assert (resultat.relevance, resultat.hotness, resultat.emergence) == (68, 70, 33)
+
+
+def test_la_presse_rss_garde_sa_note():
+    a = article("Titre de presse", type_=SourceType.RSS, categorie=SourceCategorie.MEDIA)
     assert appliquer_garde_fous(a, note(68)).relevance == 68
 
 
-def test_actu_majeure_vaut_false_par_defaut():
-    assert note(50).actu_majeure is False
+def test_un_post_vide_de_media_reste_plafonne():
+    a = article("🚨🚨", categorie=SourceCategorie.MEDIA)
+    assert appliquer_garde_fous(a, note(80)).relevance == 29
 
 
-def test_le_prompt_definit_actu_majeure():
+def test_le_prompt_ne_decote_plus_les_medias():
     from app.pipeline.scoring import SYSTEM_PROMPT
 
-    assert "actu_majeure" in SYSTEM_PROMPT
-    assert "actu_majeure" in ArticleScore.model_json_schema()["properties"]
+    assert "PLAGIAT" not in SYSTEM_PROMPT
+    assert "plafonne" not in SYSTEM_PROMPT
+    assert "actu_majeure" not in SYSTEM_PROMPT
+    assert "AUCUNE décote" in SYSTEM_PROMPT
+
+
+def test_actu_majeure_n_existe_plus_dans_le_schema():
+    assert "actu_majeure" not in ArticleScore.model_json_schema()["properties"]
+
+
+def test_une_reponse_qui_porte_encore_actu_majeure_reste_valide():
+    """Un pre-filtre local charge avec l'ancien schema peut encore l'envoyer."""
+    brut = (
+        '{"relevance": 70, "hotness": 50, "emergence": 10, "category": "announcement",'
+        ' "summary": "R.", "artists": [], "actu_majeure": true}'
+    )
+    assert ArticleScore.model_validate_json(brut).relevance == 70
 
 
 # --- Branchement dans score_pending ---
@@ -194,30 +188,16 @@ def test_post_vide_garde_la_note_locale_plafonnee(db_session):
     assert (a.relevance_score, a.hotness_score, a.emergence_score) == (29, 29, 70)
 
 
-def test_media_note_par_claude_est_plafonne(db_session):
+def test_media_note_par_claude_garde_sa_note(db_session):
     a = _persister(db_session, GUETTAPEN_MENTAL, categorie=SourceCategorie.MEDIA)
     score_pending(db_session, scorer=lambda x: note(68, hotness=70))
     db_session.refresh(a)
-    assert (a.relevance_score, a.hotness_score) == (59, 59)
+    assert (a.relevance_score, a.hotness_score) == (68, 70)
     assert a.scored_by == ScoredBy.CLAUDE
 
 
-def test_le_plafond_media_ne_fait_pas_ecarter_par_le_prefiltre(db_session):
-    """59 > seuil du pre-filtre : un media note 70 en local passe chez Claude."""
-    assert settings.local_prefilter_threshold <= 59
-    a = _persister(db_session, GUETTAPEN_RIPOST, categorie=SourceCategorie.MEDIA)
-    stats = score_pending(
-        db_session,
-        scorer=lambda x: note(75, actu_majeure=True),
-        prefilter=lambda x: note(70),
-    )
-    assert stats.scored == 1
-    db_session.refresh(a)
-    assert a.relevance_score == 75
-
-
-def test_note_locale_sous_le_seuil_est_aussi_plafonnee(db_session):
+def test_note_locale_d_un_media_n_est_plus_plafonnee(db_session):
     a = _persister(db_session, GUETTAPEN_MENTAL, categorie=SourceCategorie.MEDIA)
     score_pending(db_session, scorer=scorer_interdit, prefilter=lambda x: note(30, hotness=90))
     db_session.refresh(a)
-    assert (a.relevance_score, a.hotness_score) == (30, 59)
+    assert (a.relevance_score, a.hotness_score) == (30, 90)

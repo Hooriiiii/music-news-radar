@@ -2,7 +2,10 @@ import io
 import zipfile
 from types import SimpleNamespace
 
-from app.content.export import PLAFOND_OCTETS, construire_zip, telecharger
+import httpx
+
+from app.content.export import PLAFOND_OCTETS, construire_zip, echec_transitoire, telecharger
+from app.models import SourceCategorie, SourceType
 
 
 class FausseReponse:
@@ -146,6 +149,41 @@ def test_telecharger_retombe_sur_le_suffixe_de_lurl():
     assert extension == ".mov"
 
 
+def test_le_zip_exclut_un_media_de_compte_media_instagram():
+    """Un utilisateur du dashboard qui exporte a la main un post dont une slide
+    pointe vers l'image d'un compte media Instagram (watermarks) ne doit jamais
+    recevoir ce fichier : meme politique qu'au gel automatique (preparation.py)."""
+    post = _post_avec_medias()
+    source_interdite = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.MEDIA)
+    article = SimpleNamespace(
+        source=source_interdite,
+        media=[{"type": "photo", "url": "https://p.jpg"}, {"type": "video", "url": "https://v.mp4"}],
+    )
+
+    zip_octets = construire_zip(
+        post, [b"PNGDATA"], "legende du post", telecharger=_telecharger_factice, article=article
+    )
+    archive = zipfile.ZipFile(io.BytesIO(zip_octets))
+
+    assert archive.namelist() == ["01_cover.png", "medias_manquants.txt", "caption.txt"]
+    manquants = archive.read("medias_manquants.txt").decode()
+    assert "https://p.jpg" in manquants and "https://v.mp4" in manquants
+    assert "compte media" in manquants
+
+
+def test_le_zip_sans_article_ne_filtre_rien():
+    """Un post dont l'article a ete purge (article_id -> NULL) exporte comme
+    avant : pas de politique applicable sans savoir d'ou vient le media."""
+    post = _post_avec_medias()
+
+    zip_octets = construire_zip(
+        post, [b"PNGDATA"], "legende", telecharger=_telecharger_factice, article=None
+    )
+    noms = zipfile.ZipFile(io.BytesIO(zip_octets)).namelist()
+
+    assert noms == ["01_cover.png", "02_photo.jpg", "03_video.mp4", "caption.txt"]
+
+
 def test_telecharger_retombe_sur_bin_sans_indice():
     client = FauxClient(FausseReponse([b"data"], content_type="application/octet-stream"))
 
@@ -242,3 +280,61 @@ def test_un_post_normal_n_assemble_rien():
         _post_avec_medias(), [b"PNG"], "legende",
         telecharger=_telecharger_factice, assembler=assembler_interdit,
     )
+
+
+class _ClientQuiEchoue:
+    """Un client httpx qui ne sort jamais sur le reseau : il leve, comme le vrai."""
+
+    def __init__(self, exception):
+        self.exception = exception
+
+    def stream(self, *args, **kwargs):
+        raise self.exception
+
+    def close(self):
+        pass
+
+
+def _reponse(code):
+    return httpx.Response(code, request=httpx.Request("GET", "https://cdn/x.jpg"))
+
+
+def test_un_echec_de_transport_est_signale_comme_passager():
+    coupure = httpx.ConnectTimeout("delai depasse")
+    _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(coupure))
+    assert echec_transitoire(raison)
+    assert "ConnectTimeout" in raison
+
+
+def test_un_5xx_et_un_429_sont_passagers_un_404_non():
+    for code in (500, 503, 429):
+        erreur = httpx.HTTPStatusError("oups", request=None, response=_reponse(code))
+        _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(erreur))
+        assert echec_transitoire(raison), code
+    erreur = httpx.HTTPStatusError("oups", request=None, response=_reponse(404))
+    _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(erreur))
+    assert not echec_transitoire(raison)
+    assert "404" in raison
+
+
+def test_la_raison_d_un_media_absent_ne_montre_pas_le_drapeau_interne():
+    """`medias_manquants.txt` est lu par un humain : le prefixe qui sert a
+    classer les echecs en interne n'a rien a y faire."""
+    from app.content.export import PREFIXE_TRANSPORT, raison_lisible
+
+    assert raison_lisible(f"{PREFIXE_TRANSPORT}ConnectTimeout") == "ConnectTimeout"
+    assert raison_lisible("HTTP 404") == "HTTP 404"
+    assert raison_lisible(None) == ""
+
+    post = SimpleNamespace(
+        slides=[{"kind": "cover"}, {"kind": "media", "type": "photo", "url": "https://cdn/x.jpg"}],
+        template="kinda_post", article_url=None, assets=None,
+    )
+    contenu = construire_zip(
+        post, [], "legende",
+        telecharger=lambda url: (None, f"{PREFIXE_TRANSPORT}ConnectTimeout"),
+    )
+    with zipfile.ZipFile(io.BytesIO(contenu)) as archive:
+        texte = archive.read("medias_manquants.txt").decode()
+    assert "ConnectTimeout" in texte
+    assert PREFIXE_TRANSPORT not in texte

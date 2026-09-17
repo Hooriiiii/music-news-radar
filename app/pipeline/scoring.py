@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import anthropic
@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Article, ScoredBy, SourceCategorie, SourceType
+from app.models import Article, ScoredBy, SourceType
+from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.pipeline.election import tailles_clusters
 from app.sources.instagram import (
     TITRE_PAR_DEFAUT,
     caption_depuis_summary,
@@ -43,10 +45,6 @@ class ArticleScore(BaseModel):
     imprint: str | None = None
     summary: str
     artists: list[str] = Field(default_factory=list)
-    # Seule porte de sortie du plafond media (voir `appliquer_garde_fous`). Défaut
-    # False : le pré-filtre local et les notes d'avant ce champ restent valides,
-    # et un modèle qui l'omet ne lève jamais le plafond.
-    actu_majeure: bool = False
 
 
 SYSTEM_PROMPT = """\
@@ -103,24 +101,15 @@ climat d'un artiste, innovation durable dans l'événementiel) : angle recherch�
 4. Hors ligne : rap/hip-hop, rock, metal, country, jazz, classique quand l'actu est \
 purement interne à ces genres — relevance <40, SAUF si elle relève d'un des axes \
 ci-dessus (festival breton multi-genres, initiative écolo, événement historique).
-5. QUI PARLE compte autant que ce qui est dit. Chaque contenu indique son « Type \
-de compte » et son « Format ». Ces règles portent sur relevance (et hotness), \
-jamais sur emergence :
-   - artiste : l'artiste qui annonce SA sortie, SA date, SON projet est la source \
-PRIMAIRE, l'actu que Kinda veut en priorité. Note-la selon la grille, sans décote.
+5. QUI PARLE. Chaque contenu indique son « Type de compte » et son « Format ». \
+Ces règles portent sur relevance (et hotness), jamais sur emergence :
+   - artiste : l'artiste qui annonce SA sortie, SA date, SON projet est une source \
+PRIMAIRE. Note-la selon la grille.
    - media (Guettapen, Tsugi, Mixmag, DJ Mag, Electro News, Pop Crave, Konbini, \
-Booska-P, AllTime EDM, Billboard, FIP...) : l'actu y est déjà repackagée, la \
-reprendre serait du PLAGIAT. C'est un FILET DE SÉCURITÉ : retire 15 à 20 points à \
-la note que mériterait la même info venue de l'artiste, et plafonne à 59 une actu \
-ordinaire. SEULE exception : une actu MAJEURE que les comptes d'artistes ne \
-couvriront pas (loi ou réglementation qui menace la scène, annulation de festival, \
-décès, fermeture de club emblématique) garde sa note haute, pour ne pas la rater.
-   - actu_majeure : mets-le à true UNIQUEMENT pour ces cas — loi ou réglementation \
-qui menace la scène, annulation de festival ou d'événement, décès, fermeture d'un \
-club emblématique, ou événement de l'industrie d'un poids comparable. Dans TOUS les \
-autres cas mets false, quel que soit le type de compte (confidence d'artiste, \
-interview, sortie, line-up, rumeur : false). Pour un compte media, false plafonne \
-la note à 59 quoi que tu donnes.
+Booska-P, AllTime EDM, Billboard, FIP...) : Kinda reprend l'INFORMATION, jamais la \
+formulation ni les visuels du média. Note l'information elle-même, exactement comme \
+si elle venait de la source primaire : AUCUNE décote parce qu'elle arrive par un \
+média. Une actu reprise par plusieurs médias est souvent une GROSSE actu.
    - festival / label / club : une annonce OFFICIELLE (line-up, dates, billetterie, \
 annulation, sortie) est une source primaire et garde sa note ; la promo courante \
 (rappel de billetterie, compte à rebours, visuel d'ambiance) vaut 40-55.
@@ -186,9 +175,6 @@ histoire d'un genre. Du contenu de fond, pas une actu chaude.
   9. other : rien de ce qui précède.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
-- actu_majeure (booléen) : voir la règle 5 — true seulement pour une loi ou \
-réglementation qui menace la scène, une annulation de festival, un décès, la \
-fermeture d'un club emblématique ou un événement d'un poids comparable ; sinon false.
 - artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \
 exact, sans @ ni #). N'inclus QUE les artistes pop ou électro — ignore ceux d'autres \
 genres (metal, rock, folk, rap...) même s'ils sont cités (ex. sur une affiche de \
@@ -289,12 +275,12 @@ def apply_score(article: Article, score: ArticleScore) -> None:
     article.mentioned_artists = score.artists or None
 
 
-# --- Garde-fous déterministes ---------------------------------------------------
-# Mesuré le 2026-09-17 sur données réelles : Haiku applique les règles 5 et 6 de
-# façon inégale (IVE « [📸] » 65, LE SSERAFIM « feat. » 72, un Guettapen ordinaire
-# 70). Le code tranche donc après le modèle, sur tous les chemins de scoring.
+# --- Garde-fou déterministe ------------------------------------------------------
+# Mesuré le 2026-09-17 sur données réelles : Haiku applique la règle 6 de façon
+# inégale (IVE « [📸] » 65, LE SSERAFIM « feat. » 72). Le code tranche donc après
+# le modèle, sur tous les chemins de scoring. Le plafond des comptes media a été
+# retiré le même jour : il enterrait des grosses actus (GTA VI × Fred again..).
 PLAFOND_POST_VIDE = 29
-PLAFOND_MEDIA = 59
 
 
 def post_quasi_vide(article: Article) -> bool:
@@ -313,27 +299,15 @@ def post_quasi_vide(article: Article) -> bool:
 
 
 def appliquer_garde_fous(article: Article, score: ArticleScore) -> ArticleScore:
-    """Plafonne relevance et hotness selon qui parle et ce qui est dit.
-
-    1. Post Instagram quasi vide -> 29, quel que soit le compte.
-    2. Compte `media` -> 59, sauf `actu_majeure` posé par le modèle.
-    L'axe emergence n'est jamais touché. Fonction pure : rend une copie.
-    """
-    plafond = None
-    if post_quasi_vide(article):
-        plafond = PLAFOND_POST_VIDE
-    elif (
-        article.source is not None
-        and article.source.categorie == SourceCategorie.MEDIA
-        and not score.actu_majeure
-    ):
-        plafond = PLAFOND_MEDIA
-    if plafond is None:
+    """Post Instagram quasi vide -> relevance et hotness plafonnées à 29, quel que
+    soit le compte. L'axe emergence n'est jamais touché. Fonction pure : rend une
+    copie."""
+    if not post_quasi_vide(article):
         return score
     return score.model_copy(
         update={
-            "relevance": min(score.relevance, plafond),
-            "hotness": min(score.hotness, plafond),
+            "relevance": min(score.relevance, PLAFOND_POST_VIDE),
+            "hotness": min(score.hotness, PLAFOND_POST_VIDE),
         }
     )
 
@@ -360,10 +334,43 @@ class ScoringStats:
     prefiltered: int = 0
     # Posts Instagram quasi vides, notés sans Claude (inclus dans `prefiltered`).
     quasi_vides: int = 0
+    # Notes locales sous le seuil envoyées quand même à Claude (2026-09-17) :
+    # groupe d'au moins N sources, ou artiste suivi cité.
+    forces_cluster: int = 0
+    forces_artiste: int = 0
     # Le message de la dernière erreur, pour que la supervision puisse NOMMER la
     # panne. Sans lui, des crédits épuisés passent pour une erreur réseau parmi
     # d'autres -- c'est ce qui les a rendus invisibles pendant des jours.
     derniere_erreur: str | None = None
+
+
+RAISON_CLUSTER = "cluster"
+RAISON_ARTISTE = "artiste_suivi"
+
+
+@dataclass
+class ContexteScoring:
+    """Ce que la cascade doit savoir d'un run entier, calculé une fois : les
+    comptes d'artistes suivis et la taille (en sources) des groupes de doublons."""
+
+    index: IndexComptes
+    tailles: dict[int, int] = field(default_factory=dict)
+
+    def raison_claude(self, article: Article, note: ArticleScore | None) -> str | None:
+        """Pourquoi un article noté sous le seuil doit quand même aller chez
+        Claude, ou None. L'actu GTA VI x Fred again.. a été écartée à 15 et 25."""
+        if self.tailles.get(article.id, 1) >= settings.cluster_sources_claude:
+            return RAISON_CLUSTER
+        noms = [*(note.artists if note is not None else []), *(article.mentioned_artists or [])]
+        if self.index.cites(
+            textes=[article.title, article.summary], noms=noms, exclure_source_id=article.source_id
+        ):
+            return RAISON_ARTISTE
+        return None
+
+
+def construire_contexte(db: Session, articles: list[Article]) -> ContexteScoring:
+    return ContexteScoring(construire_index(db), tailles_clusters(db, [a.id for a in articles]))
 
 
 def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
@@ -386,14 +393,20 @@ def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
 
 
 def score_pending(
-    db: Session, scorer=None, limit: int | None = None, prefilter=None
+    db: Session,
+    scorer=None,
+    limit: int | None = None,
+    prefilter=None,
+    contexte: ContexteScoring | None = None,
 ) -> ScoringStats:
     """Score tous les articles pas encore évalués (relevance_score IS NULL).
 
     Cascade à deux étages quand un pré-filtre est disponible : un petit modèle
     local note d'abord, et l'article n'atteint Claude que si sa note atteint
     `local_prefilter_threshold`. Sous le seuil, on garde la note locale et on
-    n'appelle jamais l'API payante.
+    n'appelle jamais l'API payante -- sauf pour un représentant d'un groupe d'au
+    moins `cluster_sources_claude` sources ou un article qui cite un artiste
+    suivi (`ContexteScoring.raison_claude`).
 
     Commit après chaque article : un run interrompu ne perd pas les appels API
     déjà payés, et un article qui échoue n'annule pas les autres.
@@ -415,6 +428,8 @@ def score_pending(
     if limit is not None:
         stmt = stmt.limit(limit)
     articles = db.scalars(stmt).all()
+    if contexte is None:
+        contexte = construire_contexte(db, articles)
 
     stats = ScoringStats()
     for article in articles:
@@ -428,11 +443,14 @@ def score_pending(
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
                 stats.quasi_vides += 1
+                db.commit()
+                continue
             # Seuil STRICT : une note égale au seuil passe chez Claude. Le seuil
             # dit « en dessous, ça ne mérite pas qu'on paie », pas « à partir de ».
-            # La décision d'écarter se prend sur la note BRUTE : le plafond media
-            # (59) est au-dessus du seuil et ne doit jamais faire écarter un article.
-            elif note is not None and note.relevance < settings.local_prefilter_threshold:
+            # La décision d'écarter se prend sur la note BRUTE, avant garde-fou.
+            sous_le_seuil = note is not None and note.relevance < settings.local_prefilter_threshold
+            raison = contexte.raison_claude(article, note) if sous_le_seuil else None
+            if sous_le_seuil and raison is None:
                 apply_score(article, appliquer_garde_fous(article, note))
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
@@ -440,6 +458,10 @@ def score_pending(
                 apply_score(article, appliquer_garde_fous(article, scorer(article)))
                 article.scored_by = ScoredBy.CLAUDE
                 stats.scored += 1
+                if raison == RAISON_CLUSTER:
+                    stats.forces_cluster += 1
+                elif raison == RAISON_ARTISTE:
+                    stats.forces_artiste += 1
             db.commit()
         except Exception as exc:
             logger.exception("Scoring échoué pour l'article %s (%s)", article.id, article.title)

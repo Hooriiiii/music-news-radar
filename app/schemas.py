@@ -54,6 +54,13 @@ class ArticleOut(BaseModel):
     status: ArticleStatus
     media: list[dict] | None
 
+    # Calcules par l'API (pas des colonnes) : l'origine du visuel a venir, la
+    # raison de son absence, et si les medias propres sont interdits (compte
+    # media Instagram).
+    visuel: str | None = None
+    raison_sans_visuel: str | None = None
+    visuels_interdits: bool = False
+
 
 class ArtistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -66,6 +73,7 @@ class ArtistOut(BaseModel):
     mentions_count: int
     max_emergence: int | None
     tracked: bool
+    source_instagram_id: int | None = None
 
 
 class ArtistMentionOut(BaseModel):
@@ -155,6 +163,10 @@ class PostOut(BaseModel):
     article_title: str
     article_url: str
     source_name: str | None
+    # Les visuels retenus (origine, compte, permalink, copie locale) et le credit
+    # qui en decoule. NULL = post anterieur a la regle des visuels (2026-09-17).
+    assets: list[dict] | None = None
+    credit: str | None = None
     status: PostStatus
     template: str
     caption: str

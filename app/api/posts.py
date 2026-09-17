@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.content.choix_visuels import AucunVisuel, ChoixVisuels, VisuelsDifferes, choisir_visuels
 from app.content.compose import CompositionError, create_post, make_claude_composer
 from app.content.export import construire_zip
+from app.content.lecture_artistes import LecteurComptes
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.db import get_db
@@ -25,13 +27,26 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
+    # Les visuels d'abord, avec le meme budget de lecture que l'agent. Sans visuel
+    # autorise, le post est quand meme compose (la regle vise la file) : fond vide,
+    # a completer a la main.
+    try:
+        visuels = choisir_visuels(
+            db, article, maintenant=dt.datetime.now(dt.timezone.utc), lecteur=LecteurComptes()
+        )
+    except AucunVisuel:
+        visuels = ChoixVisuels()
+    except VisuelsDifferes as exc:
+        raise HTTPException(
+            status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
+        ) from exc
     composer = make_claude_composer()
     try:
         draft = composer(article)
     except CompositionError as exc:
         # Erreur amont (Claude) : une reponse HTTP lisible, pas un 500 avec trace.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return create_post(db, article, draft)
+    return create_post(db, article, draft, visuels=visuels)
 
 
 @router.get("/posts", response_model=list[PostOut])
@@ -248,7 +263,10 @@ def exporter_post(post_id: int, db: Session = Depends(get_db)):
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], texte_legende(post))
+    # L'article peut avoir ete purge (14 jours de retention) : le lien casse
+    # (`article_id` -> NULL) et l'export continue sans policy applicable.
+    article = db.get(Article, post.article_id) if post.article_id else None
+    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], texte_legende(post), article=article)
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
     return Response(

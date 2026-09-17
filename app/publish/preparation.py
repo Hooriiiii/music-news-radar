@@ -17,7 +17,8 @@ Trois regles :
   hors specs) retombe sur sa vignette en photo : un media ne fait jamais echouer
   le gel ;
 - les visuels d'un compte Instagram de categorie `media` ne sont jamais repris
-  (watermarks) : cover seule.
+  (watermarks, politique dans `app.content.visuels`) : ni en slide, ni en fond de
+  cover -- un tel fond rend le gel impossible.
 """
 
 import logging
@@ -29,7 +30,13 @@ from app.content import video as video_mod
 from app.content.export import telecharger as telecharger_media
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.render import render_post
-from app.models import SourceCategorie, SourceType
+from app.content.visuels import (
+    ORIGINE_ARTICLE,
+    lire_fichier_cache,
+    origine_interdite,
+    urls_interdites,
+    visuels_autorises,
+)
 from app.publish.images import ImageInexploitable, normaliser
 
 logger = logging.getLogger(__name__)
@@ -49,27 +56,39 @@ class PreparationDifferee(RuntimeError):
     est retente au passage suivant. Message affichable."""
 
 
-def visuels_interdits(article) -> bool:
-    """Compte d'actu Instagram : l'info se reecrit, ses visuels (watermarks) jamais."""
-    source = getattr(article, "source", None)
-    return (
-        source is not None
-        and getattr(source, "type", None) == SourceType.INSTAGRAM
-        and getattr(source, "categorie", None) == SourceCategorie.MEDIA
-    )
+def _media_d_actif(actif_: dict) -> dict:
+    """Un actif avec copie locale part en PHOTO depuis cette copie (l'URL du CDN
+    Instagram aura expire) ; les autres gardent leur forme."""
+    if actif_.get("fichier"):
+        return {**actif_, "type": PHOTO, "url": actif_["fichier"]}
+    return actif_
 
 
 def medias_du_carrousel(post, article) -> list[dict]:
-    """Photos et videos a publier apres la cover : slides, puis article, sans
-    doublon, sans le media qui sert de fond a la cover."""
-    if visuels_interdits(article):
-        return []
+    """Photos et videos a publier apres la cover : slides, puis actifs du post
+    (ou, pour un post anterieur aux actifs, medias autorises de l'article), sans
+    doublon, sans le media qui sert de fond a la cover, jamais un visuel interdit."""
+    interdites = urls_interdites(article)
     candidats = [
         slide for slide in post.slides[1:]
         if slide.get("kind") == "media" and slide.get("type") in (PHOTO, VIDEO)
+        and not ({slide.get("url"), slide.get("preview_url")} & interdites)
     ]
-    if article is not None:
-        candidats += [m for m in article.media or [] if m.get("type") in (PHOTO, VIDEO)]
+    actifs = getattr(post, "assets", None)
+    if actifs is not None:
+        # La policy est RE-VERIFIEE a la relecture : un actif pose quand la source
+        # etait autorisee ne part pas si elle est passee en compte media depuis,
+        # ni si son URL est devenue interdite.
+        interdite_maintenant = origine_interdite(getattr(article, "source", None))
+        candidats += [
+            _media_d_actif(a)
+            for a in actifs
+            if a.get("type") in (PHOTO, VIDEO)
+            and not (a.get("origine") == ORIGINE_ARTICLE and interdite_maintenant)
+            and not ({a.get("url"), a.get("preview_url")} & interdites)
+        ]
+    else:
+        candidats += [m for m in visuels_autorises(article) if m.get("type") in (PHOTO, VIDEO)]
     fond = post.slides[0].get("image_url") if post.slides else None
     vues: set[str] = set()
     medias = []
@@ -85,6 +104,16 @@ def medias_du_carrousel(post, article) -> list[dict]:
             continue
         medias.append(media)
     return medias
+
+
+def _octets_image(url: str, telecharger) -> bytes | None:
+    """Une copie locale est lue dans le cache, jamais telechargee ; un `file://`
+    hors du cache n'est jamais lu."""
+    octets = lire_fichier_cache(url)
+    if octets is not None or url.startswith("file://"):
+        return octets
+    octets, _ = telecharger(url)
+    return octets
 
 
 def _video_de_carrousel(media: dict, telecharger_video, sonder, transcoder) -> bytes | None:
@@ -135,6 +164,23 @@ def preparer_fichiers(
     for ancien in [*dossier.glob("*.jpg"), *dossier.glob("*.mp4")]:
         ancien.unlink()
 
+    fond = post.slides[0].get("image_url") if post.slides else None
+    if fond and fond in urls_interdites(article):
+        # Brouillon compose avant la regle du 2026-09-17 : jamais publie.
+        raise PreparationImpossible("fond de cover tire d'un compte media Instagram : visuel interdit")
+    if not fond:
+        # Sans fond, la cover part sur l'image de secours du gabarit : lisible a
+        # l'ecran d'un editeur, pas publiable telle quelle. Une file automatique
+        # ne doit jamais publier ca -- c'est le signe d'un post compose sans
+        # visuel autorise.
+        raise PreparationImpossible("aucun fond de cover : le post n'a pas de visuel")
+    if fond.startswith("file://") and lire_fichier_cache(fond) is None:
+        # La copie locale a ete purgee (cache vide, dossier applicatif efface) :
+        # le rendu retomberait en silence sur l'image de secours du gabarit. Un
+        # REPORT, jamais une exclusion -- l'article n'y est pour rien, et rien ne
+        # part sur le fond de secours.
+        raise PreparationDifferee("la copie locale du fond de cover a disparu du cache")
+
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.
     rendus = rendre(post.slides, "kinda_post")
@@ -162,7 +208,7 @@ def preparer_fichiers(
             url = media.get("url")
         if not url:
             continue
-        octets, _ = telecharger(url)
+        octets = _octets_image(url, telecharger)
         if octets is None:
             continue
         try:

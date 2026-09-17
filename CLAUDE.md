@@ -219,18 +219,17 @@ API : `GET /articles?sort=emergence&min_emergence=...`.
 
 Le feed priorise les posts des COMPTES D'ARTISTES (électro, musiques dures — hard
 techno, hardstyle, hardcore —, pop à tendance électro) : un artiste qui annonce sa
-sortie est l'actu primaire. Les comptes MÉDIAS (Guettapen, Tsugi, Mixmag, DJ Mag,
-Electro News, Pop Crave, Konbini, Booska-P, AllTime EDM, Billboard, FIP...) sont un
-**filet de sécurité** : reposter leur contenu serait du plagiat, donc ils notent
-nettement plus bas (décote 15-20, plafond 59 pour une actu ordinaire) — SAUF une
-actu majeure que les artistes ne couvriront pas (loi qui menace la scène,
-annulation de festival, décès, fermeture de club), qui garde sa note pour ne pas
-être ratée. Festivals/labels/clubs : annonce officielle = source primaire, promo
-courante 40-55. Et un post SANS INFORMATION (légende vide — titre « Post
-Instagram » —, emojis/hashtags seuls, selfie, « link in bio », teaser d'idole sans
-fait) note sous 30 quel que soit le compte : The Weeknd et IVE y prenaient 75. Les
-vraies actus pop/K-pop gardent leurs notes hautes ; l'axe emergence n'est pas
-touché.
+sortie est l'actu primaire. **Depuis le 2026-09-17, l'INFO d'un compte MÉDIA
+(Guettapen, Tsugi, Mixmag, DJ Mag, Billboard, Booska-P…) n'est plus décotée** :
+la décote de 15-20 points et le plafond à 59 ont enterré la BO de GTA VI (Fred
+again..) à 45-59, jamais atteinte à cause d'un représentant de doublon mal choisi
+(voir « Dédup à deux étages »). Kinda reprend l'information, jamais la
+formulation ni les VISUELS du média (voir « Visuels : l'info des médias, les
+images des artistes »). Festivals/labels/clubs : annonce officielle = source
+primaire, promo courante 40-55. Un post SANS INFORMATION (légende vide — titre
+« Post Instagram » —, emojis/hashtags seuls, selfie, « link in bio », teaser
+d'idole sans fait) note sous 30 quel que soit le compte. L'axe emergence n'est
+pas touché.
 
 Mécanique : colonne `sources.categorie` (VARCHAR + CHECK, migration 0016, NULL =
 inconnu) ; `build_user_prompt` passe « Format : » (post Instagram, article de
@@ -238,10 +237,16 @@ presse, post Reddit, tweet) et « Type de compte : » ; règles 5 et 6 du
 `SYSTEM_PROMPT`. Éditable au dashboard (panneau Sources), via `PATCH /sources/{id}`
 et `add_source --categorie`.
 
-**Pré-filtre local** : même prompt, plus `CONSIGNE_PREFILTRE` — la décote média ne
-doit jamais le faire noter sous 45 un contenu qui porte un fait ; seuls le bruit
-évident et les posts vides passent dessous. Sans ça, le 4B, plus brutal, écarterait
-les exceptions « actu majeure » que Claude aurait repêchées à 60+.
+**Pré-filtre local** : même prompt, plus `CONSIGNE_PREFILTRE` — ne descendre sous
+45 que pour le bruit évident, l'actu hors ligne et les posts réellement vides :
+un contenu qui porte un fait vaut 45 ou plus, quel que soit le compte. **Deux cas
+ne sont jamais écartés du passage à Claude**, même sous 45 en local : une actu
+dont le groupe de doublons réunit au moins `cluster_sources_claude` (3) sources
+distinctes (raison `cluster`), et un article qui cite un artiste suivi (raison
+`artiste_suivi`) — `ContexteScoring` (`app/pipeline/scoring.py`), compteurs
+`forces_cluster` / `forces_artiste` dans `ScoringStats`. Le post quasi vide
+(garde-fou 1 ci-dessous) reste local dans tous les cas : aucune des deux
+exceptions ne le fait passer à Claude.
 
 Classement des sources existantes : `uv run python -m scripts.categoriser_sources
 [--apply]` (sans option : le plan). Mapping explicite des comptes Instagram connus
@@ -270,24 +275,34 @@ donc APRÈS le modèle, sur tous les chemins (Claude et pré-filtre local), dans
    Coût : un post quasi vide n'est **jamais envoyé à Claude**. Note locale du
    pré-filtre si elle existe (plafonnée, son emergence est gardée), sinon note
    minimale (10/10/0, `other`, la caption en résumé) ; `scored_by = local`,
-   compté dans `prefiltered` et `quasi_vides`.
-2. **Plafond média** : `sources.categorie == media` → relevance et hotness
-   plafonnées à 59, SAUF si le modèle a posé `actu_majeure: true` (champ de
-   `ArticleScore`, défaut false — le pré-filtre et les anciennes notes restent
-   valides et ne lèvent jamais le plafond). Règle 5 du prompt : true seulement
-   pour loi/réglementation qui menace la scène, annulation de festival, décès,
-   fermeture de club emblématique ou événement de poids comparable. Le post vide
-   l'emporte sur `actu_majeure`.
-La décision d'écarter du pré-filtre se prend sur la note BRUTE : le plafond média
-(59) est au-dessus du seuil (45) et ne fait jamais écarter un article.
+   compté dans `prefiltered` et `quasi_vides`. `actu_majeure` a été retiré du
+   schéma le 2026-09-17 (jamais persisté, aucune migration) : plus de décote
+   média à lever, donc plus de champ pour ça — `ArticleScore` l'ignore
+   silencieusement si un ancien appel ou une réponse en cache le porte encore
+   (Pydantic ignore les clés inconnues).
 
 Nettoyage de la file sans rien payer : `uv run python -m scripts.appliquer_garde_fous
-[--titres-courts] [--apply]`. Ne re-applique QUE le garde-fou 1 : les anciennes
-notes n'ont pas `actu_majeure`, plafonner les médias écraserait les vraies actus
-majeures. Une note déjà posée a perdu sa caption : par défaut seul le titre « Post
-Instagram » est visé (certain) ; `--titres-courts` vise aussi les titres de moins
-de 6 mots (probable seulement — le titre n'est que la première phrase). Les
-articles USED ne sont jamais touchés.
+[--titres-courts] [--apply]`. Ne re-applique QUE le garde-fou 1. Une note déjà
+posée a perdu sa caption : par défaut seul le titre « Post Instagram » est visé
+(certain) ; `--titres-courts` vise aussi les titres de moins de 6 mots (probable
+seulement — le titre n'est que la première phrase). Les articles USED ne sont
+jamais touchés.
+
+- Rattraper les actus récentes enterrées par l'ancienne notation (décote média,
+  représentant de doublon mal élu) :
+  `uv run python -m scripts.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
+  (sans `--apply` : le plan, aucune écriture ni appel Claude ; avec : élection
+  des représentants sur la fenêtre, notation des articles mis en attente par
+  cette élection, puis re-notation Claude — sans pré-filtre — du plan : articles
+  notés en local dont le groupe atteint 3 sources ou qui citent un artiste
+  suivi, et articles déjà notés par Claude en compte média entre 40 et 59 quand
+  un artiste suivi est cité, la note dépasse 50, ou le groupe atteint 2 sources).
+  Coût : l'élection garde le plafond d'un run ordinaire
+  (`cluster_reevaluations_max_par_run`, 10) et chacune des deux phases payées est
+  bornée par `--limite` — au pire `10 + 2 × --limite` appels, et le budget
+  réellement dépensé est affiché par phase à la fin.
+- Lier une fiche artiste à son compte suivi quand le nom ne suffit pas :
+  `PATCH /artists/{id}` avec `{"source_instagram_id": <id de la source>}`
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
@@ -687,6 +702,101 @@ L'adapter RSS lit aussi les `<img>` du HTML de la description, en DERNIER recour
 32 px sont écartés), là où `media_content` est choisi par l'éditeur. Gain mesuré
 sur 12 flux réels : +12 % d'articles illustrés sans aucune requête réseau.
 
+## Visuels : l'info des médias, les images des artistes (2026-09-17)
+
+Décision de l'utilisateur : l'INFO peut venir d'un compte d'actu, ses images et
+vidéos JAMAIS (watermarks, plagiat visible d'un média concurrent).
+`app/content/visuels.py::origine_interdite` : source `instagram` de catégorie
+`media`, et elle seule — les photos de presse RSS (`og:image`, `media_content`)
+restent autorisées, quelle que soit la catégorie de leur source. Tout ce qui lit
+des médias pour publier passe par `visuels_autorises`/`urls_interdites` (fond de
+cover, photos du gel, vidéo d'un reel, cases du dashboard), avec plusieurs
+ceintures posées à chaque tâche où la règle aurait pu être contournée : un
+brouillon antérieur dont le fond vient d'un média n'est pas repris, le gel
+refuse un tel fond, et `choix_visuels._comptes_autorises` revérifie la source EN
+BASE (pas seulement héritée de l'index) avant de citer un compte d'artiste.
+
+**Pas de plafond ni de cap média, plus d'`actu_majeure`.** La ligne éditoriale
+change de mécanisme : ce n'est plus la note qui protège Kinda du plagiat visuel
+(voir « Qui parle : `sources.categorie` »), c'est le choix des visuels.
+
+**Où chercher à la place** (`choix_visuels.py`, AVANT l'appel Claude de la
+composition — le choix des visuels précède le coût payé) : d'abord les médias
+propres de l'article s'ils sont autorisés ; sinon les comptes Instagram des
+artistes SUIVIS cités (`comptes_artistes.py` : nom de la source sans
+parenthèses, handle, fiches `artists` liées par `source_instagram_id` qui
+écrasent l'index — un nom d'un seul mot comme « Anyma » n'est jamais cherché en
+texte libre, seulement via la liste `mentioned_artists` ou un `@handle`). (a)
+Leurs posts déjà en base ; (b) pour un carrousel seulement, sans rien SUR LE
+SUJET en base, une lecture en direct par `business_discovery`
+(`lecture_artistes.py`) : `visuels_lectures_max_par_passage` (2) par lecteur —
+un lecteur par passage de l'agent —, `visuels_lectures_max_par_jour` (24),
+cache par handle `visuels_cache_lectures_heures` (6 h), pause
+`visuels_pause_quota_minutes` (60) sur les codes Graph 4/17/32/613, horloge
+AWARE UTC, rien inséré en base ; (c) pour un reel, jamais de lecture en direct
+(son éligibilité se décide sans réseau, sur la base) : la première vidéo
+exploitable d'un post d'artiste déjà en base.
+
+Heuristique (`actifs_artistes.py`) : même artiste (nom et handle retirés du
+sujet), fenêtre dure `visuels_artiste_fenetre_jours` (10 j) sur la date de
+l'article, sur le sujet d'abord (recouvrement des mots significatifs du titre),
+hors sujet accepté seulement à `visuels_artiste_generique_jours` (5 j) au plus
+de la date de l'article, tri par recouvrement puis écart de date. Carrousel :
+au plus `visuels_max_photos` (3) PHOTOS — jamais de vignette de vidéo, qui
+n'est pas copiable en fichier exploitable. Reel : première vidéo directe
+(3-90 s) ou récupérable par yt-dlp sur son permalink, jamais copiée (le gel la
+télécharge).
+
+Les images d'artistes retenues sont COPIÉES dans `visuels_cache_dir` (défaut
+`~/Library/Application Support/Kinda/visuels`, nom = 32 hex du SHA-256 de l'URL)
+— les URL du CDN Instagram sont signées et expirent en quelques jours, et la
+composition précède le gel de ~22 h. Lues ensuite seulement via un `file://`
+résolu DANS ce dossier (`lire_fichier_cache`) ; ménage à `visuels_cache_jours`
+(7 j) par `purger_cache`, câblé dans `_menage` (`app/schedule/runner.py`), donc
+appelé à chaque passage de l'agent de publication.
+
+`posts.assets` (migration 0018, JSONB, réassigné en entier) garde les actifs
+choisis — origine (`article` | `artiste`), compte, permalink, date de
+publication, copie locale ; `NULL` = post antérieur à la fonctionnalité, lu
+comme avant. `artists.source_instagram_id` (même migration, FK `ON DELETE SET
+NULL`) lie une fiche artiste à son compte suivi quand le nom seul ne suffit
+pas ; `lier_artistes_comptes` le fait automatiquement par nom, sans jamais
+écraser un lien déjà posé. `posts.credit` garde les handles distincts des
+actifs, séparés par une espace. Légende : « 📸 @artiste » (« 🎥 » pour un reel),
+**sans « via »** — et depuis la demande de l'utilisateur le 2026-09-17 au soir
+(après le premier post publié), **plus de ligne « Source : <média> · <url> »** :
+le crédit du compte reste seul obligatoire, jamais coupé (`app/content/
+legende.py`).
+
+Sans visuel autorisé, l'article reste au dashboard (pastille « 🚫 sans visuel »,
+raison via `store.raison_sans_visuel`, sans appel réseau — un artiste suivi cité
+suffit à dire « pas encore », le vrai verdict attend la composition) mais sort
+de la file de publication. À la composition, deux issues distinctes :
+`AucunVisuel` exclut l'article (« composition impossible : … », comme un échec
+de composition classique) : l'article n'a aucun visuel autorisé — hors sujet,
+hors fenêtre, ou aucun artiste suivi cité. Une panne de TRANSPORT ne donne
+jamais ça : elle lève toujours `VisuelsDifferes`, qui pose seulement la raison
+« composition differee : … » sur le créneau, sans exclure ni notifier, et attend
+le passage suivant (budget/quota de lecture épuisé, ou copie en échec
+transitoire — `echec_transitoire`) ; une panne persistante refait donc le même
+report à chaque passage, jusqu'à ce que le retard fasse passer le créneau en
+`MANQUE`. Un brouillon sans visuel publiable n'est jamais gelé : `assets` vides,
+aucun fond extractible, actif devenu interdit, ou fond de cover **effacé à la
+main au dashboard** — le créneau lâche le post (pas d'exclusion : l'article n'y
+est pour rien) et la composition suivante en refait un. Et si le fond est un
+`file://` dont la copie a disparu du cache, le gel DIFFÈRE
+(`PreparationDifferee`) : jamais une publication sur l'image de secours du
+gabarit.
+`export.zip` filtre les visuels interdits avant de les inclure.
+
+**Mise en service et retour arrière** (point 9 du design) : un créneau déjà
+**gelé** part avec ses fichiers figés — les lister et les faire sauter avant la
+fusion. Et un post composé SUR CETTE BRANCHE porte un fond `file://` qui pointe
+dans `visuels_cache_dir` : ce chemin n'a aucun sens pour le code d'avant (et
+`lire_fichier_cache` n'existe pas), donc avant un retour arrière il faut **vider
+ou repointer** le fond de ces brouillons (`slides[0].image_url`), sinon leur
+cover part sur l'image de secours du gabarit.
+
 ## Dédup à deux étages
 
 1. **Par hash** (`pipeline/dedup.py`) : même url normalisée + même titre → le même
@@ -696,8 +806,18 @@ sur 12 flux réels : +12 % d'articles illustrés sans aucune requête réseau.
    normalisés (accents, ponctuation, traits d'union recollés, mots vides FR+EN) par
    **coefficient de recouvrement** des mots significatifs — pas Jaccard, qui
    punirait le titre traduit ou suffixé du nom du média. Seuil 0.65, fenêtre 48 h,
-   minimum 2 mots partagés. Le représentant est l'article vu le plus tôt ; les liens
-   ne forment jamais de chaîne (un saut suffit toujours). Idempotent.
+   minimum 2 mots partagés. Les liens se forment contre l'article vu le plus tôt ;
+   puis **`elire_representants`** (`app/pipeline/election.py`, juste après, AVANT
+   le scoring) promeut le membre le plus INFORMATIF — clé sur le titre et la
+   source seulement (le résumé est réécrit par le scoring, il ferait osciller) :
+   artistes suivis cités dans le titre, source primaire (artiste/festival/label/
+   club), visuels autorisés, mots significatifs du titre, ancienneté, id. Un
+   représentant engagé (`USED`, un `Post`, un `Creneau` non `LIBRE`) ne change
+   jamais — il garde alors ses notes. Un représentant noté par le pré-filtre local
+   dont le groupe atteint `cluster_sources_claude` (3) sources est remis à noter
+   par Claude, sauf s'il est lui-même engagé. Borne :
+   `cluster_reevaluations_max_par_run` (10) réélections + remises à noter par run.
+   Jamais de chaîne (un saut suffit toujours). Idempotent.
 
    Conséquences câblées : `link_duplicates` tourne AVANT le scoring dans
    `run_pipeline` (un doublon n'est jamais scoré, donc jamais payé), et l'API

@@ -9,6 +9,8 @@ from app.delivery.discord import send_hot_alerts
 from app.delivery.notify import notifier
 from app.pipeline.artists import record_mentions
 from app.pipeline.cluster import link_duplicates
+from app.pipeline.comptes_artistes import construire_index, lier_artistes_comptes
+from app.pipeline.election import ElectionStats, elire_representants
 from app.pipeline.health import diagnostiquer
 from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
@@ -23,8 +25,10 @@ logger = logging.getLogger(__name__)
 class PipelineReport:
     ingest: list[IngestStats] = field(default_factory=list)
     duplicates_linked: int = 0
+    election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
+    artistes_lies: int = 0
     illustres: int = 0
     scoring_skipped_reason: str | None = None
     alerts_sent: int = 0
@@ -37,12 +41,19 @@ class PipelineReport:
     alerte_jeton_sourcing: str | None = None
 
 
+def reevaluer_clusters(db: Session) -> ElectionStats:
+    """Le representant le plus informatif de chaque groupe recent (48 h)."""
+    return elire_representants(db, construire_index(db))
+
+
 def run_pipeline(
     db: Session,
     ingest=run_ingest,
     cluster=link_duplicates,
+    elire=reevaluer_clusters,
     score=score_pending,
     record=record_mentions,
+    lier_artistes=lier_artistes_comptes,
     illustrer=enrichir_articles,
     alert=send_hot_alerts,
     purge=purge_old_articles,
@@ -61,6 +72,9 @@ def run_pipeline(
     report = PipelineReport()
     report.ingest = ingest(db)
     report.duplicates_linked = cluster(db)
+    # AVANT le scoring : un doublon promu representant est note dans le meme run,
+    # et un representant local de groupe >= 3 sources repasse chez Claude.
+    report.election = elire(db)
 
     if settings.anthropic_api_key:
         report.scoring = score(db)
@@ -75,6 +89,9 @@ def run_pipeline(
     # Après le scoring, avant la purge : les artistes cités sont archivés pour de
     # bon, même quand les articles qui les mentionnaient seront supprimés
     report.mentions_recorded = record(db)
+    # Apres les mentions : une fiche artiste nouvelle se lie a son compte suivi,
+    # l'index du run suivant la connait.
+    report.artistes_lies = lier_artistes(db)
 
     if settings.discord_webhook_url:
         stats = alert(db)

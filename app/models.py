@@ -214,6 +214,12 @@ class Artist(Base):
     max_emergence: Mapped[int | None] = mapped_column(Integer, index=True)
     # Suivi manuel : l'artiste est entré dans le radar A&R de Kinda
     tracked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Le compte Instagram suivi de cet artiste, quand le nom ne suffit pas a le
+    # retrouver (« Guy-Man » et son compte). Pose automatiquement par
+    # `lier_artistes_comptes`, corrigeable au dashboard (PATCH /artists/{id}).
+    source_instagram_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="SET NULL"), index=True
+    )
 
     mentions: Mapped[list["ArtistMention"]] = relationship(back_populates="artist")
 
@@ -275,6 +281,12 @@ class Post(Base):
     # source est Instagram. Denormalise comme `source_name` : le post survit a la
     # purge de l'article, son credit aussi. Obligatoire pour un reel.
     credit: Mapped[str | None] = mapped_column(String(200))
+    # Les visuels retenus a la composition, dans l'ordre (le premier fait le fond
+    # de cover) : entrees medias completes + origine (article | artiste), compte,
+    # permalink, article_id, publie_le, fichier (copie locale). NULL = post
+    # anterieur a la regle des visuels (2026-09-17) : on relit alors les medias de
+    # l'article, filtres. Reassigner la liste ENTIERE, jamais de mutation in place.
+    assets: Mapped[list | None] = mapped_column(JSONVariant)
     status: Mapped[PostStatus] = mapped_column(
         Enum(
             PostStatus, name="post_status", native_enum=False, length=20,

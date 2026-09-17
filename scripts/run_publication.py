@@ -18,7 +18,9 @@ import logging
 from functools import partial
 
 from app.config import settings
+from app.content.choix_visuels import choisir_visuels
 from app.content.compose import make_claude_composer
+from app.content.lecture_artistes import LecteurComptes
 from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.delivery.notify import notifier
 from app.publish.jeton import JetonIndisponible, alerte_expiration, enregistrer, rafraichir_si_necessaire
@@ -28,6 +30,7 @@ from app.publish.preparation_reel import preparer_reel
 from app.publish.publier import publier_fichiers, publier_reel
 from app.publish.ytdlp import RecuperateurYtdlp
 from app.schedule.runner import RapportPublication, tourner
+from app.schedule.store import utc
 
 # A cote du jeton : meme dossier applicatif, hors du depot.
 FICHIER_PANNE = "publication_panne.json"
@@ -100,6 +103,23 @@ def outils_reel() -> dict:
     }
 
 
+def choix_du_passage():
+    """Le choix des visuels d'UN passage : un lecteur Graph neuf, qui porte le
+    budget de lectures du passage (comme le recuperateur yt-dlp).
+
+    L'horloge passee au lecteur est TOUJOURS aware UTC : sa frontiere de jour
+    (budget quotidien) et sa pause de quota comparent des dates, et un naif
+    venant d'une base SQLite ferait lever la comparaison."""
+    lecteur = LecteurComptes()
+
+    def choisir(db, article, format_, maintenant):
+        return choisir_visuels(
+            db, article, format_=format_, maintenant=utc(maintenant), lecteur=lecteur
+        )
+
+    return choisir
+
+
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     mode = mode_effectif()
@@ -130,6 +150,7 @@ def main() -> None:
                 # Relu avant chaque reclamation : le dashboard peut repasser en
                 # apercu ou en arret pendant un long passage.
                 lire_mode=mode_effectif,
+                choisir=choix_du_passage(),
                 **outils_reel(),
             )
     except Exception as exc:  # noqa: BLE001

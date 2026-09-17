@@ -132,7 +132,8 @@ def test_seuls_les_articles_eligibles_sont_candidats_reel(db_session):
 
 def test_un_article_video_va_en_reel_et_jamais_aussi_en_carrousel(db_session):
     video = _article(db_session, _source(db_session), 1, relevance=95)
-    photo = _article(db_session, _source(db_session, "tsugi", SourceCategorie.MEDIA), 2, video=False, photo=True)
+    photo = _article(db_session, _source(db_session, "tsugi", SourceCategorie.MEDIA, SourceType.RSS), 2,
+                     video=False, photo=True)
     creneaux = appliquer_arbitrage(db_session, MAINTENANT)
     reels = [c.article_id for c in creneaux if c.format == FormatCreneau.REEL]
     carrousels = [c.article_id for c in creneaux if c.format == FormatCreneau.CARROUSEL]

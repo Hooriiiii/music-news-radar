@@ -9,6 +9,7 @@ import io
 import zipfile
 
 from app.content.media import VIDEO
+from app.content.visuels import urls_interdites
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -52,6 +53,25 @@ def _extension(content_type: str | None, url: str) -> str:
     return ".bin"
 
 
+PREFIXE_TRANSPORT = "reseau: "
+# Codes qui disent « reessaie », pas « ca n'existe pas ».
+CODES_TRANSITOIRES = (408, 425, 429)
+
+
+def echec_transitoire(raison: str | None) -> bool:
+    """Vrai si la raison rendue par `telecharger` est PASSAGERE (coupure, delai,
+    429, 5xx). L'appelant doit alors reessayer plus tard plutot que renoncer : un
+    article exclu de la file n'y revient jamais, et une panne reseau de deux
+    minutes ne doit pas lui couter sa publication."""
+    return bool(raison) and raison.startswith(PREFIXE_TRANSPORT)
+
+
+def raison_lisible(raison: str | None) -> str:
+    """La raison d'un echec, sans le drapeau interne de classement : c'est ce qui
+    part dans `medias_manquants.txt`, que lit un humain."""
+    return (raison or "").removeprefix(PREFIXE_TRANSPORT)
+
+
 def telecharger(
     url: str,
     plafond: int = PLAFOND_OCTETS,
@@ -81,6 +101,14 @@ def telecharger(
                     return None, f"depasse le plafond de {plafond} octets"
             extension = _extension(reponse.headers.get("content-type"), url)
             return bytes(morceaux), extension
+    except httpx.HTTPStatusError as exc:
+        # 404, 403 : l'image n'est plus la (URL signee expiree), inutile d'insister.
+        code = exc.response.status_code
+        passager = code in CODES_TRANSITOIRES or code >= 500
+        return None, f"{PREFIXE_TRANSPORT if passager else ''}HTTP {code}"
+    except httpx.TransportError as exc:
+        # Delai, DNS, connexion coupee : la machine ou le reseau, pas l'image.
+        return None, f"{PREFIXE_TRANSPORT}{type(exc).__name__}"
     except Exception as exc:  # noqa: BLE001 -- tout echec reseau part en texte lisible
         return None, str(exc)
     finally:
@@ -108,18 +136,29 @@ def construire_zip(
     texte_legende: str,
     telecharger=telecharger,
     assembler=None,
+    article=None,
 ) -> bytes:
     """Assemble l'archive : covers puis medias, dans l'ordre de publication.
 
     Un media qui echoue ne fait PAS echouer le zip -- meme philosophie que
     l'image de secours du rendu (app/content/render.py::fetch_image_data_uri) :
     un export partiel vaut mieux qu'une erreur, surtout a 23 h.
+
+    `article` (optionnel : un post dont l'article a ete purge n'en a plus) sert
+    a RE-VERIFIER la policy des visuels au moment de l'export manuel : une
+    slide qui pointe vers l'image ou la video d'un compte media Instagram
+    (watermarks, cf. `app.content.visuels`) n'est jamais copiee dans le zip,
+    meme si elle a ete posee avant que la source ne soit categorisee `media`,
+    ou ajoutee a la main depuis le dashboard. Meme politique qu'au gel
+    automatique (`app.publish.preparation.medias_du_carrousel`), pour le seul
+    chemin qui y echappait : l'export a la main.
     """
     if assembler is None:
         from app.content.video import assembler_reel
 
         assembler = assembler_reel
 
+    interdites = urls_interdites(article) if article is not None else set()
     manquants: list[str] = []
     tampon = io.BytesIO()
     # La video que l'assemblage a absorbee : on ne la remet pas a part, elle
@@ -129,6 +168,9 @@ def construire_zip(
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
         numero = 1
         slide_video = _video_du_reel(post)
+        if slide_video is not None and {slide_video.get("url"), slide_video.get("preview_url")} & interdites:
+            manquants.append(f"{slide_video['url']} : visuel d'un compte media Instagram interdit")
+            slide_video = None
         if slide_video is not None and cover_pngs:
             octets, raison = telecharger(slide_video["url"])
             if octets is None:
@@ -153,9 +195,12 @@ def construire_zip(
             if slide.get("url") == absorbee:
                 continue
             url = slide["url"]
+            if {url, slide.get("preview_url")} & interdites:
+                manquants.append(f"{url} : visuel d'un compte media Instagram interdit")
+                continue
             contenu, extension_ou_raison = telecharger(url)
             if contenu is None:
-                manquants.append(f"{url} : {extension_ou_raison}")
+                manquants.append(f"{url} : {raison_lisible(extension_ou_raison)}")
                 continue
             extension = extension_ou_raison
             if extension == ".bin":

@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Artist, ArtistMention
+from app.models import Artist, ArtistMention, Source, SourceCategorie, SourceType
 from app.pipeline.artists import rising_artists
 from app.schemas import ArtistMentionOut, ArtistOut
 
@@ -40,19 +40,31 @@ def list_artist_mentions(
     ).all()
 
 
-class ArtistTrackUpdate(BaseModel):
-    tracked: bool
+class ArtistUpdate(BaseModel):
+    tracked: bool | None = None
+    source_instagram_id: int | None = None
 
 
 @router.patch("/{artist_id}", response_model=ArtistOut)
-def update_artist_tracking(
-    artist_id: int, payload: ArtistTrackUpdate, db: Session = Depends(get_db)
-):
-    """Entrée/sortie du radar A&R suivi à la main."""
+def update_artist_tracking(artist_id: int, payload: ArtistUpdate, db: Session = Depends(get_db)):
+    """Suivi A&R manuel, et lien vers le compte Instagram suivi de l'artiste
+    (sert a la cascade de scoring et aux visuels quand le nom ne suffit pas)."""
     artist = db.get(Artist, artist_id)
     if artist is None:
         raise HTTPException(status_code=404, detail="Artist not found")
-    artist.tracked = payload.tracked
+    champs = payload.model_fields_set
+    if "tracked" in champs and payload.tracked is not None:
+        artist.tracked = payload.tracked
+    if "source_instagram_id" in champs:
+        source_id = payload.source_instagram_id
+        if source_id is not None:
+            source = db.get(Source, source_id)
+            if source is None or source.type != SourceType.INSTAGRAM or source.categorie != SourceCategorie.ARTISTE:
+                raise HTTPException(
+                    status_code=422,
+                    detail="source_instagram_id doit designer une source Instagram de categorie artiste",
+                )
+        artist.source_instagram_id = source_id
     db.commit()
     db.refresh(artist)
     return artist

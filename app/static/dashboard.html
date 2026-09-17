@@ -36,6 +36,8 @@
   .badge { border-radius: 6px; padding: 2px 7px; background: #23232d; color: var(--muted); }
   .badge.rel { background: #241f3d; color: #b9a6ff; }
   .badge.hot-high { background: #3d1f1f; color: #ff8a8a; }
+  .badge.visuel { background: #1f2d3d; color: #8ac4ff; }
+  .badge.sans-visuel { background: #3d2a1f; color: #ffb38a; }
   a.title { color: var(--text); text-decoration: none; font-weight: 600; font-size: 14.5px; }
   a.title:hover { color: #b9a6ff; }
   .summary { color: var(--muted); font-size: 12.5px; }
@@ -307,6 +309,13 @@ async function load() {
     // retire alors silencieusement, et la carte perd son image).
     const img = (a.media || []).map(m => m.preview_url || (m.type === "photo" ? m.url : null)).filter(Boolean)[0];
     const hotClass = a.hotness_score >= 80 ? "hot-high" : "";
+    // D'ou viendra le visuel (presse, compte de l'actu, artistes cites) ou pourquoi
+    // il n'y en a pas : un article sans visuel autorise n'entre pas dans la file.
+    const visuelBadge = a.visuel
+      ? `<span class="badge visuel">📸 ${escapeHtml(a.visuel)}</span>`
+      : a.raison_sans_visuel
+        ? `<span class="badge sans-visuel" title="${escapeHtml(a.raison_sans_visuel)}">🚫 sans visuel</span>`
+        : "";
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
@@ -315,6 +324,7 @@ async function load() {
           <span class="badge ${hotClass}">hot ${a.hotness_score ?? "—"}</span>
           ${a.category ? `<span class="badge">${a.category}</span>` : ""}
           ${a.imprint ? `<span class="badge">${a.imprint}</span>` : ""}
+          ${visuelBadge}
         </div>
         <a class="title" href="${a.url}" target="_blank" rel="noopener"></a>
         <div class="summary"></div>
@@ -843,8 +853,12 @@ function renderPostDetail(post, article, covers) {
     // case restait cochable et un PATCH avec `url: null` echouait en 422 pour
     // une action que l'UI presentait comme possible.
     const sansUrl = m.type === "video" && !m.url;
-    const desactivee = tropLongue || sansUrl;
-    const raison = tropLongue
+    // Decision du 2026-09-17 : jamais l'image ni la video d'un compte media.
+    const interdit = !!(article && article.visuels_interdits);
+    const desactivee = tropLongue || sansUrl || interdit;
+    const raison = interdit
+      ? "visuel d'un compte média : interdit"
+      : tropLongue
       ? `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`
       : sansUrl
         ? "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)"
@@ -859,6 +873,24 @@ function renderPostDetail(post, article, covers) {
       ${raison ? `<span class="reel-reason">${escapeHtml(raison)}</span>` : ""}
     </div>`;
   }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Actu introuvable (probablement purgée) -- pas de médias à proposer."}</div>`;
+
+  const actifsHtml = (post.assets || []).map((x) => {
+    const vignette = x.preview_url || (x.type === "photo" ? x.url : null);
+    const origine = x.origine === "artiste"
+      ? `📸 ${escapeHtml(x.compte || "?")} · post du ${fmtDate(x.publie_le) || "?"}`
+      : (x.compte ? `📸 ${escapeHtml(x.compte)}` : "📸 photo de presse");
+    const lien = x.permalink
+      ? `<a href="${escapeHtml(x.permalink)}" target="_blank" rel="noopener">voir le post</a>` : "";
+    return `
+    <div class="media-choice">
+      ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
+      <label>${origine}</label>
+      ${lien}
+    </div>`;
+  }).join("");
+  const actifsSection = post.assets == null ? "" : `
+      <div class="section-title">Visuels retenus</div>
+      <div class="media-list">${actifsHtml || '<div class="media-empty">Aucun visuel autorisé retenu : fond à poser à la main.</div>'}</div>`;
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -887,6 +919,7 @@ function renderPostDetail(post, article, covers) {
         <button id="bg-valider">Valider</button>
       </div>
 
+      ${actifsSection}
       <div class="section-title">Médias de l'actu (carrousel)</div>
       <div class="media-list">${mediaHtml}</div>
 

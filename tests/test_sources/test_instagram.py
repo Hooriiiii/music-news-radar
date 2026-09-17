@@ -5,7 +5,15 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models import Source, SourceType
-from app.sources.instagram import InstagramAdapter, compte_depuis_url, titre_depuis_caption
+from app.sources.instagram import (
+    CODES_QUOTA,
+    InstagramAdapter,
+    QuotaGraphAtteint,
+    compte_depuis_url,
+    items_depuis_payload,
+    lire_compte,
+    titre_depuis_caption,
+)
 
 # Forme reelle d'une reponse business_discovery : le compte cible est imbrique
 # sous la cle `business_discovery` de NOTRE compte.
@@ -580,3 +588,26 @@ def test_une_video_avec_media_url_reste_une_video():
 )
 def test_compte_depuis_url(url, attendu):
     assert compte_depuis_url(url) == attendu
+
+
+@pytest.mark.parametrize("code", sorted(CODES_QUOTA))
+def test_lire_compte_reconnait_le_quota_graph(monkeypatch, code):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "EAAsecret")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    _client_meta(monkeypatch, 400, {"error": {"message": "Application request limit reached", "code": code}})
+    with pytest.raises(QuotaGraphAtteint) as exc:
+        lire_compte("fredagain", 12)
+    assert "EAAsecret" not in str(exc.value)
+
+
+def test_lire_compte_une_autre_erreur_n_est_pas_le_quota(monkeypatch):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    _client_meta(monkeypatch, 400, {"error": {"message": "Invalid user id", "code": 110}})
+    with pytest.raises(RuntimeError) as exc:
+        lire_compte("inconnu", 12)
+    assert not isinstance(exc.value, QuotaGraphAtteint)
+
+
+def test_items_depuis_payload_est_le_parse_de_l_adapter():
+    assert items_depuis_payload(PAYLOAD) == make_adapter().parse(PAYLOAD)

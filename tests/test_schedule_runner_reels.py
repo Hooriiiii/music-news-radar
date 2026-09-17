@@ -107,8 +107,11 @@ def _photo(db):
 
 
 def _post(db, article, template, credit=None):
+    # Un brouillon de carrousel porte TOUJOURS le fond de sa cover : sans lui, la
+    # file le relache (fond efface au dashboard, cf. `_brouillon_perime`).
     post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
-                caption="Legende", slides=[{"kind": "cover"}], template=template, credit=credit)
+                caption="Legende", slides=[{"kind": "cover", "image_url": "https://img/1.jpg"}],
+                template=template, credit=credit)
     db.add(post)
     db.commit()
     return post
@@ -139,7 +142,7 @@ def test_la_chaine_complete_d_un_reel(db_session, video):
     rapport = outils.tourner(db_session, R0 + dt.timedelta(minutes=20))
     assert outils.publies_reel == [(["r_reel.mp4", "r_cover.jpg"], True)]
     assert (creneau.etat, creneau.ig_media_id, rapport.publies) == (EtatCreneau.PUBLIE, "ig-reel", 1)
-    assert "🎥 via @saralandry" in outils.legendes[0]
+    assert "🎥 @saralandry" in outils.legendes[0]
 
 
 def test_un_reel_en_apercu_n_est_pas_publie(db_session, video):
