@@ -178,6 +178,7 @@
     <button class="chip" data-preset="reviewed">✓ Vus</button>
     <button class="chip" data-preset="used">📸 Postés</button>
     <button class="chip" data-preset="instagram">📷 Instagram</button>
+    <button class="chip" data-preset="tout">🗂 Tout</button>
     <select id="category">
       <option value="">Toutes catégories</option>
       <option value="new_release">Release</option><option value="announcement">Annonce</option>
@@ -262,6 +263,8 @@ const PRESETS = {
   // Tous les posts Instagram, notes ou non : la vue « A traiter » masque ceux qui
   // attendent encore leur note.
   instagram: { source_type: "instagram" },
+  // Toute la base (hors reprises d'une meme actu, cf. pipeline/cluster.py).
+  tout: {},
 };
 let preset = "fresh";
 
@@ -277,7 +280,14 @@ async function load() {
   if (category) params.set("category", category);
   if (source) params.set("source_id", source);
 
-  const articles = await (await fetch(`/articles?${params}`)).json();
+  // L'API plafonne une page a 200 : on enchaine les pages pour tout afficher.
+  const articles = [];
+  for (let offset = 0; ; offset += 200) {
+    params.set("offset", offset);
+    const page = await (await fetch(`/articles?${params}`)).json();
+    articles.push(...page);
+    if (page.length < 200) break;
+  }
   document.getElementById("count").textContent = `${articles.length} article${articles.length > 1 ? "s" : ""}`;
   grid.innerHTML = articles.length ? "" : '<div id="empty">Rien ici — change de filtre ou attends le prochain run (toutes les 2 h).</div>';
 

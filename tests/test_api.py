@@ -327,3 +327,9 @@ def test_le_dashboard_a_un_filtre_instagram(client):
     html = client.get("/").text
     assert 'data-preset="instagram"' in html
     assert 'source_type: "instagram"' in html
+
+
+def test_le_dashboard_affiche_toute_la_base(client):
+    html = client.get("/").text
+    assert 'data-preset="tout"' in html
+    assert 'params.set("offset", offset)' in html
