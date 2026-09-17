@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.content.credit import credit_video
 from app.content.highlight import validate_headline
 from app.content.media import PHOTO
 from app.models import Article, Post
@@ -328,6 +329,7 @@ def create_post(
         article_title=article.title,
         article_url=article.url,
         source_name=article.source.name if article.source is not None else None,
+        credit=credit_video(article),
         template=template,
         caption=draft.caption,
         hashtags=draft.hashtags or None,

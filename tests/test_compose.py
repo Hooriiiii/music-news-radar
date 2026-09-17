@@ -13,6 +13,7 @@ from app.content.compose import (
     create_post,
     make_claude_composer,
 )
+from app.content.media import entree
 from app.models import Article, Source, SourceType
 
 
@@ -301,3 +302,13 @@ def test_composer_reessaie_puis_reussit(db_session):
     draft = composer(article)
 
     assert draft is bon_draft
+
+
+def test_create_post_prend_la_vignette_d_un_reel_sans_media_url(db_session):
+    article = _article(db_session)
+    article.media = [entree("video", None, preview_url="https://thumb.jpg")]
+    db_session.commit()
+
+    post = create_post(db_session, article, _draft())
+
+    assert post.slides[0]["image_url"] == "https://thumb.jpg"

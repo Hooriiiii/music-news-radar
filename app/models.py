@@ -91,6 +91,17 @@ class EtatCreneau(str, enum.Enum):
     MANQUE = "manque"
 
 
+class FormatCreneau(str, enum.Enum):
+    """Ce qu'un creneau publie : un carrousel d'images ou un reel video.
+
+    Le cycle de vie (LIBRE -> ... -> PUBLIE) est le meme ; seuls changent le
+    gabarit compose, le preparateur du gel et le publieur.
+    """
+
+    CARROUSEL = "carrousel"
+    REEL = "reel"
+
+
 def _values(enum_cls):
     return [m.value for m in enum_cls]
 
@@ -260,6 +271,10 @@ class Post(Base):
     article_title: Mapped[str] = mapped_column(Text)
     article_url: Mapped[str] = mapped_column(String(2000))
     source_name: Mapped[str | None] = mapped_column(String(200))
+    # Le compte a crediter en legende (`@compte`), pose a la composition quand la
+    # source est Instagram. Denormalise comme `source_name` : le post survit a la
+    # purge de l'article, son credit aussi. Obligatoire pour un reel.
+    credit: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[PostStatus] = mapped_column(
         Enum(
             PostStatus, name="post_status", native_enum=False, length=20,
@@ -311,6 +326,14 @@ class Creneau(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     publier_a: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), unique=True, index=True)
+    format: Mapped[FormatCreneau] = mapped_column(
+        Enum(
+            FormatCreneau, name="format_creneau", native_enum=False, length=20,
+            values_callable=_values,
+        ),
+        default=FormatCreneau.CARROUSEL,
+        server_default="carrousel",
+    )
     article_id: Mapped[int | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), index=True
     )

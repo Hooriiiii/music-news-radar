@@ -5,7 +5,7 @@ import pytest
 import scripts.run_publication as script
 from app.config import settings
 from app.publish.jeton import EtatJeton, charger, enregistrer
-from app.publish.mode import enregistrer_mode
+from app.publish.mode import enregistrer_mode, enregistrer_reels
 
 MAINTENANT = dt.datetime(2026, 11, 10, 9, 0, tzinfo=dt.timezone.utc)
 
@@ -145,3 +145,67 @@ def test_un_compositeur_impossible_a_construire_n_empeche_pas_le_passage(tmp_pat
     (composer,) = passages
     with pytest.raises(RuntimeError, match="cle absente"):
         composer(object())
+
+
+# --- Outils reel branches au passage --------------------------------------------------
+
+
+def _passages(tmp_path, monkeypatch):
+    recus = []
+
+    def passage(*args, **kwargs):
+        recus.append(kwargs)
+        return script.RapportPublication()
+
+    _agent_en_panne(tmp_path, monkeypatch, passage=passage)
+    return recus
+
+
+@pytest.mark.usefixtures("reels_allumes")
+def test_l_agent_branche_les_outils_des_reels(tmp_path, monkeypatch):
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    (recu,) = recus
+    assert recu["preparer_reel"].func is script.preparer_reel
+    assert isinstance(recu["preparer_reel"].keywords["recuperer_ytdlp"], script.RecuperateurYtdlp)
+    assert recu["publier_reel"] is script.publier_reel
+
+
+@pytest.mark.usefixtures("reels_allumes")
+def test_chaque_passage_a_son_propre_budget_yt_dlp(tmp_path, monkeypatch):
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    script.main()
+    premier, second = (r["preparer_reel"].keywords["recuperer_ytdlp"] for r in recus)
+    assert premier is not second
+
+
+@pytest.mark.usefixtures("reels_allumes")
+def test_yt_dlp_coupe_par_le_env(tmp_path, monkeypatch):
+    recus = _passages(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "publication_reel_ytdlp", False)
+    script.main()
+    assert recus[0]["preparer_reel"].keywords["recuperer_ytdlp"] is None
+
+
+def test_sans_choix_au_dashboard_aucun_outil_reel(tmp_path, monkeypatch):
+    """Opt-in : sans case cochee au dashboard, l'agent ne gele ni ne publie de reel."""
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    assert (recus[0]["preparer_reel"], recus[0]["publier_reel"]) == (None, None)
+
+
+def test_reels_coupes_au_dashboard(tmp_path, monkeypatch):
+    """Les reels deja geles ne partent plus : sans publieur, ils finissent en MANQUE."""
+    recus = _passages(tmp_path, monkeypatch)
+    enregistrer_reels(False, MAINTENANT)
+    script.main()
+    assert (recus[0]["preparer_reel"], recus[0]["publier_reel"]) == (None, None)
+
+
+def test_l_agent_relit_le_mode_avant_chaque_publication(tmp_path, monkeypatch):
+    """I1 : un passage peut durer plus de 10 minutes ; le runner relit le mode
+    du dashboard avant chaque reclamation, pas seulement au demarrage."""
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    assert recus[0]["lire_mode"] is script.mode_effectif

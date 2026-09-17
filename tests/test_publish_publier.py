@@ -4,7 +4,7 @@ import pytest
 
 from app.config import settings
 from app.publish.instagram import ErreurInstagram
-from app.publish.publier import publier_fichiers
+from app.publish.publier import publier_fichiers, publier_reel
 
 
 class FauxClient:
@@ -71,3 +71,44 @@ def test_sans_identifiant_instagram_l_erreur_dit_quoi_faire(tmp_path, monkeypatc
     noms = _fichiers(tmp_path, "p_01.jpg")
     with pytest.raises(ErreurInstagram, match="META_IG_USER_ID"):
         publier_fichiers(tmp_path, noms, "L", True, heberger=_heberger([]))
+
+
+class FauxClientReel(FauxClient):
+    def preparer_reel(self, video_url, cover_url, legende, *, share_to_feed=True):
+        self.journal.append(("preparer_reel", video_url, cover_url, legende, share_to_feed))
+        return "conteneur-reel"
+
+
+def test_un_reel_en_apercu_s_arrete_au_conteneur_et_prend_la_cover_pour_temoin(tmp_path):
+    """Le temoin est telecharge en entier pour verifier le tunnel : pas la video."""
+    journal = []
+    noms = _fichiers(tmp_path, "r_reel.mp4", "r_cover.jpg")
+    resultat = publier_reel(tmp_path, noms, "L", False, client=FauxClientReel(journal), heberger=_heberger(journal))
+    assert resultat == "conteneur-reel"
+    assert journal == [
+        ("ouvre", "r_cover.jpg"),
+        ("preparer_reel", "https://t.trycloudflare.com/r_reel.mp4", "https://t.trycloudflare.com/r_cover.jpg", "L", True),
+        ("ferme",),
+    ]
+
+
+def test_un_reel_en_mode_reel_est_publie_avant_la_fermeture_du_tunnel(tmp_path):
+    journal = []
+    noms = _fichiers(tmp_path, "r_reel.mp4", "r_cover.jpg")
+    assert publier_reel(tmp_path, noms, "L", True, client=FauxClientReel(journal), heberger=_heberger(journal)) == "media1"
+    assert [e[0] for e in journal] == ["ouvre", "preparer_reel", "publier", "ferme"]
+
+
+def test_un_reel_exige_exactement_video_et_cover(tmp_path):
+    noms = _fichiers(tmp_path, "r_reel.mp4")
+    with pytest.raises(ErreurInstagram, match="deux fichiers"):
+        publier_reel(tmp_path, noms, "L", False, client=FauxClientReel([]), heberger=_heberger([]))
+
+
+def test_un_reel_dont_un_fichier_manque_n_ouvre_pas_le_tunnel(tmp_path):
+    journal = []
+    _fichiers(tmp_path, "r_reel.mp4")
+    with pytest.raises(ErreurInstagram, match="introuvables"):
+        publier_reel(tmp_path, ["r_reel.mp4", "r_cover.jpg"], "L", False,
+                     client=FauxClientReel(journal), heberger=_heberger(journal))
+    assert journal == []

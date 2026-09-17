@@ -172,6 +172,31 @@ class Settings(BaseSettings):
     # journee entiere d'un coup.
     publication_retard_max_minutes: int = 90
 
+    # --- Reels automatiques (en plus des carrousels) ---
+    # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =
+    # un reel par jour. Elles ne doivent chevaucher ni les fenetres carrousel ni
+    # entre elles (slots.FenetresInvalides) : publier_a est unique.
+    publication_reel_fenetres: str = "12:00-14:00,20:30-22:30"
+    # 3 jours x 2 reels. 0 desactive les reels sans toucher aux carrousels.
+    publication_creneaux_reel: int = 6
+    # Qui a le droit d'etre reposte en video : les comptes qui PRODUISENT l'actu.
+    # Jamais un media par defaut -- ce serait une double reprise (voir « Qui parle »).
+    publication_reel_categories: str = "artiste,festival,label,club"
+    # Meta accepte 3 s a 15 min ; 90 s est une borne EDITORIALE. Trop longue :
+    # refusee, jamais coupee.
+    publication_reel_duree_min_s: float = 3.0
+    publication_reel_duree_max_s: float = 90.0
+    # Poids max de la video source telechargee, et du reel assemble (Meta : 300 Mo).
+    publication_reel_source_max_mo: int = 100
+    publication_reel_max_mo: int = 100
+    # Le reel apparait aussi dans la grille du compte.
+    publication_reel_share_to_feed: bool = True
+    # Coupe-circuit de yt-dlp SEUL (app/publish/ytdlp.py) : a false, seules les
+    # videos a URL directe de l'API restent eligibles en reel, et yt-dlp n'est
+    # jamais lance. Le coupe-circuit de TOUS les reels vit au dashboard
+    # (`reels_actifs` dans publication.json), COUPE tant qu'il n'a pas ete coche.
+    publication_reel_ytdlp: bool = True
+
     # Livraison (étape 5)
     discord_webhook_url: str | None = None
     # Mention ajoutée aux alertes pour déclencher une vraie notification

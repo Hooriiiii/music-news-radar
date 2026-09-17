@@ -36,6 +36,17 @@ def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
 
 
+@pytest.fixture()
+def reels_allumes(_pas_de_fichiers_applicatifs_reels):
+    """Les reels sont en opt-in (coupes par defaut) : les tests qui exercent la
+    chaine reel les allument explicitement, comme le ferait le dashboard."""
+    import datetime as dt
+
+    from app.publish.mode import enregistrer_reels
+
+    enregistrer_reels(True, dt.datetime(2026, 9, 17, tzinfo=dt.timezone.utc))
+
+
 @pytest.fixture(autouse=True)
 def _pas_de_jeton_sourcing_ambiant(monkeypatch):
     """Le `.env` de l'utilisateur porte un vrai META_FB_ACCESS_TOKEN : sans ca,

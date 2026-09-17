@@ -55,6 +55,18 @@ def titre_depuis_caption(caption: str | None) -> str:
     return phrase
 
 
+def compte_depuis_url(url: str) -> str:
+    """Le username cible d'une source, ecrite `ig:nom` ou en URL instagram.com.
+
+    Fonction de module et pas seulement propriete de l'adapter : le credit d'un
+    post (`app/content/credit.py`) en a besoin sans instancier d'adapter.
+    """
+    url = url.strip().rstrip("/")
+    if url.lower().startswith("ig:"):
+        return url[3:].lstrip("@").strip()
+    return url.rsplit("/", 1)[-1].lstrip("@")
+
+
 # Garde-fou « post quasi vide » (voir `scoring.appliquer_garde_fous`) : sous ce
 # nombre de mots significatifs, une caption ne porte pas d'information.
 MOTS_MIN_CAPTION = 6
@@ -148,15 +160,25 @@ def _media(noeud: dict) -> list[dict]:
 
     Un carrousel porte ses enfants sous `children`, et n'a pas de `media_url`
     propre : sans cet aplatissement, un carrousel arriverait sans aucun media.
+
+    Meta OMET `media_url` quand le media contient du contenu protege (musique) --
+    documente, et constate sur 10 reels sur 10 d'un compte d'artiste. La video
+    reste une entree VIDEO, sans URL : c'est ce qui la garde identifiable comme
+    reel, et recuperable par yt-dlp au gel (`media.video_recuperable`). Sa
+    vignette, en `preview_url`, sert de fond de cover et de vignette au
+    dashboard, qui lisent deja ce champ.
     """
     enfants = (noeud.get("children") or {}).get("data")
     if enfants:
         return [m for enfant in enfants for m in _media(enfant)]
     type_ = _TYPES.get(noeud.get("media_type"))
     url = noeud.get("media_url")
+    vignette = noeud.get("thumbnail_url")
+    if type_ == VIDEO and not url:
+        return [entree(VIDEO, None, preview_url=vignette)]
     if not type_ or not url:
         return []
-    return [entree(type_, url, preview_url=noeud.get("thumbnail_url"))]
+    return [entree(type_, url, preview_url=vignette)]
 
 
 def _message_erreur(reponse: httpx.Response) -> str:
@@ -193,10 +215,7 @@ class InstagramAdapter(SourceAdapter):
     @property
     def compte(self) -> str:
         """Le username cible, ecrit `ig:nom` ou en URL instagram.com complete."""
-        url = self.source.url.strip().rstrip("/")
-        if url.lower().startswith("ig:"):
-            return url[3:].lstrip("@").strip()
-        return url.rsplit("/", 1)[-1].lstrip("@")
+        return compte_depuis_url(self.source.url)
 
     def parse(self, payload: dict) -> list[RawItem]:
         decouverte = payload.get("business_discovery") or {}

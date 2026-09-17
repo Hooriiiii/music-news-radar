@@ -8,6 +8,8 @@ IN_PROGRESS echoue.
 `preparer_carrousel` s'arrete AVANT la publication. C'est ce qui permet le mode
 `apercu` et le script d'essai : un conteneur non publie n'est pas public et
 expire seul en 24 h.
+
+`preparer_reel` suit le meme contrat pour un conteneur `REELS`.
 """
 
 import time
@@ -20,6 +22,13 @@ BASE = "https://graph.instagram.com"
 CARROUSEL_MAX = 10
 ATTENTE_PAS_S = 3.0
 ATTENTE_MAX_S = 300.0
+
+# Un reel s'encode plus longtemps qu'une image. Meta recommande une lecture par
+# minute pendant 5 minutes au plus ; on sonde plus serre et plus longtemps parce
+# qu'a ce stade le creneau est deja reclame : un delai trop court le ferait
+# passer en ECHEC sans retour. 40 lectures au pire.
+ATTENTE_REEL_PAS_S = 15.0
+ATTENTE_REEL_MAX_S = 600.0
 
 
 class ErreurInstagram(RuntimeError):
@@ -60,7 +69,9 @@ class ClientInstagram:
     def _conteneur(self, **params) -> str:
         return self._appel("POST", f"{self.ig_user_id}/media", params)["id"]
 
-    def _attendre(self, conteneur_id: str) -> None:
+    def _attendre(self, conteneur_id: str, pas: float | None = None, maximum: float | None = None) -> None:
+        pas = ATTENTE_PAS_S if pas is None else pas
+        maximum = ATTENTE_MAX_S if maximum is None else maximum
         ecoule = 0.0
         while True:
             statut = self._appel("GET", conteneur_id, {"fields": "status_code,status"})
@@ -69,12 +80,10 @@ class ClientInstagram:
                 return
             if code in ("ERROR", "EXPIRED"):
                 raise ErreurInstagram(f"conteneur {conteneur_id} en {code} : {statut.get('status', '')}")
-            if ecoule >= ATTENTE_MAX_S:
-                raise ErreurInstagram(
-                    f"conteneur {conteneur_id} toujours {code} apres {ATTENTE_MAX_S:.0f} s"
-                )
-            self.dormir(ATTENTE_PAS_S)
-            ecoule += ATTENTE_PAS_S
+            if ecoule >= maximum:
+                raise ErreurInstagram(f"conteneur {conteneur_id} toujours {code} apres {maximum:.0f} s")
+            self.dormir(pas)
+            ecoule += pas
 
     def preparer_carrousel(self, urls: list[str], legende: str) -> str:
         if not urls:
@@ -88,6 +97,20 @@ class ClientInstagram:
                 media_type="CAROUSEL", children=",".join(enfants), caption=legende
             )
         self._attendre(conteneur)
+        return conteneur
+
+    def preparer_reel(self, video_url: str, cover_url: str, legende: str, *, share_to_feed: bool = True) -> str:
+        # cover_url explicite plutot que thumb_offset : la cover est deja la
+        # premiere frame, mais Instagram reencode et peut la perdre. Meta retient
+        # cover_url quand les deux sont fournis.
+        conteneur = self._conteneur(
+            media_type="REELS",
+            video_url=video_url,
+            cover_url=cover_url,
+            caption=legende,
+            share_to_feed="true" if share_to_feed else "false",
+        )
+        self._attendre(conteneur, pas=ATTENTE_REEL_PAS_S, maximum=ATTENTE_REEL_MAX_S)
         return conteneur
 
     def publier(self, conteneur_id: str) -> str:

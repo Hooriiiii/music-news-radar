@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models import Source, SourceType
-from app.sources.instagram import InstagramAdapter, titre_depuis_caption
+from app.sources.instagram import InstagramAdapter, compte_depuis_url, titre_depuis_caption
 
 # Forme reelle d'une reponse business_discovery : le compte cible est imbrique
 # sous la cle `business_discovery` de NOTRE compte.
@@ -522,3 +522,61 @@ def test_caption_quasi_vide(caption, attendu):
     from app.sources.instagram import caption_quasi_vide
 
     assert caption_quasi_vide(caption) is attendu
+
+
+def _payload(*noeuds):
+    return {"business_discovery": {"media": {"data": list(noeuds)}}}
+
+
+def test_un_reel_sans_media_url_reste_une_video_identifiable():
+    """Meta omet media_url quand le media contient de la musique protegee :
+    c'est le cas de presque tous les reels d'artistes. L'entree reste une VIDEO
+    (sans URL) : sinon le reel n'est plus reconnaissable, et yt-dlp ne peut pas
+    aller le chercher au gel. La vignette sert de fond de cover."""
+    noeud = {
+        "media_type": "VIDEO",
+        "media_product_type": "REELS",
+        "thumbnail_url": "https://cdn.example/vignette.jpg",
+        "permalink": "https://www.instagram.com/reel/CCC/",
+        "timestamp": "2026-09-10T14:30:00+0000",
+    }
+    (item,) = make_adapter().parse(_payload(noeud))
+    assert item.media == [
+        {
+            "type": "video",
+            "url": None,
+            "preview_url": "https://cdn.example/vignette.jpg",
+            "duration_ms": None,
+            "width": None,
+            "height": None,
+        }
+    ]
+
+
+def test_une_video_sans_media_url_ni_vignette_reste_une_video():
+    noeud = {"media_type": "VIDEO", "permalink": "https://www.instagram.com/reel/DDD/"}
+    (item,) = make_adapter().parse(_payload(noeud))
+    assert [(m["type"], m["url"], m["preview_url"]) for m in item.media] == [("video", None, None)]
+
+
+def test_une_image_sans_media_url_ne_donne_rien():
+    noeud = {"media_type": "IMAGE", "permalink": "https://www.instagram.com/p/EEE/"}
+    (item,) = make_adapter().parse(_payload(noeud))
+    assert item.media == []
+
+
+def test_une_video_avec_media_url_reste_une_video():
+    (item,) = make_adapter().parse(_payload(PAYLOAD["business_discovery"]["media"]["data"][1]))
+    assert (item.media[0]["type"], item.media[0]["url"]) == ("video", "https://cdn.example/video.mp4")
+
+
+@pytest.mark.parametrize(
+    "url, attendu",
+    [
+        ("ig:saralandry", "saralandry"),
+        ("ig:@saralandry", "saralandry"),
+        ("https://www.instagram.com/saralandry/", "saralandry"),
+    ],
+)
+def test_compte_depuis_url(url, attendu):
+    assert compte_depuis_url(url) == attendu

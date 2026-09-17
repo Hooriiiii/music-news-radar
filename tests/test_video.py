@@ -5,10 +5,14 @@ import subprocess
 
 import pytest
 
+import app.content.video as video_mod
 from app.content.video import (
     FORMAT_REEL,
     AssemblageIndisponible,
+    _cadence,
     assembler_reel,
+    chemin_outil,
+    exiger_outils,
     sonder,
 )
 
@@ -135,3 +139,82 @@ def test_binaire_introuvable_partout_reste_une_erreur_lisible(monkeypatch, tmp_p
     with pytest.raises(AssemblageIndisponible) as exc:
         mod._exiger_ffmpeg("ffmpeg")
     assert "brew install ffmpeg" in str(exc.value)
+
+
+def test_cadence():
+    assert _cadence("30/1") == 30.0
+    assert _cadence("30000/1001") == pytest.approx(29.97, abs=0.01)
+    assert _cadence("0/0") == 0.0
+    assert _cadence(None) == 0.0
+
+
+def test_exiger_outils_sans_ffprobe(monkeypatch):
+    monkeypatch.setattr(video_mod.shutil, "which", lambda nom: "/bin/ffmpeg" if nom == "ffmpeg" else None)
+    monkeypatch.setattr(video_mod, "EMPLACEMENTS_CONNUS", ())
+    with pytest.raises(AssemblageIndisponible, match="ffprobe"):
+        exiger_outils()
+
+
+def test_chemin_outil_cherche_hors_du_path(monkeypatch, tmp_path):
+    (tmp_path / "ffmpeg").write_text("")
+    monkeypatch.setattr(video_mod.shutil, "which", lambda nom: None)
+    monkeypatch.setattr(video_mod, "EMPLACEMENTS_CONNUS", (str(tmp_path),))
+    assert chemin_outil("ffmpeg") == str(tmp_path / "ffmpeg")
+
+
+def _encodeur(nom):
+    if ffmpeg_absent:
+        return False
+    sortie = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+    return nom in sortie.stdout
+
+
+besoin_vp9 = pytest.mark.skipif(
+    not _encodeur("libvpx-vp9"), reason="ffmpeg sans libvpx-vp9 -- source VP9 non fabricable ici"
+)
+
+
+@besoin_vp9
+def test_une_source_vp9_ressort_en_h264_aac(tmp_path):
+    """yt-dlp rend les reels Instagram en VP9 + AAC (mesure du 2026-09-17), et
+    Meta n'accepte que H.264 ou HEVC : l'assemblage doit tout reencoder, jamais
+    copier le flux video."""
+    source = tmp_path / "source_vp9.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=30:duration=3",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+         "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "500k",
+         "-c:a", "aac", "-shortest", str(source)],
+        capture_output=True, check=True,
+    )
+    assert sonder(source.read_bytes())["video_codec"] == "vp9"
+    infos = sonder(assembler_reel(_cover(tmp_path), source.read_bytes()))
+    assert (infos["video_codec"], infos["audio_codec"]) == ("h264", "aac")
+    assert (infos["width"], infos["height"]) == FORMAT_REEL
+
+
+def _boite(octets, nom):
+    """Le contenu d'une boite MP4 de premier niveau, ou None."""
+    position = 0
+    while position + 8 <= len(octets):
+        taille = int.from_bytes(octets[position:position + 4], "big")
+        if octets[position + 4:position + 8] == nom:
+            return octets[position:position + taille]
+        if taille < 8:
+            return None
+        position += taille
+    return None
+
+
+@besoin_ffmpeg
+def test_le_reel_respecte_les_specs_de_meta(tmp_path):
+    """Specs Meta du 2026-09-17 : H.264/HEVC, AAC <= 48 kHz, 23-60 i/s, moov en
+    tete, AUCUNE edit list. ffmpeg en ecrit une par defaut (amorcage AAC)."""
+    sortie = assembler_reel(_cover(tmp_path), _video(tmp_path, 1280, 720, secondes=3))
+    infos = sonder(sortie)
+    assert (infos["video_codec"], infos["audio_codec"]) == ("h264", "aac")
+    assert infos["sample_rate"] <= 48000
+    assert 23 <= infos["fps"] <= 60
+    moov = _boite(sortie, b"moov")
+    assert moov is not None and sortie.find(b"moov") < sortie.find(b"mdat")
+    assert b"elst" not in moov

@@ -44,7 +44,16 @@ DELAI_MAX_S = 300
 
 
 class AssemblageIndisponible(RuntimeError):
-    """ffmpeg manquant, ou entree illisible. Message affichable tel quel."""
+    """ffmpeg manquant, ou entree illisible. Message affichable tel quel.
+
+    `returncode` et `stderr` portent ce qu'a rendu le binaire quand il a tourne :
+    l'appelant y distingue une machine a court de ressources (disque plein,
+    memoire, processus tue) d'une entree fautive."""
+
+    def __init__(self, message: str, *, returncode: int | None = None, stderr: str = "") -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr
 
 
 # launchd ne fournit qu'un PATH minimal -- /usr/bin, /bin, /usr/sbin, /sbin et
@@ -70,6 +79,29 @@ def _exiger_ffmpeg(nom: str) -> str:
     return chemin
 
 
+def exiger_outils() -> None:
+    """ffmpeg ET ffprobe, avant tout travail. Leur absence est une panne de la
+    machine, pas un defaut de l'article : l'appelant doit pouvoir la distinguer
+    d'une video illisible, qui leve la meme exception plus tard."""
+    _exiger_ffmpeg("ffmpeg")
+    _exiger_ffmpeg("ffprobe")
+
+
+def chemin_outil(nom: str) -> str:
+    """Le chemin d'un binaire ffmpeg, pour un autre outil qui ne saurait pas le
+    trouver depuis launchd (yt-dlp, `--ffmpeg-location`)."""
+    return _exiger_ffmpeg(nom)
+
+
+def _cadence(texte: str | None) -> float:
+    """`avg_frame_rate` de ffprobe (« 30000/1001 ») en images par seconde."""
+    try:
+        numerateur, denominateur = (texte or "0/0").split("/")
+        return float(numerateur) / float(denominateur) if float(denominateur) else 0.0
+    except ValueError:
+        return 0.0
+
+
 def sonder(video: bytes) -> dict:
     """Dimensions, duree et presence d'une piste audio. Sert aux tests et au
     dashboard, qui doit pouvoir afficher ce qu'il s'apprete a publier."""
@@ -83,17 +115,26 @@ def sonder(video: bytes) -> dict:
             capture_output=True, text=True, timeout=DELAI_MAX_S,
         )
         if resultat.returncode != 0:
-            raise AssemblageIndisponible(f"video illisible : {resultat.stderr.strip()[:200]}")
+            raise AssemblageIndisponible(
+                f"video illisible : {resultat.stderr.strip()[:200]}",
+                returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
+            )
         donnees = json.loads(resultat.stdout)
 
     flux_video = next((f for f in donnees["streams"] if f["codec_type"] == "video"), None)
     if flux_video is None:
         raise AssemblageIndisponible("le fichier ne contient aucun flux video")
+    flux_audio = next((f for f in donnees["streams"] if f["codec_type"] == "audio"), None)
     return {
         "width": flux_video["width"],
         "height": flux_video["height"],
         "duration": float(donnees["format"].get("duration", 0)),
-        "has_audio": any(f["codec_type"] == "audio" for f in donnees["streams"]),
+        "has_audio": flux_audio is not None,
+        # Ce que Meta controle : codecs, echantillonnage, cadence.
+        "video_codec": flux_video.get("codec_name"),
+        "audio_codec": flux_audio.get("codec_name") if flux_audio else None,
+        "sample_rate": int(flux_audio["sample_rate"]) if flux_audio and flux_audio.get("sample_rate") else None,
+        "fps": _cadence(flux_video.get("avg_frame_rate")),
     }
 
 
@@ -162,6 +203,11 @@ def assembler_reel(
             # Borne la sortie sur le flux video : sans elle, le silence infini
             # d'anullsrc produirait un fichier qui ne se termine jamais.
             "-shortest",
+            # GOP ferme et pas d'edit list : deux exigences ecrites de Meta pour
+            # les reels (2026-09-17). ffmpeg ecrit une edit list par defaut pour
+            # compenser l'amorcage AAC.
+            "-flags", "+cgop",
+            "-use_editlist", "0",
             "-movflags", "+faststart",
             str(sortie),
         ]
@@ -170,5 +216,8 @@ def assembler_reel(
             # Les dernieres lignes seulement : une trace ffmpeg complete fait
             # des centaines de lignes et n'est pas affichable dans le dashboard.
             fin = "\n".join(resultat.stderr.strip().splitlines()[-4:])
-            raise AssemblageIndisponible(f"assemblage impossible : {fin[:400]}")
+            raise AssemblageIndisponible(
+                f"assemblage impossible : {fin[:400]}",
+                returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
+            )
         return sortie.read_bytes()
