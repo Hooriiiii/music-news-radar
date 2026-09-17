@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Article, ScoredBy, SourceCategorie, SourceType
+from app.models import Article, ScoredBy, SourceType
 from app.sources.instagram import (
     TITRE_PAR_DEFAUT,
     caption_depuis_summary,
@@ -43,10 +43,6 @@ class ArticleScore(BaseModel):
     imprint: str | None = None
     summary: str
     artists: list[str] = Field(default_factory=list)
-    # Seule porte de sortie du plafond media (voir `appliquer_garde_fous`). Défaut
-    # False : le pré-filtre local et les notes d'avant ce champ restent valides,
-    # et un modèle qui l'omet ne lève jamais le plafond.
-    actu_majeure: bool = False
 
 
 SYSTEM_PROMPT = """\
@@ -103,24 +99,15 @@ climat d'un artiste, innovation durable dans l'événementiel) : angle recherch�
 4. Hors ligne : rap/hip-hop, rock, metal, country, jazz, classique quand l'actu est \
 purement interne à ces genres — relevance <40, SAUF si elle relève d'un des axes \
 ci-dessus (festival breton multi-genres, initiative écolo, événement historique).
-5. QUI PARLE compte autant que ce qui est dit. Chaque contenu indique son « Type \
-de compte » et son « Format ». Ces règles portent sur relevance (et hotness), \
-jamais sur emergence :
-   - artiste : l'artiste qui annonce SA sortie, SA date, SON projet est la source \
-PRIMAIRE, l'actu que Kinda veut en priorité. Note-la selon la grille, sans décote.
+5. QUI PARLE. Chaque contenu indique son « Type de compte » et son « Format ». \
+Ces règles portent sur relevance (et hotness), jamais sur emergence :
+   - artiste : l'artiste qui annonce SA sortie, SA date, SON projet est une source \
+PRIMAIRE. Note-la selon la grille.
    - media (Guettapen, Tsugi, Mixmag, DJ Mag, Electro News, Pop Crave, Konbini, \
-Booska-P, AllTime EDM, Billboard, FIP...) : l'actu y est déjà repackagée, la \
-reprendre serait du PLAGIAT. C'est un FILET DE SÉCURITÉ : retire 15 à 20 points à \
-la note que mériterait la même info venue de l'artiste, et plafonne à 59 une actu \
-ordinaire. SEULE exception : une actu MAJEURE que les comptes d'artistes ne \
-couvriront pas (loi ou réglementation qui menace la scène, annulation de festival, \
-décès, fermeture de club emblématique) garde sa note haute, pour ne pas la rater.
-   - actu_majeure : mets-le à true UNIQUEMENT pour ces cas — loi ou réglementation \
-qui menace la scène, annulation de festival ou d'événement, décès, fermeture d'un \
-club emblématique, ou événement de l'industrie d'un poids comparable. Dans TOUS les \
-autres cas mets false, quel que soit le type de compte (confidence d'artiste, \
-interview, sortie, line-up, rumeur : false). Pour un compte media, false plafonne \
-la note à 59 quoi que tu donnes.
+Booska-P, AllTime EDM, Billboard, FIP...) : Kinda reprend l'INFORMATION, jamais la \
+formulation ni les visuels du média. Note l'information elle-même, exactement comme \
+si elle venait de la source primaire : AUCUNE décote parce qu'elle arrive par un \
+média. Une actu reprise par plusieurs médias est souvent une GROSSE actu.
    - festival / label / club : une annonce OFFICIELLE (line-up, dates, billetterie, \
 annulation, sortie) est une source primaire et garde sa note ; la promo courante \
 (rappel de billetterie, compte à rebours, visuel d'ambiance) vaut 40-55.
@@ -186,9 +173,6 @@ histoire d'un genre. Du contenu de fond, pas une actu chaude.
   9. other : rien de ce qui précède.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
-- actu_majeure (booléen) : voir la règle 5 — true seulement pour une loi ou \
-réglementation qui menace la scène, une annulation de festival, un décès, la \
-fermeture d'un club emblématique ou un événement d'un poids comparable ; sinon false.
 - artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \
 exact, sans @ ni #). N'inclus QUE les artistes pop ou électro — ignore ceux d'autres \
 genres (metal, rock, folk, rap...) même s'ils sont cités (ex. sur une affiche de \
@@ -289,12 +273,12 @@ def apply_score(article: Article, score: ArticleScore) -> None:
     article.mentioned_artists = score.artists or None
 
 
-# --- Garde-fous déterministes ---------------------------------------------------
-# Mesuré le 2026-09-17 sur données réelles : Haiku applique les règles 5 et 6 de
-# façon inégale (IVE « [📸] » 65, LE SSERAFIM « feat. » 72, un Guettapen ordinaire
-# 70). Le code tranche donc après le modèle, sur tous les chemins de scoring.
+# --- Garde-fou déterministe ------------------------------------------------------
+# Mesuré le 2026-09-17 sur données réelles : Haiku applique la règle 6 de façon
+# inégale (IVE « [📸] » 65, LE SSERAFIM « feat. » 72). Le code tranche donc après
+# le modèle, sur tous les chemins de scoring. Le plafond des comptes media a été
+# retiré le même jour : il enterrait des grosses actus (GTA VI × Fred again..).
 PLAFOND_POST_VIDE = 29
-PLAFOND_MEDIA = 59
 
 
 def post_quasi_vide(article: Article) -> bool:
@@ -313,27 +297,15 @@ def post_quasi_vide(article: Article) -> bool:
 
 
 def appliquer_garde_fous(article: Article, score: ArticleScore) -> ArticleScore:
-    """Plafonne relevance et hotness selon qui parle et ce qui est dit.
-
-    1. Post Instagram quasi vide -> 29, quel que soit le compte.
-    2. Compte `media` -> 59, sauf `actu_majeure` posé par le modèle.
-    L'axe emergence n'est jamais touché. Fonction pure : rend une copie.
-    """
-    plafond = None
-    if post_quasi_vide(article):
-        plafond = PLAFOND_POST_VIDE
-    elif (
-        article.source is not None
-        and article.source.categorie == SourceCategorie.MEDIA
-        and not score.actu_majeure
-    ):
-        plafond = PLAFOND_MEDIA
-    if plafond is None:
+    """Post Instagram quasi vide -> relevance et hotness plafonnées à 29, quel que
+    soit le compte. L'axe emergence n'est jamais touché. Fonction pure : rend une
+    copie."""
+    if not post_quasi_vide(article):
         return score
     return score.model_copy(
         update={
-            "relevance": min(score.relevance, plafond),
-            "hotness": min(score.hotness, plafond),
+            "relevance": min(score.relevance, PLAFOND_POST_VIDE),
+            "hotness": min(score.hotness, PLAFOND_POST_VIDE),
         }
     )
 
@@ -430,8 +402,7 @@ def score_pending(
                 stats.quasi_vides += 1
             # Seuil STRICT : une note égale au seuil passe chez Claude. Le seuil
             # dit « en dessous, ça ne mérite pas qu'on paie », pas « à partir de ».
-            # La décision d'écarter se prend sur la note BRUTE : le plafond media
-            # (59) est au-dessus du seuil et ne doit jamais faire écarter un article.
+            # La décision d'écarter se prend sur la note BRUTE, avant garde-fou.
             elif note is not None and note.relevance < settings.local_prefilter_threshold:
                 apply_score(article, appliquer_garde_fous(article, note))
                 article.scored_by = ScoredBy.LOCAL

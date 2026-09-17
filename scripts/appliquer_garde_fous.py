@@ -12,11 +12,6 @@ que la premiere phrase de la premiere ligne de la caption. D'ou deux niveaux :
   « 🗂️ I-VIEW »). Probable mais pas certain -- la suite de la caption pouvait
   porter l'info. Relire le plan avant `--apply`.
 
-Le plafond MEDIA (59) n'est PAS re-applique : il depend de `actu_majeure`, que
-les anciennes notes ne portent pas. Plafonner sans lui ecraserait les vraies
-actus majeures (loi RIPOST a 75). Les articles media ne sont donc touches que
-par le garde-fou « post vide ».
-
 Les articles publies (USED) ne sont jamais modifies : c'est l'archive.
 
 Usage :
@@ -103,8 +98,6 @@ def main() -> None:
     for c in plan:
         print(f"  - #{c.article_id} [{c.source}] rel {c.avant[0]} -> {c.apres[0]}, "
               f"hot {c.avant[1]} -> {c.apres[1]} : {c.titre[:70]}")
-    print("\nPlafond media (59) non re-applique : les anciennes notes n'ont pas "
-          "`actu_majeure`, les articles media ne sont pas touches a ce titre.")
     if not args.apply and plan:
         print("Relancer avec --apply pour appliquer.")
 

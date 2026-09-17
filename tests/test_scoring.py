@@ -438,8 +438,9 @@ def test_system_prompt_priorise_les_comptes_d_artistes():
 
     lowered = SYSTEM_PROMPT.lower()
     assert "type de compte" in lowered
-    assert "plagiat" in lowered
-    assert "filet de sécurité" in lowered
+    # 2026-09-17 : l'info d'un media n'est plus decotee (le plagiat portait sur les visuels)
+    assert "plagiat" not in lowered
+    assert "aucune décote" in lowered
     # posts vides : le titre par défaut de l'adapter Instagram est cité
     assert "post instagram" in lowered
     assert "hard techno" in lowered
