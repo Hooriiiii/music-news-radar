@@ -460,3 +460,65 @@ def test_l_appel_est_note_meme_sans_nouveau_post(monkeypatch):
     monkeypatch.setattr(adapter, "_appeler", lambda: vide)
     adapter.fetch(_heure(5))
     assert adapter.source.state["dernier_appel"] == _heure(5).isoformat()
+
+
+# --- La caption, recuperable depuis le summary (garde-fou « post quasi vide ») ---
+
+
+def test_caption_depuis_summary_retire_le_bandeau_de_metriques():
+    from app.sources.instagram import _summary_with_metrics, caption_depuis_summary
+
+    noeud = {"like_count": 8000, "comments_count": 120}
+    summary = _summary_with_metrics("[📸]", noeud, 900000)
+    assert caption_depuis_summary(summary) == "[📸]"
+    assert caption_depuis_summary(_summary_with_metrics(None, noeud, 10)) == ""
+    assert caption_depuis_summary(_summary_with_metrics("Sans chiffres", {}, None)) == (
+        "Sans chiffres"
+    )
+    assert caption_depuis_summary(None) == ""
+
+
+@pytest.mark.parametrize(
+    "texte, attendu",
+    [
+        ("[📸]", 0),
+        ("🗂️ I-VIEW", 1),
+        ("LE SSERAFIM feat.", 3),
+        ("𝚖𝚊𝚍𝚎 𝚖𝚢 𝚍𝚊𝚢 ✨ #kpop @ive https://t.co/x www.a.fr", 3),
+        ("... !!! — ✨✨ 🔥", 0),
+        ("Laurent Garnier annonce une tournee en France", 7),
+        ("", 0),
+    ],
+)
+def test_mots_significatifs(texte, attendu):
+    from app.sources.instagram import mots_significatifs
+
+    assert mots_significatifs(texte) == attendu
+
+
+def test_mots_significatifs_normalise_les_lettres_decoratives():
+    import unicodedata
+
+    from app.sources.instagram import mots_significatifs
+
+    # NFKC ramene les lettres mathematiques a l'ASCII : le compte est le meme
+    assert mots_significatifs("𝚖𝚊𝚍𝚎 𝚖𝚢 𝚍𝚊𝚢") == mots_significatifs(
+        unicodedata.normalize("NFKC", "𝚖𝚊𝚍𝚎 𝚖𝚢 𝚍𝚊𝚢")
+    )
+
+
+@pytest.mark.parametrize(
+    "caption, attendu",
+    [
+        ("[📸]", True),
+        ("🗂️ I-VIEW", True),
+        ("un deux trois quatre cinq", True),
+        ("un deux trois quatre cinq six", False),
+        ("#techno #rave\nLe line-up complet de Dour est enfin tombe", False),
+        (None, True),
+    ],
+)
+def test_caption_quasi_vide(caption, attendu):
+    from app.sources.instagram import caption_quasi_vide
+
+    assert caption_quasi_vide(caption) is attendu

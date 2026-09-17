@@ -8,7 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Article, ScoredBy, SourceType
+from app.models import Article, ScoredBy, SourceCategorie, SourceType
+from app.sources.instagram import (
+    TITRE_PAR_DEFAUT,
+    caption_depuis_summary,
+    caption_quasi_vide,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,10 @@ class ArticleScore(BaseModel):
     imprint: str | None = None
     summary: str
     artists: list[str] = Field(default_factory=list)
+    # Seule porte de sortie du plafond media (voir `appliquer_garde_fous`). Défaut
+    # False : le pré-filtre local et les notes d'avant ce champ restent valides,
+    # et un modèle qui l'omet ne lève jamais le plafond.
+    actu_majeure: bool = False
 
 
 SYSTEM_PROMPT = """\
@@ -106,6 +115,12 @@ la note que mériterait la même info venue de l'artiste, et plafonne à 59 une 
 ordinaire. SEULE exception : une actu MAJEURE que les comptes d'artistes ne \
 couvriront pas (loi ou réglementation qui menace la scène, annulation de festival, \
 décès, fermeture de club emblématique) garde sa note haute, pour ne pas la rater.
+   - actu_majeure : mets-le à true UNIQUEMENT pour ces cas — loi ou réglementation \
+qui menace la scène, annulation de festival ou d'événement, décès, fermeture d'un \
+club emblématique, ou événement de l'industrie d'un poids comparable. Dans TOUS les \
+autres cas mets false, quel que soit le type de compte (confidence d'artiste, \
+interview, sortie, line-up, rumeur : false). Pour un compte media, false plafonne \
+la note à 59 quoi que tu donnes.
    - festival / label / club : une annonce OFFICIELLE (line-up, dates, billetterie, \
 annulation, sortie) est une source primaire et garde sa note ; la promo courante \
 (rappel de billetterie, compte à rebours, visuel d'ambiance) vaut 40-55.
@@ -171,6 +186,9 @@ histoire d'un genre. Du contenu de fond, pas une actu chaude.
   9. other : rien de ce qui précède.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
+- actu_majeure (booléen) : voir la règle 5 — true seulement pour une loi ou \
+réglementation qui menace la scène, une annulation de festival, un décès, la \
+fermeture d'un club emblématique ou un événement d'un poids comparable ; sinon false.
 - artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \
 exact, sans @ ni #). N'inclus QUE les artistes pop ou électro — ignore ceux d'autres \
 genres (metal, rock, folk, rap...) même s'ils sont cités (ex. sur une affiche de \
@@ -271,12 +289,77 @@ def apply_score(article: Article, score: ArticleScore) -> None:
     article.mentioned_artists = score.artists or None
 
 
+# --- Garde-fous déterministes ---------------------------------------------------
+# Mesuré le 2026-09-17 sur données réelles : Haiku applique les règles 5 et 6 de
+# façon inégale (IVE « [📸] » 65, LE SSERAFIM « feat. » 72, un Guettapen ordinaire
+# 70). Le code tranche donc après le modèle, sur tous les chemins de scoring.
+PLAFOND_POST_VIDE = 29
+PLAFOND_MEDIA = 59
+
+
+def post_quasi_vide(article: Article) -> bool:
+    """Un post Instagram dont la légende ne porte pas d'information.
+
+    Lit la caption dans `article.summary` : à appeler AVANT `apply_score`, qui
+    remplace le summary par le résumé du modèle. Sans caption connue, seul le
+    titre par défaut de l'adapter (« Post Instagram ») fait foi.
+    """
+    source = article.source
+    if source is None or source.type != SourceType.INSTAGRAM:
+        return False
+    if article.summary is None:
+        return article.title == TITRE_PAR_DEFAUT
+    return caption_quasi_vide(caption_depuis_summary(article.summary))
+
+
+def appliquer_garde_fous(article: Article, score: ArticleScore) -> ArticleScore:
+    """Plafonne relevance et hotness selon qui parle et ce qui est dit.
+
+    1. Post Instagram quasi vide -> 29, quel que soit le compte.
+    2. Compte `media` -> 59, sauf `actu_majeure` posé par le modèle.
+    L'axe emergence n'est jamais touché. Fonction pure : rend une copie.
+    """
+    plafond = None
+    if post_quasi_vide(article):
+        plafond = PLAFOND_POST_VIDE
+    elif (
+        article.source is not None
+        and article.source.categorie == SourceCategorie.MEDIA
+        and not score.actu_majeure
+    ):
+        plafond = PLAFOND_MEDIA
+    if plafond is None:
+        return score
+    return score.model_copy(
+        update={
+            "relevance": min(score.relevance, plafond),
+            "hotness": min(score.hotness, plafond),
+        }
+    )
+
+
+def score_minimal(article: Article) -> ArticleScore:
+    """La note d'un post quasi vide quand le pré-filtre local est muet : Claude
+    n'aurait rien à juger, on ne le paie pas. La caption (sans métriques) sert de
+    résumé pour rester lisible au dashboard."""
+    caption = caption_depuis_summary(article.summary)
+    return ArticleScore(
+        relevance=10,
+        hotness=10,
+        emergence=0,
+        category=Category.OTHER,
+        summary=caption or article.title or TITRE_PAR_DEFAUT,
+    )
+
+
 @dataclass
 class ScoringStats:
     scored: int = 0
     errors: int = 0
     # Articles écartés par le pré-filtre local, donc jamais soumis à Claude.
     prefiltered: int = 0
+    # Posts Instagram quasi vides, notés sans Claude (inclus dans `prefiltered`).
+    quasi_vides: int = 0
     # Le message de la dernière erreur, pour que la supervision puisse NOMMER la
     # panne. Sans lui, des crédits épuisés passent pour une erreur réseau parmi
     # d'autres -- c'est ce qui les a rendus invisibles pendant des jours.
@@ -337,14 +420,24 @@ def score_pending(
     for article in articles:
         try:
             note = _note_du_prefiltre(prefilter, article)
+            # Post quasi vide : Claude n'aurait rien à juger. La note locale si
+            # elle existe (pour son emergence), plafonnée ; sinon une note minimale.
+            if post_quasi_vide(article):
+                score = note if note is not None else score_minimal(article)
+                apply_score(article, appliquer_garde_fous(article, score))
+                article.scored_by = ScoredBy.LOCAL
+                stats.prefiltered += 1
+                stats.quasi_vides += 1
             # Seuil STRICT : une note égale au seuil passe chez Claude. Le seuil
             # dit « en dessous, ça ne mérite pas qu'on paie », pas « à partir de ».
-            if note is not None and note.relevance < settings.local_prefilter_threshold:
-                apply_score(article, note)
+            # La décision d'écarter se prend sur la note BRUTE : le plafond media
+            # (59) est au-dessus du seuil et ne doit jamais faire écarter un article.
+            elif note is not None and note.relevance < settings.local_prefilter_threshold:
+                apply_score(article, appliquer_garde_fous(article, note))
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
             else:
-                apply_score(article, scorer(article))
+                apply_score(article, appliquer_garde_fous(article, scorer(article)))
                 article.scored_by = ScoredBy.CLAUDE
                 stats.scored += 1
             db.commit()
