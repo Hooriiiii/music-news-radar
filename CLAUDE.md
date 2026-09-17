@@ -406,6 +406,16 @@ Le modèle de composition est `composer_model` (défaut `claude-sonnet-5`), plus
 que celui du scoring : la composition tourne quelques fois par jour et sa qualité
 se voit directement sur le feed.
 
+**Emojis de légende : relancés, jamais bloquants** (2026-09-17). Le compte
+d'emojis de `caption` n'est plus un validateur de `PostDraft` : `messages.parse()`
+jetait sinon tout le brouillon, et trois légendes sans emoji faisaient perdre la
+composition d'un créneau (articles 17930 et 18078). `probleme_emojis()` décrit
+l'écart (nombre trouvé, attendu, « `caption` seulement »), le compositeur relance
+avec ce message — toute erreur de validation est d'ailleurs renvoyée au modèle à
+la relance —, puis accepte le brouillon avec un warning si rien ne fait mieux.
+L'interdiction d'emoji dans `headline`/`title`/`subtitle` reste stricte (textes
+rendus dans une police).
+
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul **deux carrousels et deux reels par jour**, choisis dans le flux

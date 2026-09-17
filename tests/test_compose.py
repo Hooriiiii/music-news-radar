@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.content.compose import (
+    CAPTION_EMOJIS_MIN,
     SYSTEM_PROMPT,
     CompositionError,
     CoverVariante,
@@ -12,6 +13,7 @@ from app.content.compose import (
     contient_emoji,
     create_post,
     make_claude_composer,
+    probleme_emojis,
 )
 from app.content.media import entree
 from app.models import Article, Source, SourceType
@@ -66,27 +68,38 @@ def test_la_legende_accepte_un_asterisque_isole():
     assert "*" in draft.caption
 
 
-def test_la_legende_exige_des_emojis():
-    """Observe sur le banc d'essai : une composition Sonnet sur deux ignorait la
-    regle emojis du prompt. Une consigne n'est pas une garantie -- meme remede que
-    pour le balisage, le rejet fait relancer l'appel."""
-    with pytest.raises(ValidationError):
-        PostDraft(
-            variantes=[_variante(n) for n in range(4)],
-            caption="Une legende parfaitement correcte, mais sans le moindre emoji.",
-            hashtags=["#festival"],
-        )
+def test_la_legende_sans_emoji_reste_un_brouillon_valide():
+    """Le compte d'emojis n'est plus une regle de SCHEMA : `messages.parse()`
+    levait sinon une ValidationError qui jetait tout le brouillon, et trois
+    legendes sans emoji faisaient perdre la composition d'un creneau (production,
+    2026-09-17). Une legende sans emoji vaut mieux que pas de post : le compte est
+    verifie par `probleme_emojis`, que le compositeur utilise pour relancer."""
+    draft = PostDraft(
+        variantes=[_variante(n) for n in range(4)],
+        caption="Une legende parfaitement correcte, mais sans le moindre emoji.",
+        hashtags=["#festival"],
+    )
+    assert draft.caption.endswith("emoji.")
 
 
-def test_la_legende_refuse_une_avalanche_demojis():
-    """Borne haute tolerante : on cadre l'exces sans faire echouer une legende
-    qui respecte l'esprit de la regle a un emoji pres."""
-    with pytest.raises(ValidationError):
-        PostDraft(
-            variantes=[_variante(n) for n in range(4)],
-            caption="Trop 🩷 c'est 🎧 vraiment 🪩 beaucoup 🎪 trop 🌱 la 🔊 non ✨",
-            hashtags=["#festival"],
-        )
+def test_probleme_emojis_decrit_une_legende_sans_emoji():
+    probleme = probleme_emojis("Une legende sans le moindre emoji.")
+    assert probleme is not None
+    assert "0 emoji" in probleme
+    assert "caption" in probleme
+    assert f"{CAPTION_EMOJIS_MIN}" in probleme
+    # Ne jamais pousser le modele a en mettre dans les textes rendus.
+    assert "headline" in probleme and "jamais" in probleme
+
+
+def test_probleme_emojis_decrit_une_avalanche_demojis():
+    probleme = probleme_emojis("Trop 🩷 c'est 🎧 vraiment 🪩 beaucoup 🎪 trop 🌱 la 🔊 non ✨")
+    assert probleme is not None
+    assert "7 emoji" in probleme
+
+
+def test_probleme_emojis_accepte_une_legende_dans_les_bornes():
+    assert probleme_emojis("Line-up complet 🎧 et c'est signe ✨") is None
 
 
 def test_une_variante_exige_les_trois_textes_balises():
@@ -226,8 +239,10 @@ class _FakeParsedResponse:
 class _FakeMessages:
     def __init__(self, effects):
         self._effects = list(effects)
+        self.appels = []
 
-    def parse(self, **_kwargs):
+    def parse(self, **kwargs):
+        self.appels.append(kwargs)
         effect = self._effects.pop(0)
         if isinstance(effect, Exception):
             raise effect
@@ -237,6 +252,77 @@ class _FakeMessages:
 class _FakeClient:
     def __init__(self, effects):
         self.messages = _FakeMessages(effects)
+
+
+def _contenu_utilisateur(appel) -> str:
+    return appel["messages"][-1]["content"]
+
+
+def _draft_legende(caption):
+    return PostDraft(variantes=[_variante(i) for i in range(4)], caption=caption, hashtags=[])
+
+
+def test_composer_relance_une_legende_sans_emoji_en_disant_le_probleme(db_session):
+    article = _article(db_session)
+    sans = _draft_legende("Une legende sans emoji.")
+    avec = _draft_legende("Une legende 🎧 avec emojis ✨")
+    client = _FakeClient([_FakeParsedResponse(sans), _FakeParsedResponse(avec)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is avec
+    premier, second = client.messages.appels
+    assert "0 emoji" not in _contenu_utilisateur(premier)
+    relance = _contenu_utilisateur(second)
+    assert "0 emoji" in relance and "caption" in relance
+    assert build_user_prompt(article) in relance
+
+
+def test_composer_accepte_une_legende_sans_emoji_apres_les_tentatives(db_session, caplog):
+    """Pas de CompositionError pour un detail de forme : le brouillon part avec
+    un avertissement."""
+    article = _article(db_session)
+    drafts = [_draft_legende(f"Sans emoji {i}.") for i in range(3)]
+    client = _FakeClient([_FakeParsedResponse(d) for d in drafts])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    with caplog.at_level("WARNING"):
+        resultat = composer(article)
+
+    assert resultat is drafts[-1]
+    assert len(client.messages.appels) == 3
+    assert "acceptee malgre" in caplog.text
+
+
+def test_composer_garde_la_legende_sans_emoji_si_les_relances_echouent(db_session):
+    """Les relances ratent la validation stricte : le premier brouillon, qui ne
+    pechait que par ses emojis, est rendu plutot que de perdre la composition."""
+    article = _article(db_session)
+    sans = _draft_legende("Sans emoji.")
+    client = _FakeClient([_FakeParsedResponse(sans), _validation_error(), _validation_error()])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is sans
+
+
+def test_composer_accepte_trop_demojis_apres_les_tentatives(db_session):
+    article = _article(db_session)
+    trop = _draft_legende("Trop 🩷 c'est 🎧 vraiment 🪩 beaucoup 🎪 trop 🌱 la 🔊 non ✨")
+    client = _FakeClient([_FakeParsedResponse(trop)] * 3)
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is trop
+    assert "7 emoji" in _contenu_utilisateur(client.messages.appels[1])
+
+
+def test_composer_redonne_l_erreur_de_validation_a_la_relance(db_session):
+    article = _article(db_session)
+    client = _FakeClient([_validation_error_emoji(), _FakeParsedResponse(_draft())])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    composer(article)
+
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "Emoji interdit" in relance
 
 
 def test_composer_leve_composition_error_apres_echecs_repetes(db_session):
