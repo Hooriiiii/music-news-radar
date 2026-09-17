@@ -57,7 +57,11 @@ def publier_fichiers(
     client = client or client_par_defaut()
     heberger = heberger or hosting.heberger
     with heberger(dossier, noms[0]) as base:
-        conteneur = client.preparer_carrousel([f"{base}/{nom}" for nom in noms], legende)
+        elements = [
+            {"type": "video", "url": f"{base}/{nom}"} if nom.endswith(".mp4") else f"{base}/{nom}"
+            for nom in noms
+        ]
+        conteneur = client.preparer_carrousel(elements, legende)
         return _finir(client, conteneur, publier_vraiment, attendre_jusqu_a, encore_publier)
 
 

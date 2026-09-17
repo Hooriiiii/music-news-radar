@@ -482,6 +482,26 @@ Le sélecteur segmenté vit dans le panneau Programmation du dashboard, à côt�
 2200 caractères et 30 hashtags. La cover `kinda_post` (3:4) est donc recadrée au
 centre en 1080×1350 par `app/publish/images.py` (`publication_ratio_min`).
 
+**Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
+post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel
+parti avec la cover seule, le gel ne gardant que les photos. `preparation.py` :
+cover, puis jusqu'à 9 médias dans l'ordre (`medias_du_carrousel` : slides puis
+article, sans doublon). Une photo → JPEG normalisé ; une **vidéo** → téléchargée
+(`telecharger_video`), sondée (3 à 60 s — la doc Meta citée dans le dépôt ne donne
+pas de maximum pour un élément de carrousel, 60 s = `DUREE_MAX_SLIDE_MS`),
+transcodée en **1080×1350** (le ratio du premier élément s'impose à tout le
+carrousel) par `video.py::transcoder_carrousel` — même cadrage flouté et même
+encodage Meta (H.264/AAC, GOP fermé, sans edit list, faststart) que le reel,
+piste audio garantie —, publiée en enfant `media_type=VIDEO` +
+`is_carousel_item`. Une vidéo inutilisable (trop longue, téléchargement, sonde ou
+transcodage en échec, ffmpeg absent, sortie hors specs) **retombe sur sa vignette**
+(`preview_url`) en photo : un média ne fait jamais échouer le gel. Le client crée
+tous les enfants, sonde chaque enfant vidéo jusqu'à FINISHED au rythme des reels
+(15 s, 10 min max), puis le parent. **Le média servant de fond à la cover**
+(`slides[0].image_url`, comparé à `url` et à `preview_url`) n'est pas répété
+ensuite. **Visuels d'un compte Instagram de catégorie `media` jamais repris**
+(watermarks, `visuels_interdits`) : cover seule.
+
 **Hébergement éphémère.** Meta télécharge les images en cURL. Au moment de publier
 seulement, un mini-serveur local sert le dossier du post (sans listing) et un tunnel
 rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashboard

@@ -140,3 +140,15 @@ def test_les_crochets_d_un_reel_attendent_avant_media_publish(tmp_path):
     )
     assert resultat == "media1"
     assert [etape[0] for etape in journal] == ["ouvre", "preparer_reel", "attente", "publier", "ferme"]
+
+
+def test_un_carrousel_avec_video_passe_ses_mp4_comme_elements_video(tmp_path):
+    journal = []
+    noms = _fichiers(tmp_path, "p_01.jpg", "p_02.mp4", "p_03.jpg")
+    publier_fichiers(tmp_path, noms, "L", False, client=FauxClient(journal), heberger=_heberger(journal))
+    base = "https://t.trycloudflare.com"
+    assert journal[1] == (
+        "preparer",
+        [f"{base}/p_01.jpg", {"type": "video", "url": f"{base}/p_02.mp4"}, f"{base}/p_03.jpg"],
+        "L",
+    )

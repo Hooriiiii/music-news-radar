@@ -85,14 +85,36 @@ class ClientInstagram:
             self.dormir(pas)
             ecoule += pas
 
-    def preparer_carrousel(self, urls: list[str], legende: str) -> str:
-        if not urls:
+    def preparer_carrousel(self, elements: list, legende: str) -> str:
+        """Un element est l'URL d'une image, ou `{"type": "photo"|"video", "url": ...}`.
+
+        Un enfant VIDEO (`media_type=VIDEO`, `is_carousel_item`) s'encode chez Meta
+        comme un reel : tous les enfants sont crees d'abord (l'encodage avance en
+        parallele), puis chaque video est sondee jusqu'a FINISHED, au rythme des
+        reels, AVANT de creer le parent -- un parent aux enfants non prets echoue.
+        """
+        if not elements:
             raise ErreurInstagram("aucune image a publier")
-        urls = urls[:CARROUSEL_MAX]
-        if len(urls) == 1:
-            conteneur = self._conteneur(image_url=urls[0], caption=legende)
+        elements = [
+            {"type": "photo", "url": e} if isinstance(e, str) else e for e in elements[:CARROUSEL_MAX]
+        ]
+        if len(elements) == 1:
+            if elements[0]["type"] == "video":
+                raise ErreurInstagram("une video seule n'est pas un carrousel : publier un reel")
+            conteneur = self._conteneur(image_url=elements[0]["url"], caption=legende)
         else:
-            enfants = [self._conteneur(image_url=url, is_carousel_item="true") for url in urls]
+            enfants, videos = [], []
+            for element in elements:
+                if element["type"] == "video":
+                    enfant = self._conteneur(
+                        media_type="VIDEO", video_url=element["url"], is_carousel_item="true"
+                    )
+                    videos.append(enfant)
+                else:
+                    enfant = self._conteneur(image_url=element["url"], is_carousel_item="true")
+                enfants.append(enfant)
+            for enfant in videos:
+                self._attendre(enfant, pas=ATTENTE_REEL_PAS_S, maximum=ATTENTE_REEL_MAX_S)
             conteneur = self._conteneur(
                 media_type="CAROUSEL", children=",".join(enfants), caption=legende
             )

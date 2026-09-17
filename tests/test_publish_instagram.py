@@ -144,3 +144,46 @@ def test_un_reel_qui_ne_finit_jamais_leve_apres_le_delai_reel(monkeypatch):
     with pytest.raises(ErreurInstagram, match="IN_PROGRESS"):
         client.preparer_reel("https://t/r.mp4", "https://t/c.jpg", "L")
     assert len(pauses) == 2
+
+
+# --- Carrousel avec videos ------------------------------------------------------------
+
+
+def test_un_carrousel_mixte_cree_des_enfants_video_attendus_avant_le_parent():
+    http = FauxHttp()
+    conteneur = _client(http).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}, {"type": "photo", "url": "https://t/p.jpg"}],
+        "L",
+    )
+    posts = [(c, p) for m, c, p in http.appels if m == "POST"]
+    assert posts[0][1] == {"image_url": "https://t/cover.jpg", "is_carousel_item": "true", "access_token": "IGAAjeton"}
+    assert posts[1][1] == {
+        "media_type": "VIDEO", "video_url": "https://t/v.mp4", "is_carousel_item": "true", "access_token": "IGAAjeton",
+    }
+    assert posts[2][1]["image_url"] == "https://t/p.jpg"
+    assert posts[3][1]["children"] == "c1,c2,c3"
+    # L'enfant video est sonde AVANT la creation du parent.
+    ordre = [(m, c) for m, c, _ in http.appels]
+    assert ordre.index(("GET", "c2")) < ordre.index(("POST", "17841/media"), 3)
+    assert conteneur == "c4"
+
+
+def test_un_enfant_video_est_sonde_au_rythme_des_reels():
+    pauses = []
+    http = FauxHttp(statuts=("IN_PROGRESS", "FINISHED"))
+    ClientInstagram("j", "17841", http=http, version="v23.0", dormir=pauses.append).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}], "L"
+    )
+    assert pauses[0] == mod.ATTENTE_REEL_PAS_S
+
+
+def test_un_enfant_video_en_erreur_fait_echouer_le_conteneur():
+    with pytest.raises(ErreurInstagram, match="ERROR"):
+        _client(FauxHttp(statuts=("ERROR",))).preparer_carrousel(
+            ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}], "L"
+        )
+
+
+def test_une_video_seule_n_est_pas_un_carrousel():
+    with pytest.raises(ErreurInstagram, match="video seule"):
+        _client(FauxHttp()).preparer_carrousel([{"type": "video", "url": "https://t/v.mp4"}], "L")
