@@ -27,7 +27,7 @@ from pathlib import Path
 import httpx
 
 from app.config import settings
-from app.content.media import VIDEO, est_lien_instagram, video_recuperable, videos_exploitables
+from app.content.media import VIDEO, lien_de_reel, video_recuperable, videos_exploitables
 from app.content.render import _USER_AGENT, render_post
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
 from app.publish.images import ImageInexploitable, en_jpeg
@@ -159,15 +159,27 @@ def _panne_machine(exc: AssemblageIndisponible) -> bool:
     return bool(_PANNE_MACHINE.search(f"{getattr(exc, 'stderr', '')}\n{exc}"))
 
 
+def _repli_ytdlp_possible(article, permalink) -> bool:
+    """yt-dlp saurait-il retrouver la video dont le lien signe a expire ? Un
+    permalink de reel, ou un post dont le SEUL media est une video (son URL
+    expiree ignoree : c'est la meme question que `video_recuperable`). Un
+    carrousel `/p/` a plusieurs medias, non : yt-dlp rendrait une liste."""
+    if lien_de_reel(permalink):
+        return True
+    medias = [{**m, "url": None} for m in getattr(article, "media", None) or []]
+    return video_recuperable(medias, permalink)
+
+
 def _video_source(origine, url, article, dossier, plafond, telecharger, recuperer_ytdlp) -> bytes:
     if origine == API:
         try:
             return telecharger(url, plafond)
         except LienExpire:
             # Repli sur la page du post : yt-dlp sait souvent recuperer ce que le
-            # lien signe ne donne plus. Hors Instagram, ou sans yt-dlp, la faute reste.
+            # lien signe ne donne plus. Hors d'un reel ou d'un post a video seule
+            # (carrousel /p/, autre site), aucun repli : la faute reste.
             permalink = getattr(article, "url", None)
-            if not est_lien_instagram(permalink):
+            if not _repli_ytdlp_possible(article, permalink):
                 raise
             if recuperer_ytdlp is None:
                 # Le repli existe, yt-dlp est seulement coupe (.env) : on attend.

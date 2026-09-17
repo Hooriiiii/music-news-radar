@@ -154,6 +154,36 @@ def test_un_lien_expire_hors_instagram_reste_une_faute(tmp_path):
         preparer_reel(_post(), _article(VIDEO, url="https://t/1"), tmp_path, recuperer_ytdlp=_interdit, **outils)
 
 
+PHOTO = {"type": "photo", "url": "https://cdn/p.jpg"}
+
+
+def _expire(url, plafond):
+    raise LienExpire("video indisponible (HTTP 403) : lien expire ou retire")
+
+
+def test_un_lien_expire_d_un_carrousel_instagram_ne_lance_pas_yt_dlp(tmp_path):
+    """M2 : un post /p/ a plusieurs medias n'est pas recuperable par yt-dlp (il
+    rendrait une liste) : le lien expire reste une faute, sans repli."""
+    outils = {**_outils(), "telecharger": _expire}
+    with pytest.raises(LienExpire, match="403"):
+        preparer_reel(_post(), _article(PHOTO, VIDEO), tmp_path, recuperer_ytdlp=_interdit, **outils)
+
+
+def test_un_lien_expire_d_un_carrousel_instagram_yt_dlp_coupe_reste_une_faute(tmp_path):
+    """Pas de repli possible : rien a attendre, meme yt-dlp coupe."""
+    outils = {**_outils(), "telecharger": _expire}
+    with pytest.raises(LienExpire):
+        preparer_reel(_post(), _article(PHOTO, VIDEO), tmp_path, recuperer_ytdlp=None, **outils)
+
+
+def test_un_lien_expire_d_un_post_video_seul_retombe_sur_yt_dlp(tmp_path):
+    """Un /p/ dont le SEUL media est la video : yt-dlp sait la recuperer."""
+    recuperer = Recuperer()
+    outils = {**_outils(), "telecharger": _expire}
+    preparer_reel(_post(), _article(VIDEO), tmp_path, recuperer_ytdlp=recuperer, **outils)
+    assert [appel[0] for appel in recuperer.appels] == ["https://www.instagram.com/p/AAA/"]
+
+
 def test_yt_dlp_indisponible_pour_ce_gel_differe_sans_exclure(tmp_path):
     """PUBLICATION_REEL_YTDLP=false apres la programmation : le creneau attend,
     l'article n'est pas exclu (yt-dlp peut etre reactive)."""
