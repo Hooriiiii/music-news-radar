@@ -1,7 +1,11 @@
 import datetime as dt
+import random
 from zoneinfo import ZoneInfo
 
-from app.schedule.slots import horaires_du_jour, prochains_horaires
+import pytest
+
+from app.config import settings
+from app.schedule.slots import FenetresInvalides, horaires_du_jour, prochains_horaires
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -56,3 +60,56 @@ def test_prochains_horaires_futurs_et_dans_l_ordre():
 def test_apres_la_fenetre_du_soir_on_passe_au_lendemain():
     maintenant = dt.datetime(2026, 9, 20, 20, 0, tzinfo=PARIS).astimezone(dt.timezone.utc)
     assert _local(prochains_horaires(maintenant, 1)[0]).date() == dt.date(2026, 9, 21)
+
+
+def test_les_carrousels_gardent_exactement_leurs_heures():
+    """Changer la graine des carrousels deplacerait toutes les heures deja
+    programmees en base."""
+    jour = dt.date(2026, 9, 20)
+    attendus = []
+    for rang, (debut, fin) in enumerate(((dt.time(8, 30), dt.time(11, 0)), (dt.time(17, 0), dt.time(19, 30)))):
+        ouverture = dt.datetime.combine(jour, debut, tzinfo=PARIS)
+        minutes = int((dt.datetime.combine(jour, fin, tzinfo=PARIS) - ouverture).total_seconds() // 60)
+        tirage = random.Random(f"kinda-{jour.isoformat()}-{rang}").randint(0, minutes)
+        attendus.append((ouverture + dt.timedelta(minutes=tirage)).astimezone(dt.timezone.utc))
+    assert horaires_du_jour(jour) == attendus
+
+
+def test_deux_reels_par_jour_dans_leurs_fenetres():
+    for decalage in range(40):
+        jour = dt.date(2026, 9, 20) + dt.timedelta(days=decalage)
+        midi, soir = horaires_du_jour(jour, "reel")
+        assert dt.time(12, 0) <= _local(midi).time() <= dt.time(14, 0)
+        assert dt.time(20, 30) <= _local(soir).time() <= dt.time(22, 30)
+
+
+def test_le_tirage_reel_est_deterministe():
+    assert horaires_du_jour(dt.date(2026, 9, 20), "reel") == horaires_du_jour(dt.date(2026, 9, 20), "reel")
+
+
+def test_prochains_horaires_reel():
+    maintenant = dt.datetime(2026, 9, 20, 13, 59, tzinfo=PARIS).astimezone(dt.timezone.utc)
+    horaires = prochains_horaires(maintenant, 6, "reel")
+    assert len(horaires) == 6 and horaires == sorted(horaires)
+    assert all(h > maintenant for h in horaires)
+
+
+def test_zero_creneau_reel_ne_boucle_pas(monkeypatch):
+    assert prochains_horaires(dt.datetime(2026, 9, 20, tzinfo=dt.timezone.utc), 0, "reel") == []
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "")
+    assert prochains_horaires(dt.datetime(2026, 9, 20, tzinfo=dt.timezone.utc), 6, "reel") == []
+
+
+def test_une_fenetre_reel_qui_chevauche_un_carrousel_est_refusee(monkeypatch):
+    """Sinon deux creneaux pourraient tomber a la meme minute : publier_a est
+    unique, l'arbitrage leverait une IntegrityError obscure."""
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00,20:30-22:30")
+    with pytest.raises(FenetresInvalides, match="10:30-12:00"):
+        horaires_du_jour(dt.date(2026, 9, 20), "reel")
+
+
+def test_deux_fenetres_qui_se_touchent_sont_refusees(monkeypatch):
+    """Bornes incluses : le tirage peut tomber sur la minute de fin."""
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "11:00-12:00")
+    with pytest.raises(FenetresInvalides):
+        horaires_du_jour(dt.date(2026, 9, 20))

@@ -2,7 +2,7 @@ import datetime as dt
 import json
 
 from app.config import settings
-from app.publish.mode import enregistrer_mode, mode_effectif
+from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
 
 MAINTENANT = dt.datetime(2026, 11, 10, 9, 0, tzinfo=dt.timezone.utc)
 
@@ -52,3 +52,35 @@ def test_par_defaut_le_chemin_est_derive_de_meta_token_path(tmp_path, monkeypatc
     monkeypatch.setattr(settings, "publication_mode", "arret")
     enregistrer_mode("reel", MAINTENANT)
     assert mode_effectif() == "reel"
+
+
+def test_sans_fichier_les_reels_sont_actifs(tmp_path):
+    assert reels_actifs(tmp_path / "absent.json") is True
+
+
+def test_couper_les_reels(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "publication_mode", "apercu")
+    chemin = tmp_path / "publication.json"
+    enregistrer_reels(False, MAINTENANT, chemin)
+    assert reels_actifs(chemin) is False
+    # Le fichier ne porte pas de mode : le mode reste celui de .env.
+    assert (mode_effectif(chemin), source_du_mode(chemin)) == ("apercu", "env")
+
+
+def test_les_deux_reglages_se_preservent(tmp_path):
+    """Un seul fichier pour deux interrupteurs : ecrire l'un n'efface pas l'autre."""
+    chemin = tmp_path / "publication.json"
+    enregistrer_reels(False, MAINTENANT, chemin)
+    enregistrer_mode("apercu", MAINTENANT, chemin)
+    assert (mode_effectif(chemin), reels_actifs(chemin)) == ("apercu", False)
+    enregistrer_reels(True, MAINTENANT, chemin)
+    assert (mode_effectif(chemin), reels_actifs(chemin)) == ("apercu", True)
+    assert list(tmp_path.iterdir()) == [chemin]
+
+
+def test_une_valeur_de_reels_invalide_laisse_les_reels_actifs(tmp_path):
+    chemin = tmp_path / "publication.json"
+    chemin.write_text(json.dumps({"reels_actifs": "non"}))
+    assert reels_actifs(chemin) is True
+    chemin.write_text("{corrompu")
+    assert reels_actifs(chemin) is True

@@ -8,6 +8,9 @@ fichier JSON a cote du jeton Instagram (meme dossier applicatif, hors du
 depot) ; `.env` (`settings.publication_mode`) reste la valeur de repli tant
 qu'aucun choix n'a ete fait depuis le dashboard, ou si le fichier est absent,
 illisible ou invalide -- jamais d'exception qui arreterait l'agent planifie.
+
+Le meme fichier porte `reels_actifs`, le coupe-circuit des reels automatiques ;
+chaque ecriture preserve la cle de l'autre reglage.
 """
 
 import datetime as dt
@@ -26,12 +29,24 @@ def _chemin_par_defaut() -> Path:
     return settings.publication_mode_path
 
 
-def _mode_du_fichier(chemin: Path) -> Mode | None:
+def _lire(chemin: Path) -> dict:
     try:
         donnees = json.loads(chemin.read_text())
-        mode = donnees["mode"]
     except Exception:  # noqa: BLE001 -- absent, illisible, corrompu : jamais fatal
-        return None
+        return {}
+    return donnees if isinstance(donnees, dict) else {}
+
+
+def _ecrire(chemin: Path, donnees: dict) -> None:
+    """Atomiquement : fichier temporaire, puis remplacement."""
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_suffix(chemin.suffix + ".tmp")
+    provisoire.write_text(json.dumps(donnees))
+    os.replace(provisoire, chemin)
+
+
+def _mode_du_fichier(chemin: Path) -> Mode | None:
+    mode = _lire(chemin).get("mode")
     return mode if mode in MODES_VALIDES else None
 
 
@@ -48,10 +63,20 @@ def source_du_mode(chemin: Path | None = None) -> Literal["dashboard", "env"]:
 
 
 def enregistrer_mode(mode: Mode, maintenant: dt.datetime, chemin: Path | None = None) -> None:
-    """Ecrit le mode choisi, atomiquement (fichier temporaire + remplacement)."""
+    """Ecrit le mode choisi, sans toucher `reels_actifs`."""
     chemin = chemin or _chemin_par_defaut()
-    chemin.parent.mkdir(parents=True, exist_ok=True)
-    donnees = {"mode": mode, "change_le": maintenant.isoformat()}
-    provisoire = chemin.with_suffix(chemin.suffix + ".tmp")
-    provisoire.write_text(json.dumps(donnees))
-    os.replace(provisoire, chemin)
+    _ecrire(chemin, {**_lire(chemin), "mode": mode, "change_le": maintenant.isoformat()})
+
+
+def reels_actifs(chemin: Path | None = None) -> bool:
+    """Les reels automatiques tournent-ils ? Vrai tant que le dashboard ne les a
+    pas coupes : le mode (arret/apercu/reel) reste le garde-fou de la publication,
+    ce reglage n'est que l'interrupteur des reels."""
+    valeur = _lire(chemin or _chemin_par_defaut()).get("reels_actifs")
+    return valeur if isinstance(valeur, bool) else True
+
+
+def enregistrer_reels(actifs: bool, maintenant: dt.datetime, chemin: Path | None = None) -> None:
+    """Ecrit l'interrupteur des reels, sans toucher le mode."""
+    chemin = chemin or _chemin_par_defaut()
+    _ecrire(chemin, {**_lire(chemin), "reels_actifs": actifs, "reels_change_le": maintenant.isoformat()})
