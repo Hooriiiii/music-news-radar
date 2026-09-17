@@ -127,6 +127,9 @@ def main() -> None:
             rapport = tourner(
                 db, maintenant, mode=mode, composer=_compositeur_paresseux(),
                 preparer=preparer_fichiers, publier=publier_fichiers, notifier=notifier,
+                # Relu avant chaque reclamation : le dashboard peut repasser en
+                # apercu ou en arret pendant un long passage.
+                lire_mode=mode_effectif,
                 **outils_reel(),
             )
     except Exception as exc:  # noqa: BLE001

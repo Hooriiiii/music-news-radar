@@ -201,3 +201,11 @@ def test_reels_coupes_au_dashboard(tmp_path, monkeypatch):
     enregistrer_reels(False, MAINTENANT)
     script.main()
     assert (recus[0]["preparer_reel"], recus[0]["publier_reel"]) == (None, None)
+
+
+def test_l_agent_relit_le_mode_avant_chaque_publication(tmp_path, monkeypatch):
+    """I1 : un passage peut durer plus de 10 minutes ; le runner relit le mode
+    du dashboard avant chaque reclamation, pas seulement au demarrage."""
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    assert recus[0]["lire_mode"] is script.mode_effectif
