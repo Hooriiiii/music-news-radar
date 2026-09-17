@@ -35,6 +35,27 @@ _TYPES = {"IMAGE": PHOTO, "VIDEO": VIDEO}
 # Code d'erreur Graph d'un jeton expire, revoque ou invalide.
 JETON_INVALIDE = 190
 
+# Codes Graph d'une limite d'appels atteinte (application, utilisateur, page,
+# appels de l'API). Le quota est PARTAGE avec le pipeline : l'epuiser depuis la
+# composition bloquerait l'ingestion.
+CODES_QUOTA = frozenset({4, 17, 32, 613})
+
+# Les champs demandes au compte cible. `children` est indispensable : un
+# carrousel n'a pas de media_url propre et reviendrait vide sans lui.
+CHAMPS_MEDIA = (
+    "id,caption,media_type,media_url,thumbnail_url,permalink,"
+    "timestamp,like_count,comments_count,"
+    "children{media_type,media_url,thumbnail_url}"
+)
+
+
+# Header ASCII pur : httpx plante avant l'envoi sur un accent.
+ENTETES = {"User-Agent": "KindaBot/1.0 (music-news-radar)"}
+
+
+class QuotaGraphAtteint(RuntimeError):
+    """Meta refuse l'appel pour cause de quota. Message sans jeton."""
+
 
 def titre_depuis_caption(caption: str | None) -> str:
     """La premiere phrase de la caption, a defaut sa premiere ligne.
@@ -201,16 +222,81 @@ def _message_erreur(reponse: httpx.Response) -> str:
     return f"Meta HTTP {reponse.status_code} (code {code}) : {detail}"
 
 
+def _code_erreur(reponse: httpx.Response):
+    try:
+        return (reponse.json().get("error") or {}).get("code")
+    except ValueError:
+        return None
+
+
+def url_business_discovery(compte: str, limite: int) -> tuple[str, dict]:
+    """L'appel business_discovery : notre compte, le leur en parametre.
+
+    Meta n'expose pas de "lire le compte X" ; on lit NOTRE noeud utilisateur en
+    lui demandant le champ `business_discovery` d'un autre compte.
+    """
+    base = f"https://graph.facebook.com/{settings.meta_api_version}"
+    champs = (
+        f"business_discovery.username({compte})"
+        f"{{username,followers_count,media.limit({limite})"
+        f"{{{CHAMPS_MEDIA}}}}}"
+    )
+    return (
+        f"{base}/{settings.meta_ig_user_id}",
+        {"fields": champs, "access_token": settings.meta_fb_access_token},
+    )
+
+
+def lire_compte(compte: str, limite: int, *, client: httpx.Client | None = None) -> dict:
+    """Le payload business_discovery d'un compte.
+
+    `QuotaGraphAtteint` sur un code de quota, `RuntimeError` lisible (sans
+    jeton) sur toute autre erreur Graph.
+    """
+    url, params = url_business_discovery(compte, limite)
+    propre = client is None
+    client = client or httpx.Client(timeout=30.0, headers=ENTETES)
+    try:
+        reponse = client.get(url, params=params)
+        if reponse.is_error:
+            if _code_erreur(reponse) in CODES_QUOTA:
+                raise QuotaGraphAtteint(_message_erreur(reponse))
+            raise RuntimeError(_message_erreur(reponse))
+        return reponse.json()
+    finally:
+        if propre:
+            client.close()
+
+
+def items_depuis_payload(payload: dict) -> list[RawItem]:
+    """Les items d'un payload business_discovery. Partage entre l'ingestion et
+    la lecture en direct de la composition (`app/content/lecture_artistes.py`)."""
+    decouverte = payload.get("business_discovery") or {}
+    followers = decouverte.get("followers_count")
+    items = []
+    for noeud in (decouverte.get("media") or {}).get("data", []):
+        permalink = noeud.get("permalink")
+        # Sans permalink il n'y a pas de cle de dedup : l'item serait reingere a
+        # chaque run.
+        if not permalink:
+            continue
+        caption = noeud.get("caption")
+        items.append(
+            RawItem(
+                url=permalink,
+                title=titre_depuis_caption(caption),
+                summary=_summary_with_metrics(caption, noeud, followers),
+                published_at=_date(noeud.get("timestamp")),
+                media=_media(noeud),
+            )
+        )
+    return items
+
+
 class InstagramAdapter(SourceAdapter):
     timeout = 30.0
 
-    # Les champs demandes au compte cible. `children` est indispensable : un
-    # carrousel n'a pas de media_url propre et reviendrait vide sans lui.
-    CHAMPS_MEDIA = (
-        "id,caption,media_type,media_url,thumbnail_url,permalink,"
-        "timestamp,like_count,comments_count,"
-        "children{media_type,media_url,thumbnail_url}"
-    )
+    CHAMPS_MEDIA = CHAMPS_MEDIA
 
     @property
     def compte(self) -> str:
@@ -218,53 +304,14 @@ class InstagramAdapter(SourceAdapter):
         return compte_depuis_url(self.source.url)
 
     def parse(self, payload: dict) -> list[RawItem]:
-        decouverte = payload.get("business_discovery") or {}
-        followers = decouverte.get("followers_count")
-        items = []
-        for noeud in (decouverte.get("media") or {}).get("data", []):
-            permalink = noeud.get("permalink")
-            # Sans permalink il n'y a pas de cle de dedup : l'item serait
-            # reingere a chaque run.
-            if not permalink:
-                continue
-            caption = noeud.get("caption")
-            items.append(
-                RawItem(
-                    url=permalink,
-                    title=titre_depuis_caption(caption),
-                    summary=_summary_with_metrics(caption, noeud, followers),
-                    published_at=_date(noeud.get("timestamp")),
-                    media=_media(noeud),
-                )
-            )
-        return items
+        return items_depuis_payload(payload)
 
     def construire_url(self) -> tuple[str, dict]:
-        """L'appel business_discovery : notre compte, le leur en parametre.
-
-        Meta n'expose pas de "lire le compte X" ; on lit NOTRE noeud utilisateur
-        en lui demandant le champ `business_discovery` d'un autre compte.
-        """
-        base = f"https://graph.facebook.com/{settings.meta_api_version}"
-        champs = (
-            f"business_discovery.username({self.compte})"
-            f"{{username,followers_count,media.limit({settings.instagram_max_items})"
-            f"{{{self.CHAMPS_MEDIA}}}}}"
-        )
-        return (
-            f"{base}/{settings.meta_ig_user_id}",
-            {"fields": champs, "access_token": settings.meta_fb_access_token},
-        )
+        return url_business_discovery(self.compte, settings.instagram_max_items)
 
     def _appeler(self) -> dict:
-        url, params = self.construire_url()
-        # Header ASCII pur : httpx plante avant l'envoi sur un accent.
-        entetes = {"User-Agent": "KindaBot/1.0 (music-news-radar)"}
-        with httpx.Client(timeout=self.timeout, headers=entetes) as client:
-            reponse = client.get(url, params=params)
-            if reponse.is_error:
-                raise RuntimeError(_message_erreur(reponse))
-            return reponse.json()
+        with httpx.Client(timeout=self.timeout, headers=ENTETES) as client:
+            return lire_compte(self.compte, settings.instagram_max_items, client=client)
 
     def a_lire(self, maintenant: dt.datetime) -> bool:
         """Le compte est-il du a ce passage ?
