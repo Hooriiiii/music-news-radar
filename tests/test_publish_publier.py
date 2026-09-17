@@ -112,3 +112,31 @@ def test_un_reel_dont_un_fichier_manque_n_ouvre_pas_le_tunnel(tmp_path):
         publier_reel(tmp_path, ["r_reel.mp4", "r_cover.jpg"], "L", False,
                      client=FauxClientReel(journal), heberger=_heberger(journal))
     assert journal == []
+
+
+@pytest.mark.parametrize("encore", [True, False])
+def test_les_crochets_attendent_dans_le_tunnel_puis_relisent_la_decision(tmp_path, encore):
+    journal = []
+    noms = _fichiers(tmp_path, "p_01.jpg")
+    resultat = publier_fichiers(
+        tmp_path, noms, "L", True, client=FauxClient(journal), heberger=_heberger(journal),
+        attendre_jusqu_a=lambda: journal.append(("attente",)),
+        encore_publier=lambda: journal.append(("relecture",)) or encore,
+    )
+    etapes = [etape[0] for etape in journal]
+    if encore:
+        assert (resultat, etapes) == ("media1", ["ouvre", "preparer", "attente", "relecture", "publier", "ferme"])
+    else:
+        assert (resultat, etapes) == ("conteneur1", ["ouvre", "preparer", "attente", "relecture", "ferme"])
+
+
+def test_les_crochets_d_un_reel_attendent_avant_media_publish(tmp_path):
+    journal = []
+    noms = _fichiers(tmp_path, "r_reel.mp4", "r_cover.jpg")
+    resultat = publier_reel(
+        tmp_path, noms, "L", True, client=FauxClientReel(journal), heberger=_heberger(journal),
+        attendre_jusqu_a=lambda: journal.append(("attente",)),
+        encore_publier=lambda: True,
+    )
+    assert resultat == "media1"
+    assert [etape[0] for etape in journal] == ["ouvre", "preparer_reel", "attente", "publier", "ferme"]

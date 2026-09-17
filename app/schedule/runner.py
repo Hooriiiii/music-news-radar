@@ -10,6 +10,10 @@ Dans l'ordre :
 5. gel des creneaux a moins de 2 h : rendu et telechargements sur disque ;
 6. publication des creneaux geles pendant ce passage (Mac reveille en retard).
 
+Publication A L'HEURE : un creneau gele a moins de `publication_avance_s` de son
+heure est reclame des ce passage, son conteneur cree, puis l'agent dort jusqu'a
+l'heure affichee avant `media_publish` (mode relu juste avant).
+
 Chaque etape est isolee : une exception inattendue est consignee et notifiee, et
 le passage continue.
 
@@ -42,7 +46,9 @@ publie deux fois.
 import datetime as dt
 import logging
 import shutil
+import time
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -399,12 +405,35 @@ def _mode_courant(lire_mode) -> str:
     return mode if mode in MODES else "arret"
 
 
+def _attendre_l_heure(cible: dt.datetime, horloge, dormir) -> None:
+    """Dort jusqu'a `cible`, jamais plus que l'avance : une horloge incoherente
+    ne doit pas suspendre l'agent. Conteneur pret apres l'heure : aucune attente."""
+    restant = (cible - horloge()).total_seconds()
+    if restant > 0:
+        dormir(min(restant, settings.publication_avance_s))
+
+
+def _mode_relu(decision: dict, lire_mode) -> bool:
+    decision["mode"] = _mode_courant(lire_mode)
+    return decision["mode"] == "reel"
+
+
 def _publier(
-    db, maintenant: dt.datetime, lire_mode, publieurs: dict, notifier, rapport: RapportPublication, horloge
+    db,
+    maintenant: dt.datetime,
+    lire_mode,
+    publieurs: dict,
+    notifier,
+    rapport: RapportPublication,
+    horloge,
+    dormir,
 ) -> None:
+    # Horloge fraiche + avance : un creneau a moins d'un intervalle de l'agent
+    # est traite des maintenant, puis attendu (voir plus bas).
+    horizon = horloge() + dt.timedelta(seconds=settings.publication_avance_s)
     creneaux = db.scalars(
         select(Creneau)
-        .where(Creneau.etat == EtatCreneau.GELE, Creneau.publier_a <= maintenant)
+        .where(Creneau.etat == EtatCreneau.GELE, Creneau.publier_a <= horizon)
         .order_by(Creneau.publier_a)
     ).all()
     for creneau in creneaux:
@@ -421,6 +450,7 @@ def _publier(
         # Horloge FRAICHE : les publications precedentes de ce passage ont pu
         # prendre des minutes chacune (tunnel, attente du conteneur chez Meta).
         retard = horloge() - utc(creneau.publier_a)
+        a_venir = retard < dt.timedelta(0)
         if retard > dt.timedelta(minutes=settings.publication_retard_max_minutes):
             if _ecrire_si(db, creneau, attendu, etat=EtatCreneau.MANQUE):
                 _compter_manque(creneau, attendu, set(publieurs), rapport)
@@ -452,6 +482,10 @@ def _publier(
         mode = _mode_courant(lire_mode)
         if mode == "arret":
             continue
+        if a_venir and mode != "reel":
+            # En apercu rien n'est public : inutile de reclamer d'avance, le
+            # creneau attend son heure (et peut encore partir si l'on repasse en reel).
+            continue
 
         # Reclamation committee AVANT l'appel : si le processus meurt pendant ou
         # juste apres la publication, le creneau reste en ECHEC et n'est jamais
@@ -465,12 +499,23 @@ def _publier(
         db.commit()
         _relire(db, creneau)
 
+        # Publication a l'heure affichee : conteneur cree d'avance, attente dans
+        # le tunnel ouvert, mode RELU juste avant media_publish. Un processus tue
+        # pendant l'attente laisse l'ECHEC de la reclamation : post perdu, jamais double.
+        decision = {"mode": mode}
+        crochets = {}
+        if a_venir:
+            crochets = {
+                "attendre_jusqu_a": partial(_attendre_l_heure, utc(creneau.publier_a), horloge, dormir),
+                "encore_publier": partial(_mode_relu, decision, lire_mode),
+            }
         try:
             identifiant = publier(
                 _dossier(creneau),
                 creneau.fichiers or [],
                 texte_legende(post),
                 mode == "reel",
+                **crochets,
             )
         except Exception as exc:  # noqa: BLE001 -- tout echec doit se voir
             creneau.etat = EtatCreneau.ECHEC
@@ -483,15 +528,26 @@ def _publier(
             rapport.echecs += 1
             _prevenir(notifier, f"publication de {_heure_locale(creneau.publier_a)} en echec : {exc}")
             continue
-        creneau.ig_media_id = identifiant
-        creneau.erreur = None
+        mode = decision["mode"]
         if article is not None:
             article.file_exclu_raison = None
+        if mode == "arret":
+            # Arret choisi pendant l'attente : rien n'est parti (le conteneur non
+            # publie expire seul). Le creneau redevient GELE, dossier conserve :
+            # il partira si l'on repasse en reel avant la limite de retard.
+            creneau.etat = EtatCreneau.GELE
+            creneau.erreur = "publication suspendue : mode arret choisi avant l'heure"
+            db.commit()
+            continue
+        creneau.ig_media_id = identifiant
+        creneau.erreur = None
         if mode == "reel":
+            # Heure REELLE de la publication, apres l'eventuelle attente.
+            publie_le = horloge()
             creneau.etat = EtatCreneau.PUBLIE
-            creneau.publie_le = maintenant
+            creneau.publie_le = publie_le
             post.status = PostStatus.PUBLISHED
-            post.published_at = maintenant
+            post.published_at = publie_le
             if article is not None:
                 # USED protege l'article de la purge et l'ecarte de la file.
                 article.status = ArticleStatus.USED
@@ -518,6 +574,7 @@ def tourner(
     preparer_reel=None,
     publier_reel=None,
     lire_mode=None,
+    dormir=None,
 ) -> RapportPublication:
     if mode not in MODES:
         raise ValueError(f"mode de publication inconnu : {mode!r}, attendu {MODES}")
@@ -525,6 +582,7 @@ def tourner(
     if mode == "arret":
         return rapport
     horloge = horloge or _maintenant_reel
+    dormir = dormir or time.sleep
     # Relu avant chaque reclamation (voir _publier). Par defaut : le mode du debut.
     lire_mode = lire_mode or (lambda: mode)
     preparateurs = {FormatCreneau.CARROUSEL: preparer}
@@ -554,7 +612,7 @@ def tourner(
             return None
 
     def publication():
-        _publier(db, maintenant, lire_mode, publieurs, notifier, rapport, horloge)
+        _publier(db, maintenant, lire_mode, publieurs, notifier, rapport, horloge, dormir)
 
     formats_actifs = set(preparateurs) & set(publieurs)
     etape("retards", lambda: _marquer_manques(db, maintenant, rapport, formats_actifs))

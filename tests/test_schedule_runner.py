@@ -575,3 +575,168 @@ def test_un_arbitrage_en_panne_ne_bloque_pas_un_creneau_gele(db_session, article
     rapport = outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
     assert _creneau_h0(db_session).etat == EtatCreneau.PUBLIE
     assert any("arbitrage casse" in erreur for erreur in rapport.erreurs)
+
+
+# --- Publication a l'heure affichee ------------------------------------------------------
+
+
+class Horloge:
+    """Horloge factice : `dormir` l'avance au lieu d'attendre."""
+
+    def __init__(self, moment):
+        self.moment = moment
+        self.sommeils = []
+
+    def __call__(self):
+        return self.moment
+
+    def dormir(self, secondes):
+        self.sommeils.append(secondes)
+        self.moment += dt.timedelta(seconds=secondes)
+
+
+class OutilsPonctuels(Outils):
+    def __init__(self, horloge):
+        super().__init__()
+        self.horloge = horloge
+        self.mode = "reel"
+        self.journal = []
+        self.etats_pendant_conteneur = []
+        self.duree_conteneur_s = 0
+        self.pendant_attente = None
+
+    def publier(self, dossier, noms, legende, publier_vraiment, *, attendre_jusqu_a=None, encore_publier=None):
+        with sessionmaker(bind=self.db.get_bind())() as autre:
+            self.etats_pendant_conteneur.append(autre.get(Creneau, _creneau_h0(self.db).id).etat)
+        self.journal.append("conteneur")
+        self.horloge.moment += dt.timedelta(seconds=self.duree_conteneur_s)
+        if not publier_vraiment:
+            return "conteneur1"
+        if attendre_jusqu_a is not None:
+            attendre_jusqu_a()
+            if self.pendant_attente:
+                self.pendant_attente()
+        if encore_publier is not None and not encore_publier():
+            self.journal.append("abandon")
+            return "conteneur1"
+        self.journal.append(("media_publish", self.horloge()))
+        self.publies.append((noms, publier_vraiment))
+        return "ig42"
+
+    def tourner_ponctuel(self, db, mode="reel"):
+        self.db = db
+        return tourner(db, self.horloge(), mode=mode, composer=self.composer, preparer=self.preparer,
+                       publier=self.publier, notifier=self.notifier, horloge=self.horloge,
+                       lire_mode=lambda: self.mode, dormir=self.horloge.dormir)
+
+
+def _gele_h0(db, outils):
+    outils.tourner(db, H0 - dt.timedelta(hours=3))
+    outils.tourner(db, H0 - dt.timedelta(hours=1))
+    creneau = _creneau_h0(db)
+    assert creneau.etat == EtatCreneau.GELE
+    return creneau
+
+
+def test_un_creneau_a_cinq_minutes_part_a_l_heure_affichee(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+
+    rapport = outils.tourner_ponctuel(db_session)
+
+    # Reclame (ECHEC committe) AVANT le conteneur, attente jusqu'a l'heure, puis publication.
+    assert outils.etats_pendant_conteneur == [EtatCreneau.ECHEC]
+    assert horloge.sommeils == [300]
+    assert outils.journal == ["conteneur", ("media_publish", H0)]
+    assert (creneau.etat, rapport.publies) == (EtatCreneau.PUBLIE, 1)
+    assert utc(creneau.publie_le) == H0
+    assert db_session.get(Article, article.id).status == ArticleStatus.USED
+
+
+def test_repasser_en_apercu_pendant_l_attente_ne_publie_pas(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.pendant_attente = lambda: setattr(outils, "mode", "apercu")
+
+    rapport = outils.tourner_ponctuel(db_session)
+
+    assert outils.journal == ["conteneur", "abandon"]
+    assert (creneau.etat, creneau.publie_le, rapport.apercus, rapport.publies) == (EtatCreneau.APERCU, None, 1, 0)
+    assert db_session.get(Post, creneau.post_id).status == PostStatus.DRAFT
+    assert db_session.get(Article, article.id).status == ArticleStatus.NEW
+
+
+def test_repasser_en_arret_pendant_l_attente_rend_le_creneau_gele(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.pendant_attente = lambda: setattr(outils, "mode", "arret")
+
+    outils.tourner_ponctuel(db_session)
+
+    assert outils.journal == ["conteneur", "abandon"]
+    assert creneau.etat == EtatCreneau.GELE
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+
+    # Rien n'a ete publie : repasse en reel a temps, il part, une seule fois.
+    outils.pendant_attente = None
+    outils.mode = "reel"
+    horloge.moment = H0 + dt.timedelta(minutes=10)
+    outils.tourner_ponctuel(db_session)
+    outils.tourner_ponctuel(db_session)
+    assert creneau.etat == EtatCreneau.PUBLIE
+    assert len(outils.publies) == 1
+
+
+def test_un_conteneur_fini_apres_l_heure_publie_sans_attendre(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.duree_conteneur_s = 400
+
+    outils.tourner_ponctuel(db_session)
+
+    assert horloge.sommeils == []
+    assert outils.journal == ["conteneur", ("media_publish", H0 + dt.timedelta(seconds=100))]
+    assert creneau.etat == EtatCreneau.PUBLIE
+    assert utc(creneau.publie_le) == H0 + dt.timedelta(seconds=100)
+
+
+def test_un_creneau_au_dela_de_la_fenetre_d_avance_n_est_pas_touche(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(seconds=settings.publication_avance_s + 60))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+
+    outils.tourner_ponctuel(db_session)
+
+    assert (outils.journal, horloge.sommeils) == ([], [])
+    assert creneau.etat == EtatCreneau.GELE
+
+
+def test_en_apercu_un_creneau_a_venir_attend_son_heure(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.mode = "apercu"
+
+    outils.tourner_ponctuel(db_session, mode="apercu")
+    assert (outils.journal, creneau.etat) == ([], EtatCreneau.GELE)
+
+    horloge.moment = H0 + dt.timedelta(minutes=1)
+    outils.tourner_ponctuel(db_session, mode="apercu")
+    assert (outils.journal, creneau.etat) == (["conteneur"], EtatCreneau.APERCU)
+
+
+def test_l_attente_ne_depasse_jamais_l_avance(db_session, article, monkeypatch):
+    monkeypatch.setattr(settings, "publication_avance_s", 120)
+    horloge = Horloge(H0 - dt.timedelta(seconds=100))
+    outils = OutilsPonctuels(horloge)
+    _gele_h0(db_session, outils)
+    # Le conteneur "remonte le temps" (horloge ajustee) : l'attente reste bornee.
+    outils.duree_conteneur_s = -3600
+
+    outils.tourner_ponctuel(db_session)
+
+    assert horloge.sommeils == [120]

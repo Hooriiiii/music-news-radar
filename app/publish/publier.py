@@ -2,6 +2,11 @@
 
 Le tunnel reste ouvert jusqu'a la FIN : Meta telecharge les images pendant la
 creation du conteneur, et `media_publish` doit suivre avant la fermeture.
+
+Deux crochets optionnels pour publier a l'heure affichee : `attendre_jusqu_a`
+est appele une fois le conteneur pret, `encore_publier` juste avant
+`media_publish` (faux : on rend le conteneur sans publier, le mode a change
+pendant l'attente). Sans eux, comportement inchange.
 """
 
 from pathlib import Path
@@ -26,6 +31,17 @@ def _verifier_fichiers(dossier: Path, noms: list[str]) -> None:
         raise ErreurInstagram(f"fichiers figes introuvables : {', '.join(manquants)}")
 
 
+def _finir(client, conteneur: str, publier_vraiment: bool, attendre_jusqu_a, encore_publier) -> str:
+    # Dans le `with heberger(...)` : le tunnel reste ouvert pendant l'attente.
+    if not publier_vraiment:
+        return conteneur
+    if attendre_jusqu_a is not None:
+        attendre_jusqu_a()
+    if encore_publier is not None and not encore_publier():
+        return conteneur
+    return client.publier(conteneur)
+
+
 def publier_fichiers(
     dossier: Path,
     noms: list[str],
@@ -34,15 +50,15 @@ def publier_fichiers(
     *,
     client=None,
     heberger=None,
+    attendre_jusqu_a=None,
+    encore_publier=None,
 ) -> str:
     _verifier_fichiers(dossier, noms)
     client = client or client_par_defaut()
     heberger = heberger or hosting.heberger
     with heberger(dossier, noms[0]) as base:
         conteneur = client.preparer_carrousel([f"{base}/{nom}" for nom in noms], legende)
-        if not publier_vraiment:
-            return conteneur
-        return client.publier(conteneur)
+        return _finir(client, conteneur, publier_vraiment, attendre_jusqu_a, encore_publier)
 
 
 def publier_reel(
@@ -53,6 +69,8 @@ def publier_reel(
     *,
     client=None,
     heberger=None,
+    attendre_jusqu_a=None,
+    encore_publier=None,
 ) -> str:
     """Un reel fige : la video puis la cover, dans cet ordre (preparation_reel)."""
     if len(noms) != 2:
@@ -70,6 +88,4 @@ def publier_reel(
             legende,
             share_to_feed=settings.publication_reel_share_to_feed,
         )
-        if not publier_vraiment:
-            return conteneur
-        return client.publier(conteneur)
+        return _finir(client, conteneur, publier_vraiment, attendre_jusqu_a, encore_publier)

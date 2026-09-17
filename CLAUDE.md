@@ -509,6 +509,27 @@ chaque étape est isolée : une panne amont ne bloque jamais un post prêt. L'he
 est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié), et
 le dossier figé est supprimé une fois le créneau terminé.
 
+**Publication à l'heure affichée** (2026-09-17). L'agent passe toutes les 600 s :
+sans rien de plus, un post partait jusqu'à ~10 min après l'heure du dashboard.
+Un créneau GELE dont `publier_a` tombe dans les `publication_avance_s` (660 s,
+un intervalle + marge) à venir est traité dès ce passage, **en mode `reel`
+seulement** : réclamation (GELE → ECHEC committé, inchangée), tunnel, conteneur
+(carrousel ou REELS, jusqu'à FINISHED), puis **attente dans le tunnel ouvert**
+jusqu'à `publier_a` (jamais plus que l'avance ; conteneur prêt après l'heure :
+aucune attente), **mode relu** juste avant `media_publish`. Relu `apercu` → pas
+de `media_publish`, état APERCU ; relu `arret` → pas de `media_publish`, le
+créneau **redevient GELE** (exclusion levée, dossier gardé : il partira si l'on
+repasse en `reel` avant la limite de retard). En `apercu`, un créneau à venir
+n'est pas réclamé d'avance : il attend son heure. `publie_le` = heure réelle de
+publication. Crochets : `publier_fichiers` / `publier_reel` acceptent
+`attendre_jusqu_a` et `encore_publier` (appelés dans le `with heberger(...)`),
+sans effet quand ils sont absents ; `tourner(dormir=...)` injecte le sommeil.
+**Compromis assumé :** un processus tué PENDANT l'attente laisse le créneau en
+ECHEC « publication interrompue avant confirmation » — ce post est perdu, jamais
+doublé. launchd ne tue pas un passage en cours en temps normal. Pendant ces
+quelques minutes, le dashboard affiche le créneau en « Échec » (état de
+réclamation) jusqu'à la publication.
+
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
 **Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
