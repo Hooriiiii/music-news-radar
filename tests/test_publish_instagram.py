@@ -105,3 +105,42 @@ def test_publier_appelle_media_publish():
 def test_aucune_image_est_une_erreur():
     with pytest.raises(ErreurInstagram, match="aucune image"):
         _client(FauxHttp()).preparer_carrousel([], "L")
+
+
+def test_un_reel_donne_un_conteneur_reels_avec_cover_explicite():
+    http = FauxHttp()
+    conteneur = _client(http).preparer_reel("https://t/r.mp4", "https://t/c.jpg", "Legende")
+    assert conteneur == "c1"
+    methode, chemin, params = http.appels[0]
+    assert (methode, chemin) == ("POST", "17841/media")
+    assert params["media_type"] == "REELS"
+    assert (params["video_url"], params["cover_url"]) == ("https://t/r.mp4", "https://t/c.jpg")
+    assert (params["caption"], params["share_to_feed"]) == ("Legende", "true")
+    assert "thumb_offset" not in params
+    assert not any(c.endswith("media_publish") for _, c, _ in http.appels), "preparer ne publie pas"
+
+
+def test_share_to_feed_peut_etre_coupe():
+    http = FauxHttp()
+    _client(http).preparer_reel("https://t/r.mp4", "https://t/c.jpg", "L", share_to_feed=False)
+    assert http.appels[0][2]["share_to_feed"] == "false"
+
+
+def test_un_reel_se_sonde_toutes_les_15_secondes():
+    """L'encodage d'une video est plus long que celui d'une image."""
+    pauses = []
+    http = FauxHttp(statuts=("IN_PROGRESS", "IN_PROGRESS", "FINISHED"))
+    ClientInstagram("j", "17841", http=http, version="v23.0", dormir=pauses.append).preparer_reel(
+        "https://t/r.mp4", "https://t/c.jpg", "L"
+    )
+    assert pauses == [15.0, 15.0]
+
+
+def test_un_reel_qui_ne_finit_jamais_leve_apres_le_delai_reel(monkeypatch):
+    monkeypatch.setattr(mod, "ATTENTE_REEL_MAX_S", 30.0)
+    pauses = []
+    client = ClientInstagram("j", "17841", http=FauxHttp(statuts=("IN_PROGRESS",)), version="v23.0",
+                             dormir=pauses.append)
+    with pytest.raises(ErreurInstagram, match="IN_PROGRESS"):
+        client.preparer_reel("https://t/r.mp4", "https://t/c.jpg", "L")
+    assert len(pauses) == 2
