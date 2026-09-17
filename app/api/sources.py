@@ -21,6 +21,7 @@ def create_source(payload: SourceCreate, db: Session = Depends(get_db)):
         type=payload.type,
         url=payload.url.strip(),
         genre=(payload.genre or None),
+        categorie=payload.categorie,
     )
     db.add(source)
     db.commit()

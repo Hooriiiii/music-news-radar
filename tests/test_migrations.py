@@ -32,3 +32,8 @@ def test_une_seule_tete_et_des_revisions_uniques():
     fichiers = [p for p in (RACINE / "alembic" / "versions").glob("[0-9]*.py")]
     prefixes = [p.name.split("_", 1)[0] for p in fichiers]
     assert len(prefixes) == len(set(prefixes)), sorted(prefixes)
+
+
+def test_la_tete_est_la_categorie_de_source():
+    script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
+    assert script.get_current_head() == "0016"

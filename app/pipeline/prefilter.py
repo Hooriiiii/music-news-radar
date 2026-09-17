@@ -11,7 +11,9 @@ laisse passer trop, il n'écarte jamais à tort. Mauvais juge, bon videur.
 
 Le prompt système et le schéma de sortie sont ceux du scoring (`scoring.py`) :
 surtout PAS une copie, sinon les deux étages jugeraient sur des règles différentes
-et la comparaison mesurée ne voudrait plus rien dire.
+et la comparaison mesurée ne voudrait plus rien dire. Une seule consigne s'y
+ajoute (`CONSIGNE_PREFILTRE`) : elle empêche la décote des médias de rendre le
+pré-filtre plus sévère que Claude.
 """
 
 import json
@@ -32,6 +34,22 @@ logger = logging.getLogger(__name__)
 #   - `chat_template_kwargs: {"enable_thinking": False}` côté requête,
 #   - `/no_think` à la fin du message utilisateur.
 SUFFIXE_SANS_REFLEXION = "\n\n/no_think"
+
+# La SEULE addition au prompt du scoring. Le pré-filtre n'a qu'un rôle : ne jamais
+# écarter ce que Claude garderait à 60+. Or les règles 5 et 6 (décote des médias,
+# posts sans information) poussent des notes vers le bas ; appliquées avec la
+# brutalité d'un 4B, elles feraient passer sous le seuil (45) des actus de média
+# que Claude repêche comme exceptions majeures. On les neutralise donc sous 45,
+# sauf pour les posts réellement vides, que Claude notera sous 30 de toute façon.
+CONSIGNE_PREFILTRE = """
+
+CONSIGNE PROPRE AU PRÉ-FILTRE. Tu fais un premier tri avant un juge plus fin. \
+La décote des comptes « media » et de la promo courante (règle 5) ne doit JAMAIS \
+te faire noter sous 45 un contenu qui porte un fait (nom connu, date, sortie, \
+événement, chiffre) : dans le doute, note 45 ou plus. Ne descends sous 45 que pour \
+le bruit évident et les posts réellement vides (règle 6 : légende absente, emojis \
+ou hashtags seuls).\
+"""
 
 
 def _extraire_json(contenu: str) -> str:
@@ -64,7 +82,7 @@ def make_local_scorer(
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPT + CONSIGNE_PREFILTRE},
                 {
                     "role": "user",
                     "content": build_user_prompt(article) + SUFFIXE_SANS_REFLEXION,

@@ -32,6 +32,22 @@ class SourceType(str, enum.Enum):
     INSTAGRAM = "instagram"
 
 
+class SourceCategorie(str, enum.Enum):
+    """Qui PRODUIT le contenu d'une source -- pas son format (c'est `SourceType`).
+
+    Le scoring s'en sert : un post d'artiste est une actu primaire, un post de
+    média est déjà un repackaging que Kinda ne peut pas reposter sans plagier.
+    NULL = inconnu (sources X, ou pas encore classée).
+    """
+
+    ARTISTE = "artiste"
+    MEDIA = "media"
+    FESTIVAL = "festival"
+    LABEL = "label"
+    CLUB = "club"
+    AUTRE = "autre"
+
+
 class ArticleStatus(str, enum.Enum):
     NEW = "new"
     REVIEWED = "reviewed"
@@ -89,6 +105,13 @@ class Source(Base):
     )
     url: Mapped[str] = mapped_column(String(1000))
     genre: Mapped[str | None] = mapped_column(String(100))
+    # Artiste / média / festival... : pondère le scoring (cf. SYSTEM_PROMPT)
+    categorie: Mapped[SourceCategorie | None] = mapped_column(
+        Enum(
+            SourceCategorie, name="source_categorie", native_enum=False, length=20,
+            values_callable=_values,
+        )
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # État propre à l'adapter (ex. X/Apify : since, last_run_at) -- réassigner un
     # dict complet pour que SQLAlchemy détecte le changement, pas de mutation in place
