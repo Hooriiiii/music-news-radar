@@ -144,3 +144,75 @@ def test_un_reel_qui_ne_finit_jamais_leve_apres_le_delai_reel(monkeypatch):
     with pytest.raises(ErreurInstagram, match="IN_PROGRESS"):
         client.preparer_reel("https://t/r.mp4", "https://t/c.jpg", "L")
     assert len(pauses) == 2
+
+
+# --- Carrousel avec videos ------------------------------------------------------------
+
+
+def test_un_carrousel_mixte_cree_des_enfants_video_attendus_avant_le_parent():
+    http = FauxHttp()
+    conteneur = _client(http).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}, {"type": "photo", "url": "https://t/p.jpg"}],
+        "L",
+    )
+    posts = [(c, p) for m, c, p in http.appels if m == "POST"]
+    assert posts[0][1] == {"image_url": "https://t/cover.jpg", "is_carousel_item": "true", "access_token": "IGAAjeton"}
+    assert posts[1][1] == {
+        "media_type": "VIDEO", "video_url": "https://t/v.mp4", "is_carousel_item": "true", "access_token": "IGAAjeton",
+    }
+    assert posts[2][1]["image_url"] == "https://t/p.jpg"
+    assert posts[3][1]["children"] == "c1,c2,c3"
+    # L'enfant video est sonde AVANT la creation du parent.
+    ordre = [(m, c) for m, c, _ in http.appels]
+    assert ordre.index(("GET", "c2")) < ordre.index(("POST", "17841/media"), 3)
+    assert conteneur == "c4"
+
+
+def test_un_enfant_video_est_sonde_au_rythme_des_reels():
+    pauses = []
+    http = FauxHttp(statuts=("IN_PROGRESS", "FINISHED"))
+    ClientInstagram("j", "17841", http=http, version="v23.0", dormir=pauses.append).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}], "L"
+    )
+    assert pauses[0] == mod.ATTENTE_REEL_PAS_S
+
+
+class HttpParConteneur(FauxHttp):
+    """Statut par identifiant de conteneur, FINISHED par defaut."""
+
+    def __init__(self, statuts_par_id):
+        super().__init__()
+        self.statuts_par_id = statuts_par_id
+
+    def request(self, methode, url, params=None):
+        chemin = url.removeprefix(BASE + "/")
+        if methode == "GET":
+            self.appels.append((methode, chemin, dict(params)))
+            return httpx.Response(200, json={"status_code": self.statuts_par_id.get(chemin, "FINISHED")})
+        return super().request(methode, url, params)
+
+
+def test_un_enfant_video_en_erreur_est_retire_du_carrousel():
+    http = HttpParConteneur({"c2": "ERROR"})
+    conteneur = _client(http).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}, "https://t/p.jpg"], "L"
+    )
+    parent = [p for m, c, p in http.appels if m == "POST" and p.get("media_type") == "CAROUSEL"]
+    assert parent[0]["children"] == "c1,c3"
+    assert conteneur == "c4"
+
+
+def test_sans_deux_elements_restants_la_cover_part_seule():
+    http = HttpParConteneur({"c2": "EXPIRED"})
+    conteneur = _client(http).preparer_carrousel(
+        ["https://t/cover.jpg", {"type": "video", "url": "https://t/v.mp4"}], "L"
+    )
+    posts = [p for m, c, p in http.appels if m == "POST"]
+    assert posts[-1] == {"image_url": "https://t/cover.jpg", "caption": "L", "access_token": "IGAAjeton"}
+    assert not any(p.get("media_type") == "CAROUSEL" for p in posts)
+    assert conteneur == "c3"
+
+
+def test_une_video_seule_n_est_pas_un_carrousel():
+    with pytest.raises(ErreurInstagram, match="video seule"):
+        _client(FauxHttp()).preparer_carrousel([{"type": "video", "url": "https://t/v.mp4"}], "L")

@@ -13,7 +13,6 @@ si aucune tentative n'aboutit.
 """
 
 import logging
-import re
 
 import anthropic
 import pydantic
@@ -22,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.content.credit import credit_video
+from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.media import PHOTO
 from app.models import Article, Post
@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 
 HEADLINE_MAX = 110
 NB_VARIANTES = 4
-# Bornes des emojis de legende. Le prompt en demande 2 a 4 ; la borne haute du
-# validateur est plus lache expres (voir `PostDraft._emojis_presents`).
+# Bornes TOLEREES des emojis de legende. Le prompt en demande 2 a 4 ; la borne
+# haute est plus lache expres (voir `probleme_emojis`). Hors bornes, le
+# compositeur relance, puis accepte : jamais une composition perdue pour ca.
 CAPTION_EMOJIS_MIN = 2
 CAPTION_EMOJIS_MAX = 6
 # Le sous-titre du reel vit dans une bande plus etroite que l'accroche du post :
@@ -48,24 +49,6 @@ COMPOSER_MAX_ATTEMPTS = 3
 
 class CompositionError(RuntimeError):
     """Levee quand aucune tentative de composition n'a produit un brouillon valide."""
-
-
-# Detection par PLAGES Unicode (les blocs qui portent les proprietes
-# Emoji_Presentation / Extended_Pictographic), et non par liste d'emojis en dur :
-# une liste serait perimee a la version d'Unicode suivante. Le module `regex`, seul
-# a exposer `\p{Extended_Pictographic}`, n'est pas une dependance du projet.
-# Les plages sont choisies pour ne PAS attraper ce que les accroches contiennent
-# deja legitimement : lettres accentuees (bloc latin), apostrophes typographiques,
-# points de suspension, guillemets, degre, et les marqueurs `**` du surlignage.
-_EMOJI_RE = re.compile(
-    "["
-    "\U0001f000-\U0001faff"  # pictogrammes, visages, objets, transports, drapeaux
-    "\U00002600-\U000027bf"  # symboles divers et dingbats (coeur, etoile, soleil)
-    "\U00002b00-\U00002bff"  # fleches et formes geometriques a rendu emoji
-    "\U0000fe0f"  # selecteur de variation : force le rendu emoji du caractere precedent
-    "\U0000200d"  # liaison des sequences composees (famille, drapeaux regionaux)
-    "]"
-)
 
 
 def contient_emoji(texte: str) -> bool:
@@ -136,24 +119,32 @@ class PostDraft(BaseModel):
             raise ValueError("Balisage ** interdit dans la legende : elle n'est pas rendue")
         return value
 
-    @field_validator("caption")
-    @classmethod
-    def _emojis_presents(cls, value: str) -> str:
-        """La regle 6 du prompt demande 2 a 4 emojis ; le modele l'oublie souvent.
 
-        Releve sur le banc d'essai : une composition sur deux repartait sans aucun
-        emoji. La borne haute est volontairement plus large que celle du prompt --
-        elle n'est la que pour arreter l'exces. Un intervalle trop serre ferait
-        echouer les trois tentatives de `make_claude_composer` sur une legende
-        deja bonne, et bloquerait la creation du post pour un detail de forme.
-        """
-        nombre = len(_EMOJI_RE.findall(value))
-        if not CAPTION_EMOJIS_MIN <= nombre <= CAPTION_EMOJIS_MAX:
-            raise ValueError(
-                f"La legende porte {nombre} emoji(s), attendu entre "
-                f"{CAPTION_EMOJIS_MIN} et {CAPTION_EMOJIS_MAX}"
-            )
-        return value
+
+# Ce que le prompt demande (regle 6). La borne haute toleree est plus lache :
+# elle n'est la que pour arreter l'exces.
+CAPTION_EMOJIS_DEMANDES = (2, 4)
+
+
+def probleme_emojis(caption: str) -> str | None:
+    """Decrit, pour la relance, une legende hors bornes d'emojis ; None sinon.
+
+    Ce n'est PLUS un validateur de `PostDraft` : `messages.parse()` aurait leve
+    une ValidationError qui jette le brouillon entier, et trois legendes sans
+    emoji faisaient perdre la composition d'un creneau (production, 2026-09-17,
+    articles 17930 et 18078). `make_claude_composer` relance avec ce message,
+    puis accepte le brouillon avec un avertissement : une legende sans emoji vaut
+    mieux que pas de post.
+    """
+    nombre = len(_EMOJI_RE.findall(caption))
+    if CAPTION_EMOJIS_MIN <= nombre <= CAPTION_EMOJIS_MAX:
+        return None
+    bas, haut = CAPTION_EMOJIS_DEMANDES
+    return (
+        f"La legende (`caption`) porte {nombre} emoji(s), attendu entre {bas} et {haut} "
+        f"(tolere de {CAPTION_EMOJIS_MIN} a {CAPTION_EMOJIS_MAX}). Corrige UNIQUEMENT la "
+        "legende `caption` ; jamais d'emoji dans `headline`, `title` ou `subtitle`."
+    )
 
 
 SYSTEM_PROMPT = """\
@@ -201,8 +192,9 @@ subtitle : le line-up electro tombe **ce week-end**
 
 4. LEGENDE (`caption`) : COMMUNE aux quatre variantes -- les variantes sont des \
 formulations de cover, pas des angles editoriaux distincts, une seule legende \
-suffit. Le texte sous le post, en francais, 3 a 6 lignes. Elle developpe ce que la \
-cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
+suffit. Le texte sous le post, en francais, en 2 a 4 paragraphes courts (1 a 2 \
+phrases chacun), SEPARES PAR UNE ligne vide -- jamais un bloc compact, illisible \
+sur mobile. Elle developpe ce que la cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
 AUCUN balisage ** : le surlignage n'existe que sur la cover, qui est une image ; \
 dans la legende les asterisques s'afficheraient telles quelles.
 La CLOTURE depend de la nature de l'actu :
@@ -273,18 +265,30 @@ def make_claude_composer(
 
     def composer(article: Article) -> PostDraft:
         derniere_erreur: Exception | None = None
+        # Brouillon valide mais aux emojis hors bornes : rendu si aucune
+        # tentative ne fait mieux, plutot que de perdre la composition.
+        repli: PostDraft | None = None
+        consigne: str | None = None
         for tentative in range(1, max_attempts + 1):
+            contenu = build_user_prompt(article)
+            if consigne:
+                # Le SDK ne renvoie rien au modele : sans ce retour, la relance
+                # repart a l'aveugle et refait souvent la meme erreur.
+                contenu += (
+                    "\n\nTa reponse precedente a ete refusee. Probleme a corriger :\n"
+                    f"{consigne}"
+                )
             try:
                 response = client.messages.parse(
                     model=settings.composer_model,
                     max_tokens=COMPOSER_MAX_TOKENS,
                     system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": build_user_prompt(article)}],
+                    messages=[{"role": "user", "content": contenu}],
                     output_format=PostDraft,
                 )
-                return response.parsed_output
             except (pydantic.ValidationError, ValueError) as exc:
                 derniere_erreur = exc
+                consigne = str(exc)[:1500]
                 logger.warning(
                     "composition invalide pour l'article %s (tentative %s/%s) : %s",
                     article.id,
@@ -292,6 +296,41 @@ def make_claude_composer(
                     max_attempts,
                     exc,
                 )
+                continue
+            draft = response.parsed_output
+            if draft is None:
+                # max_tokens atteint ou refus : aucune sortie structuree. Meme
+                # traitement qu'un echec de validation, jamais d'AttributeError.
+                raison = getattr(response, "stop_reason", None)
+                derniere_erreur = ValueError(f"sortie structuree vide (stop_reason={raison})")
+                consigne = (
+                    "Ta reponse etait vide ou tronquee : rends le JSON complet, "
+                    "sans texte autour, en restant concis."
+                )
+                logger.warning(
+                    "composition vide pour l'article %s (tentative %s/%s) : %s",
+                    article.id, tentative, max_attempts, raison,
+                )
+                continue
+            probleme = probleme_emojis(draft.caption)
+            if probleme is None:
+                return draft
+            repli = draft
+            consigne = probleme
+            logger.warning(
+                "legende hors bornes d'emojis pour l'article %s (tentative %s/%s) : %s",
+                article.id,
+                tentative,
+                max_attempts,
+                probleme,
+            )
+        if repli is not None:
+            logger.warning(
+                "legende acceptee malgre les emojis pour l'article %s : %s",
+                article.id,
+                probleme_emojis(repli.caption),
+            )
+            return repli
         raise CompositionError(
             f"composition impossible pour l'article {article.id} "
             f"apres {max_attempts} tentatives"

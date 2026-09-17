@@ -406,6 +406,18 @@ Le modèle de composition est `composer_model` (défaut `claude-sonnet-5`), plus
 que celui du scoring : la composition tourne quelques fois par jour et sa qualité
 se voit directement sur le feed.
 
+**Emojis de légende : relancés, jamais bloquants** (2026-09-17). Le compte
+d'emojis de `caption` n'est plus un validateur de `PostDraft` : `messages.parse()`
+jetait sinon tout le brouillon, et trois légendes sans emoji faisaient perdre la
+composition d'un créneau (articles 17930 et 18078). `probleme_emojis()` décrit
+l'écart (nombre trouvé, attendu, « `caption` seulement »), le compositeur relance
+avec ce message — toute erreur de validation est d'ailleurs renvoyée au modèle à
+la relance —, puis accepte le brouillon avec un warning si rien ne fait mieux.
+Une sortie structurée vide (`parsed_output` None : `max_tokens` ou refus) est
+traitée comme un échec de validation : relance, puis `CompositionError`.
+L'interdiction d'emoji dans `headline`/`title`/`subtitle` reste stricte (textes
+rendus dans une police).
+
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul **deux carrousels et deux reels par jour**, choisis dans le flux
@@ -472,6 +484,30 @@ Le sélecteur segmenté vit dans le panneau Programmation du dashboard, à côt�
 2200 caractères et 30 hashtags. La cover `kinda_post` (3:4) est donc recadrée au
 centre en 1080×1350 par `app/publish/images.py` (`publication_ratio_min`).
 
+**Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
+post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel
+parti avec la cover seule, le gel ne gardant que les photos. `preparation.py` :
+cover, puis jusqu'à 9 médias dans l'ordre (`medias_du_carrousel` : slides puis
+article, sans doublon). Une photo → JPEG normalisé ; une **vidéo** → téléchargée
+(`telecharger_video`), sondée (3 à 60 s — la doc Meta citée dans le dépôt ne donne
+pas de maximum pour un élément de carrousel, 60 s = `DUREE_MAX_SLIDE_MS`),
+transcodée en **1080×1350** (le ratio du premier élément s'impose à tout le
+carrousel) par `video.py::transcoder_carrousel` — même cadrage flouté et même
+encodage Meta (H.264/AAC, GOP fermé, sans edit list, faststart) que le reel,
+piste audio garantie —, publiée en enfant `media_type=VIDEO` +
+`is_carousel_item`. Une vidéo inutilisable (trop longue, téléchargement, sonde ou
+transcodage en échec, ffmpeg absent, sortie hors specs) **retombe sur sa vignette**
+(`preview_url`) en photo : un média ne fait jamais échouer le gel. Le client crée
+tous les enfants, sonde chaque enfant vidéo jusqu'à FINISHED au rythme des reels
+(15 s, 10 min max), puis le parent ; un enfant vidéo refusé (création, ERROR,
+EXPIRED, délai) est **retiré**, et s'il reste moins de deux éléments la cover part
+seule en image. **La photo servant de fond à la cover** (`slides[0].image_url`)
+n'est pas répétée ensuite ; une vidéo dont c'est la vignette **reste** (un clip
+n'est pas le même asset que son image fixe), sauf si elle retomberait sur cette
+vignette. Une sortie transcodée hors specs (dimensions, codecs, poids) retombe
+aussi sur la vignette. **Visuels d'un compte Instagram de catégorie `media` jamais repris**
+(watermarks, `visuels_interdits`) : cover seule.
+
 **Hébergement éphémère.** Meta télécharge les images en cURL. Au moment de publier
 seulement, un mini-serveur local sert le dossier du post (sans listing) et un tunnel
 rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashboard
@@ -498,6 +534,35 @@ contenu (409). Les créneaux déjà gelés sont publiés AVANT composition et ge
 chaque étape est isolée : une panne amont ne bloque jamais un post prêt. L'heure
 est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié), et
 le dossier figé est supprimé une fois le créneau terminé.
+
+**Publication à l'heure affichée** (2026-09-17). L'agent passe toutes les 600 s :
+sans rien de plus, un post partait jusqu'à ~10 min après l'heure du dashboard.
+Un créneau GELE dont `publier_a` tombe dans les `publication_avance_s` (660 s,
+un intervalle + marge) à venir est traité dès ce passage, **en mode `reel`
+seulement** : réclamation (GELE → ECHEC committé, inchangée), tunnel, conteneur
+(carrousel ou REELS, jusqu'à FINISHED), puis **attente dans le tunnel ouvert**
+jusqu'à `publier_a`, par pas de 30 s relus sur l'horloge murale (jamais plus que
+l'avance au total ; conteneur prêt après l'heure : aucune attente). En mode
+`reel`, **retard puis mode sont relus** juste avant `media_publish` — pour TOUT
+créneau, pas seulement ceux attendus : les enfants vidéo d'un carrousel peuvent
+retenir le conteneur des minutes. Retard > 90 min (Mac endormi pendant
+l'attente) → pas de `media_publish`, MANQUE, exclusion levée, notifié, dossier
+effacé. Relu `apercu` → état APERCU ; relu `arret` → le créneau **redevient
+GELE** par écriture conditionnelle sur l'état réclamé (si le dashboard est passé
+entre-temps, son choix prime ; sinon exclusion levée, dossier gardé : il partira
+si l'on repasse en `reel` avant la limite de retard). En `apercu`, un créneau à venir
+n'est pas réclamé d'avance : il attend son heure. `publie_le` = heure réelle de
+publication. Crochets : `publier_fichiers` / `publier_reel` acceptent
+`attendre_jusqu_a` et `encore_publier` (appelés dans le `with heberger(...)`),
+sans effet quand ils sont absents ; `tourner(dormir=...)` injecte le sommeil.
+**Compromis assumé :** un processus tué PENDANT l'attente laisse le créneau en
+ECHEC « publication interrompue avant confirmation » — ce post est perdu, jamais
+doublé. launchd ne tue pas un passage en cours en temps normal. Pendant ces
+quelques minutes, le créneau est en ECHEC de réclamation
+(`RAISON_RECLAMATION`) : tant que `publier_a` est à moins de 20 min dans le passé
+(ou à venir), le dashboard l'affiche « Publication en cours » sans détail
+d'erreur, et `PATCH /posts/{id}` refuse toute édition de contenu (409), comme
+sur un créneau GELE. Au-delà (crash), il redevient un échec éditable.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
@@ -530,7 +595,22 @@ vidéo, l'assemble (`assembler_reel`, sans edit list, GOP fermé), sonde source 
 sortie contre les specs Meta, et fige `<prefixe>_reel.mp4` puis
 `<prefixe>_cover.jpg` ; la publication crée un conteneur `REELS` avec
 `cover_url` explicite (sondage 15 s, 10 min max). Crédit `🎥 via @compte`
-obligatoire (`posts.credit`), jamais coupé. ffmpeg absent = panne systémique qui
+obligatoire (`posts.credit`), jamais coupé. **Plus de ligne « Source : <url> »** sous la légende
+(2026-09-17, demande de l'utilisateur) — ni à la publication ni dans l'export zip
+(`app/content/legende.py`) ; le crédit reste.
+**Légende aérée** (2026-09-17) : le prompt demande 2 à 4 paragraphes courts (1-2
+phrases) séparés par une ligne vide ; filet déterministe `aerer_legende()` dans
+`texte_legende` (publication ET export) — une légende sans ligne vide voit ses
+retours à la ligne simples doublés (sauf devant une ligne de liste — emoji ou
+puce, « 📅 24.09 » —, qui garde son retour simple), ou, en bloc de plus de deux
+phrases, est coupée par paires de phrases (les emojis de fin restent avec leur
+phrase ; « ... » suivi d'une minuscule ne coupe pas ; pas de coupe après une
+abréviation : initiales « J. », « U.S. », et feat, ft, Vol, Dr, St, Mr, Mme, No,
+vs). Ordre publié : légende, crédit, puis les hashtags en dernier bloc. Longueur :
+marge de **2150** points de code sur TOUT le texte (Meta : 2200, unité non
+documentée) ; si crédit + hashtags débordent à eux seuls, des hashtags partent par
+la fin (500 caractères gardés à la légende), puis la légende est coupée — le
+crédit jamais. ffmpeg absent = panne systémique qui
 ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**

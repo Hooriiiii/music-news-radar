@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # Au-dela, on ne publie pas : un Mac rouvert le soir lacherait sinon la
     # journee entiere d'un coup.
     publication_retard_max_minutes: int = 90
+    # Un creneau gele a moins de ce delai de son heure est traite des ce passage :
+    # reclame, conteneur cree, puis ATTENTE jusqu'a l'heure affichee avant
+    # media_publish. Un intervalle de l'agent (600 s) plus une marge : sinon un
+    # post pouvait partir jusqu'a 10 minutes apres l'heure du dashboard.
+    publication_avance_s: int = 660
 
     # --- Reels automatiques (en plus des carrousels) ---
     # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =

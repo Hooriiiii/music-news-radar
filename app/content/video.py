@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 # pas a notre place : une video hors format est recadree par ses soins, sans
 # qu'on maitrise ce qui est coupe.
 FORMAT_REEL = (1080, 1920)
+# Un element video de carrousel : Instagram recadre chaque element au ratio du
+# PREMIER, la cover `kinda_post` publiee en 1080x1350 (4:5).
+FORMAT_CARROUSEL = (1080, 1350)
 CADENCE = 30
 # Le fond floute : la video agrandie pour REMPLIR le cadre, puis floutee. C'est
 # le codage visuel dominant sur Reels et TikTok, et il ne perd rien de l'image.
@@ -138,6 +141,21 @@ def sonder(video: bytes) -> dict:
     }
 
 
+def _cadre_floute(entree: str, format_: tuple[int, int], sortie: str) -> str:
+    """La video entiere au centre, sur elle-meme agrandie et floutee. Commun au
+    reel et a la video de carrousel : rien n'est perdu de l'image."""
+    largeur, hauteur = format_
+    return (
+        # la video source -> fond floute qui REMPLIT le cadre...
+        f"[{entree}]scale={largeur}:{hauteur}:force_original_aspect_ratio=increase,"
+        f"crop={largeur}:{hauteur},boxblur={FLOU}:1[fond_{sortie}];"
+        # ...et la video entiere, redimensionnee pour TENIR dedans, sans rien perdre
+        f"[{entree}]scale={largeur}:{hauteur}:force_original_aspect_ratio=decrease,"
+        f"scale=trunc(iw/2)*2:trunc(ih/2)*2[avant_{sortie}];"
+        f"[fond_{sortie}][avant_{sortie}]overlay=(W-w)/2:(H-h)/2,fps={CADENCE},setsar=1[{sortie}];"
+    )
+
+
 def _filtre(frames_cover: int, source_a_audio: bool) -> str:
     """Le graphe de filtres, en une chaine. Ecrit ici et pas en dur ailleurs :
     c'est la seule regle de mise en forme du reel.
@@ -149,16 +167,11 @@ def _filtre(frames_cover: int, source_a_audio: bool) -> str:
     """
     largeur, hauteur = FORMAT_REEL
     return (
-        # [1] la video source -> fond floute qui REMPLIT le cadre...
-        f"[1:v]scale={largeur}:{hauteur}:force_original_aspect_ratio=increase,"
-        f"crop={largeur}:{hauteur},boxblur={FLOU}:1[fond];"
-        # ...et la video entiere, redimensionnee pour TENIR dedans, sans rien perdre
-        f"[1:v]scale={largeur}:{hauteur}:force_original_aspect_ratio=decrease,"
-        f"scale=trunc(iw/2)*2:trunc(ih/2)*2[avant];"
-        f"[fond][avant]overlay=(W-w)/2:(H-h)/2,fps={CADENCE},setsar=1[v1];"
+        # [1] la video source, cadree sur fond floute
+        _cadre_floute("1:v", FORMAT_REEL, "v1")
         # [0] la cover : quelques frames, meme cadence et meme SAR pour que
         # `concat` les accepte cote a cote
-        f"[0:v]scale={largeur}:{hauteur},fps={CADENCE},setsar=1,"
+        + f"[0:v]scale={largeur}:{hauteur},fps={CADENCE},setsar=1,"
         f"trim=end_frame={frames_cover},setpts=PTS-STARTPTS[v0];"
         # les deux silences : sans eux, concat refuse d'assembler
         f"[2:a]atrim=end={frames_cover / CADENCE},asetpts=PTS-STARTPTS[a0];"
@@ -198,26 +211,62 @@ def assembler_reel(
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-filter_complex", _filtre(frames_cover, source_a_audio),
             "-map", "[v]", "-map", "[a]",
-            "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k",
-            # Borne la sortie sur le flux video : sans elle, le silence infini
-            # d'anullsrc produirait un fichier qui ne se termine jamais.
-            "-shortest",
-            # GOP ferme et pas d'edit list : deux exigences ecrites de Meta pour
-            # les reels (2026-09-17). ffmpeg ecrit une edit list par defaut pour
-            # compenser l'amorcage AAC.
-            "-flags", "+cgop",
-            "-use_editlist", "0",
-            "-movflags", "+faststart",
+            *ENCODAGE_META,
             str(sortie),
         ]
-        resultat = subprocess.run(commande, capture_output=True, text=True, timeout=DELAI_MAX_S)
-        if resultat.returncode != 0 or not sortie.exists():
-            # Les dernieres lignes seulement : une trace ffmpeg complete fait
-            # des centaines de lignes et n'est pas affichable dans le dashboard.
-            fin = "\n".join(resultat.stderr.strip().splitlines()[-4:])
-            raise AssemblageIndisponible(
-                f"assemblage impossible : {fin[:400]}",
-                returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
-            )
-        return sortie.read_bytes()
+        return _executer(commande, sortie)
+
+
+# Encodage commun au reel et a la video de carrousel.
+ENCODAGE_META = (
+    "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k",
+    # Borne la sortie sur le flux video : sans elle, le silence infini
+    # d'anullsrc produirait un fichier qui ne se termine jamais.
+    "-shortest",
+    # GOP ferme et pas d'edit list : deux exigences ecrites de Meta pour
+    # les reels (2026-09-17). ffmpeg ecrit une edit list par defaut pour
+    # compenser l'amorcage AAC.
+    "-flags", "+cgop",
+    "-use_editlist", "0",
+    "-movflags", "+faststart",
+)
+
+
+def _executer(commande: list[str], sortie: Path) -> bytes:
+    resultat = subprocess.run(commande, capture_output=True, text=True, timeout=DELAI_MAX_S)
+    if resultat.returncode != 0 or not sortie.exists():
+        # Les dernieres lignes seulement : une trace ffmpeg complete fait
+        # des centaines de lignes et n'est pas affichable dans le dashboard.
+        fin = "\n".join(resultat.stderr.strip().splitlines()[-4:])
+        raise AssemblageIndisponible(
+            f"assemblage impossible : {fin[:400]}",
+            returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
+        )
+    return sortie.read_bytes()
+
+
+def transcoder_carrousel(video: bytes) -> bytes:
+    """Une video d'actu -> un element de carrousel 1080x1350, H.264/AAC, meme
+    cadrage sur fond floute que le reel, piste audio garantie (silence si muette)."""
+    ffmpeg = _exiger_ffmpeg("ffmpeg")
+    source_a_audio = sonder(video)["has_audio"]
+    with tempfile.TemporaryDirectory() as dossier:
+        base = Path(dossier)
+        (base / "source.mp4").write_bytes(video)
+        sortie = base / "carrousel.mp4"
+        audio = (
+            "[0:a]aresample=44100,asetpts=PTS-STARTPTS[a]"
+            if source_a_audio
+            else "[1:a]asetpts=PTS-STARTPTS[a]"
+        )
+        commande = [
+            ffmpeg, "-y",
+            "-i", str(base / "source.mp4"),
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-filter_complex", _cadre_floute("0:v", FORMAT_CARROUSEL, "v") + audio,
+            "-map", "[v]", "-map", "[a]",
+            *ENCODAGE_META,
+            str(sortie),
+        ]
+        return _executer(commande, sortie)

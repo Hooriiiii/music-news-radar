@@ -604,14 +604,18 @@ async function loadSchedulePanel() {
     const details = [fmtDate(c.publier_a)];
     if (c.relevance != null) details.push(`pertinence ${c.relevance}`);
     if (c.epingle) details.push("📌 épinglé");
-    if (c.erreur) details.push(`⚠ ${c.erreur}`);
+    // Reclame par l'agent il y a peu : conteneur en creation ou attente de
+    // l'heure affichee, pas un echec (voir RAISON_RECLAMATION, runner.py).
+    const enCours = c.etat === "echec" && c.erreur === "publication interrompue avant confirmation"
+      && new Date(c.publier_a).getTime() > Date.now() - 20 * 60 * 1000;
+    if (c.erreur && !enCours) details.push(`⚠ ${c.erreur}`);
     row.querySelector(".sub").textContent = details.join(" · ");
     const formatPill = row.querySelector(".format-pill");
     formatPill.classList.add(c.format);
     formatPill.textContent = FORMATS_CRENEAU[c.format] || c.format;
     const pastille = row.querySelector(".status-pill");
-    pastille.classList.add(c.etat);
-    pastille.textContent = ETATS_CRENEAU[c.etat] || c.etat;
+    pastille.classList.add(enCours ? "gele" : c.etat);
+    pastille.textContent = enCours ? "Publication en cours" : (ETATS_CRENEAU[c.etat] || c.etat);
     if (CRENEAUX_MODIFIABLES.has(c.etat)) {
       const actions = row.querySelector(".slot-actions");
       const bouton = (libelle, titre, donnees) => {

@@ -40,3 +40,12 @@ def test_le_detail_d_un_post_sait_lire_une_video_sans_url():
     html = DASHBOARD.read_text()
     assert 'const sansUrl = m.type === "video" && !m.url;' in html
     assert "m.preview_url || (m.type === \"photo\" ? m.url : null)" in html
+
+
+def test_un_creneau_reclame_recemment_s_affiche_en_cours_de_publication():
+    """Pendant l'attente de l'heure, le creneau est en ECHEC de reclamation : le
+    dashboard dit « Publication en cours », sans detail d'erreur."""
+    html = DASHBOARD.read_text()
+    assert "Publication en cours" in html
+    assert '"publication interrompue avant confirmation"' in html
+    assert "20 * 60 * 1000" in html

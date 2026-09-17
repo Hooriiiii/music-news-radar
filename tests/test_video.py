@@ -218,3 +218,24 @@ def test_le_reel_respecte_les_specs_de_meta(tmp_path):
     moov = _boite(sortie, b"moov")
     assert moov is not None and sortie.find(b"moov") < sortie.find(b"mdat")
     assert b"elst" not in moov
+
+
+# --- Video d'un carrousel ------------------------------------------------------------
+
+
+@besoin_ffmpeg
+@pytest.mark.parametrize("muette", [False, True])
+def test_une_video_de_carrousel_sort_en_4_5_h264_aac(tmp_path, muette):
+    """Instagram recadre chaque element au ratio du PREMIER, la cover 1080x1350 :
+    la video est cadree d'avance sur fond floute, avec une piste audio garantie."""
+    sortie = video_mod.transcoder_carrousel(_video(tmp_path, 1280, 720, muette=muette))
+    infos = sonder(sortie)
+    assert (infos["width"], infos["height"]) == video_mod.FORMAT_CARROUSEL == (1080, 1350)
+    assert (infos["video_codec"], infos["audio_codec"]) == ("h264", "aac")
+    assert infos["duration"] == pytest.approx(1.0, abs=0.2)
+
+
+@besoin_ffmpeg
+def test_une_video_de_carrousel_illisible_donne_une_erreur_lisible(tmp_path):
+    with pytest.raises(AssemblageIndisponible):
+        video_mod.transcoder_carrousel(b"pas une video")
