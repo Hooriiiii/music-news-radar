@@ -13,7 +13,6 @@ si aucune tentative n'aboutit.
 """
 
 import logging
-import re
 
 import anthropic
 import pydantic
@@ -22,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.content.credit import credit_video
+from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.media import PHOTO
 from app.models import Article, Post
@@ -49,24 +49,6 @@ COMPOSER_MAX_ATTEMPTS = 3
 
 class CompositionError(RuntimeError):
     """Levee quand aucune tentative de composition n'a produit un brouillon valide."""
-
-
-# Detection par PLAGES Unicode (les blocs qui portent les proprietes
-# Emoji_Presentation / Extended_Pictographic), et non par liste d'emojis en dur :
-# une liste serait perimee a la version d'Unicode suivante. Le module `regex`, seul
-# a exposer `\p{Extended_Pictographic}`, n'est pas une dependance du projet.
-# Les plages sont choisies pour ne PAS attraper ce que les accroches contiennent
-# deja legitimement : lettres accentuees (bloc latin), apostrophes typographiques,
-# points de suspension, guillemets, degre, et les marqueurs `**` du surlignage.
-_EMOJI_RE = re.compile(
-    "["
-    "\U0001f000-\U0001faff"  # pictogrammes, visages, objets, transports, drapeaux
-    "\U00002600-\U000027bf"  # symboles divers et dingbats (coeur, etoile, soleil)
-    "\U00002b00-\U00002bff"  # fleches et formes geometriques a rendu emoji
-    "\U0000fe0f"  # selecteur de variation : force le rendu emoji du caractere precedent
-    "\U0000200d"  # liaison des sequences composees (famille, drapeaux regionaux)
-    "]"
-)
 
 
 def contient_emoji(texte: str) -> bool:
@@ -210,8 +192,9 @@ subtitle : le line-up electro tombe **ce week-end**
 
 4. LEGENDE (`caption`) : COMMUNE aux quatre variantes -- les variantes sont des \
 formulations de cover, pas des angles editoriaux distincts, une seule legende \
-suffit. Le texte sous le post, en francais, 3 a 6 lignes. Elle developpe ce que la \
-cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
+suffit. Le texte sous le post, en francais, en 2 a 4 paragraphes courts (1 a 2 \
+phrases chacun), SEPARES PAR UNE ligne vide -- jamais un bloc compact, illisible \
+sur mobile. Elle developpe ce que la cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
 AUCUN balisage ** : le surlignage n'existe que sur la cover, qui est une image ; \
 dans la legende les asterisques s'afficheraient telles quelles.
 La CLOTURE depend de la nature de l'actu :

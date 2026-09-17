@@ -153,6 +153,11 @@ def test_le_prompt_porte_la_cloture_conditionnelle_et_lanti_contradiction():
     assert "que l'article contredit" in SYSTEM_PROMPT
 
 
+def test_le_prompt_demande_des_paragraphes_courts_separes_par_une_ligne_vide():
+    assert "2 a 4 paragraphes courts" in SYSTEM_PROMPT
+    assert "ligne vide" in SYSTEM_PROMPT
+
+
 def test_le_prompt_porte_la_regle_emojis():
     assert "EMOJIS" in SYSTEM_PROMPT
     assert "AUCUN emoji dans `headline`, `title` ou `subtitle`" in SYSTEM_PROMPT

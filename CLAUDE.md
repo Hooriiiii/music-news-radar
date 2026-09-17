@@ -563,7 +563,14 @@ sortie contre les specs Meta, et fige `<prefixe>_reel.mp4` puis
 `cover_url` explicite (sondage 15 s, 10 min max). Crédit `🎥 via @compte`
 obligatoire (`posts.credit`), jamais coupé. **Plus de ligne « Source : <url> »** sous la légende
 (2026-09-17, demande de l'utilisateur) — ni à la publication ni dans l'export zip
-(`app/content/legende.py`) ; le crédit reste. ffmpeg absent = panne systémique qui
+(`app/content/legende.py`) ; le crédit reste.
+**Légende aérée** (2026-09-17) : le prompt demande 2 à 4 paragraphes courts (1-2
+phrases) séparés par une ligne vide ; filet déterministe `aerer_legende()` dans
+`texte_legende` (publication ET export) — une légende sans ligne vide voit ses
+retours à la ligne simples doublés, ou, en bloc de plus de deux phrases, est
+coupée par paires de phrases (les emojis de fin restent avec leur phrase ; « ... »
+suivi d'une minuscule ne coupe pas). Ordre publié : légende, crédit, puis les
+hashtags en dernier bloc ; la coupe à 2200 caractères compte les lignes ajoutées. ffmpeg absent = panne systémique qui
 ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
