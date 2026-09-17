@@ -362,14 +362,25 @@ def test_l_executeur_par_defaut_tue_tout_le_groupe_au_delai(tmp_path):
     from app.publish.ytdlp import executer_en_groupe
 
     temoin = tmp_path / "pid"
+    provisoire = tmp_path / "pid.tmp"
+    # Ecriture atomique (rename) : jamais un pid lu a moitie ecrit.
     script = (
-        "import subprocess, sys, time\n"
+        "import os, subprocess, sys, time\n"
         "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-        f"open({str(temoin)!r}, 'w').write(str(p.pid))\n"
+        f"open({str(provisoire)!r}, 'w').write(str(p.pid))\n"
+        f"os.replace({str(provisoire)!r}, {str(temoin)!r})\n"
         "time.sleep(60)\n"
     )
+    # 5 s : une machine chargee (suite complete, CI) met parfois plus de 2 s a
+    # demarrer deux interpreteurs Python.
     with pytest.raises(subprocess.TimeoutExpired):
-        executer_en_groupe([sys.executable, "-c", script], capture_output=True, text=True, timeout=2)
+        executer_en_groupe([sys.executable, "-c", script], capture_output=True, text=True, timeout=5)
+    for _ in range(50):
+        if temoin.exists():
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("le petit-enfant n'a jamais ecrit son pid avant le delai")
     petit_enfant = int(temoin.read_text())
     for _ in range(50):
         try:

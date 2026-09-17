@@ -11,6 +11,7 @@ Usage :
 """
 
 import argparse
+import shutil
 
 from app.config import settings
 from app.content.legende import texte_legende
@@ -38,15 +39,20 @@ def main() -> None:
         article = db.get(Article, post.article_id) if post.article_id else None
         dossier = settings.publication_dir / "essais" / str(post.id)
         legende = texte_legende(post)
-        if post.template == "kinda_reel":
-            recuperer = RecuperateurYtdlp() if settings.publication_reel_ytdlp else None
-            noms = preparer_reel(post, article, dossier, recuperer_ytdlp=recuperer)
-            print(f"reel assemble dans {dossier} : {', '.join(noms)}")
-            conteneur = publier_reel(dossier, noms, legende, publier_vraiment=False)
-        else:
-            noms = preparer_fichiers(post, article, dossier)
-            print(f"{len(noms)} image(s) figee(s) dans {dossier}")
-            conteneur = publier_fichiers(dossier, noms, legende, publier_vraiment=False)
+        try:
+            if post.template == "kinda_reel":
+                recuperer = RecuperateurYtdlp() if settings.publication_reel_ytdlp else None
+                noms = preparer_reel(post, article, dossier, recuperer_ytdlp=recuperer)
+                print(f"reel assemble dans {dossier} : {', '.join(noms)}")
+                conteneur = publier_reel(dossier, noms, legende, publier_vraiment=False)
+            else:
+                noms = preparer_fichiers(post, article, dossier)
+                print(f"{len(noms)} image(s) figee(s) dans {dossier}")
+                conteneur = publier_fichiers(dossier, noms, legende, publier_vraiment=False)
+        finally:
+            # Le menage de l'agent ne touche jamais `essais/` : sans ceci, chaque
+            # essai de reel laisserait des dizaines de Mo de video sur le disque.
+            shutil.rmtree(dossier, ignore_errors=True)
         print(f"conteneur {conteneur} FINISHED chez Meta -- rien n'a ete publie")
 
 
