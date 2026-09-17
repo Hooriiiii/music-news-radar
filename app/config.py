@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     # Coupe-circuit de yt-dlp SEUL (app/publish/ytdlp.py) : a false, seules les
     # videos a URL directe de l'API restent eligibles en reel, et yt-dlp n'est
     # jamais lance. Le coupe-circuit de TOUS les reels vit au dashboard
-    # (`reels_actifs` dans publication.json).
+    # (`reels_actifs` dans publication.json), COUPE tant qu'il n'a pas ete coche.
     publication_reel_ytdlp: bool = True
 
     # Livraison (étape 5)

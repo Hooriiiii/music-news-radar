@@ -54,8 +54,21 @@ def test_par_defaut_le_chemin_est_derive_de_meta_token_path(tmp_path, monkeypatc
     assert mode_effectif() == "reel"
 
 
-def test_sans_fichier_les_reels_sont_actifs(tmp_path):
-    assert reels_actifs(tmp_path / "absent.json") is True
+def test_sans_fichier_les_reels_sont_coupes(tmp_path):
+    """Opt-in explicite : une fusion ne doit jamais allumer les reels toute seule."""
+    assert reels_actifs(tmp_path / "absent.json") is False
+
+
+def test_un_fichier_sans_la_cle_laisse_les_reels_coupes(tmp_path):
+    chemin = tmp_path / "publication.json"
+    enregistrer_mode("reel", MAINTENANT, chemin)
+    assert reels_actifs(chemin) is False
+
+
+def test_allumer_les_reels(tmp_path):
+    chemin = tmp_path / "publication.json"
+    enregistrer_reels(True, MAINTENANT, chemin)
+    assert reels_actifs(chemin) is True
 
 
 def test_couper_les_reels(tmp_path, monkeypatch):
@@ -78,9 +91,9 @@ def test_les_deux_reglages_se_preservent(tmp_path):
     assert list(tmp_path.iterdir()) == [chemin]
 
 
-def test_une_valeur_de_reels_invalide_laisse_les_reels_actifs(tmp_path):
+def test_une_valeur_de_reels_invalide_laisse_les_reels_coupes(tmp_path):
     chemin = tmp_path / "publication.json"
-    chemin.write_text(json.dumps({"reels_actifs": "non"}))
-    assert reels_actifs(chemin) is True
+    chemin.write_text(json.dumps({"reels_actifs": "oui"}))
+    assert reels_actifs(chemin) is False
     chemin.write_text("{corrompu")
-    assert reels_actifs(chemin) is True
+    assert reels_actifs(chemin) is False

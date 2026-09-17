@@ -69,11 +69,12 @@ def enregistrer_mode(mode: Mode, maintenant: dt.datetime, chemin: Path | None = 
 
 
 def reels_actifs(chemin: Path | None = None) -> bool:
-    """Les reels automatiques tournent-ils ? Vrai tant que le dashboard ne les a
-    pas coupes : le mode (arret/apercu/reel) reste le garde-fou de la publication,
-    ce reglage n'est que l'interrupteur des reels."""
-    valeur = _lire(chemin or _chemin_par_defaut()).get("reels_actifs")
-    return valeur if isinstance(valeur, bool) else True
+    """Les reels automatiques tournent-ils ? Seulement si le dashboard les a
+    EXPLICITEMENT allumes : cle absente, fichier illisible ou valeur invalide
+    valent False. Une fusion ou un fichier perdu ne doit jamais publier de reel
+    tout seul, meme en mode `reel`. Le mode (arret/apercu/reel) reste le
+    garde-fou de la publication, ce reglage n'est que l'interrupteur des reels."""
+    return _lire(chemin or _chemin_par_defaut()).get("reels_actifs") is True
 
 
 def enregistrer_reels(actifs: bool, maintenant: dt.datetime, chemin: Path | None = None) -> None:

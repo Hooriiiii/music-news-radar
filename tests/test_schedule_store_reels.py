@@ -2,6 +2,8 @@
 
 import datetime as dt
 
+import pytest
+
 from app.config import settings
 from app.content.media import entree
 from app.models import (
@@ -19,6 +21,9 @@ from app.schedule.store import (
     synchroniser_creneaux,
     utc,
 )
+
+# Reels en opt-in : ce module exerce la chaine reel, il les allume.
+pytestmark = pytest.mark.usefixtures("reels_allumes")
 
 MAINTENANT = dt.datetime(2026, 9, 20, 4, 0, tzinfo=dt.timezone.utc)
 

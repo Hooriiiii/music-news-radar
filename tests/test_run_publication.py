@@ -161,6 +161,7 @@ def _passages(tmp_path, monkeypatch):
     return recus
 
 
+@pytest.mark.usefixtures("reels_allumes")
 def test_l_agent_branche_les_outils_des_reels(tmp_path, monkeypatch):
     recus = _passages(tmp_path, monkeypatch)
     script.main()
@@ -170,6 +171,7 @@ def test_l_agent_branche_les_outils_des_reels(tmp_path, monkeypatch):
     assert recu["publier_reel"] is script.publier_reel
 
 
+@pytest.mark.usefixtures("reels_allumes")
 def test_chaque_passage_a_son_propre_budget_yt_dlp(tmp_path, monkeypatch):
     recus = _passages(tmp_path, monkeypatch)
     script.main()
@@ -178,11 +180,19 @@ def test_chaque_passage_a_son_propre_budget_yt_dlp(tmp_path, monkeypatch):
     assert premier is not second
 
 
+@pytest.mark.usefixtures("reels_allumes")
 def test_yt_dlp_coupe_par_le_env(tmp_path, monkeypatch):
     recus = _passages(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "publication_reel_ytdlp", False)
     script.main()
     assert recus[0]["preparer_reel"].keywords["recuperer_ytdlp"] is None
+
+
+def test_sans_choix_au_dashboard_aucun_outil_reel(tmp_path, monkeypatch):
+    """Opt-in : sans case cochee au dashboard, l'agent ne gele ni ne publie de reel."""
+    recus = _passages(tmp_path, monkeypatch)
+    script.main()
+    assert (recus[0]["preparer_reel"], recus[0]["publier_reel"]) == (None, None)
 
 
 def test_reels_coupes_au_dashboard(tmp_path, monkeypatch):

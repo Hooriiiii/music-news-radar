@@ -18,6 +18,9 @@ from app.schedule.runner import tourner
 from app.schedule.slots import prochains_horaires
 from app.schedule.store import utc
 
+# Reels en opt-in : ce module exerce la chaine reel, il les allume.
+pytestmark = pytest.mark.usefixtures("reels_allumes")
+
 BASE = dt.datetime(2026, 9, 20, 4, 0, tzinfo=dt.timezone.utc)
 (R0,) = prochains_horaires(BASE, 1, "reel")
 

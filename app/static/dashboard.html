@@ -248,7 +248,7 @@
       <button class="mode-choix" data-mode="apercu">Aperçu</button>
       <button class="mode-choix mode-reel" data-mode="reel">Réel</button>
     </div>
-    <label class="reels-toggle" title="Coupe ou rallume les reels automatiques">
+    <label class="reels-toggle" title="Reels automatiques : coupés tant que la case n'est pas cochée">
       <input type="checkbox" id="reels-actifs"> Reels auto
     </label>
   </div>
@@ -504,11 +504,12 @@ async function chargerReels() {
     if (!reponse.ok) throw new Error(String(reponse.status));
     const etat = await reponse.json();
     caseReels.indeterminate = false;
-    caseReels.checked = etat.actifs;
+    caseReels.checked = etat.actifs === true;
     caseReels.parentElement.title = etat.ytdlp
       ? "Reels automatiques ; yt-dlp récupère au gel les vidéos sans lien direct"
       : "Reels automatiques ; yt-dlp coupé (PUBLICATION_REEL_YTDLP) : vidéos à lien direct seulement";
   } catch (erreur) {
+    caseReels.checked = false;
     caseReels.indeterminate = true;
   }
 }

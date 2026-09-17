@@ -26,6 +26,14 @@ def test_le_panneau_programmation_porte_l_interrupteur_des_reels():
     assert 'fetch("/publication/reels", {' in html
 
 
+def test_la_case_des_reels_est_decochee_par_defaut():
+    """Reels en opt-in : jamais cochee sans reponse explicite de l'API."""
+    html = DASHBOARD.read_text()
+    assert '<input type="checkbox" id="reels-actifs"> Reels auto' in html
+    assert "caseReels.checked = etat.actifs === true;" in html
+    assert "caseReels.checked = false;" in html
+
+
 def test_le_detail_d_un_post_sait_lire_une_video_sans_url():
     """Sentinelle : une video sans URL (reel Instagram sans media_url) s'affiche
     par sa vignette et n'est pas cochable comme slide."""

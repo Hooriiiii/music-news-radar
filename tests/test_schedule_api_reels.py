@@ -155,8 +155,8 @@ def test_l_offre_de_reels(client, db_session):
     }
 
 
-def test_les_reels_sont_actifs_par_defaut(client):
-    assert client.get("/publication/reels").json() == {"actifs": True, "ytdlp": True}
+def test_les_reels_sont_coupes_par_defaut(client):
+    assert client.get("/publication/reels").json() == {"actifs": False, "ytdlp": True}
 
 
 def test_ytdlp_reflete_le_env(client, monkeypatch):
@@ -167,6 +167,9 @@ def test_ytdlp_reflete_le_env(client, monkeypatch):
 def test_couper_les_reels_vide_la_file_des_reels_sans_toucher_au_mode(client, db_session):
     assert client.put("/publication/mode", json={"mode": "apercu"}).status_code == 200
     client.post("/schedule/rebuild")
+    # Opt-in : tant que la case n'est pas cochee, aucun creneau reel.
+    assert {v["format"] for v in client.get("/schedule").json()} == {"carrousel"}
+    assert client.put("/publication/reels", json={"actifs": True}).json()["actifs"] is True
     assert "reel" in {v["format"] for v in client.get("/schedule").json()}
 
     reponse = client.put("/publication/reels", json={"actifs": False})
