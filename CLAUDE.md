@@ -497,9 +497,13 @@ piste audio garantie —, publiée en enfant `media_type=VIDEO` +
 transcodage en échec, ffmpeg absent, sortie hors specs) **retombe sur sa vignette**
 (`preview_url`) en photo : un média ne fait jamais échouer le gel. Le client crée
 tous les enfants, sonde chaque enfant vidéo jusqu'à FINISHED au rythme des reels
-(15 s, 10 min max), puis le parent. **Le média servant de fond à la cover**
-(`slides[0].image_url`, comparé à `url` et à `preview_url`) n'est pas répété
-ensuite. **Visuels d'un compte Instagram de catégorie `media` jamais repris**
+(15 s, 10 min max), puis le parent ; un enfant vidéo refusé (création, ERROR,
+EXPIRED, délai) est **retiré**, et s'il reste moins de deux éléments la cover part
+seule en image. **La photo servant de fond à la cover** (`slides[0].image_url`)
+n'est pas répétée ensuite ; une vidéo dont c'est la vignette **reste** (un clip
+n'est pas le même asset que son image fixe), sauf si elle retomberait sur cette
+vignette. Une sortie transcodée hors specs (dimensions, codecs, poids) retombe
+aussi sur la vignette. **Visuels d'un compte Instagram de catégorie `media` jamais repris**
 (watermarks, `visuels_interdits`) : cover seule.
 
 **Hébergement éphémère.** Meta télécharge les images en cURL. Au moment de publier

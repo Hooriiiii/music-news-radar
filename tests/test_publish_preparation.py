@@ -180,15 +180,43 @@ def test_une_video_sans_lien_direct_donne_sa_vignette(tmp_path):
     assert journal == []
 
 
-def test_le_media_du_fond_de_cover_n_est_pas_repris_dans_le_carrousel():
+def test_la_photo_du_fond_de_cover_n_est_pas_reprise_mais_la_video_oui():
+    """Un clip n'est pas le meme asset que son image fixe : la video dont la
+    vignette sert de fond reste dans le carrousel."""
     fond = "https://img/fond.jpg"
-    post = _post()
     article = _article_medias(
         {"type": "photo", "url": fond},
         _video(preview=fond),
         {"type": "photo", "url": "https://img/autre.jpg"},
     )
-    assert [m["url"] for m in medias_du_carrousel(post, article)] == ["https://img/autre.jpg"]
+    assert [m["url"] for m in medias_du_carrousel(_post(), article)] == ["https://cdn/v.mp4", "https://img/autre.jpg"]
+
+
+def test_une_video_qui_retomberait_sur_la_vignette_du_fond_est_ecartee(tmp_path):
+    journal, outils = _outils_video(echec_telechargement=True)
+    telecharges = []
+
+    def telecharger(url):
+        telecharges.append(url)
+        return _png(1200, 800), ".png"
+
+    noms = preparer_fichiers(
+        _post(), _article_medias(_video(preview="https://img/fond.jpg")), tmp_path,
+        rendre=_rendre(), telecharger=telecharger, **outils,
+    )
+    assert len(noms) == 1
+    assert telecharges == []
+
+
+@pytest.mark.parametrize("sortie", [
+    {**SORTIE_OK, "width": 1080, "height": 1920},
+    {**SORTIE_OK, "audio_codec": None},
+])
+def test_une_video_transcodee_hors_specs_retombe_sur_sa_vignette(tmp_path, sortie):
+    _, outils = _outils_video()
+    outils["sonder"] = lambda octets: dict(sortie if octets == b"sortie" else SOURCE_OK)
+    noms = _preparer(tmp_path, _post(), _article_medias(_video()), **outils)
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
 
 
 def test_les_visuels_d_un_compte_media_instagram_ne_sont_jamais_repris(tmp_path):

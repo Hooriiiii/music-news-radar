@@ -11,7 +11,8 @@ cadrage sur fond floute que le reel). Premier post reel (Charlotte de Witte,
 article 17839) : 5 videos, et un carrousel parti avec la cover seule.
 
 Trois regles :
-- le media qui sert de FOND a la cover n'est pas repete ensuite ;
+- la photo qui sert de FOND a la cover n'est pas repetee ensuite (une video dont
+  c'est la vignette reste, sauf si elle retombe sur cette vignette) ;
 - une video inutilisable (trop longue, telechargement ou sonde en echec, sortie
   hors specs) retombe sur sa vignette en photo : un media ne fait jamais echouer
   le gel ;
@@ -77,7 +78,10 @@ def medias_du_carrousel(post, article) -> list[dict]:
         if not cle or cle in vues:
             continue
         vues.add(cle)
-        if fond and fond in (media.get("url"), media.get("preview_url")):
+        # La photo du fond n'est pas repetee. Une video dont la vignette sert de
+        # fond reste : un clip n'est pas le meme asset que son image fixe (elle
+        # n'est ecartee que si elle retombe sur cette vignette, au gel).
+        if fond and media.get("type") == PHOTO and media.get("url") == fond:
             continue
         medias.append(media)
     return medias
@@ -152,6 +156,8 @@ def preparer_fichiers(
                 elements.append(("mp4", mp4))
                 continue
             url = media.get("preview_url")
+            if url and url == post.slides[0].get("image_url"):
+                continue
         else:
             url = media.get("url")
         if not url:

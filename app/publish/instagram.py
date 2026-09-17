@@ -98,26 +98,40 @@ class ClientInstagram:
         elements = [
             {"type": "photo", "url": e} if isinstance(e, str) else e for e in elements[:CARROUSEL_MAX]
         ]
-        if len(elements) == 1:
-            if elements[0]["type"] == "video":
-                raise ErreurInstagram("une video seule n'est pas un carrousel : publier un reel")
-            conteneur = self._conteneur(image_url=elements[0]["url"], caption=legende)
-        else:
-            enfants, videos = [], []
+        if len(elements) >= 2:
+            enfants: list[tuple[str, str]] = []
             for element in elements:
                 if element["type"] == "video":
-                    enfant = self._conteneur(
-                        media_type="VIDEO", video_url=element["url"], is_carousel_item="true"
-                    )
-                    videos.append(enfant)
+                    try:
+                        enfant = self._conteneur(
+                            media_type="VIDEO", video_url=element["url"], is_carousel_item="true"
+                        )
+                    except ErreurInstagram:
+                        continue
+                    enfants.append((enfant, "video"))
                 else:
-                    enfant = self._conteneur(image_url=element["url"], is_carousel_item="true")
-                enfants.append(enfant)
-            for enfant in videos:
-                self._attendre(enfant, pas=ATTENTE_REEL_PAS_S, maximum=ATTENTE_REEL_MAX_S)
-            conteneur = self._conteneur(
-                media_type="CAROUSEL", children=",".join(enfants), caption=legende
-            )
+                    enfants.append((self._conteneur(image_url=element["url"], is_carousel_item="true"), "photo"))
+            prets = []
+            for enfant, type_ in enfants:
+                if type_ == "video":
+                    try:
+                        self._attendre(enfant, pas=ATTENTE_REEL_PAS_S, maximum=ATTENTE_REEL_MAX_S)
+                    except ErreurInstagram:
+                        # ERROR, EXPIRED ou delai : une video refusee est retiree,
+                        # le post part sans elle plutot que pas du tout.
+                        continue
+                prets.append(enfant)
+            if len(prets) >= 2:
+                conteneur = self._conteneur(
+                    media_type="CAROUSEL", children=",".join(prets), caption=legende
+                )
+                self._attendre(conteneur)
+                return conteneur
+        # Un seul element, ou un carrousel reduit a moins de deux : la cover seule.
+        photo = next((e for e in elements if e["type"] != "video"), None)
+        if photo is None:
+            raise ErreurInstagram("une video seule n'est pas un carrousel : publier un reel")
+        conteneur = self._conteneur(image_url=photo["url"], caption=legende)
         self._attendre(conteneur)
         return conteneur
 
