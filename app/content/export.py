@@ -52,6 +52,19 @@ def _extension(content_type: str | None, url: str) -> str:
     return ".bin"
 
 
+PREFIXE_TRANSPORT = "reseau: "
+# Codes qui disent « reessaie », pas « ca n'existe pas ».
+CODES_TRANSITOIRES = (408, 425, 429)
+
+
+def echec_transitoire(raison: str | None) -> bool:
+    """Vrai si la raison rendue par `telecharger` est PASSAGERE (coupure, delai,
+    429, 5xx). L'appelant doit alors reessayer plus tard plutot que renoncer : un
+    article exclu de la file n'y revient jamais, et une panne reseau de deux
+    minutes ne doit pas lui couter sa publication."""
+    return bool(raison) and raison.startswith(PREFIXE_TRANSPORT)
+
+
 def telecharger(
     url: str,
     plafond: int = PLAFOND_OCTETS,
@@ -81,6 +94,14 @@ def telecharger(
                     return None, f"depasse le plafond de {plafond} octets"
             extension = _extension(reponse.headers.get("content-type"), url)
             return bytes(morceaux), extension
+    except httpx.HTTPStatusError as exc:
+        # 404, 403 : l'image n'est plus la (URL signee expiree), inutile d'insister.
+        code = exc.response.status_code
+        passager = code in CODES_TRANSITOIRES or code >= 500
+        return None, f"{PREFIXE_TRANSPORT if passager else ''}HTTP {code}"
+    except httpx.TransportError as exc:
+        # Delai, DNS, connexion coupee : la machine ou le reseau, pas l'image.
+        return None, f"{PREFIXE_TRANSPORT}{type(exc).__name__}"
     except Exception as exc:  # noqa: BLE001 -- tout echec reseau part en texte lisible
         return None, str(exc)
     finally:

@@ -168,6 +168,12 @@ def preparer_fichiers(
     if fond and fond in urls_interdites(article):
         # Brouillon compose avant la regle du 2026-09-17 : jamais publie.
         raise PreparationImpossible("fond de cover tire d'un compte media Instagram : visuel interdit")
+    if not fond:
+        # Sans fond, la cover part sur l'image de secours du gabarit : lisible a
+        # l'ecran d'un editeur, pas publiable telle quelle. Une file automatique
+        # ne doit jamais publier ca -- c'est le signe d'un post compose sans
+        # visuel autorise.
+        raise PreparationImpossible("aucun fond de cover : le post n'a pas de visuel")
 
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.

@@ -2,7 +2,9 @@ import io
 import zipfile
 from types import SimpleNamespace
 
-from app.content.export import PLAFOND_OCTETS, construire_zip, telecharger
+import httpx
+
+from app.content.export import PLAFOND_OCTETS, construire_zip, echec_transitoire, telecharger
 
 
 class FausseReponse:
@@ -242,3 +244,38 @@ def test_un_post_normal_n_assemble_rien():
         _post_avec_medias(), [b"PNG"], "legende",
         telecharger=_telecharger_factice, assembler=assembler_interdit,
     )
+
+
+class _ClientQuiEchoue:
+    """Un client httpx qui ne sort jamais sur le reseau : il leve, comme le vrai."""
+
+    def __init__(self, exception):
+        self.exception = exception
+
+    def stream(self, *args, **kwargs):
+        raise self.exception
+
+    def close(self):
+        pass
+
+
+def _reponse(code):
+    return httpx.Response(code, request=httpx.Request("GET", "https://cdn/x.jpg"))
+
+
+def test_un_echec_de_transport_est_signale_comme_passager():
+    coupure = httpx.ConnectTimeout("delai depasse")
+    _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(coupure))
+    assert echec_transitoire(raison)
+    assert "ConnectTimeout" in raison
+
+
+def test_un_5xx_et_un_429_sont_passagers_un_404_non():
+    for code in (500, 503, 429):
+        erreur = httpx.HTTPStatusError("oups", request=None, response=_reponse(code))
+        _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(erreur))
+        assert echec_transitoire(raison), code
+    erreur = httpx.HTTPStatusError("oups", request=None, response=_reponse(404))
+    _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(erreur))
+    assert not echec_transitoire(raison)
+    assert "404" in raison

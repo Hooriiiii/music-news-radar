@@ -253,3 +253,13 @@ def test_un_nouveau_gel_efface_aussi_les_anciennes_videos(tmp_path):
     (tmp_path / "ancien_02.mp4").write_bytes(b"x")
     _preparer(tmp_path, _post(), None)
     assert not (tmp_path / "ancien_02.mp4").exists()
+
+
+def test_une_cover_sans_fond_n_est_jamais_publiee(tmp_path):
+    """Sans fond, la cover partirait sur l'image de secours : ce n'est pas un
+    post publiable, et c'est le signe d'un brouillon compose sans visuel."""
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": None}
+    post = SimpleNamespace(slides=[cover], assets=[])
+    with pytest.raises(PreparationImpossible, match="aucun fond"):
+        preparer_fichiers(post, _article(), tmp_path, rendre=_rendre(), telecharger=_telecharger())

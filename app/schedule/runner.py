@@ -65,6 +65,7 @@ from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCrene
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.schedule.store import (
     TEMPLATES,
+    a_une_image,
     actifs_interdits,
     appliquer_arbitrage,
     post_a_reprendre,
@@ -243,12 +244,21 @@ def _choix_sans_lecture(db, article, format_, maintenant):
 
 def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     """Un brouillon dont les visuels ne sont plus publiables : compose avant la
-    regle du 2026-09-17 sur un compte media (`assets` NULL), ou portant l'actif
-    d'un compte d'artiste passe `media` depuis la composition."""
+    regle du 2026-09-17 sur un compte media (`assets` NULL), compose SANS aucun
+    visuel autorise (`assets == []`, un post fait a la main au dashboard), ou
+    portant l'actif d'un compte d'artiste passe `media` depuis la composition.
+
+    Le cas `assets == []` est le plus sournois : le brouillon existe, la file le
+    trouve deja compose et le gel partirait sur le fond de secours. La file ne
+    publie que ce qui porte un visuel : le creneau recompose, et si l'article n'a
+    toujours aucun visuel autorise il sort par le chemin normal (AucunVisuel).
+    """
     if post is None:
         return False
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))
+    if not post.assets:
+        return not a_une_image(article)
     return bool(actifs_interdits(db, post))
 
 
@@ -409,15 +419,6 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         if _deja_publie(article, post):
             _liberer(db, creneau, attendu, "article deja publie")
             continue
-        if actifs_interdits(db, post):
-            # La source d'un actif est RELUE au gel : un compte d'artiste reclasse
-            # `media` depuis la composition ne doit pas voir son visuel publie.
-            # L'article n'y est pour rien : le creneau lache le post, et la
-            # composition suivante en refait un avec des visuels autorises.
-            erreur = "gel refuse : visuel interdit (compte devenu media depuis la composition)"
-            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
-            _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
-            continue
         if creneau.format == FormatCreneau.REEL:
             raison = (
                 raison_ineligible_reel(article, maintenant=maintenant)
@@ -430,6 +431,17 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
                 _liberer(db, creneau, attendu, f"reel impossible : {raison}")
                 continue
             _completer_credit(db, post, article)
+        if _brouillon_perime(db, post, article):
+            # Relu au gel, APRES la regle reel : la source d'un actif d'artiste
+            # est reprise par son article (compte passe `media` depuis la
+            # composition), et un brouillon sans aucun visuel ne part pas sur le
+            # fond de secours. L'article n'y est pour rien : le creneau lache le
+            # post, et la composition suivante en refait un avec des visuels
+            # autorises (ou l'exclut, avec la bonne raison).
+            erreur = "gel refuse : le post n'a pas de visuel publiable"
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
+            _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
+            continue
         try:
             noms = preparer(post, article, _dossier(creneau))
         except PreparationDifferee as exc:

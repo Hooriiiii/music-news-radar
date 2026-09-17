@@ -21,6 +21,9 @@ from app.models import Article, FormatCreneau
 from app.pipeline.cluster import significant_tokens
 from app.pipeline.comptes_artistes import CompteArtiste
 
+# Borne de lecture des posts d'artistes candidats (voir `posts_en_base`).
+LIMITE_POSTS = 200
+
 
 def _utc(moment: dt.datetime | None) -> dt.datetime | None:
     # SQLite rend des datetime naifs ; `store.utc` n'est pas importable ici (cycle).
@@ -133,7 +136,11 @@ def posts_en_base(
     articles = db.scalars(
         select(Article)
         .where(Article.source_id.in_(list(par_source)), Article.media.is_not(None), vu >= depuis)
-        .order_by(Article.id)
+        # Les plus RECENTS d'abord, et borne dure : la fenetre limite deja le
+        # volume, mais l'arbitrage appelle cette requete par article candidat --
+        # un compte tres actif ne doit pas faire remonter des centaines de posts.
+        .order_by(vu.desc(), Article.id.desc())
+        .limit(LIMITE_POSTS)
     ).all()
     return [
         PostArtiste(

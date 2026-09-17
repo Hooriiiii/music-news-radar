@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.content.actifs_artistes import PostArtiste
 from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visuels
+from app.content.export import PREFIXE_TRANSPORT
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import entree
 from app.config import settings
@@ -259,3 +260,17 @@ def test_un_compte_media_cite_n_empeche_pas_l_artiste(db_session, fred, guettape
     choix = _choisir(db_session, article, index=index)
     assert [a["url"] for a in choix.actifs] == ["https://cdn.ig/fred.jpg"]
     assert choix.credit == "@fredagain"
+
+
+def test_une_coupure_reseau_differe_au_lieu_d_exclure(db_session, fred, guettapen):
+    """Un timeout n'est pas une absence de visuel : l'article serait exclu POUR
+    TOUJOURS sur une panne de quelques minutes."""
+    article = _article(db_session, guettapen, mentioned=["Fred again.."])
+    _article(db_session, fred, "GTA soundtrack", media=[entree("photo", "https://cdn.ig/coupe.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+
+    def telecharger(url):
+        return None, f"{PREFIXE_TRANSPORT}ConnectTimeout"
+
+    with pytest.raises(VisuelsDifferes, match="reseau"):
+        _choisir(db_session, article, telecharger=telecharger)

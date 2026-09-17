@@ -25,7 +25,12 @@ from app.models import (
 )
 from app.schedule.runner import _menage, tourner
 from app.schedule.slots import prochains_horaires
-from app.schedule.store import candidats_eligibles, raison_ineligible_reel, raison_sans_visuel
+from app.schedule.store import (
+    actifs_interdits,
+    candidats_eligibles,
+    raison_ineligible_reel,
+    raison_sans_visuel,
+)
 
 UTC = dt.timezone.utc
 BASE = dt.datetime(2026, 9, 20, 4, 0, tzinfo=UTC)
@@ -221,7 +226,7 @@ def test_un_brouillon_dont_le_compte_est_passe_media_n_est_pas_gele(db_session, 
     db_session.refresh(article)
     assert creneau.etat == EtatCreneau.PROGRAMME
     assert creneau.post_id != post.id
-    assert "visuel interdit" in creneau.erreur
+    assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable"
     # L'article n'est pas en faute : il peut repartir avec d'autres visuels.
     assert article.file_exclu_raison is None
 
@@ -273,3 +278,66 @@ def test_le_dashboard_signale_des_visuels_differes(client, db_session, fred, mon
     reponse = client.post(f"/articles/{article.id}/posts")
     assert reponse.status_code == 503
     assert "quota" in reponse.json()["detail"]
+
+
+def test_un_brouillon_sans_aucun_visuel_n_est_pas_gele(db_session, guettapen):
+    """Compose a la main au dashboard sans visuel autorise (`assets == []`) :
+    la file ne doit pas le publier avec le fond de secours."""
+    article = _article(db_session, guettapen, "Actu sans artiste",
+                       media=[entree("photo", "https://cdn.ig/g.jpg")])
+    post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
+                caption="L", slides=[{"kind": "cover", "image_url": None}],
+                template="kinda_post", assets=[])
+    db_session.add(post)
+    db_session.commit()
+    creneau = Creneau(publier_a=BASE + dt.timedelta(hours=1), article_id=article.id,
+                      post_id=post.id, etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(creneau)
+    db_session.commit()
+
+    outils = Outils()
+    outils.tourner(db_session)
+    db_session.refresh(creneau)
+    db_session.refresh(article)
+    # Le gel refuse le brouillon vide et lache le post ; rien n'est publie.
+    assert creneau.post_id is None
+    assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable"
+    assert article.file_exclu_raison is None
+    # Au passage suivant, la composition ne reprend pas ce brouillon : sans visuel
+    # autorise, l'article sort de la file par le chemin normal.
+    outils.tourner(db_session)
+    db_session.refresh(article)
+    assert outils.composes == []
+    assert article.file_exclu_raison.startswith("composition impossible :")
+
+
+def test_les_actifs_sont_resolus_quelle_que_soit_l_ecriture_du_compte(db_session):
+    """`ig:FredAgain` et une URL instagram.com designent le meme compte : la
+    relecture de policy ne doit pas dependre de l'ecriture de la source."""
+    for url in ("ig:FredAgain", "https://www.instagram.com/fredagain/"):
+        source = Source(name="Fred again.. (IG)", type=SourceType.INSTAGRAM, url=url,
+                        categorie=SourceCategorie.MEDIA)
+        db_session.add(source)
+        db_session.commit()
+        post = Post(article_title="t", article_url="https://x/1", caption="L",
+                    slides=[{"kind": "cover", "image_url": "https://cdn.ig/f.jpg"}],
+                    template="kinda_post",
+                    assets=[actif(entree("photo", "https://cdn.ig/f.jpg"), origine="artiste",
+                                  compte="@fredagain")])
+        db_session.add(post)
+        db_session.commit()
+        assert len(actifs_interdits(db_session, post)) == 1, url
+        db_session.delete(source)
+        db_session.delete(post)
+        db_session.commit()
+
+
+def test_le_choix_du_passage_rend_une_horloge_aware(monkeypatch):
+    vus = []
+    monkeypatch.setattr(script, "LecteurComptes", lambda: object())
+    monkeypatch.setattr(
+        script, "choisir_visuels",
+        lambda db, article, *, format_, maintenant, lecteur: vus.append(maintenant),
+    )
+    script.choix_du_passage()(None, None, FormatCreneau.CARROUSEL, BASE.replace(tzinfo=None))
+    assert vus == [BASE]

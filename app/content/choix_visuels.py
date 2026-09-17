@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.content.actifs_artistes import Retenu, classer, medias_utilisables, posts_en_base
 from app.content.credit import credit_video
-from app.content.export import telecharger as telecharger_media
+from app.content.export import echec_transitoire, telecharger as telecharger_media
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import PHOTO, VIDEO
 from app.content.visuels import (
@@ -132,16 +132,21 @@ def _en_actif_artiste(retenu: Retenu, entree_media: dict, fichier: str | None = 
 
 def _copier_images(
     retenus: list[Retenu], telecharger, interdites: set[str] = frozenset()
-) -> list[dict]:
-    """Les photos des posts retenus, copiees dans le cache local, au plus
-    `visuels_max_photos`. Une copie en echec est sautee : l'URL signee du CDN
-    Instagram a pu expirer entre l'ingestion et maintenant."""
+) -> tuple[list[dict], bool]:
+    """Les photos des posts retenus, copiees dans le cache local (au plus
+    `visuels_max_photos`), et si une copie a echoue pour une raison PASSAGERE.
+
+    Une copie en echec est sautee : l'URL signee du CDN Instagram a pu expirer
+    entre l'ingestion et maintenant. Mais une coupure reseau n'est PAS une
+    absence de visuel -- l'appelant differe alors au lieu d'exclure un article
+    qui ne reviendrait jamais dans la file."""
     actifs: list[dict] = []
     vues: set[str] = set()
+    panne_transport = False
     for retenu in retenus:
         for entree_media in retenu.medias:
             if len(actifs) >= settings.visuels_max_photos:
-                return actifs
+                return actifs, panne_transport
             # `medias_utilisables` ne rend que des photos avec URL pour un
             # carrousel : une vignette de video n'est jamais un actif d'artiste.
             url = entree_media.get("url")
@@ -151,12 +156,13 @@ def _copier_images(
             octets, extension = telecharger(url)
             if octets is None:
                 logger.info("Visuel d'artiste inaccessible (%s) : %s", url, extension)
+                panne_transport = panne_transport or echec_transitoire(extension)
                 continue
             chemin = chemin_cache(url, extension if extension in EXTENSIONS_IMAGE else ".jpg")
             chemin.parent.mkdir(parents=True, exist_ok=True)
             chemin.write_bytes(octets)
             actifs.append(_en_actif_artiste(retenu, entree_media, chemin.resolve().as_uri()))
-    return actifs
+    return actifs, panne_transport
 
 
 def choisir_visuels(
@@ -210,11 +216,17 @@ def choisir_visuels(
         if nouveaux:
             retenus = classer(article, [*posts, *nouveaux], format_=format_, maintenant=maintenant)
 
-    actifs = _copier_images(retenus, telecharger, urls_interdites(article))
+    actifs, panne_transport = _copier_images(retenus, telecharger, urls_interdites(article))
     if actifs:
         return ChoixVisuels(actifs, credit_des_actifs(actifs))
     if differe is not None:
         raise VisuelsDifferes(str(differe)) from differe
+    if panne_transport:
+        # Des visuels existaient, seule la copie a echoue et pour une raison
+        # passagere : on retente au passage suivant plutot que d'exclure.
+        raise VisuelsDifferes(
+            "copie des visuels d'artistes impossible (reseau) : nouvelle tentative au prochain passage"
+        )
     raise AucunVisuel(
         "aucun visuel recent des artistes suivis cites (hors fenetre, hors sujet ou inaccessible)"
     )

@@ -83,7 +83,7 @@ def synchroniser_creneaux(
     return list(db.scalars(_futurs(format_, maintenant).order_by(Creneau.publier_a)))
 
 
-def _a_une_image(article: Article) -> bool:
+def a_une_image(article: Article) -> bool:
     # Sans image AUTORISEE, la cover partirait sur le fond de secours : pas
     # publiable. Un compte media Instagram n'en fournit jamais.
     return any(
@@ -107,7 +107,7 @@ def raison_sans_visuel(article: Article, index: IndexComptes | None = None) -> s
     composition (en base, puis en direct). Si rien n'est trouve alors, l'article
     sera exclu avec la raison precise.
     """
-    if _a_une_image(article):
+    if a_une_image(article):
         return None
     if index is None:
         db = object_session(article)
@@ -146,11 +146,15 @@ def actifs_interdits(db: Session, post: Post) -> list[dict]:
         }
     par_handle: dict[str, Source] = {}
     if handles:
+        # Le handle est NORMALISE : une meme source s'ecrit `ig:fredagain`,
+        # `ig:FredAgain` ou `https://www.instagram.com/fredagain/`. Comparer les
+        # URL brutes laisserait passer un visuel interdit selon l'ecriture.
         par_handle = {
             compte_depuis_url(source.url).lower(): source
             for source in db.scalars(
-                select(Source).where(Source.url.in_([f"ig:{handle}" for handle in handles]))
+                select(Source).where(Source.type == SourceType.INSTAGRAM)
             )
+            if compte_depuis_url(source.url).lower() in handles
         }
     interdits = []
     for actif_ in artistes:
