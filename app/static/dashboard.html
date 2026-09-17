@@ -88,6 +88,9 @@
   .status-pill.apercu { background: #33301d; color: #e8d27a; }
   .status-pill.echec { background: #3d1f23; color: #ff9aa5; }
   .status-pill.manque { background: #2d2323; color: #c9a3a3; }
+  .format-pill { font-size: 11px; border-radius: 999px; padding: 2px 8px; background: #23232d; color: var(--muted); white-space: nowrap; }
+  .format-pill.reel { background: #3d1f35; color: #ff9ad5; }
+  .reels-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: 12px; }
   .posts-bar { display: flex; gap: 8px; margin-bottom: 14px; }
   .post-row { display: flex; align-items: center; gap: 12px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; cursor: pointer; }
@@ -245,8 +248,12 @@
       <button class="mode-choix" data-mode="apercu">Aperçu</button>
       <button class="mode-choix mode-reel" data-mode="reel">Réel</button>
     </div>
+    <label class="reels-toggle" title="Coupe ou rallume les reels automatiques">
+      <input type="checkbox" id="reels-actifs"> Reels auto
+    </label>
   </div>
   <div id="mode-explication" class="mode-explication"></div>
+  <div id="offre-reels" class="mode-explication"></div>
   <div id="schedule-list"></div>
 </section>
 
@@ -476,6 +483,48 @@ const ETATS_CRENEAU = {
   apercu: "Aperçu, non publié", echec: "Échec", manque: "Manqué",
 };
 const CRENEAUX_MODIFIABLES = new Set(["libre", "programme"]);
+const FORMATS_CRENEAU = { carrousel: "🖼 Carrousel", reel: "🎬 Reel" };
+
+async function chargerOffreReels() {
+  const zone = document.getElementById("offre-reels");
+  try {
+    const reponse = await fetch("/schedule/offre-reels");
+    if (!reponse.ok) throw new Error(String(reponse.status));
+    const offre = await reponse.json();
+    zone.textContent = `Reels : ${offre.eligibles} article(s) éligible(s) sur ${offre.avec_video} avec vidéo, dont ${offre.directes} à lien direct — le reste via yt-dlp au gel (${offre.fraicheur_jours} derniers jours).`;
+  } catch (erreur) {
+    zone.textContent = "Offre de reels indisponible.";
+  }
+}
+
+async function chargerReels() {
+  const caseReels = document.getElementById("reels-actifs");
+  try {
+    const reponse = await fetch("/publication/reels");
+    if (!reponse.ok) throw new Error(String(reponse.status));
+    const etat = await reponse.json();
+    caseReels.indeterminate = false;
+    caseReels.checked = etat.actifs;
+    caseReels.parentElement.title = etat.ytdlp
+      ? "Reels automatiques ; yt-dlp récupère au gel les vidéos sans lien direct"
+      : "Reels automatiques ; yt-dlp coupé (PUBLICATION_REEL_YTDLP) : vidéos à lien direct seulement";
+  } catch (erreur) {
+    caseReels.indeterminate = true;
+  }
+}
+
+document.getElementById("reels-actifs").onchange = async (evenement) => {
+  const reponse = await fetch("/publication/reels", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ actifs: evenement.target.checked }),
+  });
+  if (!reponse.ok) {
+    const corps = await reponse.json().catch(() => ({}));
+    alert("Changement refusé : " + (corps.detail || reponse.status));
+  }
+  loadSchedulePanel();
+};
 
 const MODE_EXPLICATIONS = {
   arret: "Arrêt : rien ne tourne.",
@@ -524,6 +573,8 @@ async function loadSchedulePanel() {
   const list = document.getElementById("schedule-list");
   list.innerHTML = "Chargement…";
   chargerMode();
+  chargerOffreReels();
+  chargerReels();
   let creneaux;
   try {
     const reponse = await fetch("/schedule");
@@ -545,6 +596,7 @@ async function loadSchedulePanel() {
     row.className = "post-row";
     row.innerHTML = `
       <div class="grow"><div class="hl"></div><div class="sub"></div></div>
+      <span class="format-pill"></span>
       <span class="status-pill"></span>
       <span class="slot-actions"></span>`;
     row.querySelector(".hl").textContent = c.article_title || "(créneau libre)";
@@ -553,6 +605,9 @@ async function loadSchedulePanel() {
     if (c.epingle) details.push("📌 épinglé");
     if (c.erreur) details.push(`⚠ ${c.erreur}`);
     row.querySelector(".sub").textContent = details.join(" · ");
+    const formatPill = row.querySelector(".format-pill");
+    formatPill.classList.add(c.format);
+    formatPill.textContent = FORMATS_CRENEAU[c.format] || c.format;
     const pastille = row.querySelector(".status-pill");
     pastille.classList.add(c.etat);
     pastille.textContent = ETATS_CRENEAU[c.etat] || c.etat;
@@ -568,7 +623,7 @@ async function loadSchedulePanel() {
       if (c.article_id) {
         bouton(c.epingle ? "📍" : "📌", c.epingle ? "Désépingler" : "Épingler", { epingle: !c.epingle });
       }
-      bouton("✏️", "Remplacer par un autre article (identifiant)", "remplacer");
+      bouton("✏️", "Remplacer par un autre article (identifiant)", c.format === "reel" ? "remplacer-reel" : "remplacer");
       if (c.article_id) {
         bouton("⏬", "Décaler au créneau suivant", { decaler: true });
         bouton("🚫", "Sauter cet article", { sauter: true });
@@ -579,8 +634,11 @@ async function loadSchedulePanel() {
 }
 
 async function modifierCreneau(id, donnees) {
-  if (donnees === "remplacer") {
-    const saisie = prompt("Identifiant de l'article à programmer ici :");
+  if (donnees === "remplacer" || donnees === "remplacer-reel") {
+    const question = donnees === "remplacer-reel"
+      ? "Identifiant de l'article (vidéo d'un compte artiste, festival, label ou club) :"
+      : "Identifiant de l'article à programmer ici :";
+    const saisie = prompt(question);
     if (!saisie) return;
     donnees = { article_id: Number(saisie) };
   }
