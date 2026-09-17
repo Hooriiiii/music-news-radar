@@ -7,16 +7,16 @@ rejete par la base.
 
 Postgres ne sait pas modifier un CHECK : on le supprime et on le recree.
 
-Revision ID: 0014
-Revises: 0013
+Revision ID: 0015
+Revises: 0014
 Create Date: 2026-09-11
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0014"
-down_revision = "0013"
+revision = "0015"
+down_revision = "0014"
 branch_labels = None
 depends_on = None
 
@@ -48,7 +48,7 @@ def downgrade() -> None:
     # `articles.source_id` et `artist_mentions.source_id` sont des FK SANS
     # `ON DELETE` (contrairement a `artist_mentions.article_id`, en SET NULL) :
     # supprimer une source Instagram encore referencee leve ForeignKeyViolation
-    # et bloque le downgrade en 0014. On supprime donc les lignes dependantes
+    # et bloque le downgrade en 0015. On supprime donc les lignes dependantes
     # AVANT la source elle-meme -- articles puis artist_mentions, dans cet
     # ordre pour ne violer aucune contrainte au passage.
     op.execute(

@@ -22,3 +22,13 @@ def test_toutes_les_migrations_se_chargent():
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
     revisions = list(script.walk_revisions())
     assert revisions, "aucune migration trouvee"
+
+
+def test_une_seule_tete_et_des_revisions_uniques():
+    """Deux branches developpees en parallele ont chacune pose une 0014 : un
+    identifiant duplique ou deux tetes font echouer `alembic upgrade head`."""
+    script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
+    assert script.get_heads() == [script.get_current_head()]
+    fichiers = [p for p in (RACINE / "alembic" / "versions").glob("[0-9]*.py")]
+    prefixes = [p.name.split("_", 1)[0] for p in fichiers]
+    assert len(prefixes) == len(set(prefixes)), sorted(prefixes)
