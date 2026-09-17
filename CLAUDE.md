@@ -403,12 +403,10 @@ se voit directement sur le feed.
 
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
-Kinda publie seul deux carrousels par jour, choisis dans le flux scoré. Pas de reel :
-aucune source ne fournissait plus de vidéo (X à sec) au moment de la conception ;
-la source Instagram, réintroduite le 2026-09-17 avec un jeton Facebook distinct
-(voir « Deux jetons Meta »), peut en ramener.
-Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révision du
-2026-09-16.
+Kinda publie seul **deux carrousels et deux reels par jour**, choisis dans le flux
+scoré. Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`
+(révision du 2026-09-16) pour la file, et
+`docs/superpowers/specs/2026-09-17-reels-automatiques-design.md` pour les reels.
 
 **Connexion Instagram, sans Facebook.** App Meta « Kinda Radar », compte
 `kindanewsfrance` déclaré testeur : une app non revue publie sur ses comptes
@@ -497,6 +495,40 @@ est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié),
 le dossier figé est supprimé une fois le créneau terminé.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
+
+**Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
+migration 0017) ; fenêtres reel propres (`PUBLICATION_REEL_FENETRES`, défaut
+`12:00-14:00,20:30-22:30`), `PUBLICATION_CRENEAUX_REEL=0` les désactive.
+`publier_a` reste unique tous formats confondus : `slots.py` refuse des fenêtres
+qui se chevauchent. Arbitrage **reels d'abord**, un article n'occupe jamais deux
+créneaux. Éligible en reel : vidéo avec URL directe (≤ 90 s ou durée inconnue),
+compte artiste/festival/label/club (`PUBLICATION_REEL_CATEGORIES`), source
+Instagram (crédit). Le gel (`app/publish/preparation_reel.py`) télécharge la
+vidéo, l'assemble (`assembler_reel`, sans edit list, GOP fermé), sonde source et
+sortie contre les specs Meta, et fige `<prefixe>_reel.mp4` puis
+`<prefixe>_cover.jpg` ; la publication crée un conteneur `REELS` avec
+`cover_url` explicite (sondage 15 s, 10 min max). Crédit `🎥 via @compte`
+obligatoire (`posts.credit`), jamais coupé. ffmpeg absent = panne systémique qui
+ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
+
+**yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
+Meta omet `media_url` des reels à musique protégée ; la vidéo vient alors de
+`app/publish/ytdlp.py`, **au gel seulement** : API d'abord, yt-dlp sur le
+permalink sinon (et en repli d'un lien CDN expiré). Dépendance uv épinglée
+(`yt-dlp>=2026.8.19`, la version Homebrew 2025.12.08 échoue sur « login
+required »), lancée par `sys.executable -m yt_dlp` avec `--ignore-config
+--no-cookies --no-cookies-from-browser` — **jamais de cookies ni de connexion**.
+Un téléchargement par passage ; après une panne (session exigée, 429, erreur
+inconnue), notification avec la commande de mise à jour et **pause de 60
+minutes** (`ytdlp_etat.json` à côté du jeton) ; pendant la pause, une raison sur
+le créneau, sans notification. Vidéo supprimée/privée : article exclu. Sources
+en VP9 : `assembler_reel` réencode tout en H.264/AAC. Coupe-circuits : case
+« Reels auto » du dashboard (`reels_actifs` dans `publication.json`,
+`/publication/reels`) pour tous les reels, `PUBLICATION_REEL_YTDLP=false` pour
+yt-dlp seul. **Mettre à jour yt-dlp** quand la notification le demande :
+`uv lock --upgrade-package yt-dlp && uv sync`, puis committer `uv.lock`.
+Risques acceptés : CGU Instagram, fragilité, détection de droits à la
+republication, limitation de l'IP résidentielle — démarrer en `apercu`.
 
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
@@ -666,6 +698,14 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   les remplace pas. Et les `media_url` du CDN Instagram sont SIGNEES et EXPIRENT
   en quelques jours : stocker l'URL puis la servir plus tard donne un 404
   silencieux, d'ou le telechargement de l'asset au moment du gel.
+- **Meta omet `media_url` des médias qui contiennent du contenu protégé**
+  (documenté, et constaté le 2026-09-17 : 10 reels sur 10 de `davidguetta`, 39
+  reels ingérés sur 59 sans vidéo). Un reel d'artiste porte presque toujours de la
+  musique : **il n'est pas téléchargeable par l'API**. `_media` garde alors une
+  entrée `video` **sans URL**, la vignette (`thumbnail_url`) en `preview_url` :
+  le post reste illustré et identifiable comme reel, et `video_recuperable` dit
+  si yt-dlp pourra le chercher au gel (permalink `/reel/`, ou vidéo seule).
+  L'offre (`directes` contre le reste) est à surveiller au dashboard.
 - **Le quota Graph de l'app est partagé et vite atteint** : le 2026-09-17, ~310
   appels de vérification plus un passage sur 120 comptes dans la même heure ont
   rendu l'erreur code 4 (« Application request limit reached ») pendant une heure.
