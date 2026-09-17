@@ -17,6 +17,13 @@ from app.schedule.runner import tourner
 from app.schedule.slots import prochains_horaires
 from app.schedule.store import utc
 
+
+@pytest.fixture(autouse=True)
+def _carrousels_seuls(monkeypatch):
+    # Ces tests decrivent la file carrousel seule ; les reels ont leurs propres fichiers.
+    monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
+
+
 BASE = dt.datetime(2026, 9, 20, 4, 0, tzinfo=dt.timezone.utc)
 H0, H1 = prochains_horaires(BASE, 2)
 

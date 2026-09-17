@@ -1,5 +1,8 @@
 import datetime as dt
 
+import pytest
+
+from app.config import settings
 from app.content.media import entree
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, Source, SourceType
 from app.schedule.slots import prochains_horaires
@@ -9,6 +12,13 @@ from app.schedule.store import (
     synchroniser_creneaux,
     utc,
 )
+
+
+@pytest.fixture(autouse=True)
+def _carrousels_seuls(monkeypatch):
+    # Ces tests decrivent la file carrousel seule ; les reels ont leurs propres fichiers.
+    monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
+
 
 MAINTENANT = dt.datetime(2026, 9, 20, 10, 0, tzinfo=dt.timezone.utc)
 

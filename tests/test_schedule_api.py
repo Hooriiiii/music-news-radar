@@ -1,7 +1,15 @@
 import datetime as dt
 
+import pytest
+
 from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
+
+
+@pytest.fixture(autouse=True)
+def _carrousels_seuls(monkeypatch):
+    # Ces tests decrivent la file carrousel seule ; les reels ont leurs propres fichiers.
+    monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
 
 
 def _maintenant():
