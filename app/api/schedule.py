@@ -14,10 +14,16 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau
+from app.publish.mode import enregistrer_mode, mode_effectif, source_du_mode
 from app.schedule.store import MODIFIABLES, VERROUILLES, appliquer_arbitrage, post_a_reprendre, utc
-from app.schemas import CreneauOut, CreneauUpdate
+from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate
 
 router = APIRouter(tags=["schedule"])
+
+# Passer en `reel` publie sur le vrai compte Instagram, publiquement et de
+# facon irreversible : on exige que l'utilisateur tape ce mot en confirmation,
+# pas une simple case a cocher qu'un clic malheureux activerait.
+CONFIRMATION_REEL = "PUBLIER"
 
 
 def _maintenant() -> dt.datetime:
@@ -54,6 +60,22 @@ def _reprogrammer(creneau: Creneau) -> None:
 @router.get("/schedule", response_model=list[CreneauOut])
 def lister_file(db: Session = Depends(get_db)):
     return _liste(db, _maintenant())
+
+
+@router.get("/publication/mode", response_model=ModeOut)
+def lire_mode():
+    return ModeOut(mode=mode_effectif(), source=source_du_mode())
+
+
+@router.put("/publication/mode", response_model=ModeOut)
+def changer_mode(payload: ModeUpdate):
+    if payload.mode == "reel" and payload.confirmation != CONFIRMATION_REEL:
+        raise HTTPException(
+            status_code=409,
+            detail=f"passer en reel exige confirmation=\"{CONFIRMATION_REEL}\" : publication publique et irreversible",
+        )
+    enregistrer_mode(payload.mode, _maintenant())
+    return ModeOut(mode=mode_effectif(), source=source_du_mode())
 
 
 @router.post("/schedule/rebuild", response_model=list[CreneauOut])

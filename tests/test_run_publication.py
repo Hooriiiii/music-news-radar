@@ -5,6 +5,7 @@ import pytest
 import scripts.run_publication as script
 from app.config import settings
 from app.publish.jeton import EtatJeton, charger, enregistrer
+from app.publish.mode import enregistrer_mode
 
 MAINTENANT = dt.datetime(2026, 11, 10, 9, 0, tzinfo=dt.timezone.utc)
 
@@ -50,6 +51,18 @@ def test_en_arret_l_agent_ne_touche_meme_pas_la_base(monkeypatch):
         raise AssertionError("la base ne doit pas etre sollicitee en mode arret")
 
     monkeypatch.setattr(settings, "publication_mode", "arret")
+    monkeypatch.setattr(script, "attendre_base", interdit)
+    script.main()
+
+
+def test_le_mode_du_fichier_dashboard_prime_sur_le_env(tmp_path, monkeypatch):
+    """arret pose depuis le dashboard doit arreter l'agent meme si .env dit apercu."""
+    def interdit():
+        raise AssertionError("la base ne doit pas etre sollicitee : le fichier dit arret")
+
+    monkeypatch.setattr(settings, "publication_mode", "apercu")
+    monkeypatch.setattr(settings, "publication_mode_path", tmp_path / "publication.json")
+    enregistrer_mode("arret", MAINTENANT, tmp_path / "publication.json")
     monkeypatch.setattr(script, "attendre_base", interdit)
     script.main()
 

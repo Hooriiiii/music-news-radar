@@ -339,12 +339,25 @@ passage. Le coût dicte le calendrier : composition Claude à J-1, gel (rendu et
 téléchargements) à T-2h, publication à l'heure. **Au-delà de 90 minutes de retard,
 on ne publie pas** : un Mac rouvert le soir lâcherait sinon la journée d'un coup.
 
-**Trois modes** (`PUBLICATION_MODE`) : `arret`, `apercu` (tout, y compris le
-conteneur chez Meta, sauf `media_publish`), `reel`. Publier est public et
-irréversible : passer à `reel` est une décision de l'utilisateur. En `apercu`, un
-article passé en aperçu devient **inéligible** (comme un article publié : son
-créneau APERCU le retire de `candidats_eligibles`), sinon le même article
-reviendrait à chaque créneau — la file avance donc comme en `reel`.
+**Trois modes** : `arret`, `apercu` (tout, y compris le conteneur chez Meta, sauf
+`media_publish`), `reel`. Publier est public et irréversible : passer à `reel` est
+une décision de l'utilisateur. En `apercu`, un article passé en aperçu devient
+**inéligible** (comme un article publié : son créneau APERCU le retire de
+`candidats_eligibles`), sinon le même article reviendrait à chaque créneau — la
+file avance donc comme en `reel`.
+
+**Le mode se choisit dans le dashboard**, pas dans `.env`. `app/publish/mode.py` :
+`mode_effectif()` lit `publication.json` à côté du jeton Instagram
+(`settings.meta_token_path.parent`, chemin configurable via
+`publication_mode_path`) et retombe sur `PUBLICATION_MODE` (`.env`) si le fichier
+est absent, illisible ou invalide — jamais d'exception, l'agent planifié ne doit
+pas planter faute de fichier. `enregistrer_mode()` écrit atomiquement (fichier
+temporaire + `os.replace`). API : `GET /publication/mode` (`{mode, source}`,
+`source` valant `dashboard` ou `env`) et `PUT /publication/mode` (`{mode,
+confirmation}`) — passer à `reel` exige `confirmation: "PUBLIER"`, sinon 409 :
+une publication publique et irréversible ne doit pas basculer sur un simple clic.
+Le sélecteur segmenté vit dans le panneau Programmation du dashboard, à côté de
+« Recalculer la file ».
 
 **Règles Meta vérifiées dans la documentation (2026-09-16)** : JPEG uniquement,
 8 Mo, 320 à 1440 px de large, proportions 4:5 à 1,91:1, carrousel de 10, légende de

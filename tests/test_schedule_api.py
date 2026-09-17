@@ -1,5 +1,6 @@
 import datetime as dt
 
+from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
 
 
@@ -149,3 +150,53 @@ def test_remplacer_libere_un_ancien_creneau_programme_passe(client, db_session):
     assert vue["article_id"] == article.id
     db_session.refresh(ancien)
     assert (ancien.article_id, ancien.etat) == (None, EtatCreneau.LIBRE)
+
+
+# --- Mode de publication -----------------------------------------------------
+
+
+def _fichier_mode(tmp_path, monkeypatch):
+    chemin = tmp_path / "publication.json"
+    monkeypatch.setattr(settings, "publication_mode_path", chemin)
+    return chemin
+
+
+def test_get_mode_sans_fichier_rend_le_repli_env(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "publication_mode", "arret")
+    assert client.get("/publication/mode").json() == {"mode": "arret", "source": "env"}
+
+
+def test_put_mode_apercu_change_la_source_en_dashboard(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "publication_mode", "arret")
+    reponse = client.put("/publication/mode", json={"mode": "apercu"})
+    assert reponse.status_code == 200
+    assert reponse.json() == {"mode": "apercu", "source": "dashboard"}
+    assert client.get("/publication/mode").json() == {"mode": "apercu", "source": "dashboard"}
+
+
+def test_put_mode_reel_sans_confirmation_est_refuse(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    reponse = client.put("/publication/mode", json={"mode": "reel"})
+    assert reponse.status_code == 409
+    assert client.get("/publication/mode").json()["mode"] != "reel"
+
+
+def test_put_mode_reel_avec_mauvaise_confirmation_est_refuse(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    reponse = client.put("/publication/mode", json={"mode": "reel", "confirmation": "publier"})
+    assert reponse.status_code == 409
+
+
+def test_put_mode_reel_avec_confirmation_est_accepte(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    reponse = client.put("/publication/mode", json={"mode": "reel", "confirmation": "PUBLIER"})
+    assert reponse.status_code == 200
+    assert reponse.json() == {"mode": "reel", "source": "dashboard"}
+
+
+def test_put_mode_inconnu_est_refuse_en_422(client, tmp_path, monkeypatch):
+    _fichier_mode(tmp_path, monkeypatch)
+    reponse = client.put("/publication/mode", json={"mode": "pause"})
+    assert reponse.status_code == 422

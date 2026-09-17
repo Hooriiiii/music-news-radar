@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     # Verifie en lecture seule le 2026-09-16 : v21.0 et v23.0 repondent.
     meta_api_version: str = "v23.0"
     meta_token_path: Path = Path.home() / "Library/Application Support/Kinda/instagram_token.json"
+    # Le mode choisi depuis le dashboard vit ici (a cote du jeton, meme dossier
+    # applicatif hors du depot) -- `.env` (publication_mode ci-dessous) n'est
+    # plus que la valeur de repli si ce fichier n'existe pas encore.
+    publication_mode_path: Path = Path.home() / "Library/Application Support/Kinda/publication.json"
 
     # --- Publication automatique ---
     # Les fichiers figes au gel (T-2h), un sous-dossier par creneau.
