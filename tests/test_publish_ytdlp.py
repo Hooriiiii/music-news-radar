@@ -216,6 +216,17 @@ def test_l_etat_vit_a_cote_du_jeton():
         (LOGIN, SYSTEMIQUE),
         ("ERROR: HTTP Error 429: Too Many Requests", SYSTEMIQUE),
         ("ERROR: [Instagram] DAbc123: Requested format is not available", SYSTEMIQUE),
+        # Revue, tour 1 : une panne serveur ou reseau dit aussi « unavailable ».
+        ("ERROR: HTTP Error 503: Service Unavailable", SYSTEMIQUE),
+        ("ERROR: HTTP Error 502: Bad Gateway", SYSTEMIQUE),
+        ("ERROR: HTTP Error 500: Internal Server Error", SYSTEMIQUE),
+        ("ERROR: [Errno 35] Resource temporarily unavailable", SYSTEMIQUE),
+        ("ERROR: [Instagram] DAbc123: service unavailable", SYSTEMIQUE),
+        ("ERROR: [Instagram] DAbc123: temporarily unavailable", SYSTEMIQUE),
+        ("ERROR: [Errno 61] Connection refused", SYSTEMIQUE),
+        # Un 404 dans un code court n'est pas un code HTTP.
+        ("ERROR: [Instagram] DC-404: Unable to extract data", SYSTEMIQUE),
+        ("ERROR: [Instagram] DC-404: Not Found", SYSTEMIQUE),
         ("ERROR: quelque chose d'inattendu", SYSTEMIQUE),
         ("", SYSTEMIQUE),
     ],
@@ -229,3 +240,166 @@ def test_yt_dlp_est_une_dependance_epinglee():
     from yt_dlp.version import __version__
 
     assert __version__ >= "2026.08.19"
+
+
+# --- Revue, tour 1 -----------------------------------------------------------
+
+
+def test_trois_pannes_sur_le_meme_lien_excluent_l_article(tmp_path):
+    """Un permalink qui fait echouer yt-dlp trois fois de suite ne bloque pas la
+    file indefiniment : la troisieme panne devient une faute de l'article."""
+    for rang, minutes in enumerate((0, 61, 122)):
+        faux = FauxYtdlp(code=1, stderr="ERROR: [Instagram] DAbc123: Unable to extract data")
+        recuperer = _recuperateur(tmp_path, faux, MAINTENANT + dt.timedelta(minutes=minutes))
+        if rang < 2:
+            with pytest.raises(YtdlpIndisponible):
+                recuperer(REEL, tmp_path / "1", 100_000_000)
+            assert lire_etat(tmp_path / FICHIER_ETAT)["echecs"][REEL] == rang + 1
+        else:
+            with pytest.raises(PreparationImpossible, match="indisponible"):
+                recuperer(REEL, tmp_path / "1", 100_000_000)
+            assert REEL not in lire_etat(tmp_path / FICHIER_ETAT).get("echecs", {})
+
+
+def test_les_pannes_sont_comptees_par_lien(tmp_path):
+    autre = "https://www.instagram.com/reel/DXyz999/"
+    for minutes, url in ((0, REEL), (61, REEL), (122, autre)):
+        faux = FauxYtdlp(code=1, stderr=LOGIN)
+        with pytest.raises(YtdlpIndisponible):
+            _recuperateur(tmp_path, faux, MAINTENANT + dt.timedelta(minutes=minutes))(url, tmp_path / "1", 100_000_000)
+    assert lire_etat(tmp_path / FICHIER_ETAT)["echecs"] == {REEL: 2, autre: 1}
+
+
+def test_un_succes_remet_le_compteur_du_lien_a_zero(tmp_path):
+    with pytest.raises(YtdlpIndisponible):
+        _recuperateur(tmp_path, FauxYtdlp(code=1, stderr=LOGIN))(REEL, tmp_path / "1", 100_000_000)
+    apres = MAINTENANT + dt.timedelta(minutes=61)
+    _recuperateur(tmp_path, FauxYtdlp(), apres)(REEL, tmp_path / "1", 100_000_000)
+    assert REEL not in lire_etat(tmp_path / FICHIER_ETAT).get("echecs", {})
+
+
+class FauxPartiel(FauxYtdlp):
+    """yt-dlp qui laisse des morceaux dans le dossier avant d'echouer."""
+
+    def __call__(self, commande, **kwargs):
+        dossier = Path(commande[commande.index("-o") + 1]).parent
+        dossier.mkdir(parents=True, exist_ok=True)
+        (dossier / "source-ytdlp.f247.webm.part").write_bytes(b"morceau")
+        (dossier / "source-ytdlp.f140.m4a").write_bytes(b"audio")
+        return super().__call__(commande, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "faux, attendue",
+    [
+        (FauxPartiel(code=1, stderr=LOGIN), YtdlpIndisponible),
+        (FauxPartiel(code=1, stderr="ERROR: [Instagram] DAbc123: Video unavailable"), PreparationImpossible),
+        (FauxPartiel(lever=subprocess.TimeoutExpired("yt_dlp", 300)), YtdlpIndisponible),
+        (FauxPartiel(ecrire=False, stdout="File is larger than max-filesize"), PreparationImpossible),
+        (FauxPartiel(contenu=b"x" * 2000), PreparationImpossible),
+    ],
+)
+def test_aucun_morceau_ne_reste_apres_un_echec(tmp_path, faux, attendue):
+    dossier = tmp_path / "1"
+    with pytest.raises(attendue):
+        _recuperateur(tmp_path, faux)(REEL, dossier, 1000)
+    assert list(dossier.iterdir()) == []
+
+
+def test_plusieurs_fichiers_le_mp4_est_prefere(tmp_path):
+    class FauxDeux(FauxYtdlp):
+        def __call__(self, commande, **kwargs):
+            dossier = Path(commande[commande.index("-o") + 1]).parent
+            dossier.mkdir(parents=True, exist_ok=True)
+            (dossier / "source-ytdlp.webm").write_bytes(b"webm")
+            (dossier / "source-ytdlp.mp4").write_bytes(b"mp4")
+            return subprocess.CompletedProcess(commande, 0, stdout="", stderr="")
+
+    assert _recuperateur(tmp_path, FauxDeux())(REEL, tmp_path / "1", 1000) == b"mp4"
+    assert list((tmp_path / "1").iterdir()) == []
+
+
+def test_la_taille_est_verifiee_avant_la_lecture(tmp_path, monkeypatch):
+    lus = []
+    lire = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: lus.append(self) or lire(self))
+    with pytest.raises(PreparationImpossible, match="trop lourde"):
+        _recuperateur(tmp_path, FauxYtdlp(contenu=b"x" * 2000))(REEL, tmp_path / "1", 1000)
+    assert [p for p in lus if p.name.startswith("source-ytdlp")] == []
+
+
+def test_une_date_naive_dans_l_etat_est_lue_en_utc(tmp_path):
+    (tmp_path / FICHIER_ETAT).write_text(json.dumps({"pause_jusqu_a": "2026-09-20T10:30:00"}))
+    faux = FauxYtdlp()
+    with pytest.raises(YtdlpEnAttente):
+        _recuperateur(tmp_path, faux)(REEL, tmp_path / "1", 100_000_000)
+    apres = MAINTENANT + dt.timedelta(minutes=31)
+    assert _recuperateur(tmp_path, faux, apres)(REEL, tmp_path / "1", 100_000_000) == b"video-vp9"
+
+
+def test_yt_dlp_n_est_jamais_lance_en_http(tmp_path):
+    faux = FauxYtdlp()
+    with pytest.raises(PreparationImpossible, match="instagram"):
+        _recuperateur(tmp_path, faux)("http://www.instagram.com/reel/A/", tmp_path / "1", 1000)
+    assert faux.commandes == []
+
+
+def test_la_commande_refuse_une_option_interdite(tmp_path, monkeypatch):
+    import app.publish.ytdlp as module
+
+    monkeypatch.setattr(module, "OPTIONS_FIXES", (*module.OPTIONS_FIXES, "--cookies", "c.txt"))
+    with pytest.raises(ValueError, match="--cookies"):
+        _recuperateur(tmp_path, FauxYtdlp()).commande(REEL, tmp_path, 1000)
+
+
+def test_l_executeur_par_defaut_tue_tout_le_groupe_au_delai(tmp_path):
+    """Au delai, le fusionneur ffmpeg lance par yt-dlp doit mourir aussi : le
+    sous-processus part dans sa propre session et tout le groupe est tue.
+    Aucun yt-dlp ici : un Python qui lance un petit-enfant endormi."""
+    import os
+    import time
+
+    from app.publish.ytdlp import executer_en_groupe
+
+    temoin = tmp_path / "pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(temoin)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        executer_en_groupe([sys.executable, "-c", script], capture_output=True, text=True, timeout=2)
+    petit_enfant = int(temoin.read_text())
+    for _ in range(50):
+        try:
+            os.kill(petit_enfant, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("le petit-enfant a survecu au delai")
+
+
+def test_l_executeur_par_defaut_rend_la_sortie():
+    from app.publish.ytdlp import executer_en_groupe
+
+    resultat = executer_en_groupe(
+        [sys.executable, "-c", "import sys; print('ok'); sys.stderr.write('err'); sys.exit(3)"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert (resultat.returncode, resultat.stdout, resultat.stderr) == (3, "ok\n", "err")
+
+
+def test_le_recuperateur_utilise_l_executeur_de_groupe():
+    from app.publish.ytdlp import executer_en_groupe
+
+    assert RecuperateurYtdlp().executer is executer_en_groupe
+
+
+def test_un_flux_avant_fusion_n_est_pas_la_video(tmp_path):
+    """Sans chemin imprime, un `source-ytdlp.f140.m4a` laisse par une fusion
+    ratee n'est pas une video : aucun fichier produit, panne systemique."""
+    faux = FauxPartiel(ecrire=False)
+    with pytest.raises(YtdlpIndisponible, match="aucun fichier"):
+        _recuperateur(tmp_path, faux)(REEL, tmp_path / "1", 100_000_000)

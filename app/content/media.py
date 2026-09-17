@@ -79,10 +79,13 @@ def raison_pas_de_reel(media: list[dict] | None) -> str | None:
 def est_lien_instagram(url: str | None) -> bool:
     """Un lien dont l'HOTE est instagram.com. Pas un `in` sur la chaine :
     « https://evil.example/www.instagram.com/... » ne doit pas passer, yt-dlp
-    n'est jamais lance ailleurs qu'Instagram."""
+    n'est jamais lance ailleurs qu'Instagram. En https seulement."""
     if not url:
         return False
-    hote = (urlsplit(url).hostname or "").lower()
+    morceaux = urlsplit(url)
+    if morceaux.scheme.lower() != "https":
+        return False
+    hote = (morceaux.hostname or "").lower()
     return hote == "instagram.com" or hote.endswith(".instagram.com")
 
 

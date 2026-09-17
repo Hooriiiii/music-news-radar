@@ -96,6 +96,9 @@ def test_est_lien_instagram():
     assert est_lien_instagram("https://www.instagram.com/p/A/")
     assert not est_lien_instagram("https://tsugi.fr/a")
     assert not est_lien_instagram(None)
+    # https seulement : yt-dlp ne part jamais en clair, ni sur un autre schema.
+    assert not est_lien_instagram("http://www.instagram.com/reel/A/")
+    assert not est_lien_instagram("ftp://www.instagram.com/reel/A/")
 
 
 def test_une_video_sans_url_n_est_toujours_pas_exploitable_directement():
