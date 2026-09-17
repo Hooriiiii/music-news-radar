@@ -24,6 +24,7 @@ from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.media import PHOTO
+from app.content.visuels import visuels_autorises
 from app.models import Article, Post
 
 logger = logging.getLogger(__name__)
@@ -343,12 +344,13 @@ def _fond_par_defaut(article: Article) -> str | None:
     """La photo de l'article, sinon la vignette d'une video.
 
     Une actu video n'a pas de photo, et sa vignette fait un fond de cover
-    parfaitement valable -- c'est meme le cas normal pour ce type d'actu.
+    parfaitement valable -- c'est meme le cas normal pour ce type d'actu. Jamais
+    le visuel d'un compte media Instagram.
     """
-    for entree in article.media or []:
+    for entree in visuels_autorises(article):
         if entree.get("type") == PHOTO and entree.get("url"):
             return entree["url"]
-    for entree in article.media or []:
+    for entree in visuels_autorises(article):
         if entree.get("preview_url"):
             return entree["preview_url"]
     return None

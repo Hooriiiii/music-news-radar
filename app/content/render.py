@@ -10,6 +10,7 @@ Ce module ne connait ni la base ni Claude : il recoit une liste de dicts.
 
 import base64
 import logging
+import mimetypes
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from markupsafe import Markup
 from playwright.sync_api import Browser, sync_playwright
 
 from app.content.highlight import to_html
+from app.content.visuels import lire_fichier_cache
 from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
 
 logger = logging.getLogger(__name__)
@@ -96,7 +98,16 @@ def fetch_image_data_uri(url: str | None) -> str:
     deterministe (elle part parfois avant la fin du chargement). Une photo
     introuvable retombe sur l'image de secours -- un post sans photo vaut mieux
     qu'un post en echec.
+
+    Une copie locale (`file://`) est lue dans le cache des visuels seulement ;
+    hors du cache ou disparue, elle n'est jamais lue et le secours la remplace.
     """
+    locale = lire_fichier_cache(url)
+    if locale is not None:
+        return _data_uri(locale, mimetypes.guess_type(url)[0] or "image/jpeg")
+    if url and url.startswith("file://"):
+        logger.warning("copie locale introuvable ou hors cache : %s", url)
+        url = None
     if url:
         try:
             response = httpx.get(

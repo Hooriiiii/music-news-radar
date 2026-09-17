@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import settings
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
+from app.content.visuels import visuels_autorises
 from app.models import (
     Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus, SourceType,
 )
@@ -75,10 +76,11 @@ def synchroniser_creneaux(
 
 
 def _a_une_image(article: Article) -> bool:
-    # Sans image, la cover partirait sur le fond de secours : pas publiable.
+    # Sans image AUTORISEE, la cover partirait sur le fond de secours : pas
+    # publiable. Un compte media Instagram n'en fournit jamais.
     return any(
         (m.get("type") == "photo" and m.get("url")) or m.get("preview_url")
-        for m in article.media or []
+        for m in visuels_autorises(article)
     )
 
 
