@@ -349,10 +349,19 @@ testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine da
   de connexion Instagram ne sait pas appeler). Portées : `instagram_basic`,
   `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`,
   `business_management`. **60 jours une fois étendu, AUCUN rafraîchissement
-  automatique** : le renouveler à la main dans le Graph API Explorer, puis
-  débogueur de jeton → « Étendre », et le reporter dans `.env`. Expiré, Meta
-  répond code 190 : chaque source Instagram passe en erreur avec un message qui
-  dit quoi faire, et la notification de fin de run le signale.
+  automatique** (il faudrait le secret de l'app) : le renouveler à la main —
+  developers.facebook.com/tools/explorer → Generate Access Token → ⓘ → outil de
+  débogage → « Étendre le jeton d'accès » → remplacer `META_FB_ACCESS_TOKEN` dans
+  `.env`. Étendu le 2026-09-17 : `expires_at` 2026-11-16,
+  `data_access_expires_at` 2026-12-16.
+  **Alerte d'échéance** (`app/sources/instagram_jeton.py`) : à chaque run horaire,
+  `run_pipeline` interroge `debug_token` et notifie (macOS) à **J-7** ou dès
+  l'expiration, **au plus une fois par jour** (date dans
+  `sourcing_token_alert.json` à côté de `meta_token_path`). Sautée sans jeton ;
+  une panne réseau ne donne qu'un warning (type d'exception seulement, jamais le
+  texte, qui porterait l'URL donc le jeton). Expiré malgré tout, Meta répond
+  code 190 : chaque source Instagram passe en erreur avec un message qui dit quoi
+  faire, et la notification de fin de run le signale aussi.
 `META_IG_USER_ID` et `META_API_VERSION` sont communs aux deux usages.
 
 **La file.** 6 créneaux (3 jours × 2), heure tirée dans 08:30-11:00 et 17:00-19:30

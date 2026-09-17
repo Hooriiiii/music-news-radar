@@ -67,3 +67,47 @@ def test_run_pipeline_purges_and_reports_count(db_session, full_config):
         purge=lambda db, days: 7,
     )
     assert report.purged == 7
+
+
+def test_run_pipeline_surveille_le_jeton_de_sourcing(db_session, full_config):
+    vus = []
+
+    def surveiller(maintenant, notifier):
+        vus.append((maintenant, notifier))
+        return "jeton bientot expire"
+
+    def notify(titre, message):
+        pass
+
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: [],
+        score=lambda db: ScoringStats(),
+        record=lambda db: 0,
+        illustrer=lambda db: type("S", (), {"illustres": 0})(),
+        alert=lambda db: FakeAlertStats(),
+        purge=lambda db, days: 0,
+        notify=notify,
+        surveiller_jeton=surveiller,
+    )
+    assert len(vus) == 1 and vus[0][1] is notify
+    assert vus[0][0].tzinfo is not None
+    assert report.alerte_jeton_sourcing == "jeton bientot expire"
+
+
+def test_une_surveillance_du_jeton_qui_casse_n_arrete_pas_le_run(db_session, full_config):
+    def surveiller(maintenant, notifier):
+        raise RuntimeError("imprevu")
+
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: [],
+        score=lambda db: ScoringStats(),
+        record=lambda db: 0,
+        illustrer=lambda db: type("S", (), {"illustres": 0})(),
+        alert=lambda db: FakeAlertStats(),
+        purge=lambda db, days: 0,
+        notify=lambda titre, message: None,
+        surveiller_jeton=surveiller,
+    )
+    assert report.alerte_jeton_sourcing is None

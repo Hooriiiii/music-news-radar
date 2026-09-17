@@ -36,6 +36,13 @@ def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
 
 
+@pytest.fixture(autouse=True)
+def _pas_de_jeton_sourcing_ambiant(monkeypatch):
+    """Le `.env` de l'utilisateur porte un vrai META_FB_ACCESS_TOKEN : sans ca,
+    chaque `run_pipeline` de test appellerait debug_token chez Meta."""
+    monkeypatch.setattr(settings, "meta_fb_access_token", None)
+
+
 @pytest.fixture()
 def db_session():
     engine = create_engine(
