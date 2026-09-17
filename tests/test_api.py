@@ -267,3 +267,43 @@ def test_le_dashboard_porte_le_panneau_de_programmation(client):
     assert 'data-preset="schedule"' in html
     assert 'id="schedule-panel"' in html
     assert 'fetch("/schedule")' in html
+
+
+# --- Catégorie de source (artiste / média / ...) ---
+
+
+def test_source_expose_sa_categorie(client, db_session):
+    make_source(db_session)
+    assert client.get("/sources").json()[0]["categorie"] is None
+
+
+def test_create_source_avec_categorie(client):
+    response = client.post("/sources", json={
+        "name": "Tsugi", "type": "instagram", "url": "ig:tsugimag", "categorie": "media"})
+    assert response.status_code == 201
+    assert response.json()["categorie"] == "media"
+
+
+def test_patch_source_categorie(client, db_session):
+    source = make_source(db_session)
+    response = client.patch(f"/sources/{source.id}", json={"categorie": "artiste"})
+    assert response.status_code == 200
+    assert response.json()["categorie"] == "artiste"
+
+
+def test_categorie_invalide_rejetee(client, db_session):
+    source = make_source(db_session)
+    assert client.patch(f"/sources/{source.id}", json={"categorie": "blog"}).status_code == 422
+
+
+def test_patch_source_categorie_remise_a_inconnu(client, db_session):
+    source = make_source(db_session)
+    client.patch(f"/sources/{source.id}", json={"categorie": "media"})
+    response = client.patch(f"/sources/{source.id}", json={"categorie": None})
+    assert response.json()["categorie"] is None
+
+
+def test_dashboard_permet_de_classer_une_source(client):
+    html = client.get("/").text
+    assert 'id="s-categorie"' in html
+    assert 'class="categorie"' in html

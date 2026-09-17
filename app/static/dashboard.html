@@ -207,6 +207,15 @@
       <option value="reddit_rss">Subreddit</option>
     </select>
     <input id="s-genre" placeholder="Genre (electronic, pop…)">
+    <select id="s-categorie" title="Qui produit le contenu : un artiste est prioritaire, un média sert de filet de sécurité">
+      <option value="">Catégorie inconnue</option>
+      <option value="artiste">Artiste</option>
+      <option value="media">Média</option>
+      <option value="festival">Festival</option>
+      <option value="label">Label</option>
+      <option value="club">Club</option>
+      <option value="autre">Autre</option>
+    </select>
     <input id="s-url" class="full" placeholder="URL / requête" required>
     <div class="hint" id="s-hint"></div>
     <button type="submit">Ajouter la source</button>
@@ -374,9 +383,26 @@ async function loadSourcesPanel() {
       </div>
       <span class="tag">${s.type}</span>
       ${s.genre ? `<span class="tag">${s.genre}</span>` : ""}
+      <select class="categorie" title="Catégorie du compte (pondère le scoring)">
+        <option value="">Catégorie inconnue</option>
+      <option value="artiste">Artiste</option>
+      <option value="media">Média</option>
+      <option value="festival">Festival</option>
+      <option value="label">Label</option>
+      <option value="club">Club</option>
+      <option value="autre">Autre</option>
+      </select>
       <button class="toggle">${s.active ? "⏸ Désactiver" : "▶ Activer"}</button>`;
     row.querySelector(".nm").textContent = s.name;
     row.querySelector(".u").textContent = s.url;
+    const catSel = row.querySelector(".categorie");
+    catSel.value = s.categorie || "";
+    catSel.onchange = async () => {
+      await fetch(`/sources/${s.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categorie: catSel.value || null }),
+      });
+    };
     row.querySelector(".toggle").onclick = async () => {
       await fetch(`/sources/${s.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -395,6 +421,7 @@ document.getElementById("src-form").onsubmit = async (e) => {
     type: typeSel.value,
     url: document.getElementById("s-url").value.trim(),
     genre: document.getElementById("s-genre").value.trim() || null,
+    categorie: document.getElementById("s-categorie").value || null,
   };
   const res = await fetch("/sources", {
     method: "POST", headers: { "Content-Type": "application/json" },

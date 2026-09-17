@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.content import layout
 from app.content.highlight import validate_headline
-from app.models import ArticleStatus, EtatCreneau, PostStatus, SourceType
+from app.models import ArticleStatus, EtatCreneau, PostStatus, SourceCategorie, SourceType
 
 
 class SourceOut(BaseModel):
@@ -16,6 +16,7 @@ class SourceOut(BaseModel):
     type: SourceType
     url: str
     genre: str | None
+    categorie: SourceCategorie | None
     active: bool
 
 
@@ -24,11 +25,13 @@ class SourceCreate(BaseModel):
     type: SourceType
     url: str
     genre: str | None = None
+    categorie: SourceCategorie | None = None
 
 
 class SourceUpdate(BaseModel):
     name: str | None = None
     genre: str | None = None
+    categorie: SourceCategorie | None = None
     active: bool | None = None
 
 
