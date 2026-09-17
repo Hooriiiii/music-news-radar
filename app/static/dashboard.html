@@ -70,6 +70,15 @@
   /* --- Panneau Posts --- */
   #posts-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
   #schedule-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .mode-control { display: flex; margin-left: auto; border: 1px solid var(--border);
+    border-radius: 999px; overflow: hidden; }
+  .mode-choix { border: none; background: var(--panel); color: var(--muted);
+    padding: 6px 14px; cursor: pointer; font-size: 12.5px; border-left: 1px solid var(--border); }
+  .mode-choix:first-child { border-left: none; }
+  .mode-choix.on { background: var(--accent); color: #fff; }
+  .mode-choix.mode-reel { color: #ff8a8a; }
+  .mode-choix.mode-reel.on { background: var(--hot); color: #fff; }
+  .mode-explication { color: var(--muted); font-size: 11.5px; margin: 8px 0 16px; }
   .slot-actions { display: flex; gap: 4px; }
   .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px; cursor: pointer; padding: 2px 6px; }
   .status-pill.libre { background: #23232d; color: var(--muted); }
@@ -219,7 +228,13 @@
 <section id="schedule-panel" hidden>
   <div class="posts-bar">
     <button id="schedule-rebuild">🔄 Recalculer la file</button>
+    <div id="mode-control" class="mode-control">
+      <button class="mode-choix" data-mode="arret">Arrêt</button>
+      <button class="mode-choix" data-mode="apercu">Aperçu</button>
+      <button class="mode-choix mode-reel" data-mode="reel">Réel</button>
+    </div>
   </div>
+  <div id="mode-explication" class="mode-explication"></div>
   <div id="schedule-list"></div>
 </section>
 
@@ -419,9 +434,53 @@ const ETATS_CRENEAU = {
 };
 const CRENEAUX_MODIFIABLES = new Set(["libre", "programme"]);
 
+const MODE_EXPLICATIONS = {
+  arret: "Arrêt : rien ne tourne.",
+  apercu: "Aperçu : tout est préparé chez Meta sauf la publication, chaque aperçu consomme l'article.",
+  reel: "Réel : publication publique automatique.",
+};
+
+async function chargerMode() {
+  const explication = document.getElementById("mode-explication");
+  try {
+    const reponse = await fetch("/publication/mode");
+    if (!reponse.ok) throw new Error(String(reponse.status));
+    const { mode } = await reponse.json();
+    for (const bouton of document.querySelectorAll(".mode-choix")) {
+      bouton.classList.toggle("on", bouton.dataset.mode === mode);
+    }
+    explication.textContent = MODE_EXPLICATIONS[mode] || "";
+  } catch (erreur) {
+    explication.textContent = "Échec du chargement du mode de publication.";
+  }
+}
+
+document.querySelectorAll(".mode-choix").forEach((bouton) => {
+  bouton.onclick = async () => {
+    const mode = bouton.dataset.mode;
+    const payload = { mode };
+    if (mode === "reel") {
+      const saisie = prompt('Publier réellement et automatiquement sur Instagram : tape PUBLIER pour confirmer.');
+      if (saisie === null) return;
+      payload.confirmation = saisie;
+    }
+    const reponse = await fetch("/publication/mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!reponse.ok) {
+      const corps = await reponse.json().catch(() => ({}));
+      alert("Changement de mode refusé : " + (corps.detail || reponse.status));
+    }
+    chargerMode();
+  };
+});
+
 async function loadSchedulePanel() {
   const list = document.getElementById("schedule-list");
   list.innerHTML = "Chargement…";
+  chargerMode();
   let creneaux;
   try {
     const reponse = await fetch("/schedule");

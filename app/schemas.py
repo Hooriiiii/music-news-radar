@@ -223,3 +223,13 @@ class CreneauUpdate(BaseModel):
     article_id: int | None = None
     sauter: bool = False
     decaler: bool = False
+
+
+class ModeOut(BaseModel):
+    mode: Literal["arret", "apercu", "reel"]
+    source: Literal["dashboard", "env"]
+
+
+class ModeUpdate(BaseModel):
+    mode: Literal["arret", "apercu", "reel"]
+    confirmation: str | None = None

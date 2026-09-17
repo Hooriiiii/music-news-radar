@@ -21,6 +21,7 @@ from app.content.compose import make_claude_composer
 from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.delivery.notify import notifier
 from app.publish.jeton import JetonIndisponible, alerte_expiration, enregistrer, rafraichir_si_necessaire
+from app.publish.mode import mode_effectif
 from app.publish.preparation import preparer_fichiers
 from app.publish.publier import publier_fichiers
 from app.schedule.runner import RapportPublication, tourner
@@ -81,7 +82,7 @@ def _compositeur_paresseux():
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    mode = settings.publication_mode
+    mode = mode_effectif()
     if mode == "arret":
         return
     # Lance par launchd, parfois au reveil du Mac avant que le DNS reponde.
