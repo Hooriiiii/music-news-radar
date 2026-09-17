@@ -117,9 +117,18 @@ def source_video_reel(article: Article) -> str | None:
     return None
 
 
+def raison_reel_propre(article: Article) -> str | None:
+    """L'eligibilite reel par les medias de l'article LUI-MEME : video, categorie
+    du compte, credit. None si elle est acquise.
+
+    Extraite pour que le choix des visuels distingue « cet article a sa propre
+    video » de « il faut aller la chercher chez un artiste cite »."""
+    return _raison_ineligible_reel(article, source_video_reel(article))
+
+
 def raison_ineligible_reel(article: Article) -> str | None:
     """None si l'article peut partir en reel, sinon la raison, affichable."""
-    return _raison_ineligible_reel(article, source_video_reel(article))
+    return raison_reel_propre(article)
 
 
 def _raison_ineligible_reel(article: Article, source_video: str | None) -> str | None:

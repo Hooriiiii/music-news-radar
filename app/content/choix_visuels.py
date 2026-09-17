@@ -1,0 +1,188 @@
+"""Choisir les visuels d'un post, AVANT de payer sa composition.
+
+Dans l'ordre (design du 2026-09-17) :
+1. les medias de l'article, s'ils sont autorises (photo de presse, post d'un
+   compte d'artiste, de festival, de label, de club) ;
+2. sinon les posts des artistes SUIVIS cites : en base, puis -- carrousel
+   seulement, sans rien sur le sujet en base -- lus en direct, avec un budget.
+
+Les images d'artistes sont COPIEES en local : les URL du CDN Instagram sont
+signees et expirent, et le gel vient ~22 h apres la composition. Une video de
+reel ne l'est pas : le gel la telecharge (API) ou la recupere (yt-dlp).
+
+Deux issues sans visuel : `AucunVisuel` (l'article n'en a pas, il sort de la
+file) et `VisuelsDifferes` (la lecture en direct attend son budget ou le quota :
+on reessaie au passage suivant, rien n'est exclu).
+"""
+
+import datetime as dt
+import logging
+from dataclasses import dataclass, field
+
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.content.actifs_artistes import Retenu, classer, medias_utilisables, posts_en_base
+from app.content.credit import credit_video
+from app.content.export import telecharger as telecharger_media
+from app.content.lecture_artistes import LectureDifferee
+from app.content.media import PHOTO, VIDEO
+from app.content.visuels import (
+    ORIGINE_ARTICLE,
+    ORIGINE_ARTISTE,
+    actif,
+    chemin_cache,
+    credit_des_actifs,
+    raison_sans_artiste,
+    visuels_autorises,
+)
+from app.models import Article, FormatCreneau
+from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.schedule.store import raison_reel_propre
+
+logger = logging.getLogger(__name__)
+
+EXTENSIONS_IMAGE = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+class AucunVisuel(RuntimeError):
+    """Aucun visuel autorise pour cet article. Message affichable."""
+
+
+class VisuelsDifferes(RuntimeError):
+    """Les visuels ne peuvent pas etre choisis MAINTENANT. Message affichable."""
+
+
+@dataclass
+class ChoixVisuels:
+    actifs: list[dict] = field(default_factory=list)
+    credit: str | None = None
+
+
+def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
+    """Les visuels de l'article lui-meme, ou None s'il n'en a pas d'autorise."""
+    medias = visuels_autorises(article)
+    compte = credit_video(article)
+
+    def en_actif(entree_media: dict) -> dict:
+        return actif(
+            entree_media,
+            origine=ORIGINE_ARTICLE,
+            compte=compte,
+            permalink=article.url,
+            article_id=article.id,
+        )
+
+    if format_ == FormatCreneau.REEL:
+        if raison_reel_propre(article) is not None:
+            return None
+        videos = medias_utilisables(medias, article.url, format_)
+        return ChoixVisuels([en_actif(videos[0])], compte) if videos else None
+
+    # Photos ET videos : le carrousel publie les deux (le gel telecharge la video,
+    # et retombe sur sa vignette). Un media sans aucune URL n'est pas un visuel.
+    publiables = [
+        m
+        for m in medias
+        if m.get("type") in (PHOTO, VIDEO) and (m.get("url") or m.get("preview_url"))
+    ]
+    return ChoixVisuels([en_actif(m) for m in publiables], compte) if publiables else None
+
+
+def _en_actif_artiste(retenu: Retenu, entree_media: dict, fichier: str | None = None) -> dict:
+    return actif(
+        entree_media,
+        origine=ORIGINE_ARTISTE,
+        compte=f"@{retenu.post.compte.handle}",
+        permalink=retenu.post.permalink,
+        article_id=retenu.post.article_id,
+        publie_le=retenu.post.publie_le,
+        fichier=fichier,
+    )
+
+
+def _copier_images(retenus: list[Retenu], telecharger) -> list[dict]:
+    """Les photos des posts retenus, copiees dans le cache local, au plus
+    `visuels_max_photos`. Une copie en echec est sautee : l'URL signee du CDN
+    Instagram a pu expirer entre l'ingestion et maintenant."""
+    actifs: list[dict] = []
+    vues: set[str] = set()
+    for retenu in retenus:
+        for entree_media in retenu.medias:
+            if len(actifs) >= settings.visuels_max_photos:
+                return actifs
+            # `medias_utilisables` ne rend que des photos avec URL pour un
+            # carrousel : une vignette de video n'est jamais un actif d'artiste.
+            url = entree_media.get("url")
+            if not url or url in vues:
+                continue
+            vues.add(url)
+            octets, extension = telecharger(url)
+            if octets is None:
+                logger.info("Visuel d'artiste inaccessible (%s) : %s", url, extension)
+                continue
+            chemin = chemin_cache(url, extension if extension in EXTENSIONS_IMAGE else ".jpg")
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            chemin.write_bytes(octets)
+            actifs.append(_en_actif_artiste(retenu, entree_media, chemin.resolve().as_uri()))
+    return actifs
+
+
+def choisir_visuels(
+    db: Session,
+    article: Article,
+    *,
+    format_: FormatCreneau = FormatCreneau.CARROUSEL,
+    maintenant: dt.datetime,
+    lecteur=None,
+    index: IndexComptes | None = None,
+    telecharger=telecharger_media,
+) -> ChoixVisuels:
+    propres = _propres(article, format_)
+    if propres is not None:
+        return propres
+
+    index = index if index is not None else construire_index(db)
+    comptes = index.cites(
+        textes=[article.title, article.summary],
+        noms=article.mentioned_artists or [],
+        exclure_source_id=article.source_id,
+    )
+    if not comptes:
+        if format_ == FormatCreneau.REEL:
+            raise AucunVisuel(raison_reel_propre(article))
+        raise AucunVisuel(raison_sans_artiste(article))
+
+    posts = posts_en_base(db, comptes, maintenant)
+    retenus = classer(article, posts, format_=format_, maintenant=maintenant)
+
+    if format_ == FormatCreneau.REEL:
+        # Jamais de lecture en direct pour un reel : son eligibilite s'est decidee
+        # a l'arbitrage, sans reseau, sur la base.
+        if not retenus:
+            raise AucunVisuel("aucune video recente des artistes suivis cites")
+        video = _en_actif_artiste(retenus[0], retenus[0].medias[0])
+        return ChoixVisuels([video], video["compte"])
+
+    differe: LectureDifferee | None = None
+    if lecteur is not None and not any(r.sur_le_sujet for r in retenus):
+        lus: list = []
+        for compte in comptes:
+            try:
+                lus += lecteur(compte, maintenant)
+            except LectureDifferee as exc:
+                differe = exc
+                break
+        connus = {p.permalink for p in posts}
+        nouveaux = [p for p in lus if p.permalink not in connus]
+        if nouveaux:
+            retenus = classer(article, [*posts, *nouveaux], format_=format_, maintenant=maintenant)
+
+    actifs = _copier_images(retenus, telecharger)
+    if actifs:
+        return ChoixVisuels(actifs, credit_des_actifs(actifs))
+    if differe is not None:
+        raise VisuelsDifferes(str(differe)) from differe
+    raise AucunVisuel(
+        "aucun visuel recent des artistes suivis cites (hors fenetre, hors sujet ou inaccessible)"
+    )
