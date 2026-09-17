@@ -8,6 +8,8 @@ c'est-a-dire trop tard. D'ou une normalisation systematique au gel.
 La cover `kinda_post` (1080x1440, soit 3:4) est elle-meme hors bornes : elle est
 recadree AU CENTRE en 1080x1350. 45 px partent en haut et en bas ; le logo (87 px
 du haut) et le bloc d'accroche (76 px du bas) restent dans l'image.
+
+`en_jpeg` sert la cover d'un reel, qui echappe aux regles de proportions du fil.
 """
 
 import io
@@ -29,13 +31,12 @@ class ImageInexploitable(ValueError):
     """L'image ne peut pas etre mise aux regles de Meta. Message affichable."""
 
 
-def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
+def _ouvrir_rgb(octets: bytes) -> Image.Image:
     try:
         image = Image.open(io.BytesIO(octets))
         image.load()
     except Exception as exc:  # noqa: BLE001 -- Pillow leve des types tres varies
         raise ImageInexploitable(f"image illisible : {exc}") from exc
-
     # Une photo de telephone porte souvent son orientation en EXIF : sans ca,
     # elle partirait couchee.
     image = ImageOps.exif_transpose(image)
@@ -44,7 +45,20 @@ def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
         fond = Image.new("RGB", rgba.size, FOND)
         fond.paste(rgba, mask=rgba.getchannel("A"))
         image = fond
+    return image
 
+
+def _jpeg_borne(image: Image.Image, poids_max: int) -> bytes:
+    for qualite in QUALITES:
+        tampon = io.BytesIO()
+        image.save(tampon, "JPEG", quality=qualite, optimize=True)
+        if tampon.tell() <= poids_max:
+            return tampon.getvalue()
+    raise ImageInexploitable(f"plus de {poids_max // (1024 * 1024)} Mo meme compressee")
+
+
+def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
+    image = _ouvrir_rgb(octets)
     largeur, hauteur = image.size
 
     ratio = largeur / hauteur
@@ -68,9 +82,14 @@ def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
         nouvelle_hauteur = round(image.height * LARGEUR_MAX / image.width)
         image = image.resize((LARGEUR_MAX, nouvelle_hauteur), Image.LANCZOS)
 
-    for qualite in QUALITES:
-        tampon = io.BytesIO()
-        image.save(tampon, "JPEG", quality=qualite, optimize=True)
-        if tampon.tell() <= POIDS_MAX:
-            return tampon.getvalue()
-    raise ImageInexploitable("plus de 8 Mo meme compressee")
+    return _jpeg_borne(image, POIDS_MAX)
+
+
+def en_jpeg(octets: bytes, poids_max: int = POIDS_MAX) -> bytes:
+    """La cover d'un reel : JPEG RGB de 8 Mo au plus, SANS recadrage.
+
+    Les regles 4:5 a 1,91:1 ne valent que pour les images du fil. Pour un reel,
+    Meta prend lui-meme le rectangle 9:16 central (onglet Reels) et le carre
+    central (fil) : la cover kinda_reel, deja en 1080x1920, part telle quelle.
+    """
+    return _jpeg_borne(_ouvrir_rgb(octets), poids_max)

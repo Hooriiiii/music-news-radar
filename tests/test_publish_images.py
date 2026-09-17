@@ -5,7 +5,7 @@ import io
 import pytest
 from PIL import Image
 
-from app.publish.images import ImageInexploitable, normaliser
+from app.publish.images import ImageInexploitable, en_jpeg, normaliser
 
 
 def _image(largeur, hauteur, mode="RGB", format_="PNG"):
@@ -61,3 +61,18 @@ def test_une_banniere_trop_etroite_apres_recadrage_est_refusee():
     """Une banniere 728x90 (8.09:1) est recadree a 171x90, sous les 320 px."""
     with pytest.raises(ImageInexploitable):
         normaliser(_image(728, 90))
+
+
+def test_la_cover_d_un_reel_garde_son_9_16():
+    """Meta prend lui-meme le 9:16 central pour l'onglet Reels : pas de recadrage."""
+    assert _dimensions(en_jpeg(_image(1080, 1920))) == ("JPEG", (1080, 1920), "RGB")
+
+
+def test_en_jpeg_aplatit_la_transparence():
+    format_, _, mode = _dimensions(en_jpeg(_image(1080, 1920, mode="RGBA")))
+    assert (format_, mode) == ("JPEG", "RGB")
+
+
+def test_en_jpeg_refuse_une_image_illisible():
+    with pytest.raises(ImageInexploitable):
+        en_jpeg(b"pas une image")
