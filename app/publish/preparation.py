@@ -29,6 +29,7 @@ from app.config import settings
 from app.content import video as video_mod
 from app.content.export import telecharger as telecharger_media
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
+from app.content.urls import url_propre
 from app.content.render import render_post
 from app.content.visuels import (
     ORIGINE_ARTICLE,
@@ -108,7 +109,10 @@ def medias_du_carrousel(post, article) -> list[dict]:
 
 def _octets_image(url: str, telecharger) -> bytes | None:
     """Une copie locale est lue dans le cache, jamais telechargee ; un `file://`
-    hors du cache n'est jamais lu."""
+    hors du cache n'est jamais lu. L'URL est nettoyee de ses entites HTML : une
+    ligne posee avant le nettoyage a l'ingestion porte encore `&amp;`, que le CDN
+    Instagram refuse."""
+    url = url_propre(url) or url
     octets = lire_fichier_cache(url)
     if octets is not None or url.startswith("file://"):
         return octets
@@ -118,7 +122,7 @@ def _octets_image(url: str, telecharger) -> bytes | None:
 
 def _video_de_carrousel(media: dict, telecharger_video, sonder, transcoder) -> bytes | None:
     """Le MP4 d'un element video, ou None (l'appelant prend alors la vignette)."""
-    url, duree_ms = media.get("url"), media.get("duration_ms")
+    url, duree_ms = url_propre(media.get("url")), media.get("duration_ms")
     if not url or (duree_ms and duree_ms > DUREE_MAX_SLIDE_MS):
         return None
     duree_max_s = DUREE_MAX_SLIDE_MS / 1000
