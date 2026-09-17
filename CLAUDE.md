@@ -296,8 +296,11 @@ jamais touchés.
   cette élection, puis re-notation Claude — sans pré-filtre — du plan : articles
   notés en local dont le groupe atteint 3 sources ou qui citent un artiste
   suivi, et articles déjà notés par Claude en compte média entre 40 et 59 quand
-  un artiste suivi est cité, la note dépasse 50, ou le groupe atteint 2 sources ;
-  au plus `--limite` appels Claude au total)
+  un artiste suivi est cité, la note dépasse 50, ou le groupe atteint 2 sources).
+  Coût : l'élection garde le plafond d'un run ordinaire
+  (`cluster_reevaluations_max_par_run`, 10) et chacune des deux phases payées est
+  bornée par `--limite` — au pire `10 + 2 × --limite` appels, et le budget
+  réellement dépensé est affiché par phase à la fin.
 - Lier une fiche artiste à son compte suivi quand le nom ne suffit pas :
   `PATCH /artists/{id}` avec `{"source_instagram_id": <id de la source>}`
 

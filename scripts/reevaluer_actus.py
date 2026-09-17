@@ -10,6 +10,12 @@ Sans --apply : le PLAN seul, aucune ecriture, aucun appel Claude. Avec --apply :
 2. notation des articles en attente (representants promus ou remis a noter) ;
 3. re-notation par Claude, sans pre-filtre, des articles du plan.
 
+Cout : l'election est bornee par `cluster_reevaluations_max_par_run` (10, le
+plafond d'un run ordinaire) et CHACUNE des phases 2 et 3 par --limite -- au plus
+2 x --limite + 10 appels au pire, et le budget reellement depense est affiche par
+phase a la fin. Passer --limite a l'election lui aurait donne 100 remises a noter
+a elle seule, soit deux fois le cout annonce.
+
 Le plan, sur --jours jours (non doublons, non publies, non exclus, deja notes) :
 - notes par le pre-filtre local et (groupe >= 3 sources ou artiste suivi cite) ;
 - notes par Claude, compte media, relevance 40-59, et (artiste suivi cite ou
@@ -41,6 +47,22 @@ RAISON_ARTISTE = "artiste_suivi"
 RAISON_MEDIA = "media_decote"
 NOTE_MEDIA_MIN = 40
 NOTE_MEDIA_PROCHE = 50
+
+
+@dataclass
+class Budget:
+    """Appels Claude reellement payes, par phase."""
+
+    # Remises a noter decidees par l'election : elles sont PAYEES en phase 2.
+    election: int = 0
+    # Articles notes par `score_pending` (les remises a noter, et l'arriere ordinaire).
+    en_attente: int = 0
+    # Re-notations du plan tentees (une erreur a ete payee elle aussi).
+    plan: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.en_attente + self.plan
 
 
 @dataclass
@@ -113,21 +135,29 @@ def reevaluer(
     appliquer: bool = False,
     scorer=None,
     noter_en_attente=score_pending,
-) -> tuple[ElectionStats, list[Reevaluation]]:
+) -> tuple[ElectionStats, list[Reevaluation], Budget]:
+    # Plafond de l'election : celui d'un run ordinaire, PAS --limite (qui borne
+    # les re-notations du plan) -- sinon le script coute le double de ce qu'il dit.
     election = elire_representants(
-        db, construire_index(db), window_hours=jours * 24, limite=limite,
+        db, construire_index(db), window_hours=jours * 24,
+        limite=settings.cluster_reevaluations_max_par_run,
         maintenant=maintenant, appliquer=appliquer,
     )
     # APRES l'election (les representants remis a noter sortent du plan : leur
     # note est nulle) et AVANT la notation des en-attente (un article ne doit pas
     # etre paye deux fois).
     plan = planifier(db, maintenant, jours=jours, limite=limite)
+    budget = Budget(election=election.a_rescorer)
     if not appliquer:
-        return election, plan
+        return election, plan, budget
     scorer = scorer or make_claude_scorer()
-    noter_en_attente(db, scorer=scorer)
+    # Borne aussi la phase 2 : l'arriere des articles non notes n'a aucune raison
+    # de tenir dans le budget de ce rattrapage.
+    stats = noter_en_attente(db, scorer=scorer, limit=limite)
+    budget.en_attente = getattr(stats, "scored", 0) or 0
     for reevaluation in plan:
         article = db.get(Article, reevaluation.article_id)
+        budget.plan += 1
         try:
             apply_score(article, appliquer_garde_fous(article, scorer(article)))
             article.scored_by = ScoredBy.CLAUDE
@@ -136,7 +166,7 @@ def reevaluer(
         except Exception as exc:  # noqa: BLE001 -- un echec n'arrete pas les autres
             db.rollback()
             print(f"  ! #{reevaluation.article_id} : {exc}")
-    return election, plan
+    return election, plan, budget
 
 
 def main() -> None:
@@ -147,7 +177,7 @@ def main() -> None:
     args = parser.parse_args()
     attendre_base()
     with SessionLocal() as db:
-        election, plan = reevaluer(
+        election, plan, budget = reevaluer(
             db, dt.datetime.now(dt.timezone.utc), jours=args.jours, limite=args.limite, appliquer=args.apply
         )
     print(f"Representants : {election.reelus} change(s), {election.verrouilles} verrouille(s), "
@@ -160,8 +190,14 @@ def main() -> None:
         apres = f" -> {r.apres}" if r.apres is not None else ""
         print(f"  - #{r.article_id} [{r.source}] {r.raison} rel {r.avant}{apres} "
               f"(artistes suivis {r.artistes}, sources {r.taille}) : {r.titre[:70]}")
+    if args.apply:
+        print(f"Budget Claude depense : {budget.en_attente} en attente "
+              f"(dont {budget.election} remis a noter par l'election) + {budget.plan} du plan "
+              f"= {budget.total} appel(s)")
     if not args.apply:
-        print("\nPlan calcule AVANT election : les representants peuvent changer a l'application.")
+        print(f"\nBudget au pire : {settings.cluster_reevaluations_max_par_run} remises a noter "
+              f"+ {args.limite} en attente + {len(plan)} du plan.")
+        print("Plan calcule AVANT election : les representants peuvent changer a l'application.")
         if plan or election.changements:
             print("Relancer avec --apply pour appliquer.")
 

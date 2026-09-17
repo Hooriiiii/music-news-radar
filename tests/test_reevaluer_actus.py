@@ -8,7 +8,7 @@ import pytest
 
 import scripts.reevaluer_actus as script
 from app.models import Article, ArticleStatus, ScoredBy, Source, SourceCategorie, SourceType
-from app.pipeline.scoring import ArticleScore, Category
+from app.pipeline.scoring import ArticleScore, Category, ScoringStats
 from app.sources.instagram import TITRE_PAR_DEFAUT
 
 UTC = dt.timezone.utc
@@ -86,8 +86,8 @@ def test_sans_apply_rien_n_est_ecrit(db_session, fred):
                      "GTA VI full soundtrack announced featuring Fred again.., PinkPantheress, more", 45,
                      heures=3, rep=mixmag)
 
-    election, plan = script.reevaluer(db_session, MAINTENANT, scorer=_interdit,
-                                      noter_en_attente=lambda db, scorer: _interdit(None))
+    election, plan, _ = script.reevaluer(db_session, MAINTENANT, scorer=_interdit,
+                                      noter_en_attente=lambda db, scorer, limit: _interdit(None))
 
     db_session.expire_all()
     assert election.changements == [(mixmag.id, djmag.id)]
@@ -108,13 +108,48 @@ def test_apply_elit_note_les_en_attente_puis_re_note_le_plan(db_session, fred):
         return ArticleScore(relevance=74, hotness=60, emergence=5, category=Category.ANNOUNCEMENT,
                             summary="La BO de GTA VI.", artists=["Fred again.."])
 
-    election, plan = script.reevaluer(
+    election, plan, _ = script.reevaluer(
         db_session, MAINTENANT, appliquer=True, scorer=claude,
-        noter_en_attente=lambda db, scorer: en_attente.append(scorer),
+        noter_en_attente=lambda db, scorer, limit: en_attente.append((scorer, limit)),
     )
 
     assert election.reelus == 1
     assert djmag.duplicate_of_id is None
-    assert en_attente == [claude]
+    assert en_attente == [(claude, 100)]
     assert [(r.article_id, r.apres) for r in plan] == [(djmag.id, 74)]
     assert (djmag.relevance_score, djmag.scored_by) == (74, ScoredBy.CLAUDE)
+
+
+def test_le_budget_est_borne_et_rapporte_par_phase(db_session, fred, monkeypatch):
+    """Le script promettait « au plus --limite appels » : sans borne, l'election
+    pouvait remettre a noter jusqu'a --limite articles (plafond du run ignore) et
+    la notation des en-attente n'etait bornee par rien -- soit ~2x le cout promis."""
+    from app.config import settings
+    from app.pipeline.election import ElectionStats
+
+    vus = {}
+
+    def election_factice(db, index, **kwargs):
+        vus.update(kwargs)
+        return ElectionStats(a_rescorer=2)
+
+    monkeypatch.setattr(script, "elire_representants", election_factice)
+    presse = _source(db_session, "presse")
+    _article(db_session, presse, "Fred again.. et la BO de GTA VI", 45)
+    appels = []
+
+    def noter(db, scorer, limit):
+        appels.append(limit)
+        return ScoringStats(scored=2)
+
+    election, plan, budget = script.reevaluer(
+        db_session, MAINTENANT, limite=7, appliquer=True,
+        scorer=lambda article: ArticleScore(relevance=70, hotness=10, emergence=5,
+                                            category=Category.ANNOUNCEMENT, summary="x", artists=[]),
+        noter_en_attente=noter,
+    )
+
+    assert vus["limite"] == settings.cluster_reevaluations_max_par_run
+    assert appels == [7]
+    assert (budget.en_attente, budget.plan) == (2, len(plan))
+    assert budget.election == election.a_rescorer
