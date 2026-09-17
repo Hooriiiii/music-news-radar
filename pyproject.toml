@@ -16,6 +16,7 @@ dependencies = [
     "jinja2>=3.1",
     "playwright>=1.61.0",
     "pillow>=12.3.0",
+    "yt-dlp>=2026.8.19",
 ]
 
 [dependency-groups]

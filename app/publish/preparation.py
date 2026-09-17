@@ -24,6 +24,13 @@ class PreparationImpossible(RuntimeError):
     """Le post ne peut pas etre fige. Message affichable."""
 
 
+class PreparationDifferee(RuntimeError):
+    """Le gel ne peut pas se faire MAINTENANT, sans que l'article ni la machine
+    soient en defaut (pause de yt-dlp, un telechargement par passage deja fait).
+    Le runner inscrit la raison sur le creneau, sans exclure ni notifier : le gel
+    est retente au passage suivant. Message affichable."""
+
+
 def urls_des_photos(post, article) -> list[str]:
     urls = [
         slide["url"]
