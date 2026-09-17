@@ -298,6 +298,20 @@ def make_claude_composer(
                 )
                 continue
             draft = response.parsed_output
+            if draft is None:
+                # max_tokens atteint ou refus : aucune sortie structuree. Meme
+                # traitement qu'un echec de validation, jamais d'AttributeError.
+                raison = getattr(response, "stop_reason", None)
+                derniere_erreur = ValueError(f"sortie structuree vide (stop_reason={raison})")
+                consigne = (
+                    "Ta reponse etait vide ou tronquee : rends le JSON complet, "
+                    "sans texte autour, en restant concis."
+                )
+                logger.warning(
+                    "composition vide pour l'article %s (tentative %s/%s) : %s",
+                    article.id, tentative, max_attempts, raison,
+                )
+                continue
             probleme = probleme_emojis(draft.caption)
             if probleme is None:
                 return draft

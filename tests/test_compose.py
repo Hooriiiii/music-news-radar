@@ -403,3 +403,19 @@ def test_create_post_prend_la_vignette_d_un_reel_sans_media_url(db_session):
     post = create_post(db_session, article, _draft())
 
     assert post.slides[0]["image_url"] == "https://thumb.jpg"
+
+
+def test_une_sortie_vide_est_retentee_comme_une_erreur_de_validation(db_session):
+    """max_tokens ou refus : `parsed_output` vaut None. Jamais d'AttributeError."""
+    article = _article(db_session)
+    bon = _draft()
+    client = _FakeClient([_FakeParsedResponse(None), _FakeParsedResponse(bon)])
+    assert make_claude_composer(client=client, max_attempts=3)(article) is bon
+    assert "vide" in _contenu_utilisateur(client.messages.appels[1])
+
+
+def test_des_sorties_vides_repetees_donnent_une_composition_error(db_session):
+    article = _article(db_session)
+    client = _FakeClient([_FakeParsedResponse(None)] * 3)
+    with pytest.raises(CompositionError):
+        make_claude_composer(client=client, max_attempts=3)(article)

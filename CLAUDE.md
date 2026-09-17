@@ -413,6 +413,8 @@ composition d'un créneau (articles 17930 et 18078). `probleme_emojis()` décrit
 l'écart (nombre trouvé, attendu, « `caption` seulement »), le compositeur relance
 avec ce message — toute erreur de validation est d'ailleurs renvoyée au modèle à
 la relance —, puis accepte le brouillon avec un warning si rien ne fait mieux.
+Une sortie structurée vide (`parsed_output` None : `max_tokens` ou refus) est
+traitée comme un échec de validation : relance, puis `CompositionError`.
 L'interdiction d'emoji dans `headline`/`title`/`subtitle` reste stricte (textes
 rendus dans une police).
 
