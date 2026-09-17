@@ -41,6 +41,11 @@ conditionnel committe) AVANT l'appel a Meta, et on ne publie que si la
 reclamation a touche une ligne. Un crash entre la publication et la confirmation
 laisse donc un ECHEC, jamais retente -- mieux vaut un post manque qu'un post
 publie deux fois.
+
+Aucune transaction ouverte pendant l'attente de l'heure ni pendant l'appel a
+Meta : Neon coupe une session restee « idle in transaction », et c'est
+l'ecriture d'APRES publication qui tombait (voir `_clore_transaction` et
+`_ecrire_apres_publication`).
 """
 
 import datetime as dt
@@ -53,7 +58,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import InterfaceError, InvalidRequestError, OperationalError, PendingRollbackError
 
 from app.config import settings
 from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visuels
@@ -520,6 +525,53 @@ def _encore_publier(decision: dict, lire_mode, publier_a: dt.datetime, horloge) 
     return decision["mode"] == "reel"
 
 
+def _clore_transaction(db) -> None:
+    """Rend la session SANS transaction ouverte, avant une attente ou un appel long.
+
+    Une session qui a LU garde sa transaction ouverte tant qu'on ne la clot pas
+    (ici : le `refresh` de la reclamation, les `get` du post et de l'article).
+    L'attente de l'heure puis l'appel a Meta durent des minutes : Neon coupe
+    alors la connexion restee « idle in transaction », et c'est l'ecriture
+    d'APRES publication qui tombe -- celle qui enregistre PUBLIE, l'ig_media_id
+    et l'article USED. Le 17/09, le reel etait en ligne et la base disait ECHEC.
+
+    `expire_on_commit=False` : les objets gardent leurs valeurs apres ce commit,
+    et rien ne doit les relire avant le retour de `publier` (ce serait rouvrir
+    une transaction pour la duree de l'appel).
+    """
+    try:
+        db.commit()
+    except Exception:  # noqa: BLE001 -- une session deja fautive se referme ici
+        logger.exception("commit impossible avant l'attente : rollback")
+        db.rollback()
+
+
+# Une connexion morte se signale ainsi ; `PendingRollbackError` est ce que rend la
+# session quand un echec precedent l'a laissee a nettoyer.
+COUPURES = (OperationalError, InterfaceError, PendingRollbackError)
+
+
+def _ecrire_apres_publication(db, ecrire):
+    """Ecrit le resultat d'une publication, avec UNE reconnexion si besoin.
+
+    L'appel a Meta est deja fait : perdre cette ecriture laisserait un post EN
+    LIGNE enregistre en ECHEC, article exclu et jamais marque USED -- la base ne
+    dirait plus la realite, et l'utilisateur verrait un faux echec. Un second
+    essai ne republie RIEN : seule la base est retouchee, le conteneur Meta n'est
+    pas renvoye (la reclamation, elle, reste committee et interdit toujours un
+    doublon).
+
+    `rollback()` rend la connexion au pool (`pool_pre_ping` en fournira une
+    vivante) et defait les modifications en attente : `ecrire` les repose.
+    """
+    try:
+        return ecrire()
+    except COUPURES:
+        logger.exception("connexion perdue apres la publication : reconnexion et second essai")
+    db.rollback()
+    return ecrire()
+
+
 def _publier(
     db,
     maintenant: dt.datetime,
@@ -615,64 +667,95 @@ def _publier(
             )
         if a_venir and mode == "reel":
             crochets["attendre_jusqu_a"] = partial(_attendre_l_heure, utc(creneau.publier_a), horloge, dormir)
+
+        # Tout ce dont l'appel a besoin est lu MAINTENANT, avant de rendre la
+        # session sans transaction : rien ne doit toucher la base entre ici et le
+        # retour de `publier` (voir `_clore_transaction`).
+        dossier, fichiers, legende = _dossier(creneau), creneau.fichiers or [], texte_legende(post)
+        _clore_transaction(db)
         try:
-            identifiant = publier(
-                _dossier(creneau),
-                creneau.fichiers or [],
-                texte_legende(post),
-                mode == "reel",
-                **crochets,
-            )
+            identifiant = publier(dossier, fichiers, legende, mode == "reel", **crochets)
         except Exception as exc:  # noqa: BLE001 -- tout echec doit se voir
-            creneau.etat = EtatCreneau.ECHEC
-            creneau.erreur = str(exc)[:1000]
-            if article is not None:
-                # Un article refuse par Meta ne revient pas dans la file.
-                article.file_exclu_raison = f"echec de publication : {exc}"[:500]
-            db.commit()
+            # Alias : `exc` est efface a la sortie du bloc `except`, la fermeture
+            # le lirait donc sur un nom disparu.
+            faute = exc
+
+            def echec():
+                creneau.etat = EtatCreneau.ECHEC
+                creneau.erreur = str(faute)[:1000]
+                if article is not None:
+                    # Un article refuse par Meta ne revient pas dans la file.
+                    article.file_exclu_raison = f"echec de publication : {faute}"[:500]
+                db.commit()
+
+            _ecrire_apres_publication(db, echec)
             _effacer_dossier(creneau)
             rapport.echecs += 1
             _prevenir(notifier, f"publication de {_heure_locale(creneau.publier_a)} en echec : {exc}")
             continue
         mode = decision["mode"]
-        if article is not None:
-            article.file_exclu_raison = None
+
+        def effacer_exclusion():
+            if article is not None:
+                article.file_exclu_raison = None
+
         if mode == "arret":
             # Arret choisi pendant l'attente : rien n'est parti (le conteneur non
             # publie expire seul). Le creneau redevient GELE, dossier conserve :
             # il partira si l'on repasse en reel avant la limite de retard.
             # Ecriture CONDITIONNELLE : si le dashboard est passe, son choix prime.
-            _ecrire_si(
-                db, creneau, reclame,
-                etat=EtatCreneau.GELE, erreur="publication suspendue : mode arret choisi avant l'heure",
-            )
+            def suspendre():
+                effacer_exclusion()
+                _ecrire_si(
+                    db, creneau, reclame,
+                    etat=EtatCreneau.GELE,
+                    erreur="publication suspendue : mode arret choisi avant l'heure",
+                )
+
+            _ecrire_apres_publication(db, suspendre)
             continue
         if mode == "manque":
             # Trop tard au moment de media_publish : rien n'est parti, l'article
             # peut revenir dans la file.
-            if _ecrire_si(db, creneau, reclame, etat=EtatCreneau.MANQUE, erreur="retard au moment de publier"):
+            def manquer():
+                effacer_exclusion()
+                return _ecrire_si(
+                    db, creneau, reclame, etat=EtatCreneau.MANQUE, erreur="retard au moment de publier"
+                )
+
+            if _ecrire_apres_publication(db, manquer):
                 _compter_manque(creneau, reclame, set(publieurs), rapport)
                 _effacer_dossier(creneau)
             continue
-        creneau.ig_media_id = identifiant
-        creneau.erreur = None
+
+        # Le post EST parti (ou son conteneur est pret, en apercu) : cette ecriture
+        # doit aboutir, quitte a reconnecter. Les compteurs du rapport sont poses
+        # APRES, pour qu'un second essai ne compte pas deux publications.
+        def enregistrer():
+            effacer_exclusion()
+            creneau.ig_media_id = identifiant
+            creneau.erreur = None
+            if mode == "reel":
+                # Heure REELLE de la publication, apres l'eventuelle attente.
+                publie_le = horloge()
+                creneau.etat = EtatCreneau.PUBLIE
+                creneau.publie_le = publie_le
+                post.status = PostStatus.PUBLISHED
+                post.published_at = publie_le
+                if article is not None:
+                    # USED protege l'article de la purge et l'ecarte de la file.
+                    article.status = ArticleStatus.USED
+            else:
+                # Pas de publie_le : rien n'est parti. L'etat APERCU suffit a faire
+                # avancer la file (voir candidats_eligibles).
+                creneau.etat = EtatCreneau.APERCU
+            db.commit()
+
+        _ecrire_apres_publication(db, enregistrer)
         if mode == "reel":
-            # Heure REELLE de la publication, apres l'eventuelle attente.
-            publie_le = horloge()
-            creneau.etat = EtatCreneau.PUBLIE
-            creneau.publie_le = publie_le
-            post.status = PostStatus.PUBLISHED
-            post.published_at = publie_le
-            if article is not None:
-                # USED protege l'article de la purge et l'ecarte de la file.
-                article.status = ArticleStatus.USED
             rapport.publies += 1
         else:
-            # Pas de publie_le : rien n'est parti. L'etat APERCU suffit a faire
-            # avancer la file (voir candidats_eligibles).
-            creneau.etat = EtatCreneau.APERCU
             rapport.apercus += 1
-        db.commit()
         _effacer_dossier(creneau)
 
 
