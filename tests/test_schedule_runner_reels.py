@@ -107,8 +107,11 @@ def _photo(db):
 
 
 def _post(db, article, template, credit=None):
+    # Un brouillon de carrousel porte TOUJOURS le fond de sa cover : sans lui, la
+    # file le relache (fond efface au dashboard, cf. `_brouillon_perime`).
     post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
-                caption="Legende", slides=[{"kind": "cover"}], template=template, credit=credit)
+                caption="Legende", slides=[{"kind": "cover", "image_url": "https://img/1.jpg"}],
+                template=template, credit=credit)
     db.add(post)
     db.commit()
     return post

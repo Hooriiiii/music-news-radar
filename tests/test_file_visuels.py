@@ -367,3 +367,35 @@ def test_un_brouillon_sans_fond_extractible_est_relache_pas_exclu(db_session, fr
     assert creneau.post_id is None
     assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable"
     assert article.file_exclu_raison is None
+
+
+def test_un_fond_efface_au_dashboard_relache_le_brouillon_sans_exclure(db_session, fred):
+    """Le fond de la cover est editable au dashboard : vide a la main, le post
+    partirait sur l'image de secours du gabarit. Le creneau lache le brouillon et
+    la composition suivante en refait un -- jamais d'exclusion, l'article a bien
+    un visuel."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    photo = actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article",
+                  compte="@fredagain", article_id=article.id)
+    post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
+                caption="L", slides=[{"kind": "cover", "image_url": None}],
+                template="kinda_post", assets=[photo])
+    db_session.add(post)
+    db_session.commit()
+    creneau = Creneau(publier_a=BASE + dt.timedelta(hours=1), article_id=article.id,
+                      post_id=post.id, etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(creneau)
+    db_session.commit()
+
+    outils = Outils()
+    outils.tourner(db_session)
+    db_session.refresh(creneau)
+    db_session.refresh(article)
+    assert creneau.post_id is None
+    assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable"
+    assert article.file_exclu_raison is None
+    # Le brouillon n'est pas repris : un nouveau post est compose, avec un fond.
+    outils.tourner(db_session, maintenant=BASE + dt.timedelta(minutes=5))
+    db_session.refresh(creneau)
+    assert outils.composes == [article.id]
+    assert creneau.post_id is not None

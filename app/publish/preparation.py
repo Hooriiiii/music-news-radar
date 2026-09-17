@@ -174,6 +174,12 @@ def preparer_fichiers(
         # ne doit jamais publier ca -- c'est le signe d'un post compose sans
         # visuel autorise.
         raise PreparationImpossible("aucun fond de cover : le post n'a pas de visuel")
+    if fond.startswith("file://") and lire_fichier_cache(fond) is None:
+        # La copie locale a ete purgee (cache vide, dossier applicatif efface) :
+        # le rendu retomberait en silence sur l'image de secours du gabarit. Un
+        # REPORT, jamais une exclusion -- l'article n'y est pour rien, et rien ne
+        # part sur le fond de secours.
+        raise PreparationDifferee("la copie locale du fond de cover a disparu du cache")
 
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.

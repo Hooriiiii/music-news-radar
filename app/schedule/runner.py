@@ -244,8 +244,9 @@ def _choix_sans_lecture(db, article, format_, maintenant):
 def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     """Un brouillon dont les visuels ne sont plus publiables : compose avant la
     regle du 2026-09-17 sur un compte media (`assets` NULL), compose SANS aucun
-    visuel autorise (`assets == []`, un post fait a la main au dashboard), ou
-    portant l'actif d'un compte d'artiste passe `media` depuis la composition.
+    visuel autorise (`assets == []`, un post fait a la main au dashboard),
+    portant l'actif d'un compte d'artiste passe `media` depuis la composition, ou
+    dont le fond de cover a ete efface a la main au dashboard.
 
     Le cas sans fond est le plus sournois : le brouillon existe, la file le
     trouve deja compose et le gel partirait sur le fond de secours. La file ne
@@ -256,6 +257,15 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     """
     if post is None:
         return False
+    if post.template == TEMPLATES[FormatCreneau.CARROUSEL] and not (
+        post.slides and post.slides[0].get("image_url")
+    ):
+        # Fond EFFACE a la main au dashboard (le champ est editable) : le rendu
+        # partirait sur l'image de secours. Un brouillon a relacher, jamais un
+        # article a exclure -- ses actifs sont peut-etre intacts, et la
+        # composition suivante reposera un fond. (Un reel n'a pas cette
+        # contrainte : sa cover est la premiere frame de la video.)
+        return True
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))
     if image_de_fond(post.assets) is None:

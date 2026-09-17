@@ -27,7 +27,12 @@ from app.content.visuels import (
 )
 from app.content.choix_visuels import _propres
 from app.models import Article, FormatCreneau, Source, SourceCategorie, SourceType
-from app.publish.preparation import PreparationImpossible, medias_du_carrousel, preparer_fichiers
+from app.publish.preparation import (
+    PreparationDifferee,
+    PreparationImpossible,
+    medias_du_carrousel,
+    preparer_fichiers,
+)
 from app.schedule.store import a_une_image, candidats_eligibles
 
 UTC = dt.timezone.utc
@@ -296,3 +301,14 @@ def test_sentinelle_un_compte_media_instagram_n_a_de_visuel_pour_personne():
     article.id = 1
     assert a_une_image(article) is False
     assert _propres(article, FormatCreneau.CARROUSEL) is None
+
+
+def test_le_gel_differe_quand_la_copie_locale_du_fond_a_disparu(tmp_path):
+    """Purge du cache, dossier applicatif efface : le fond `file://` n'existe
+    plus. Le rendu retomberait sur l'image de secours du gabarit -- report, et
+    jamais une exclusion (l'article n'y est pour rien)."""
+    fond = chemin_cache("https://cdn.ig/disparue.jpg").resolve().as_uri()
+    post = SimpleNamespace(slides=[{"kind": "cover", "image_url": fond}], assets=[])
+    with pytest.raises(PreparationDifferee, match="copie locale du fond"):
+        preparer_fichiers(post, _article(_source(SourceType.RSS)), tmp_path,
+                          rendre=_interdit, telecharger=_interdit)
