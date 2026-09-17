@@ -1,0 +1,299 @@
+"""Le gel d'un reel : cover, video (API puis yt-dlp), assemblage, specs Meta."""
+
+import io
+import shutil
+import subprocess
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from PIL import Image
+
+from app.content.media import entree
+from app.content.render import RenduSlide
+from app.content.video import AssemblageIndisponible
+from app.publish.preparation import PreparationDifferee, PreparationImpossible
+from app.publish.preparation_reel import (
+    API,
+    YTDLP,
+    LienExpire,
+    preparer_reel,
+    source_de_la_video,
+    telecharger_video,
+)
+
+besoin_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg absent -- assemblage non testable ici")
+
+SOURCE = {"width": 1080, "height": 1920, "duration": 12.0, "has_audio": True, "video_codec": "vp9",
+          "audio_codec": "aac", "sample_rate": 44100, "fps": 30.0}
+SORTIE = {**SOURCE, "video_codec": "h264", "duration": 12.03}
+REEL = "https://www.instagram.com/reel/DAbc123/"
+
+
+def _png(largeur=1080, hauteur=1920):
+    tampon = io.BytesIO()
+    Image.new("RGB", (largeur, hauteur), (10, 20, 30)).save(tampon, "PNG")
+    return tampon.getvalue()
+
+
+def _rendre(overflow=False):
+    def rendre(slides, template):
+        rendre.appels.append(template)
+        return [RenduSlide(png=_png(), scale=1.0, lines={}, overflow=overflow)]
+
+    rendre.appels = []
+    return rendre
+
+
+def _post(template="kinda_reel", credit="@saralandry", *medias):
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**", "image_url": None}
+    return SimpleNamespace(template=template, credit=credit, slides=[cover, *medias])
+
+
+def _article(*medias, url="https://www.instagram.com/p/AAA/"):
+    return SimpleNamespace(media=list(medias), url=url)
+
+
+VIDEO = {"type": "video", "url": "https://cdn/v.mp4", "preview_url": None, "duration_ms": None,
+         "width": None, "height": None}
+SANS_URL = entree("video", None, preview_url="https://cdn/v.jpg")
+
+
+class Recuperer:
+    """Un faux yt-dlp : enregistre ses appels, rend des octets ou leve."""
+
+    def __init__(self, octets=b"source", erreur=None):
+        self.octets, self.erreur, self.appels = octets, erreur, []
+
+    def __call__(self, url, dossier, plafond):
+        self.appels.append((url, dossier, plafond))
+        if self.erreur is not None:
+            raise self.erreur
+        return self.octets
+
+
+def _interdit(*args, **kwargs):
+    raise AssertionError("cet outil ne devait pas etre appele")
+
+
+def _outils(source=SOURCE, sortie=SORTIE):
+    def sonder(octets):
+        return source if octets == b"source" else sortie
+
+    return {
+        "rendre": _rendre(),
+        "telecharger": lambda url, plafond: b"source",
+        "sonder": sonder,
+        "assembler": lambda cover, video: b"reel-mp4",
+        "verifier_outils": lambda: None,
+    }
+
+
+def test_un_reel_fige_deux_fichiers_video_puis_cover(tmp_path):
+    outils = _outils()
+    noms = preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+    assert [nom.rsplit("_", 1)[1] for nom in noms] == ["reel.mp4", "cover.jpg"]
+    assert (tmp_path / noms[0]).read_bytes() == b"reel-mp4"
+    cover = Image.open(io.BytesIO((tmp_path / noms[1]).read_bytes()))
+    assert (cover.format, cover.size) == ("JPEG", (1080, 1920))
+    assert outils["rendre"].appels == ["kinda_reel"]
+
+
+def test_le_prefixe_ne_se_devine_pas(tmp_path):
+    premier = preparer_reel(_post(), _article(VIDEO), tmp_path / "a", **_outils())
+    second = preparer_reel(_post(), _article(VIDEO), tmp_path / "b", **_outils())
+    assert premier[0] != second[0]
+
+
+def test_un_gel_repete_efface_les_anciens_fichiers(tmp_path):
+    preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils())
+    noms = preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils())
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(noms)
+
+
+def test_source_de_la_video_l_api_d_abord():
+    slide = {"kind": "media", "type": "video", "url": "https://cdn/choisie.mp4"}
+    assert source_de_la_video(_post("kinda_reel", "@x", slide), _article(VIDEO)) == (API, "https://cdn/choisie.mp4")
+    assert source_de_la_video(_post(), _article(VIDEO, url=REEL)) == (API, "https://cdn/v.mp4")
+    assert source_de_la_video(_post(), _article(SANS_URL, url=REEL)) == (YTDLP, REEL)
+    assert source_de_la_video(_post(), _article(SANS_URL)) == (YTDLP, "https://www.instagram.com/p/AAA/")
+    assert source_de_la_video(_post(), _article(url="https://tsugi.fr/a")) is None
+    assert source_de_la_video(_post(), None) is None
+
+
+def test_sans_media_url_la_video_vient_de_yt_dlp(tmp_path):
+    recuperer = Recuperer()
+    outils = {**_outils(), "telecharger": _interdit}
+    noms = preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **outils)
+    assert [(url, dossier, plafond) for url, dossier, plafond in recuperer.appels] == [(REEL, tmp_path, 100 * 1024 * 1024)]
+    assert (tmp_path / noms[0]).read_bytes() == b"reel-mp4"
+
+
+def test_une_url_directe_ne_lance_jamais_yt_dlp(tmp_path):
+    preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=_interdit, **_outils())
+
+
+def test_un_lien_api_expire_retombe_sur_yt_dlp(tmp_path):
+    """Les media_url du CDN sont signees et expirent en quelques jours."""
+    recuperer = Recuperer()
+
+    def expire(url, plafond):
+        raise LienExpire("video indisponible (HTTP 403) : lien expire ou retire")
+
+    outils = {**_outils(), "telecharger": expire}
+    preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **outils)
+    assert [appel[0] for appel in recuperer.appels] == [REEL]
+
+
+def test_un_lien_expire_hors_instagram_reste_une_faute(tmp_path):
+    def expire(url, plafond):
+        raise LienExpire("video indisponible (HTTP 403) : lien expire ou retire")
+
+    outils = {**_outils(), "telecharger": expire}
+    with pytest.raises(PreparationImpossible, match="403"):
+        preparer_reel(_post(), _article(VIDEO, url="https://t/1"), tmp_path, recuperer_ytdlp=_interdit, **outils)
+
+
+def test_yt_dlp_indisponible_pour_ce_gel_differe_sans_exclure(tmp_path):
+    """PUBLICATION_REEL_YTDLP=false apres la programmation : le creneau attend,
+    l'article n'est pas exclu (yt-dlp peut etre reactive)."""
+    with pytest.raises(PreparationDifferee, match="yt-dlp") as attente:
+        preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=None, **_outils())
+    assert not isinstance(attente.value, PreparationImpossible)
+
+
+def test_une_attente_yt_dlp_remonte_telle_quelle(tmp_path):
+    recuperer = Recuperer(erreur=PreparationDifferee("yt-dlp en pause jusqu'a 11:00 UTC"))
+    with pytest.raises(PreparationDifferee, match="pause"):
+        preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **_outils())
+
+
+def test_la_cover_est_rendue_avant_yt_dlp(tmp_path):
+    """Une cover qui deborde ne doit pas consommer le telechargement du passage."""
+    outils = {**_outils(), "rendre": _rendre(overflow=True)}
+    with pytest.raises(PreparationImpossible, match="deborde"):
+        preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=_interdit, **outils)
+
+
+@pytest.mark.parametrize(
+    "post, article, motif",
+    [
+        (_post(template="kinda_post"), _article(VIDEO), "gabarit"),
+        (_post(credit=None), _article(VIDEO), "credit"),
+        (_post(), _article(url="https://tsugi.fr/a"), "aucune video"),
+    ],
+)
+def test_les_fautes_de_l_article(tmp_path, post, article, motif):
+    with pytest.raises(PreparationImpossible, match=motif):
+        preparer_reel(post, article, tmp_path, **_outils())
+
+
+def test_une_cover_qui_deborde_est_une_faute(tmp_path):
+    outils = {**_outils(), "rendre": _rendre(overflow=True)}
+    with pytest.raises(PreparationImpossible, match="deborde"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+@pytest.mark.parametrize("duree, motif", [(2.0, "trop courte"), (95.0, "trop longue")])
+def test_une_duree_hors_bornes_est_refusee(tmp_path, duree, motif):
+    with pytest.raises(PreparationImpossible, match=motif):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(source={**SOURCE, "duration": duree}))
+
+
+def test_une_sortie_hors_specs_est_refusee_avant_meta(tmp_path):
+    with pytest.raises(PreparationImpossible, match="cadence"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(sortie={**SORTIE, "fps": 20.0}))
+
+
+def test_une_sortie_vp9_serait_refusee(tmp_path):
+    """Filet : si l'assemblage copiait un jour le flux VP9 de yt-dlp, le gel le refuserait."""
+    with pytest.raises(PreparationImpossible, match="codec video vp9"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(sortie={**SORTIE, "video_codec": "vp9"}))
+
+
+def test_une_video_illisible_est_une_faute(tmp_path):
+    outils = _outils()
+
+    def illisible(octets):
+        raise AssemblageIndisponible("video illisible : moov atom not found")
+
+    outils["sonder"] = illisible
+    with pytest.raises(PreparationImpossible, match="illisible"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+def test_un_assemblage_trop_long_est_une_faute(tmp_path):
+    outils = _outils()
+
+    def trop_long(cover, video):
+        raise subprocess.TimeoutExpired("ffmpeg", 300)
+
+    outils["assembler"] = trop_long
+    with pytest.raises(PreparationImpossible, match="delai"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+def test_ffmpeg_absent_est_une_panne_systemique(tmp_path):
+    """Pas d'exclusion : la faute est a la machine, pas a l'article."""
+    outils = _outils()
+
+    def absent():
+        raise AssemblageIndisponible("ffmpeg est introuvable")
+
+    outils["verifier_outils"] = absent
+    with pytest.raises(AssemblageIndisponible):
+        preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=_interdit, **outils)
+
+
+# --- Telechargement -------------------------------------------------------------
+
+
+def _client(gestionnaire):
+    return httpx.Client(transport=httpx.MockTransport(gestionnaire))
+
+
+def test_telecharger_rend_les_octets():
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"mp4"))
+    assert telecharger_video("https://cdn/v.mp4", 1000, client=client) == b"mp4"
+
+
+def test_un_lien_expire_leve_lien_expire():
+    client = _client(lambda requete: httpx.Response(403))
+    with pytest.raises(LienExpire, match="403"):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+def test_une_panne_du_serveur_est_systemique():
+    client = _client(lambda requete: httpx.Response(503))
+    with pytest.raises(httpx.HTTPStatusError):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+def test_une_video_trop_lourde_est_refusee_en_cours_de_lecture():
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"x" * 2000))
+    with pytest.raises(PreparationImpossible, match="trop lourde"):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+def test_une_page_html_n_est_pas_une_video():
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": "text/html"}, content=b"<html>"))
+    with pytest.raises(PreparationImpossible, match="pas une video"):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+# --- Chaine reelle, ffmpeg compris ------------------------------------------------
+
+
+@besoin_ffmpeg
+def test_la_chaine_complete_avec_ffmpeg(tmp_path):
+    source = tmp_path / "source.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=30:duration=4",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source)],
+        capture_output=True, check=True,
+    )
+    octets = source.read_bytes()
+    noms = preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path / "fige", rendre=_rendre(),
+                         recuperer_ytdlp=Recuperer(octets=octets))
+    assert (tmp_path / "fige" / noms[0]).stat().st_size > 0
