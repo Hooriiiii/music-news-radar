@@ -132,8 +132,13 @@ def elire_representants(
         )
     )
     stats = ElectionStats()
+
+    def budget() -> bool:
+        # Verifie avant CHAQUE action comptee : la borne n'est jamais depassee.
+        return stats.reelus + stats.a_rescorer < limite
+
     for representant_id in representants:
-        if stats.reelus + stats.a_rescorer >= limite:
+        if not budget():
             break
         actuel = db.get(Article, representant_id)
         if actuel is None or actuel.duplicate_of_id is not None:
@@ -143,8 +148,9 @@ def elire_representants(
         ).all()
         membres = [actuel, *doublons]
         meilleur = max(membres, key=lambda a: cle_information(a, index))
+        engage = representant_engage(db, actuel)
         if meilleur.id != actuel.id:
-            if representant_engage(db, actuel):
+            if engage:
                 stats.verrouilles += 1
                 meilleur = actuel
             else:
@@ -156,10 +162,14 @@ def elire_representants(
                         if membre.id != meilleur.id:
                             membre.duplicate_of_id = meilleur.id
         sources = len({membre.source_id for membre in membres})
+        # Un representant engage garde ses notes : les effacer le ferait passer sous
+        # le seuil de la file, et un creneau programme ou epingle perdrait son article.
         if (
             meilleur.scored_by == ScoredBy.LOCAL
             and sources >= settings.cluster_sources_claude
             and meilleur.title != TITRE_PAR_DEFAUT
+            and budget()
+            and not (engage if meilleur.id == actuel.id else representant_engage(db, meilleur))
         ):
             stats.a_rescorer += 1
             if appliquer:

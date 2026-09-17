@@ -198,3 +198,32 @@ def test_le_reglage_par_defaut_borne_la_run(db_session, fred, monkeypatch):
     mixmag = _article(db_session, _source(db_session, "mixmag"), MIXMAG, heures=6)
     _article(db_session, _source(db_session, "djmag"), DJMAG, heures=3, rep=mixmag)
     assert elire_representants(db_session, construire_index(db_session), maintenant=MAINTENANT).reelus == 0
+
+
+def test_un_representant_engage_n_est_jamais_remis_a_noter(db_session):
+    rep = _article(db_session, _source(db_session, "a"), "Actu commune longue et precise", heures=8,
+                   relevance=25, scored_by=ScoredBy.LOCAL)
+    _article(db_session, _source(db_session, "b"), "Actu commune", rep=rep)
+    _article(db_session, _source(db_session, "c"), "Actu commune", rep=rep)
+    db_session.add(Creneau(publier_a=MAINTENANT + dt.timedelta(hours=3), article_id=rep.id,
+                           etat=EtatCreneau.PROGRAMME))
+    db_session.commit()
+
+    stats = elire_representants(db_session, construire_index(db_session), maintenant=MAINTENANT)
+
+    assert stats.a_rescorer == 0
+    assert (rep.relevance_score, rep.scored_by) == (25, ScoredBy.LOCAL)
+
+
+def test_la_borne_est_exacte_meme_dans_un_seul_groupe(db_session, fred):
+    # Reelection ET remise a noter possibles dans le meme groupe : une seule action.
+    mixmag = _article(db_session, _source(db_session, "mixmag"), MIXMAG, heures=6)
+    djmag = _article(db_session, _source(db_session, "djmag"), DJMAG, heures=3, rep=mixmag,
+                     relevance=25, scored_by=ScoredBy.LOCAL)
+    _article(db_session, _source(db_session, "tsugi"), "GTA soundtrack", heures=2, rep=mixmag)
+
+    stats = elire_representants(db_session, construire_index(db_session), maintenant=MAINTENANT, limite=1)
+
+    assert (stats.reelus, stats.a_rescorer) == (1, 0)
+    assert djmag.duplicate_of_id is None
+    assert djmag.relevance_score == 25
