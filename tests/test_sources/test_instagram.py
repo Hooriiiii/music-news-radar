@@ -201,7 +201,7 @@ class FauxReponse:
 
 
 def test_l_url_cible_le_compte_et_demande_les_bons_champs(monkeypatch):
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "17841400000000000")
     url, params = make_adapter().construire_url()
 
@@ -214,20 +214,112 @@ def test_l_url_cible_le_compte_et_demande_les_bons_champs(monkeypatch):
 
 def test_le_carrousel_est_demande_explicitement(monkeypatch):
     """Sans `children`, un carrousel revient sans aucun media."""
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
     _, params = make_adapter().construire_url()
     assert "children" in params["fields"]
 
 
-def test_fetch_sans_token_dit_quoi_faire(monkeypatch):
-    monkeypatch.setattr(settings, "meta_access_token", None)
-    with pytest.raises(RuntimeError, match="META_ACCESS_TOKEN"):
+def test_le_jeton_de_publication_n_est_jamais_utilise(monkeypatch):
+    """`meta_access_token` est le jeton de connexion Instagram (publication) :
+    il ne peut pas appeler business_discovery sur graph.facebook.com."""
+    monkeypatch.setattr(settings, "meta_access_token", "IGAA-PUBLICATION")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "EAA-SOURCING")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    url, params = make_adapter().construire_url()
+    assert url.startswith("https://graph.facebook.com/")
+    assert params["access_token"] == "EAA-SOURCING"
+
+
+def test_la_version_d_api_vient_de_la_config(monkeypatch):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    monkeypatch.setattr(settings, "meta_api_version", "v99.0")
+    url, _ = make_adapter().construire_url()
+    assert "/v99.0/" in url
+
+
+@pytest.mark.parametrize("jeton,ig_user", [(None, "1"), ("TOK", None)])
+def test_fetch_sans_configuration_saute_la_source_sans_appel(monkeypatch, jeton, ig_user):
+    """Comme DISCORD_WEBHOOK_URL absente : l'etape est sautee, rien ne casse."""
+    monkeypatch.setattr(settings, "meta_access_token", "IGAA-PUBLICATION")
+    monkeypatch.setattr(settings, "meta_fb_access_token", jeton)
+    monkeypatch.setattr(settings, "meta_ig_user_id", ig_user)
+    adapter = make_adapter()
+
+    def interdit():
+        raise AssertionError("aucun appel reseau sans jeton")
+
+    monkeypatch.setattr(adapter, "_appeler", interdit)
+    assert adapter.fetch() == []
+    assert not adapter.source.state
+
+
+def _client_meta(monkeypatch, statut, corps):
+    import httpx
+
+    import app.sources.instagram as module
+
+    reel = httpx.Client
+    transport = httpx.MockTransport(lambda requete: httpx.Response(statut, json=corps))
+    monkeypatch.setattr(module.httpx, "Client", lambda **kw: reel(transport=transport, **kw))
+
+
+ERREUR_190 = {
+    "error": {
+        "message": "Error validating access token: Session has expired.",
+        "type": "OAuthException",
+        "code": 190,
+        "error_subcode": 463,
+    }
+}
+
+
+def test_un_jeton_expire_leve_une_erreur_qui_dit_quoi_faire(monkeypatch):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "EAAsecret123")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    _client_meta(monkeypatch, 400, ERREUR_190)
+    with pytest.raises(RuntimeError) as exc:
+        make_adapter().fetch()
+    message = str(exc.value)
+    assert "META_FB_ACCESS_TOKEN" in message
+    assert "190" in message
+    assert "Etendre" in message
+    assert "EAAsecret123" not in message
+
+
+def test_une_autre_erreur_meta_garde_le_message_de_meta(monkeypatch):
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    corps = {"error": {"message": "Invalid user id", "type": "OAuthException", "code": 110}}
+    _client_meta(monkeypatch, 400, corps)
+    with pytest.raises(RuntimeError, match="Invalid user id"):
         make_adapter().fetch()
 
 
+def test_un_jeton_expire_est_rapporte_par_le_pipeline_sans_le_casser(db_session, monkeypatch):
+    """Le chemin reel : `run_ingest` attrape l'erreur, la consigne sur la source,
+    et `diagnostiquer` la remonte a la notification."""
+    from app.pipeline.health import diagnostiquer
+    from app.pipeline.ingest import run_ingest
+
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+    _client_meta(monkeypatch, 400, ERREUR_190)
+    source = Source(name="Tsugi IG", type=SourceType.INSTAGRAM, url="ig:tsugimag")
+    db_session.add(source)
+    db_session.commit()
+
+    stats = run_ingest(db_session, shuffle=lambda x: None)
+
+    assert len(stats) == 1 and "190" in stats[0].error
+    assert "190" in db_session.get(Source, source.id).state["last_error"]
+    problemes = diagnostiquer(db_session, stats, None)
+    assert any("Tsugi IG" in p for p in problemes)
+
+
 def test_fetch_note_le_dernier_post_vu(monkeypatch):
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
     adapter = make_adapter()
     monkeypatch.setattr(adapter, "_appeler", lambda: PAYLOAD)
@@ -237,7 +329,7 @@ def test_fetch_note_le_dernier_post_vu(monkeypatch):
 
 
 def test_fetch_ne_rend_que_les_posts_plus_recents_que_l_etat(monkeypatch):
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
     adapter = make_adapter()
     adapter.source.state = {"dernier_post": "2026-09-09T22:05:00+00:00"}
@@ -249,7 +341,7 @@ def test_fetch_ne_rend_que_les_posts_plus_recents_que_l_etat(monkeypatch):
 
 def test_l_etat_est_reassigne_en_entier(monkeypatch):
     """Piege SQLAlchemy documente : muter un JSONB en place ne persiste pas."""
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
     adapter = make_adapter()
     etat_initial = {"autre": "valeur"}
@@ -290,7 +382,7 @@ def test_ingest_source_insere_les_articles(db_session, monkeypatch):
     temporairement le `.replace(tzinfo=None)`)."""
     from app.pipeline.ingest import ingest_source
 
-    monkeypatch.setattr(settings, "meta_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
     # Les items du payload de reference sont figes en 2026-09 : on aligne la
     # fenetre de retention dessus pour ne pas dependre de la date du jour.

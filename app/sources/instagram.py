@@ -5,6 +5,10 @@ les comptes PROFESSIONNELS (business ou creator) sont visibles. Un artiste
 emergent en profil perso -- soit une bonne part du deal-flow A&R -- n'est pas
 atteignable par cette voie. Cette source COMPLETE les RSS, elle ne les remplace
 pas.
+
+Jeton : `META_FB_ACCESS_TOKEN`, un jeton utilisateur FACEBOOK (EAA...). Jamais
+`META_ACCESS_TOKEN`, qui est le jeton de connexion Instagram de la publication
+(graph.instagram.com) et ne sait pas appeler business_discovery.
 """
 
 import datetime as dt
@@ -26,6 +30,9 @@ TITRE_MAX = 200
 TITRE_PAR_DEFAUT = "Post Instagram"
 
 _TYPES = {"IMAGE": PHOTO, "VIDEO": VIDEO}
+
+# Code d'erreur Graph d'un jeton expire, revoque ou invalide.
+JETON_INVALIDE = 190
 
 
 def titre_depuis_caption(caption: str | None) -> str:
@@ -110,6 +117,26 @@ def _media(noeud: dict) -> list[dict]:
     return [entree(type_, url, preview_url=noeud.get("thumbnail_url"))]
 
 
+def _message_erreur(reponse: httpx.Response) -> str:
+    """Une erreur Graph lisible, qui finit dans `sources.state.last_error` et
+    dans la notification du run. Le jeton n'y figure jamais : l'URL de la
+    requete le porte en parametre, d'ou un message construit a la main plutot
+    que celui de `raise_for_status()`."""
+    try:
+        erreur = reponse.json().get("error") or {}
+    except ValueError:
+        erreur = {}
+    code = erreur.get("code")
+    detail = erreur.get("message") or reponse.reason_phrase
+    if code == JETON_INVALIDE:
+        return (
+            f"META_FB_ACCESS_TOKEN expire ou invalide (Meta code 190 : {detail}) -- "
+            "le renouveler dans le Graph API Explorer, puis debogueur de jeton -> "
+            "« Etendre » (60 jours), et le reporter dans .env"
+        )
+    return f"Meta HTTP {reponse.status_code} (code {code}) : {detail}"
+
+
 class InstagramAdapter(SourceAdapter):
     timeout = 30.0
 
@@ -165,7 +192,7 @@ class InstagramAdapter(SourceAdapter):
         )
         return (
             f"{base}/{settings.meta_ig_user_id}",
-            {"fields": champs, "access_token": settings.meta_access_token},
+            {"fields": champs, "access_token": settings.meta_fb_access_token},
         )
 
     def _appeler(self) -> dict:
@@ -174,15 +201,19 @@ class InstagramAdapter(SourceAdapter):
         entetes = {"User-Agent": "KindaBot/1.0 (music-news-radar)"}
         with httpx.Client(timeout=self.timeout, headers=entetes) as client:
             reponse = client.get(url, params=params)
-            reponse.raise_for_status()
+            if reponse.is_error:
+                raise RuntimeError(_message_erreur(reponse))
             return reponse.json()
 
     def fetch(self) -> list[RawItem]:
-        if not settings.meta_access_token or not settings.meta_ig_user_id:
-            raise RuntimeError(
-                "META_ACCESS_TOKEN / META_IG_USER_ID manquants dans .env — "
-                "token de Page a creer sur developers.facebook.com"
+        # Sans jeton, la source est SAUTEE comme le sont les alertes sans
+        # webhook : l'absence est un choix de configuration, pas une panne.
+        if not settings.meta_fb_access_token or not settings.meta_ig_user_id:
+            logger.info(
+                "Source Instagram %s sautee : META_FB_ACCESS_TOKEN ou META_IG_USER_ID absent",
+                self.source.name,
             )
+            return []
         etat = dict(self.source.state or {})
         depuis = _date_iso(etat.get("dernier_post"))
 

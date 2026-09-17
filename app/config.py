@@ -86,15 +86,15 @@ class Settings(BaseSettings):
     apify_max_charge_usd: float = 0.25
     x_min_fetch_interval_hours: int = 6
 
-    # --- Meta / Instagram (business_discovery) ---
-    # Gratuit, contrairement a X. Un seul token et un seul IG user id servent
-    # TOUTES les sources Instagram : l'API interroge les comptes cibles a travers
-    # le notre.
-    meta_access_token: str | None = None
-    meta_ig_user_id: str | None = None
-    # Epinglee : une version d'API Graph reste servie environ deux ans, et une
-    # montee de version doit etre un choix, jamais une surprise un matin.
-    meta_api_version: str = "v21.0"
+    # --- Source Instagram (business_discovery, connexion FACEBOOK) ---
+    # Gratuit, contrairement a X. Jeton DISTINCT de `meta_access_token` (plus
+    # bas, connexion Instagram, sert a PUBLIER) : business_discovery n'existe que
+    # sur graph.facebook.com et exige un jeton utilisateur Facebook (EAA...).
+    # Absent = les sources Instagram sont sautees en silence. Jeton de 60 jours
+    # une fois etendu, a renouveler a la main (Graph API Explorer -> debogueur
+    # de jeton -> « Etendre »). `meta_ig_user_id` et `meta_api_version` sont
+    # partages avec la publication.
+    meta_fb_access_token: str | None = None
     # Nombre de posts recents lus par compte et par run. L'appel est gratuit, mais
     # il consomme le quota Graph de l'app (~200 appels/heure) : inutile d'aller
     # chercher loin a chaque passage horaire.
