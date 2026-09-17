@@ -11,6 +11,7 @@ from app.content.export import construire_zip
 from app.content.lecture_artistes import LecteurComptes
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
+from app.content.visuels import fond_de_cover
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
@@ -211,9 +212,10 @@ def rendre_covers(post_id: int, db: Session = Depends(get_db)):
     variantes = (post.variants or {}).get("variantes") or []
     if not variantes:
         raise HTTPException(status_code=409, detail="Post sans variantes a rendre")
-    image_url = post.slides[0].get("image_url") if post.slides else None
+    # `fond_de_cover` et non une lecture directe : meme normalisation que la file
+    # et le gel (un `str(None)` vaut un fond absent, cf. app.content.visuels).
     try:
-        rendus = render_covers(variantes, image_url, post.template)
+        rendus = render_covers(variantes, fond_de_cover(post), post.template)
     except RenduIndisponible as exc:
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc

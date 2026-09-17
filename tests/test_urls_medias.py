@@ -209,3 +209,36 @@ def test_une_url_interdite_l_est_sous_ses_deux_formes():
 
     Source.type, Source.categorie = SourceType.INSTAGRAM, SourceCategorie.MEDIA
     assert visuels.urls_interdites(Article()) == {SALE, PROPRE}
+
+
+# --- Le fond litteralement a « None » ----------------------------------------
+#
+# Des brouillons de production (posts 34 et 35, article 17974) portent
+# `slides[0].image_url == "None"` : un `str(None)` ecrit a la place d'un vrai
+# vide. Chaine non vide, elle passe toutes les gardes « pas de fond » et le rendu
+# retombe en silence sur `fallback.jpg` -- exactement le bug du 2026-09-17.
+
+
+def test_un_fond_a_none_est_lu_comme_absent():
+    assert url_propre("None") is None
+    assert url_propre("none") is None
+    assert url_telechargeable("None") is None
+
+
+def test_le_rendu_ne_va_jamais_chercher_l_url_none(monkeypatch):
+    def interdit(*args, **kwargs):  # pragma: no cover -- doit ne jamais servir
+        raise AssertionError("aucune requete pour un fond a « None »")
+
+    monkeypatch.setattr(render.httpx, "get", interdit)
+    assert render.fetch_image_data_uri("None").startswith("data:image/jpeg;base64,")
+
+
+def test_le_gel_refuse_un_fond_a_none(tmp_path):
+    from types import SimpleNamespace
+
+    def interdit(*args, **kwargs):  # pragma: no cover -- doit ne jamais servir
+        raise AssertionError("ni rendu ni telechargement sans fond")
+
+    post = SimpleNamespace(slides=[{"kind": "cover", "image_url": "None"}], assets=[])
+    with pytest.raises(preparation.PreparationImpossible, match="aucun fond de cover"):
+        preparation.preparer_fichiers(post, None, tmp_path, rendre=interdit, telecharger=interdit)

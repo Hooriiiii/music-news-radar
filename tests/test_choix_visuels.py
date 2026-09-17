@@ -13,6 +13,7 @@ from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visu
 from app.content.export import PREFIXE_TRANSPORT
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import entree
+from app.content.visuels import image_de_fond
 from app.config import settings
 from app.models import Article, FormatCreneau, Source, SourceCategorie, SourceType
 from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, cle_artiste, construire_index
@@ -192,12 +193,15 @@ def test_un_reel_sans_video_d_artiste_n_a_aucun_visuel(db_session, fred, guettap
 
 
 def test_un_reel_propre_garde_sa_video(db_session, fred):
-    video = entree("video", "https://cdn.ig/fred.mp4", duration_ms=20_000)
+    # La vignette de la video fait le fond de la cover : un seul actif suffit.
+    video = entree("video", "https://cdn.ig/fred.mp4", duration_ms=20_000,
+                   preview_url="https://cdn.ig/fred.jpg")
     article = _article(db_session, fred, media=[video])
     choix = _choisir(db_session, article, format_=FormatCreneau.REEL)
     assert [(a["origine"], a["url"], a["permalink"]) for a in choix.actifs] == [
         ("article", "https://cdn.ig/fred.mp4", article.url),
     ]
+    assert image_de_fond(choix.actifs) == "https://cdn.ig/fred.jpg"
     assert choix.credit == "@fredagain"
 
 
@@ -312,3 +316,72 @@ def test_une_photo_emmene_la_video_sans_vignette_du_meme_post(db_session, fred):
         entree("video", "https://cdn.ig/v.mp4"),
     ])
     assert [a["type"] for a in _choisir(db_session, article).actifs] == ["photo", "video"]
+
+
+def test_un_reel_propre_emporte_la_photo_de_l_actu_comme_fond(db_session):
+    """Forme de production (article 17974) : un reel dont la video se recupere au
+    gel par yt-dlp, et dont le seul media est une PHOTO. La cover d'un reel est
+    rendue comme celle d'un carrousel : les actifs doivent porter le porteur de
+    video ET une image de fond, sinon le gel refuse le post a chaque passage."""
+    charlotte = _source(db_session, "Charlotte de Witte (IG)", "charlottedewittemusic")
+    article = _article(db_session, charlotte, "Charlotte de Witte a Bruxelles",
+                       media=[entree("photo", "https://cdn.ig/cdw.jpg")],
+                       url="https://www.instagram.com/reel/DdYfXDpxf1o/")
+
+    choix = _choisir(db_session, article, format_=FormatCreneau.REEL)
+
+    assert [(a["type"], a["url"], a["origine"]) for a in choix.actifs] == [
+        ("video", None, "article"),
+        ("photo", "https://cdn.ig/cdw.jpg", "article"),
+    ]
+    assert image_de_fond(choix.actifs) == "https://cdn.ig/cdw.jpg"
+    assert choix.credit == "@charlottedewittemusic"
+
+
+def test_un_reel_sans_aucune_image_est_refuse_avant_la_composition(db_session):
+    """Ni photo, ni vignette, ni artiste suivi cite : composer serait payer un
+    post dont la cover partirait sur l'image de secours du gabarit."""
+    charlotte = _source(db_session, "Charlotte de Witte (IG)", "charlottedewittemusic")
+    article = _article(db_session, charlotte, "Un set a Bruxelles",
+                       media=[entree("video", None)],
+                       url="https://www.instagram.com/reel/DdSANSIMAGE/")
+    with pytest.raises(AucunVisuel, match="fond"):
+        _choisir(db_session, article, format_=FormatCreneau.REEL)
+
+
+def test_un_reel_sans_image_prend_la_photo_d_un_artiste_cite(db_session, fred):
+    """La video reste celle de l'actu ; le fond vient d'un artiste suivi cite,
+    copie en local comme pour un carrousel."""
+    charlotte = _source(db_session, "Charlotte de Witte (IG)", "charlottedewittemusic")
+    article = _article(db_session, charlotte, media=[entree("video", None)],
+                       mentioned=["Fred again.."],
+                       url="https://www.instagram.com/reel/DdAVECFRED/")
+    _article(db_session, fred, "GTA soundtrack", media=[entree("photo", "https://cdn.ig/fred.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+    telechargement = Telechargement()
+
+    choix = _choisir(db_session, article, format_=FormatCreneau.REEL, telecharger=telechargement)
+
+    assert [(a["type"], a["origine"], a["compte"]) for a in choix.actifs] == [
+        ("video", "article", "@charlottedewittemusic"),
+        ("photo", "artiste", "@fredagain"),
+    ]
+    assert image_de_fond(choix.actifs).startswith("file://")
+    assert telechargement.urls == ["https://cdn.ig/fred.jpg"]
+    assert choix.credit == "@charlottedewittemusic @fredagain"
+
+
+def test_un_reel_d_artiste_sans_vignette_prend_un_fond_chez_les_artistes(db_session, fred, guettapen):
+    """La video vient du post d'un artiste et n'a pas de vignette : le fond est
+    cherche chez les artistes cites plutot que d'abandonner le creneau."""
+    article = _article(db_session, guettapen, mentioned=["Fred again.."],
+                       media=[entree("video", "https://cdn.ig/guettapen.mp4", duration_ms=20_000)])
+    _article(db_session, fred, "GTA soundtrack le clip", url="https://www.instagram.com/reel/FRED/",
+             media=[entree("video", None)], date=DATE_ACTU - dt.timedelta(days=1))
+    _article(db_session, fred, "GTA soundtrack la photo",
+             media=[entree("photo", "https://cdn.ig/fred.jpg")], date=DATE_ACTU - dt.timedelta(days=1))
+
+    choix = _choisir(db_session, article, format_=FormatCreneau.REEL, lecteur=Lecteur())
+
+    assert [(a["type"], a["origine"]) for a in choix.actifs] == [("video", "artiste"), ("photo", "artiste")]
+    assert image_de_fond(choix.actifs).startswith("file://")

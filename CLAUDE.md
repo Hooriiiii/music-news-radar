@@ -750,6 +750,25 @@ n'est pas copiable en fichier exploitable. Reel : première vidéo directe
 (3-90 s) ou récupérable par yt-dlp sur son permalink, jamais copiée (le gel la
 télécharge).
 
+**Un reel a besoin de DEUX visuels, pas d'un** (2026-09-17, bug de production).
+Sa cover est une image rendue par Chromium — c'est elle que Meta affiche en
+couverture (`cover_url`) —, donc un porteur de vidéo NU (Meta omet `media_url`
+*et* la vignette) ne suffit pas : `choisir_visuels` garde le porteur ET ajoute un
+fond, dans l'ordre photo de l'actu → vignette de la vidéo → photo d'un artiste
+suivi cité (même chemin, mêmes budgets et même copie en cache que le carrousel,
+mais jamais de lecture en direct). Sans aucune image : `AucunVisuel` AVANT la
+composition payée. Sans cette règle, le créneau de l'article 17974 (reel de
+Charlotte de Witte) se composait puis échouait au gel à chaque passage
+(« gel refusé : le post n'a pas de visuel publiable ») jusqu'à MANQUE. Trois
+lectures uniques en découlent : `visuels.fond_de_cover` (seul lecteur de
+`slides[0].image_url`, qui traite `""` et le `str(None)` de brouillons de
+production comme un fond ABSENT — sinon le rendu retombe en silence sur
+`fallback.jpg`, le bug du fond de secours), `preparation.verifier_fond` (partagé
+par les deux gabarits) et `_brouillon_perime`, qui relâche donc aussi un
+brouillon de reel sans fond — c'est ce qui fait recomposer les brouillons cassés
+déjà en base, sans script de rattrapage. `create_post` lève plutôt que de
+persister des actifs sans fond extractible.
+
 Les images d'artistes retenues sont COPIÉES dans `visuels_cache_dir` (défaut
 `~/Library/Application Support/Kinda/visuels`, nom = 32 hex du SHA-256 de l'URL)
 — les URL du CDN Instagram sont signées et expirent en quelques jours, et la

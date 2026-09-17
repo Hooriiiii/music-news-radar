@@ -65,7 +65,7 @@ from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visu
 from app.content.compose import CompositionError, create_post
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
-from app.content.visuels import image_de_fond, origine_interdite, purger_cache
+from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite, purger_cache
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.schedule.store import (
@@ -262,14 +262,14 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     """
     if post is None:
         return False
-    if post.template == TEMPLATES[FormatCreneau.CARROUSEL] and not (
-        post.slides and post.slides[0].get("image_url")
-    ):
-        # Fond EFFACE a la main au dashboard (le champ est editable) : le rendu
-        # partirait sur l'image de secours. Un brouillon a relacher, jamais un
-        # article a exclure -- ses actifs sont peut-etre intacts, et la
-        # composition suivante reposera un fond. (Un reel n'a pas cette
-        # contrainte : sa cover est la premiere frame de la video.)
+    if fond_de_cover(post) is None:
+        # Fond EFFACE a la main au dashboard (le champ est editable), jamais pose
+        # (brouillon de reel compose avant le correctif : article 17974, posts 34
+        # et 35), ou reduit au `str(None)` que `fond_de_cover` lit comme absent :
+        # le rendu partirait sur l'image de secours. Un brouillon a relacher,
+        # jamais un article a exclure -- ses actifs sont peut-etre intacts, et la
+        # composition suivante reposera un fond. Les DEUX gabarits : la cover d'un
+        # reel est rendue comme celle d'un carrousel et sert de `cover_url`.
         return True
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))

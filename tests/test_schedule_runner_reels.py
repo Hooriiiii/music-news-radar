@@ -491,3 +491,38 @@ def test_un_reel_manque_reels_actifs_garde_le_message_de_veille(db_session, vide
     outils.tourner(db_session, BASE)
     (message,) = [n for n in outils.notifications if "manque" in n]
     assert "veille" in message and "reels coupés" not in message
+
+
+def test_un_brouillon_de_reel_sans_fond_est_relache_et_recompose(db_session, video):
+    """Brouillons de production (posts 34 et 35, article 17974) : la cover d'un
+    reel etait composee SANS fond -- ou avec le `str(None)` qui en tenait lieu --
+    et le creneau restait bloque sur « gel refuse » jusqu'a MANQUE. Le post est
+    relache, l'article n'est pas exclu, et le passage suivant en recompose un."""
+    for fond in (None, "None"):
+        post = Post(article_id=video.id, article_title=video.title, article_url=video.url,
+                    caption="Legende", slides=[{"kind": "cover", "image_url": fond}],
+                    template="kinda_reel", credit="@saralandry",
+                    assets=[{"type": "video", "url": None, "preview_url": None,
+                             "origine": "article", "compte": "@saralandry"}])
+        db_session.add(post)
+        db_session.commit()
+        creneau = _epingle(db_session, BASE + dt.timedelta(hours=1), FormatCreneau.REEL, video, post)
+
+        outils = Outils()
+        outils.tourner(db_session, BASE)
+        db_session.refresh(creneau)
+        db_session.refresh(video)
+        assert outils.prepares_reel == [], fond
+        assert creneau.post_id is None, fond
+        assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable", fond
+        assert video.file_exclu_raison is None, fond
+
+        outils.tourner(db_session, BASE + dt.timedelta(minutes=5))
+        db_session.refresh(creneau)
+        assert outils.composes == [video.id], fond
+        nouveau = db_session.get(Post, creneau.post_id)
+        assert nouveau.id != post.id and nouveau.slides[0]["image_url"] == "https://cdn/v.jpg", fond
+        db_session.delete(creneau)
+        db_session.delete(nouveau)
+        db_session.delete(post)
+        db_session.commit()

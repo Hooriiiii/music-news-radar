@@ -36,6 +36,7 @@ from app.content.visuels import (
     chemin_cache,
     credit_des_actifs,
     image_de,
+    image_de_fond,
     origine_interdite,
     raison_sans_artiste,
     urls_interdites,
@@ -48,6 +49,13 @@ from app.schedule.store import raison_reel_propre
 logger = logging.getLogger(__name__)
 
 EXTENSIONS_IMAGE = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+# La cover d'un reel est rendue par Chromium : sans fond, elle partirait sur
+# l'image de secours du gabarit. Message affichable au dashboard.
+RAISON_SANS_FOND = (
+    "aucune image de fond pour la cover du reel (ni photo de l'actu, ni vignette, "
+    "ni photo recente des artistes suivis cites)"
+)
 
 
 class AucunVisuel(RuntimeError):
@@ -82,7 +90,21 @@ def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
         if raison_reel_propre(article) is not None:
             return None
         videos = medias_utilisables(medias, article.url, format_)
-        return ChoixVisuels([en_actif(videos[0])], compte) if videos else None
+        if not videos:
+            return None
+        actifs = [en_actif(videos[0])]
+        # La cover d'un reel est RENDUE par Chromium, comme celle d'un carrousel :
+        # il lui FAUT un fond. Le porteur de video n'en donne aucun quand Meta
+        # omet `media_url` ET la vignette -- `medias_utilisables` fabrique alors
+        # une entree video nue. La photo de l'actu, elle, en donne un : sans cet
+        # ajout, le post partait sans fond et le gel le refusait a chaque passage
+        # jusqu'a MANQUE (article 17974, reel de Charlotte de Witte).
+        image = next((m for m in medias if m is not videos[0] and image_de(m)), None)
+        if image is not None:
+            actifs.append(en_actif(image))
+        # `image_de_fond` prefere deja la vraie photo a la vignette de la video.
+        # Un fond peut manquer encore : l'appelant le cherchera chez les artistes.
+        return ChoixVisuels(actifs, credit_des_actifs(actifs) or compte)
 
     # Tout ce qui donne une image fixe (photo, vignette, gif) -- c'est elle qui
     # fera le fond de la cover -- PLUS les videos publiables (le gel telecharge
@@ -137,7 +159,10 @@ def _en_actif_artiste(retenu: Retenu, entree_media: dict, fichier: str | None = 
 
 
 def _copier_images(
-    retenus: list[Retenu], telecharger, interdites: set[str] = frozenset()
+    retenus: list[Retenu],
+    telecharger,
+    interdites: set[str] = frozenset(),
+    maximum: int | None = None,
 ) -> tuple[list[dict], bool]:
     """Les photos des posts retenus, copiees dans le cache local (au plus
     `visuels_max_photos`), et si une copie a echoue pour une raison PASSAGERE.
@@ -149,9 +174,10 @@ def _copier_images(
     actifs: list[dict] = []
     vues: set[str] = set()
     panne_transport = False
+    plafond = settings.visuels_max_photos if maximum is None else maximum
     for retenu in retenus:
         for entree_media in retenu.medias:
-            if len(actifs) >= settings.visuels_max_photos:
+            if len(actifs) >= plafond:
                 return actifs, panne_transport
             # `medias_utilisables` ne rend que des photos avec URL pour un
             # carrousel : une vignette de video n'est jamais un actif d'artiste.
@@ -171,6 +197,49 @@ def _copier_images(
     return actifs, panne_transport
 
 
+def _reel(
+    article: Article,
+    propres: ChoixVisuels | None,
+    retenus: list[Retenu],
+    posts: list,
+    *,
+    maintenant: dt.datetime,
+    telecharger,
+) -> ChoixVisuels:
+    """Les visuels d'un reel : le porteur de la VIDEO, et une IMAGE DE FOND.
+
+    Deux besoins distincts, et c'est toute la lecon du creneau bloque de
+    l'article 17974 : `assembler_reel` a besoin de la video, mais la cover qui
+    lui sert de premiere frame est rendue par Chromium et a besoin d'un fond.
+    Un porteur de video nu (Meta omet `media_url` et la vignette) ne donne que
+    le premier.
+
+    Jamais de lecture en direct ici : l'eligibilite d'un reel se decide sans
+    reseau, sur la base (design du 2026-09-17)."""
+    actifs = list(propres.actifs) if propres is not None else []
+    if not actifs:
+        if not retenus:
+            raise AucunVisuel("aucune video recente des artistes suivis cites")
+        actifs = [_en_actif_artiste(retenus[0], retenus[0].medias[0])]
+    if image_de_fond(actifs) is None:
+        # Le fond suit le meme chemin et les memes budgets que les photos d'un
+        # carrousel : classees sur le sujet, puis COPIEES dans le cache local (les
+        # URL du CDN Instagram expirent avant le gel). Une seule suffit.
+        photos = classer(article, posts, format_=FormatCreneau.CARROUSEL, maintenant=maintenant)
+        copies, panne_transport = _copier_images(
+            photos, telecharger, urls_interdites(article), maximum=1
+        )
+        if not copies:
+            if panne_transport:
+                raise VisuelsDifferes(
+                    "copie du fond de cover impossible (reseau) : nouvelle tentative au prochain passage"
+                )
+            raise AucunVisuel(RAISON_SANS_FOND)
+        actifs += copies
+    credit = credit_des_actifs(actifs)
+    return ChoixVisuels(actifs, credit or (propres.credit if propres is not None else None))
+
+
 def choisir_visuels(
     db: Session,
     article: Article,
@@ -182,7 +251,9 @@ def choisir_visuels(
     telecharger=telecharger_media,
 ) -> ChoixVisuels:
     propres = _propres(article, format_)
-    if propres is not None:
+    if propres is not None and (
+        format_ != FormatCreneau.REEL or image_de_fond(propres.actifs) is not None
+    ):
         return propres
 
     index = index if index is not None else construire_index(db)
@@ -194,19 +265,16 @@ def choisir_visuels(
     comptes = _comptes_autorises(db, comptes)
     if not comptes:
         if format_ == FormatCreneau.REEL:
-            raise AucunVisuel(raison_reel_propre(article))
+            # Soit l'article n'a pas de video, soit il n'a aucune image pour le
+            # fond de sa cover -- et aucun artiste suivi cite pour en fournir une.
+            raise AucunVisuel(raison_reel_propre(article) or RAISON_SANS_FOND)
         raise AucunVisuel(raison_sans_artiste(article))
 
     posts = posts_en_base(db, comptes, maintenant)
     retenus = classer(article, posts, format_=format_, maintenant=maintenant)
 
     if format_ == FormatCreneau.REEL:
-        # Jamais de lecture en direct pour un reel : son eligibilite s'est decidee
-        # a l'arbitrage, sans reseau, sur la base.
-        if not retenus:
-            raise AucunVisuel("aucune video recente des artistes suivis cites")
-        video = _en_actif_artiste(retenus[0], retenus[0].medias[0])
-        return ChoixVisuels([video], video["compte"])
+        return _reel(article, propres, retenus, posts, maintenant=maintenant, telecharger=telecharger)
 
     differe: LectureDifferee | None = None
     if lecteur is not None and not any(r.sur_le_sujet for r in retenus):

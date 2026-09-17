@@ -87,9 +87,13 @@ def actif(
 
 
 def image_de(entree_media: dict) -> str | None:
-    """L'image fixe d'un media : la copie locale, sinon la photo, sinon la vignette."""
+    """L'image fixe d'un media : la copie locale, sinon la photo, sinon la vignette.
+
+    Les trois passent par `url_propre` : un `str(None)` ou un `&amp;` venu d'une
+    ligne posee avant le nettoyage a l'ingestion ne doit pas passer pour un fond
+    valable -- le rendu retomberait en silence sur l'image de secours."""
     if entree_media.get("fichier"):
-        return entree_media["fichier"]
+        return url_propre(entree_media["fichier"])
     if entree_media.get("type") == PHOTO and entree_media.get("url"):
         return url_propre(entree_media["url"])
     return url_propre(entree_media.get("preview_url"))
@@ -103,6 +107,17 @@ def image_de_fond(actifs: list[dict] | None) -> str | None:
     actifs = actifs or []
     photos = [a for a in actifs if a.get("type") == PHOTO]
     return next((image for a in [*photos, *actifs] if (image := image_de(a))), None)
+
+
+def fond_de_cover(post) -> str | None:
+    """Le fond de la cover d'un post, ou None s'il n'en a pas d'exploitable.
+
+    LE point de lecture unique de `slides[0].image_url` : le champ est editable au
+    dashboard et des lignes de production portent le `str(None)` d'un ancien
+    defaut. Chaque lecteur (file, gel, rendu) doit voir la meme chose -- sans quoi
+    l'un refuse un post que l'autre publie sur l'image de secours du gabarit."""
+    slides = getattr(post, "slides", None) or []
+    return url_propre(slides[0].get("image_url")) if slides else None
 
 
 def a_une_image_autorisee(article) -> bool:
