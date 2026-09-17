@@ -66,6 +66,11 @@ from app.schedule.store import TEMPLATES, appliquer_arbitrage, post_a_reprendre,
 logger = logging.getLogger(__name__)
 
 MODES = ("arret", "apercu", "reel")
+# Erreur posee a la reclamation. Recente, elle signifie « publication en cours »
+# (conteneur, attente de l'heure) : le dashboard l'affiche ainsi et refuse les
+# editions de contenu (voir api/posts.py).
+RAISON_RECLAMATION = "publication interrompue avant confirmation"
+RECLAMATION_EN_COURS = dt.timedelta(minutes=20)
 
 
 @dataclass
@@ -501,7 +506,7 @@ def _publier(
         # juste apres la publication, le creneau reste en ECHEC et n'est jamais
         # retente. L'article est exclu de meme, sinon il repartirait sur un autre
         # creneau. Zero ligne touchee : un autre passage (ou le dashboard) est passe.
-        interruption = "publication interrompue avant confirmation"
+        interruption = RAISON_RECLAMATION
         if not _reclamer(db, creneau, attendu, etat=EtatCreneau.ECHEC, erreur=interruption):
             continue
         if article is not None:

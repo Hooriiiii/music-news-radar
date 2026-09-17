@@ -552,8 +552,11 @@ sans effet quand ils sont absents ; `tourner(dormir=...)` injecte le sommeil.
 **Compromis assumé :** un processus tué PENDANT l'attente laisse le créneau en
 ECHEC « publication interrompue avant confirmation » — ce post est perdu, jamais
 doublé. launchd ne tue pas un passage en cours en temps normal. Pendant ces
-quelques minutes, le dashboard affiche le créneau en « Échec » (état de
-réclamation) jusqu'à la publication.
+quelques minutes, le créneau est en ECHEC de réclamation
+(`RAISON_RECLAMATION`) : tant que `publier_a` est à moins de 20 min dans le passé
+(ou à venir), le dashboard l'affiche « Publication en cours » sans détail
+d'erreur, et `PATCH /posts/{id}` refuse toute édition de contenu (409), comme
+sur un créneau GELE. Au-delà (crash), il redevient un échec éditable.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 

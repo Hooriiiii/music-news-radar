@@ -645,12 +645,12 @@ def test_une_slide_legacy_migree_valide_postout(client, db_session):
     assert reponse_liste.status_code == 200
 
 
-def _post_sur_un_creneau(db, etat):
+def _post_sur_un_creneau(db, etat, erreur=None, dans=dt.timedelta(hours=1)):
     article = _article(db)
     post = _post(db, article, variants=_quatre_variantes())
     db.add(Creneau(
-        publier_a=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1),
-        article_id=article.id, post_id=post.id, etat=EtatCreneau(etat),
+        publier_a=dt.datetime.now(dt.timezone.utc) + dans,
+        article_id=article.id, post_id=post.id, etat=EtatCreneau(etat), erreur=erreur,
     ))
     db.commit()
     return post
@@ -677,3 +677,19 @@ def test_un_post_gele_ne_se_modifie_plus(client, db_session, modification):
 def test_un_post_programme_non_gele_se_modifie(client, db_session):
     post = _post_sur_un_creneau(db_session, "programme")
     assert client.patch(f"/posts/{post.id}", json={"caption": "Autre"}).status_code == 200
+
+
+RECLAMATION = "publication interrompue avant confirmation"
+
+
+@pytest.mark.parametrize(("erreur", "dans", "statut"), [
+    # Reclame par l'agent, conteneur en cours ou attente de l'heure : fige.
+    (RECLAMATION, dt.timedelta(minutes=5), 409),
+    (RECLAMATION, dt.timedelta(minutes=-5), 409),
+    # Une vieille reclamation (crash) ou un vrai echec : editable.
+    (RECLAMATION, dt.timedelta(minutes=-30), 200),
+    ("media refuse", dt.timedelta(minutes=5), 200),
+])
+def test_un_post_en_cours_de_publication_ne_se_modifie_plus(client, db_session, erreur, dans, statut):
+    post = _post_sur_un_creneau(db_session, "echec", erreur=erreur, dans=dans)
+    assert client.patch(f"/posts/{post.id}", json={"caption": "Autre"}).status_code == statut

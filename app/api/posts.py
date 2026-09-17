@@ -11,6 +11,8 @@ from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
+from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
+from app.schedule.store import utc
 from app.schemas import CoversOut, PostOut, PostUpdate
 
 router = APIRouter(tags=["posts"])
@@ -54,6 +56,25 @@ def lire_post(post_id: int, db: Session = Depends(get_db)):
     return post
 
 
+def _publication_figee(db: Session, post: Post) -> bool:
+    """Gele, ou RECLAME recemment par l'agent : conteneur en creation ou attente
+    de l'heure affichee. Une vieille reclamation (crash) ne fige plus rien."""
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    creneaux = db.scalars(
+        select(Creneau).where(
+            Creneau.post_id == post.id, Creneau.etat.in_([EtatCreneau.GELE, EtatCreneau.ECHEC])
+        )
+    ).all()
+    return any(
+        creneau.etat == EtatCreneau.GELE
+        or (
+            creneau.erreur == RAISON_RECLAMATION
+            and utc(creneau.publier_a) > maintenant - RECLAMATION_EN_COURS
+        )
+        for creneau in creneaux
+    )
+
+
 @router.patch("/posts/{post_id}", response_model=PostOut)
 def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_db)):
     post = db.get(Post, post_id)
@@ -66,9 +87,7 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
             payload.slides, payload.variante_retenue, payload.caption, payload.hashtags, payload.template
         )
     )
-    if edite_le_contenu and db.scalar(
-        select(Creneau.id).where(Creneau.post_id == post.id, Creneau.etat == EtatCreneau.GELE)
-    ):
+    if edite_le_contenu and _publication_figee(db, post):
         # Les fichiers sont figes et la legende part telle quelle a l'heure dite :
         # une edition maintenant ne correspondrait plus a ce qui a ete fige.
         raise HTTPException(
