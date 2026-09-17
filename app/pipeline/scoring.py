@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import anthropic
@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ScoredBy, SourceType
+from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.pipeline.election import tailles_clusters
 from app.sources.instagram import (
     TITRE_PAR_DEFAUT,
     caption_depuis_summary,
@@ -332,10 +334,43 @@ class ScoringStats:
     prefiltered: int = 0
     # Posts Instagram quasi vides, notés sans Claude (inclus dans `prefiltered`).
     quasi_vides: int = 0
+    # Notes locales sous le seuil envoyées quand même à Claude (2026-09-17) :
+    # groupe d'au moins N sources, ou artiste suivi cité.
+    forces_cluster: int = 0
+    forces_artiste: int = 0
     # Le message de la dernière erreur, pour que la supervision puisse NOMMER la
     # panne. Sans lui, des crédits épuisés passent pour une erreur réseau parmi
     # d'autres -- c'est ce qui les a rendus invisibles pendant des jours.
     derniere_erreur: str | None = None
+
+
+RAISON_CLUSTER = "cluster"
+RAISON_ARTISTE = "artiste_suivi"
+
+
+@dataclass
+class ContexteScoring:
+    """Ce que la cascade doit savoir d'un run entier, calculé une fois : les
+    comptes d'artistes suivis et la taille (en sources) des groupes de doublons."""
+
+    index: IndexComptes
+    tailles: dict[int, int] = field(default_factory=dict)
+
+    def raison_claude(self, article: Article, note: ArticleScore | None) -> str | None:
+        """Pourquoi un article noté sous le seuil doit quand même aller chez
+        Claude, ou None. L'actu GTA VI x Fred again.. a été écartée à 15 et 25."""
+        if self.tailles.get(article.id, 1) >= settings.cluster_sources_claude:
+            return RAISON_CLUSTER
+        noms = [*(note.artists if note is not None else []), *(article.mentioned_artists or [])]
+        if self.index.cites(
+            textes=[article.title, article.summary], noms=noms, exclure_source_id=article.source_id
+        ):
+            return RAISON_ARTISTE
+        return None
+
+
+def construire_contexte(db: Session, articles: list[Article]) -> ContexteScoring:
+    return ContexteScoring(construire_index(db), tailles_clusters(db, [a.id for a in articles]))
 
 
 def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
@@ -358,14 +393,20 @@ def _note_du_prefiltre(prefilter, article: Article) -> ArticleScore | None:
 
 
 def score_pending(
-    db: Session, scorer=None, limit: int | None = None, prefilter=None
+    db: Session,
+    scorer=None,
+    limit: int | None = None,
+    prefilter=None,
+    contexte: ContexteScoring | None = None,
 ) -> ScoringStats:
     """Score tous les articles pas encore évalués (relevance_score IS NULL).
 
     Cascade à deux étages quand un pré-filtre est disponible : un petit modèle
     local note d'abord, et l'article n'atteint Claude que si sa note atteint
     `local_prefilter_threshold`. Sous le seuil, on garde la note locale et on
-    n'appelle jamais l'API payante.
+    n'appelle jamais l'API payante -- sauf pour un représentant d'un groupe d'au
+    moins `cluster_sources_claude` sources ou un article qui cite un artiste
+    suivi (`ContexteScoring.raison_claude`).
 
     Commit après chaque article : un run interrompu ne perd pas les appels API
     déjà payés, et un article qui échoue n'annule pas les autres.
@@ -387,6 +428,8 @@ def score_pending(
     if limit is not None:
         stmt = stmt.limit(limit)
     articles = db.scalars(stmt).all()
+    if contexte is None:
+        contexte = construire_contexte(db, articles)
 
     stats = ScoringStats()
     for article in articles:
@@ -400,10 +443,14 @@ def score_pending(
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
                 stats.quasi_vides += 1
+                db.commit()
+                continue
             # Seuil STRICT : une note égale au seuil passe chez Claude. Le seuil
             # dit « en dessous, ça ne mérite pas qu'on paie », pas « à partir de ».
             # La décision d'écarter se prend sur la note BRUTE, avant garde-fou.
-            elif note is not None and note.relevance < settings.local_prefilter_threshold:
+            sous_le_seuil = note is not None and note.relevance < settings.local_prefilter_threshold
+            raison = contexte.raison_claude(article, note) if sous_le_seuil else None
+            if sous_le_seuil and raison is None:
                 apply_score(article, appliquer_garde_fous(article, note))
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
@@ -411,6 +458,10 @@ def score_pending(
                 apply_score(article, appliquer_garde_fous(article, scorer(article)))
                 article.scored_by = ScoredBy.CLAUDE
                 stats.scored += 1
+                if raison == RAISON_CLUSTER:
+                    stats.forces_cluster += 1
+                elif raison == RAISON_ARTISTE:
+                    stats.forces_artiste += 1
             db.commit()
         except Exception as exc:
             logger.exception("Scoring échoué pour l'article %s (%s)", article.id, article.title)
