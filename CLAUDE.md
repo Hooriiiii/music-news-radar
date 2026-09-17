@@ -247,6 +247,44 @@ explicite fait foi ; les défauts ne remplissent qu'une catégorie vide, pour ne
 jamais écraser un classement manuel. Idempotent. Conséquence assumée : les flux RSS
 de presse passent en `media` et notent donc plus bas qu'avant.
 
+**Garde-fous déterministes (2026-09-17).** Le prompt ne suffit pas : mesuré le jour
+même sur données réelles, Haiku applique les règles 5 et 6 de façon inégale — IVE
+« [📸] » 65, « 🗂️ I-VIEW » 65, LE SSERAFIM « feat. » 72, et des Guettapen
+ordinaires au-dessus du plafond (« LA SANTÉ MENTALE DE PETIT BISCUIT AU PLUS BAS »
+68, « LE NÉERLANDAIS REVIENT SUR SON ÉVOLUTION » 70), alors que « LA LOI RIPOST MET
+EN DANGER LA SCÈNE ÉLECTRONIQUE FRANÇAISE » (75) doit rester haut. Le code tranche
+donc APRÈS le modèle, sur tous les chemins (Claude et pré-filtre local), dans
+`scoring.appliquer_garde_fous(article, score)` (pure, rend une copie) :
+1. **Post Instagram quasi vide** (`post_quasi_vide`) : moins de 6 mots
+   significatifs dans la caption → relevance et hotness plafonnées à 29, emergence
+   intacte. Un mot compte s'il contient une lettre ou un chiffre, après NFKC (les
+   lettres « mathématiques » 𝚖𝚊𝚍𝚎 redeviennent ASCII) et retrait des URLs,
+   hashtags et @mentions (`instagram.mots_significatifs`). La caption est relue
+   dans `article.summary` sans le bandeau de métriques
+   (`caption_depuis_summary`) — donc AVANT `apply_score`, qui écrase le summary.
+   Sans caption connue, seul le titre « Post Instagram » fait foi.
+   Coût : un post quasi vide n'est **jamais envoyé à Claude**. Note locale du
+   pré-filtre si elle existe (plafonnée, son emergence est gardée), sinon note
+   minimale (10/10/0, `other`, la caption en résumé) ; `scored_by = local`,
+   compté dans `prefiltered` et `quasi_vides`.
+2. **Plafond média** : `sources.categorie == media` → relevance et hotness
+   plafonnées à 59, SAUF si le modèle a posé `actu_majeure: true` (champ de
+   `ArticleScore`, défaut false — le pré-filtre et les anciennes notes restent
+   valides et ne lèvent jamais le plafond). Règle 5 du prompt : true seulement
+   pour loi/réglementation qui menace la scène, annulation de festival, décès,
+   fermeture de club emblématique ou événement de poids comparable. Le post vide
+   l'emporte sur `actu_majeure`.
+La décision d'écarter du pré-filtre se prend sur la note BRUTE : le plafond média
+(59) est au-dessus du seuil (45) et ne fait jamais écarter un article.
+
+Nettoyage de la file sans rien payer : `uv run python -m scripts.appliquer_garde_fous
+[--titres-courts] [--apply]`. Ne re-applique QUE le garde-fou 1 : les anciennes
+notes n'ont pas `actu_majeure`, plafonner les médias écraserait les vraies actus
+majeures. Une note déjà posée a perdu sa caption : par défaut seul le titre « Post
+Instagram » est visé (certain) ; `--titres-courts` vise aussi les titres de moins
+de 6 mots (probable seulement — le titre n'est que la première phrase). Les
+articles USED ne sont jamais touchés.
+
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
 Les articles sont purgés à 14 jours ; **les artistes et leurs citations, jamais**.
