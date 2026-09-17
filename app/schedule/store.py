@@ -119,6 +119,26 @@ def raison_sans_visuel(article: Article, index: IndexComptes | None = None) -> s
     return raison_sans_artiste(article)
 
 
+def etiquette_visuel(article: Article, index: IndexComptes) -> str | None:
+    """Ce que le dashboard affiche : d'ou viendra le visuel.
+
+    "presse" pour un media qui n'est pas Instagram (og:image, media_content) ;
+    le handle du compte pour un visuel propre a l'article (artiste, festival,
+    label, club) ; sinon les comptes d'artistes suivis cites, dont le visuel
+    sera cherche a la composition. `None` si rien de tout ca n'est possible --
+    voir `raison_sans_visuel` pour la raison affichable.
+    """
+    if a_une_image(article):
+        source = article.source
+        if source is not None and source.type == SourceType.INSTAGRAM:
+            return f"@{compte_depuis_url(source.url)}"
+        return "presse"
+    comptes = comptes_cites(article, index)
+    if comptes:
+        return "artistes : " + ", ".join(f"@{c.handle}" for c in comptes)
+    return None
+
+
 def actifs_interdits(db: Session, post: Post) -> list[dict]:
     """Les actifs d'un post que la policy refuse MAINTENANT.
 

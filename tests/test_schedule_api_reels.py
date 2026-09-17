@@ -15,7 +15,10 @@ def _article(db, n, video=True, categorie=SourceCategorie.ARTISTE):
     source = Source(name=f"compte{n}", type=SourceType.INSTAGRAM, url=f"ig:compte{n}", categorie=categorie)
     db.add(source)
     db.commit()
-    media = [entree("video", f"https://cdn/{n}.mp4")] if video else [entree("photo", f"https://img/{n}.jpg")]
+    media = (
+        [entree("video", f"https://cdn/{n}.mp4", preview_url=f"https://cdn/{n}.jpg")]
+        if video else [entree("photo", f"https://img/{n}.jpg")]
+    )
     article = Article(source_id=source.id, url=f"https://www.instagram.com/p/{n}/", title=f"Actu {n}",
                       raw_hash=f"h{n}", relevance_score=80, published_at=_maintenant(), media=media)
     db.add(article)

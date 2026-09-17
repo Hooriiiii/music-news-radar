@@ -28,6 +28,7 @@ from app.schedule.store import (
     offre_reels,
     post_a_reprendre,
     raison_ineligible_reel,
+    raison_sans_visuel,
     utc,
 )
 from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate, OffreReelsOut, ReelsOut, ReelsUpdate
@@ -160,6 +161,10 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
             raison = raison_ineligible_reel(article)
             if raison is not None:
                 raise HTTPException(status_code=409, detail=f"Article inutilisable en reel : {raison}")
+        else:
+            raison = raison_sans_visuel(article)
+            if raison is not None:
+                raise HTTPException(status_code=409, detail=f"Article sans visuel autorise : {raison}")
         if db.scalar(
             select(Creneau.id).where(
                 Creneau.article_id == article.id,

@@ -9,6 +9,7 @@ import io
 import zipfile
 
 from app.content.media import VIDEO
+from app.content.visuels import urls_interdites
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -129,18 +130,29 @@ def construire_zip(
     texte_legende: str,
     telecharger=telecharger,
     assembler=None,
+    article=None,
 ) -> bytes:
     """Assemble l'archive : covers puis medias, dans l'ordre de publication.
 
     Un media qui echoue ne fait PAS echouer le zip -- meme philosophie que
     l'image de secours du rendu (app/content/render.py::fetch_image_data_uri) :
     un export partiel vaut mieux qu'une erreur, surtout a 23 h.
+
+    `article` (optionnel : un post dont l'article a ete purge n'en a plus) sert
+    a RE-VERIFIER la policy des visuels au moment de l'export manuel : une
+    slide qui pointe vers l'image ou la video d'un compte media Instagram
+    (watermarks, cf. `app.content.visuels`) n'est jamais copiee dans le zip,
+    meme si elle a ete posee avant que la source ne soit categorisee `media`,
+    ou ajoutee a la main depuis le dashboard. Meme politique qu'au gel
+    automatique (`app.publish.preparation.medias_du_carrousel`), pour le seul
+    chemin qui y echappait : l'export a la main.
     """
     if assembler is None:
         from app.content.video import assembler_reel
 
         assembler = assembler_reel
 
+    interdites = urls_interdites(article) if article is not None else set()
     manquants: list[str] = []
     tampon = io.BytesIO()
     # La video que l'assemblage a absorbee : on ne la remet pas a part, elle
@@ -150,6 +162,9 @@ def construire_zip(
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
         numero = 1
         slide_video = _video_du_reel(post)
+        if slide_video is not None and {slide_video.get("url"), slide_video.get("preview_url")} & interdites:
+            manquants.append(f"{slide_video['url']} : visuel d'un compte media Instagram interdit")
+            slide_video = None
         if slide_video is not None and cover_pngs:
             octets, raison = telecharger(slide_video["url"])
             if octets is None:
@@ -174,6 +189,9 @@ def construire_zip(
             if slide.get("url") == absorbee:
                 continue
             url = slide["url"]
+            if {url, slide.get("preview_url")} & interdites:
+                manquants.append(f"{url} : visuel d'un compte media Instagram interdit")
+                continue
             contenu, extension_ou_raison = telecharger(url)
             if contenu is None:
                 manquants.append(f"{url} : {extension_ou_raison}")

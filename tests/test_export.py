@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 
 from app.content.export import PLAFOND_OCTETS, construire_zip, echec_transitoire, telecharger
+from app.models import SourceCategorie, SourceType
 
 
 class FausseReponse:
@@ -146,6 +147,41 @@ def test_telecharger_retombe_sur_le_suffixe_de_lurl():
 
     assert contenu == b"data"
     assert extension == ".mov"
+
+
+def test_le_zip_exclut_un_media_de_compte_media_instagram():
+    """Un utilisateur du dashboard qui exporte a la main un post dont une slide
+    pointe vers l'image d'un compte media Instagram (watermarks) ne doit jamais
+    recevoir ce fichier : meme politique qu'au gel automatique (preparation.py)."""
+    post = _post_avec_medias()
+    source_interdite = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.MEDIA)
+    article = SimpleNamespace(
+        source=source_interdite,
+        media=[{"type": "photo", "url": "https://p.jpg"}, {"type": "video", "url": "https://v.mp4"}],
+    )
+
+    zip_octets = construire_zip(
+        post, [b"PNGDATA"], "legende du post", telecharger=_telecharger_factice, article=article
+    )
+    archive = zipfile.ZipFile(io.BytesIO(zip_octets))
+
+    assert archive.namelist() == ["01_cover.png", "medias_manquants.txt", "caption.txt"]
+    manquants = archive.read("medias_manquants.txt").decode()
+    assert "https://p.jpg" in manquants and "https://v.mp4" in manquants
+    assert "compte media" in manquants
+
+
+def test_le_zip_sans_article_ne_filtre_rien():
+    """Un post dont l'article a ete purge (article_id -> NULL) exporte comme
+    avant : pas de politique applicable sans savoir d'ou vient le media."""
+    post = _post_avec_medias()
+
+    zip_octets = construire_zip(
+        post, [b"PNGDATA"], "legende", telecharger=_telecharger_factice, article=None
+    )
+    noms = zipfile.ZipFile(io.BytesIO(zip_octets)).namelist()
+
+    assert noms == ["01_cover.png", "02_photo.jpg", "03_video.mp4", "caption.txt"]
 
 
 def test_telecharger_retombe_sur_bin_sans_indice():

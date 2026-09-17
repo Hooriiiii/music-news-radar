@@ -263,7 +263,10 @@ def exporter_post(post_id: int, db: Session = Depends(get_db)):
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], texte_legende(post))
+    # L'article peut avoir ete purge (14 jours de retention) : le lien casse
+    # (`article_id` -> NULL) et l'export continue sans policy applicable.
+    article = db.get(Article, post.article_id) if post.article_id else None
+    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], texte_legende(post), article=article)
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
     return Response(

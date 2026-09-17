@@ -4,13 +4,24 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.content.visuels import origine_interdite
 from app.db import get_db
 from app.models import Article, ArticleStatus, Source, SourceType
+from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.schedule.store import etiquette_visuel, raison_sans_visuel
 from app.schemas import ArticleOut
 
 router = APIRouter(prefix="/articles", tags=["articles"])
+
+
+def _avec_visuel(article: Article, index: IndexComptes) -> ArticleOut:
+    sortie = ArticleOut.model_validate(article)
+    sortie.visuel = etiquette_visuel(article, index)
+    sortie.raison_sans_visuel = raison_sans_visuel(article, index)
+    sortie.visuels_interdits = origine_interdite(article.source)
+    return sortie
 
 
 @router.get("", response_model=list[ArticleOut])
@@ -32,7 +43,7 @@ def list_articles(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Article)
+    stmt = select(Article).options(selectinload(Article.source))
     if status is not None:
         stmt = stmt.where(Article.status == status)
     if min_relevance is not None:
@@ -66,7 +77,10 @@ def list_articles(
         )
     else:
         stmt = stmt.order_by(Article.published_at.desc().nulls_last(), Article.id.desc())
-    return db.scalars(stmt.limit(limit).offset(offset)).all()
+    articles = db.scalars(stmt.limit(limit).offset(offset)).all()
+    # Un index pour toute la page : les comptes suivis ne changent pas d'un article a l'autre.
+    index = construire_index(db)
+    return [_avec_visuel(article, index) for article in articles]
 
 
 @router.get("/{article_id}", response_model=ArticleOut)
@@ -74,7 +88,7 @@ def get_article(article_id: int, db: Session = Depends(get_db)):
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    return article
+    return _avec_visuel(article, construire_index(db))
 
 
 class ArticleStatusUpdate(BaseModel):
