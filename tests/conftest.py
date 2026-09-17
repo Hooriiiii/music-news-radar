@@ -34,6 +34,7 @@ def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "meta_token_path", applicatif / "instagram_token.json")
     monkeypatch.setattr(settings, "publication_mode_path", applicatif / "publication.json")
     monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
+    monkeypatch.setattr(settings, "visuels_cache_dir", applicatif / "visuels")
 
 
 @pytest.fixture()

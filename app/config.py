@@ -128,6 +128,30 @@ class Settings(BaseSettings):
     # se compte en centaines d'articles.
     illustration_max_par_run: int = 40
 
+    # --- Regroupement des doublons et cascade (2026-09-17) ---
+    # Une actu couverte par au moins N sources DISTINCTES passe toujours chez
+    # Claude, meme sous le seuil du pre-filtre local.
+    cluster_sources_claude: int = 3
+    # Borne des reelections de representant et des remises a noter par run : au
+    # plus un appel Claude chacune.
+    cluster_reevaluations_max_par_run: int = 10
+
+    # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
+    # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
+    visuels_artiste_fenetre_jours: int = 10
+    # Hors sujet (un portrait, un live), un post n'est accepte qu'a N jours de l'actu.
+    visuels_artiste_generique_jours: int = 5
+    visuels_max_photos: int = 3
+    # business_discovery en direct, a la composition : le quota Graph est partage
+    # avec le pipeline et a deja rendu le code 4 pendant une heure.
+    visuels_lectures_max_par_passage: int = 2
+    visuels_lectures_max_par_jour: int = 24
+    visuels_cache_lectures_heures: int = 6
+    visuels_pause_quota_minutes: int = 60
+    # Copies locales des images d'artistes : les URL du CDN Instagram expirent.
+    visuels_cache_dir: Path = Path.home() / "Library/Application Support/Kinda/visuels"
+    visuels_cache_jours: int = 7
+
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
     # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant
