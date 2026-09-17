@@ -1,3 +1,6 @@
+from pathlib import Path
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,6 +107,46 @@ class Settings(BaseSettings):
     # Borne le coût réseau d'un run -- surtout au premier passage, où l'arriéré
     # se compte en centaines d'articles.
     illustration_max_par_run: int = 40
+
+    # --- Instagram (connexion Instagram, sans Facebook) ---
+    # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
+    # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant
+    # vit dans `meta_token_path` -- le code ne reecrit jamais .env.
+    meta_access_token: str | None = None
+    meta_ig_user_id: str | None = None
+    # Verifie en lecture seule le 2026-09-16 : v21.0 et v23.0 repondent.
+    meta_api_version: str = "v23.0"
+    meta_token_path: Path = Path.home() / "Library/Application Support/Kinda/instagram_token.json"
+
+    # --- Publication automatique ---
+    # Les fichiers figes au gel (T-2h), un sous-dossier par creneau.
+    publication_dir: Path = Path.home() / "Library/Application Support/Kinda/publication"
+    # Meta exige des proportions entre 4:5 et 1,91:1 (documentation, 2026-09-16) :
+    # la cover 3:4 est recadree en 4:5. A passer a 0.75 seulement si un essai reel
+    # montre que Meta accepte le 3:4.
+    publication_ratio_min: float = 0.8
+    # Fenetres de publication, heure de Paris. L'heure exacte est tiree au hasard
+    # dans chaque fenetre, pour ne pas publier comme une horloge.
+    publication_fuseau: str = "Europe/Paris"
+    publication_fenetre_matin: str = "08:30-11:00"
+    publication_fenetre_apres_midi: str = "17:00-19:30"
+    # 3 jours x 2 creneaux.
+    publication_creneaux: int = 6
+    # Eligibilite a la file : la barre du digest, et une actu de moins de 3 jours.
+    publication_min_relevance: int = 60
+    publication_fraicheur_jours: int = 3
+    # arret : l'agent ne fait rien. apercu : tout, jusqu'au conteneur cree chez
+    # Meta, SAUF la publication. reel : publie. Publier est public et
+    # irreversible : le passage a « reel » est une decision de l'utilisateur.
+    publication_mode: Literal["arret", "apercu", "reel"] = "arret"
+    # La composition (appel Claude paye) n'a lieu qu'a J-1 : on ne paie jamais
+    # un post qui se fait doubler avant demain.
+    publication_composition_heures: int = 24
+    # Gel a T-2h : rendu et telechargements faits d'avance.
+    publication_gel_heures: int = 2
+    # Au-dela, on ne publie pas : un Mac rouvert le soir lacherait sinon la
+    # journee entiere d'un coup.
+    publication_retard_max_minutes: int = 90
 
     # Livraison (étape 5)
     discord_webhook_url: str | None = None

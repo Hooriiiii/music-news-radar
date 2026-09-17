@@ -12,8 +12,10 @@ import pytest
 
 from scripts.install_agents import (
     INTERVALLE_PIPELINE,
+    INTERVALLE_PUBLICATION,
     LABEL_DASHBOARD,
     LABEL_PIPELINE,
+    LABEL_PUBLICATION,
     LABELS_OBSOLETES,
     PORT_DASHBOARD,
     THROTTLE_DASHBOARD,
@@ -25,6 +27,7 @@ from scripts.install_agents import (
     installer,
     plist_dashboard,
     plist_pipeline,
+    plist_publication,
     plists,
     statut,
     tronquer_logs,
@@ -44,6 +47,31 @@ def chemins(tmp_path: Path) -> Chemins:
         # fait passer l'assertion sur le code de sortie a vide.
         conf_rotation=tmp_path / "etc" / "newsyslog.d" / "music-news-radar.conf",
     )
+
+
+def test_l_agent_de_publication_passe_toutes_les_dix_minutes(chemins):
+    """Une precision de +/- 10 minutes sur l'heure de publication, sans rien
+    couter : l'agent ne score rien et ne compose qu'a J-1."""
+    p = plist_publication(chemins)
+    assert p["Label"] == LABEL_PUBLICATION
+    assert "scripts.run_publication" in p["ProgramArguments"]
+    assert p["StartInterval"] == INTERVALLE_PUBLICATION == 600
+
+
+def test_l_agent_de_publication_est_installe_et_desinstalle_avec_les_autres(chemins):
+    assert LABEL_PUBLICATION in plists(chemins)
+    executeur = FauxExecuteur()
+    installer(chemins, executer=executeur)
+    executeur.commandes.clear()
+    desinstaller(chemins, executer=executeur)
+    assert LABEL_PUBLICATION in set(_labels_de(executeur.commandes, "bootout"))
+    assert not (chemins.launch_agents / f"{LABEL_PUBLICATION}.plist").exists()
+
+
+def test_la_rotation_couvre_les_logs_de_publication(chemins):
+    conf = conf_rotation(chemins)
+    for suffixe in (".log", ".err.log"):
+        assert str(chemins.logs / f"publication{suffixe}") in conf
 
 
 def test_l_agent_execute_le_pipeline_complet_et_pas_la_seule_ingestion(chemins):
@@ -209,7 +237,7 @@ def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins)
     )
     premier_bootstrap = min(i for i, c in enumerate(executeur.commandes) if "bootstrap" in c)
     assert dernier_bootout < premier_bootstrap
-    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD}
+    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD, LABEL_PUBLICATION}
 
 
 def test_installer_ecrit_les_plists_et_cree_le_dossier_de_logs(chemins):

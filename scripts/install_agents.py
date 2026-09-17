@@ -17,6 +17,10 @@ UN SEUL ordonnanceur depuis le passage au tout-local : launchd, sur le Mac.
   com.musicnewsradar.dashboard  uvicorn en permanence, pour que le dashboard
         soit debout sur localhost:8000.
 
+  com.musicnewsradar.publication  scripts.run_publication, toutes les 10 min
+        la file de publication Instagram. Sort immediatement en mode `arret`,
+        le defaut (`PUBLICATION_MODE` dans .env).
+
 Pourquoi Python et pas bash : `plistlib` produit des plists valides par
 construction et leur CONTENU devient testable sans appeler launchctl. Les
 anciens `.plist` versionnes codaient /Users/theoherve/... en dur et cassaient
@@ -41,6 +45,7 @@ from pathlib import Path
 # dans LABELS_OBSOLETES ci-dessous, traite par --apply comme par --uninstall.
 LABEL_PIPELINE = "com.musicnewsradar.pipeline"
 LABEL_DASHBOARD = "com.musicnewsradar.dashboard"
+LABEL_PUBLICATION = "com.musicnewsradar.publication"
 
 # Agents a decharger : `ingest` est l'agent d'ingestion seule du socle d'aout,
 # remplace par celui-ci ; `digest` date du 5 juillet et echouait chaque jour.
@@ -51,6 +56,10 @@ LABELS_OBSOLETES = ("com.musicnewsradar.ingest", "com.musicnewsradar.digest")
 # Une heure. Le run score desormais a chaque passage (appels Claude payes) et
 # plus rien n'a besoin d'etre temps reel : les alertes Discord sont coupees.
 INTERVALLE_PIPELINE = 3600
+
+# Dix minutes : c'est la precision de l'heure de publication. L'agent ne coute
+# rien a ce rythme -- il ne score pas, et ne compose qu'a J-1.
+INTERVALLE_PUBLICATION = 600
 PORT_DASHBOARD = 8000
 # KeepAlive face a un port durablement occupe boucle : sans ce plancher, launchd
 # reessaie toutes les 10 s et remplit les logs.
@@ -62,7 +71,7 @@ PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 ROTATION_GENERATIONS = 5
 ROTATION_TAILLE_KO = 5000
-BASES_LOG = ("pipeline", "dashboard")
+BASES_LOG = ("pipeline", "dashboard", "publication")
 
 
 @dataclass(frozen=True)
@@ -226,10 +235,25 @@ def plist_dashboard(chemins: Chemins) -> dict:
     }
 
 
+def plist_publication(chemins: Chemins) -> dict:
+    """La file de publication. En mode `arret` (defaut), le script sort
+    immediatement : l'installer ne publie rien tant que l'utilisateur n'a pas
+    choisi `apercu` ou `reel` dans .env."""
+    return {
+        **_commun(chemins, LABEL_PUBLICATION, "publication"),
+        "ProgramArguments": [
+            str(chemins.uv), "run", "python", "-m", "scripts.run_publication",
+        ],
+        "StartInterval": INTERVALLE_PUBLICATION,
+        "RunAtLoad": True,
+    }
+
+
 def plists(chemins: Chemins) -> dict[str, dict]:
     return {
         LABEL_PIPELINE: plist_pipeline(chemins),
         LABEL_DASHBOARD: plist_dashboard(chemins),
+        LABEL_PUBLICATION: plist_publication(chemins),
     }
 
 
@@ -357,7 +381,7 @@ def desinstaller(chemins: Chemins, executer=_executer) -> None:
     """Les labels obsoletes sont retires ici AUSSI : quelqu'un qui desinstalle
     sans avoir relance --apply depuis le passage au tout-local garderait sinon
     l'ancien `com.musicnewsradar.ingest` charge, en croyant tout avoir retire."""
-    for label in (LABEL_PIPELINE, LABEL_DASHBOARD, *LABELS_OBSOLETES):
+    for label in (*plists(chemins), *LABELS_OBSOLETES):
         _bootout(label, executer)
         _supprimer_plist(chemins.launch_agents / f"{label}.plist", label)
 
@@ -373,7 +397,7 @@ def statut(chemins: Chemins, executer=_executer) -> None:
         if len(colonnes) == 3
     }
     print("Agents du socle :")
-    for label in (LABEL_PIPELINE, LABEL_DASHBOARD):
+    for label in plists(chemins):
         colonnes = lignes.get(label)
         if colonnes is None:
             print(f"  {label:34s} absent")

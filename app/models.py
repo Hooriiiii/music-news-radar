@@ -55,6 +55,25 @@ class PostStatus(str, enum.Enum):
     PUBLISHED = "published"
 
 
+class EtatCreneau(str, enum.Enum):
+    """Ou en est un creneau de publication.
+
+    LIBRE et PROGRAMME bougent encore au gre de l'arbitrage. Tous les autres sont
+    definitifs : GELE (fichiers prets, plus aucun remplacement), PUBLIE, APERCU
+    (conteneur cree chez Meta mais non publie, mode apercu), ECHEC (la
+    publication a ete tentee et refusee) et MANQUE (l'heure est passee de plus de
+    90 minutes sans publication, typiquement le Mac endormi).
+    """
+
+    LIBRE = "libre"
+    PROGRAMME = "programme"
+    GELE = "gele"
+    PUBLIE = "publie"
+    APERCU = "apercu"
+    ECHEC = "echec"
+    MANQUE = "manque"
+
+
 def _values(enum_cls):
     return [m.value for m in enum_cls]
 
@@ -131,6 +150,11 @@ class Article(Base):
     duplicate_of_id: Mapped[int | None] = mapped_column(
         ForeignKey("articles.id", ondelete="SET NULL"), index=True
     )
+    # Raison pour laquelle l'article ne doit plus etre propose a la file de
+    # publication : composition ou gel impossible, ou « sauter » depuis le
+    # dashboard. Null = eligible. Sans cette trace, un article en defaut
+    # reviendrait a chaque passage de l'agent, toutes les 10 minutes.
+    file_exclu_raison: Mapped[str | None] = mapped_column(Text)
 
     source: Mapped[Source] = relationship(back_populates="articles")
 
@@ -248,3 +272,40 @@ class Post(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Creneau(Base):
+    """Une heure de publication, et ce qui doit y partir.
+
+    Table a part et non colonnes sur `posts` : un creneau porte un article bien
+    avant qu'un post existe, puisque la composition (appel Claude paye) n'a lieu
+    qu'a J-1. `publier_a` est UNIQUE : deux creneaux a la meme heure publieraient
+    deux fois.
+    """
+
+    __tablename__ = "creneaux"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    publier_a: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), unique=True, index=True)
+    article_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), index=True
+    )
+    post_id: Mapped[int | None] = mapped_column(ForeignKey("posts.id", ondelete="SET NULL"))
+    etat: Mapped[EtatCreneau] = mapped_column(
+        Enum(
+            EtatCreneau, name="etat_creneau", native_enum=False, length=20,
+            values_callable=_values,
+        ),
+        default=EtatCreneau.LIBRE,
+        server_default="libre",
+        index=True,
+    )
+    # Epingle depuis le dashboard : l'arbitrage n'y touche plus.
+    epingle: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Noms des JPEG figes, dans l'ordre du carrousel. Reassigner la liste ENTIERE.
+    fichiers: Mapped[list | None] = mapped_column(JSONVariant)
+    ig_media_id: Mapped[str | None] = mapped_column(String(100))
+    erreur: Mapped[str | None] = mapped_column(Text)
+    gele_le: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    publie_le: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    cree_le: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

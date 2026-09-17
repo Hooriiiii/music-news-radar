@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.content.compose import CompositionError, create_post, make_claude_composer
 from app.content.export import construire_zip
+from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.db import get_db
-from app.models import Article, ArticleStatus, Post, PostStatus
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
 from app.schemas import CoversOut, PostOut, PostUpdate
 
 router = APIRouter(tags=["posts"])
@@ -58,6 +59,19 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
     post = db.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    edite_le_contenu = any(
+        valeur is not None
+        for valeur in (payload.slides, payload.variante_retenue, payload.caption, payload.hashtags)
+    )
+    if edite_le_contenu and db.scalar(
+        select(Creneau.id).where(Creneau.post_id == post.id, Creneau.etat == EtatCreneau.GELE)
+    ):
+        # Les fichiers sont figes et la legende part telle quelle a l'heure dite :
+        # une edition maintenant ne correspondrait plus a ce qui a ete fige.
+        raise HTTPException(
+            status_code=409, detail="Post gele sur un creneau de publication : il ne se modifie plus"
+        )
 
     if payload.caption is not None:
         post.caption = payload.caption
@@ -201,14 +215,6 @@ def rendre_post(post_id: int, db: Session = Depends(get_db)):
     return rapport
 
 
-def _texte_legende(post: Post) -> str:
-    parties = [post.caption]
-    if post.hashtags:
-        parties.append(" ".join(post.hashtags))
-    parties.append(f"Source : {post.article_url}")
-    return "\n\n".join(parties)
-
-
 @router.get("/posts/{post_id}/export.zip")
 def exporter_post(post_id: int, db: Session = Depends(get_db)):
     post = _post_ou_404(db, post_id)
@@ -221,7 +227,7 @@ def exporter_post(post_id: int, db: Session = Depends(get_db)):
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], _texte_legende(post))
+    zip_octets = construire_zip(post, [rendu.png for rendu in rendus], texte_legende(post))
 
     # En-tete en ASCII pur : un nom de fichier accentue casse l'envoi
     return Response(
