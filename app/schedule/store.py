@@ -13,7 +13,7 @@ et les carrousels piochent dans le reste.
 import datetime as dt
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.content.credit import credit_video
@@ -90,17 +90,26 @@ def duree_max_reel_ms() -> int:
     return int(settings.publication_reel_duree_max_s * 1000)
 
 
+def _trop_courte(entree: dict) -> bool:
+    # Une duree CONNUE sous le minimum ferait echouer le gel, qui exclurait
+    # l'article pour tous les formats. Une duree inconnue passe.
+    duree = entree.get("duration_ms")
+    return duree is not None and duree < settings.publication_reel_duree_min_s * 1000
+
+
 def source_video_reel(article: Article) -> str | None:
     """D'ou viendra la video du reel : "api" (URL directe), "ytdlp" (recuperee sur
     le permalink au gel), ou None. L'ordre est la regle : l'API d'abord."""
-    if videos_exploitables(article.media, duree_max_reel_ms()):
+    if any(not _trop_courte(v) for v in videos_exploitables(article.media, duree_max_reel_ms())):
         return "api"
     source = article.source
+    videos = [m for m in article.media or [] if m.get("type") == "video"]
     if (
         settings.publication_reel_ytdlp
         and source is not None
         and source.type == SourceType.INSTAGRAM
         and video_recuperable(article.media, article.url)
+        and not any(_trop_courte(v) for v in videos)
     ):
         return "ytdlp"
     return None
@@ -108,7 +117,11 @@ def source_video_reel(article: Article) -> str | None:
 
 def raison_ineligible_reel(article: Article) -> str | None:
     """None si l'article peut partir en reel, sinon la raison, affichable."""
-    if source_video_reel(article) is None:
+    return _raison_ineligible_reel(article, source_video_reel(article))
+
+
+def _raison_ineligible_reel(article: Article, source_video: str | None) -> str | None:
+    if source_video is None:
         return "aucune video exploitable"
     source = article.source
     categorie = source.categorie.value if source is not None and source.categorie is not None else None
@@ -124,6 +137,8 @@ def _articles_publiables(db: Session, maintenant: dt.datetime, limite: int) -> l
     depuis = maintenant - dt.timedelta(days=settings.publication_fraicheur_jours)
     return db.scalars(
         select(Article)
+        # La source est lue pour chaque article (eligibilite reel) : un seul aller.
+        .options(selectinload(Article.source))
         .where(Article.relevance_score >= settings.publication_min_relevance)
         .where(Article.duplicate_of_id.is_(None))
         .where(Article.status != ArticleStatus.USED)
@@ -237,6 +252,6 @@ def offre_reels(db: Session, maintenant: dt.datetime) -> dict:
     return {
         "avec_video": len(avec_video),
         "directes": sum(1 for a in avec_video if sources[a.id] == "api"),
-        "eligibles": sum(1 for a in avec_video if raison_ineligible_reel(a) is None),
+        "eligibles": sum(1 for a in avec_video if _raison_ineligible_reel(a, sources[a.id]) is None),
         "fraicheur_jours": settings.publication_fraicheur_jours,
     }

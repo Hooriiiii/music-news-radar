@@ -179,3 +179,29 @@ def test_offre_reels(db_session):
     assert offre_reels(db_session, MAINTENANT) == {
         "avec_video": 3, "directes": 2, "eligibles": 2, "fraicheur_jours": 3,
     }
+
+
+def test_une_video_trop_courte_reste_carrousel_mais_pas_reel(db_session):
+    # Le gel refuserait une video de 2 s et exclurait l'article pour tous les formats.
+    artiste = _source(db_session)
+    courte = _article(db_session, artiste, 1, duree_ms=2_000, photo=True)
+    courte_ytdlp = _article(db_session, artiste, 2, video=False, sans_url=True,
+                            permalink="https://www.instagram.com/reel/CCC/")
+    courte_ytdlp.media = [entree("video", None, preview_url="https://cdn/2.jpg", duration_ms=2_000)]
+    db_session.commit()
+    inconnue = _article(db_session, artiste, 3)
+    assert source_video_reel(courte) is None
+    assert source_video_reel(courte_ytdlp) is None
+    assert raison_ineligible_reel(inconnue) is None
+    reels = [c.article_id for c in candidats_eligibles(db_session, MAINTENANT, FormatCreneau.REEL)]
+    assert courte.id not in reels and inconnue.id in reels
+    assert courte.id in [c.article_id for c in candidats_eligibles(db_session, MAINTENANT)]
+
+
+def test_un_carrousel_gele_garde_son_article_hors_des_reels(db_session):
+    video = _article(db_session, _source(db_session), 1)
+    db_session.add(Creneau(publier_a=MAINTENANT + dt.timedelta(hours=1, minutes=7), article_id=video.id,
+                           etat=EtatCreneau.GELE, epingle=False))
+    db_session.commit()
+    creneaux = appliquer_arbitrage(db_session, MAINTENANT)
+    assert all(c.article_id is None for c in creneaux if c.format == FormatCreneau.REEL)
