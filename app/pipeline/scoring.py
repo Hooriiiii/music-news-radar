@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Article, ScoredBy
+from app.models import Article, ScoredBy, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,8 @@ mondiale de David Guetta est une grosse actu (relevance 85) sans aucun intérêt
 d'émergence (emergence 0).
 
 1. Cœur de ligne : la MUSIQUE ÉLECTRONIQUE (house, techno, drum & bass, EDM, dance, \
-expérimental, clubbing, festivals, labels et artistes électro).
+expérimental, clubbing, festivals, labels et artistes électro), y compris les \
+MUSIQUES DURES (hard techno, hardstyle, hardcore) et la pop à tendance électro.
 2. Bienvenues aussi : les GROSSES actus POP mainstream (stars internationales : \
 album surprise, décès, scandale majeur, tournée événement), Y COMPRIS LA K-POP \
 (BTS, BLACKPINK, Stray Kids, SEVENTEEN, NewJeans, aespa, LE SSERAFIM... : comebacks, \
@@ -93,6 +94,29 @@ climat d'un artiste, innovation durable dans l'événementiel) : angle recherch�
 4. Hors ligne : rap/hip-hop, rock, metal, country, jazz, classique quand l'actu est \
 purement interne à ces genres — relevance <40, SAUF si elle relève d'un des axes \
 ci-dessus (festival breton multi-genres, initiative écolo, événement historique).
+5. QUI PARLE compte autant que ce qui est dit. Chaque contenu indique son « Type \
+de compte » et son « Format ». Ces règles portent sur relevance (et hotness), \
+jamais sur emergence :
+   - artiste : l'artiste qui annonce SA sortie, SA date, SON projet est la source \
+PRIMAIRE, l'actu que Kinda veut en priorité. Note-la selon la grille, sans décote.
+   - media (Guettapen, Tsugi, Mixmag, DJ Mag, Electro News, Pop Crave, Konbini, \
+Booska-P, AllTime EDM, Billboard, FIP...) : l'actu y est déjà repackagée, la \
+reprendre serait du PLAGIAT. C'est un FILET DE SÉCURITÉ : retire 15 à 20 points à \
+la note que mériterait la même info venue de l'artiste, et plafonne à 59 une actu \
+ordinaire. SEULE exception : une actu MAJEURE que les comptes d'artistes ne \
+couvriront pas (loi ou réglementation qui menace la scène, annulation de festival, \
+décès, fermeture de club emblématique) garde sa note haute, pour ne pas la rater.
+   - festival / label / club : une annonce OFFICIELLE (line-up, dates, billetterie, \
+annulation, sortie) est une source primaire et garde sa note ; la promo courante \
+(rappel de billetterie, compte à rebours, visuel d'ambiance) vaut 40-55.
+   - inconnu ou autre : juge sur le contenu seul.
+6. POSTS SANS INFORMATION : relevance <30, quel que soit le compte, star comprise. \
+Légende vide ou quasi vide (titre « Post Instagram »), emojis/hashtags/mentions \
+seuls, selfie ou photo d'ambiance, promo générique sans objet (« link in bio », \
+« out now » sans dire quoi), teaser d'idole pop/K-pop sans fait (photo concept, \
+version alternative d'un titre déjà sorti, « D-3 »). La notoriété du compte ne \
+remplace pas une info. Les VRAIES actus pop/K-pop (comeback daté, album, tournée, \
+record) gardent leurs notes hautes.
 
 Pour chaque article ou post fourni, évalue :
 
@@ -182,12 +206,26 @@ demain », alors c'est en dessous de 80, quelle que soit la qualité de l'actu.\
 """
 
 
+# Le format dit COMMENT l'info arrive ; le type de compte (`sources.categorie`)
+# dit QUI la produit. Le prompt système s'appuie sur les deux (règles 5 et 6).
+FORMATS = {
+    SourceType.INSTAGRAM: "post Instagram",
+    SourceType.RSS: "article de presse",
+    SourceType.REDDIT_RSS: "post Reddit",
+    SourceType.X: "tweet",
+    SourceType.BLUESKY: "post Bluesky",
+}
+
+
 def build_user_prompt(article: Article) -> str:
     parts = [f"Titre : {article.title}"]
     if article.summary:
         parts.append(f"Extrait : {article.summary[:1500]}")
     if article.source is not None:
         parts.append(f"Source : {article.source.name}")
+        parts.append(f"Format : {FORMATS.get(article.source.type, 'inconnu')}")
+        categorie = article.source.categorie
+        parts.append(f"Type de compte : {categorie.value if categorie else 'inconnu'}")
     if article.published_at is not None:
         parts.append(f"Publié le : {article.published_at:%d/%m/%Y %H:%M} UTC")
     parts.append(f"URL : {article.url}")

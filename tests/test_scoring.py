@@ -392,3 +392,56 @@ def test_prefiltered_compte_plusieurs_articles(db_session):
     )
     assert stats.prefiltered == 2
     assert stats.scored == 1
+
+
+# --- Type de compte : l'artiste d'abord, le média en filet de sécurité ---
+
+
+def _article_de(type_, categorie, url="ig:exemple"):
+    from app.models import SourceCategorie
+
+    article = make_article()
+    article.source = Source(
+        id=1, name="Compte", type=type_, url=url,
+        categorie=SourceCategorie(categorie) if categorie else None,
+    )
+    return article
+
+
+@pytest.mark.parametrize("categorie", ["artiste", "media", "festival", "label", "club", "autre"])
+def test_build_user_prompt_porte_le_type_de_compte(categorie):
+    prompt = build_user_prompt(_article_de(SourceType.INSTAGRAM, categorie))
+    assert f"Type de compte : {categorie}" in prompt
+
+
+def test_build_user_prompt_categorie_inconnue_ne_ment_pas():
+    prompt = build_user_prompt(_article_de(SourceType.X, None))
+    assert "Type de compte : inconnu" in prompt
+
+
+@pytest.mark.parametrize(
+    "type_, attendu",
+    [
+        (SourceType.INSTAGRAM, "post Instagram"),
+        (SourceType.RSS, "article de presse"),
+        (SourceType.REDDIT_RSS, "post Reddit"),
+        (SourceType.X, "tweet"),
+    ],
+)
+def test_build_user_prompt_porte_le_format(type_, attendu):
+    prompt = build_user_prompt(_article_de(type_, "media"))
+    assert f"Format : {attendu}" in prompt
+
+
+def test_system_prompt_priorise_les_comptes_d_artistes():
+    from app.pipeline.scoring import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+    assert "type de compte" in lowered
+    assert "plagiat" in lowered
+    assert "filet de sécurité" in lowered
+    # posts vides : le titre par défaut de l'adapter Instagram est cité
+    assert "post instagram" in lowered
+    assert "hard techno" in lowered
+    # la règle pop/K-pop reste en place
+    assert "ne les déprioris jamais" in lowered

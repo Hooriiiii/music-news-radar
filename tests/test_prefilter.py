@@ -82,7 +82,14 @@ def test_la_requete_porte_les_garde_fous_qwen():
     # le prompt système est celui du scoring, pas une copie
     from app.pipeline.scoring import SYSTEM_PROMPT
 
-    assert payload["messages"][0]["content"] == SYSTEM_PROMPT
+    systeme = payload["messages"][0]["content"]
+    assert systeme.startswith(SYSTEM_PROMPT)
+    # la seule addition : le garde-fou qui empêche le pré-filtre d'être plus
+    # sévère que Claude sur les comptes médias
+    from app.pipeline.prefilter import CONSIGNE_PREFILTRE
+
+    assert systeme == SYSTEM_PROMPT + CONSIGNE_PREFILTRE
+    assert "45" in CONSIGNE_PREFILTRE
 
 
 def test_reutilise_le_schema_de_article_score():

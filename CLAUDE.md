@@ -64,7 +64,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
-- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...]`
+- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...] [--categorie artiste|media|festival|label|club|autre]`
   (Instagram : URL au format `ig:<compte>`, ex. `ig:tsugimag` — compte professionnel
   business/creator uniquement, `business_discovery` ne voit pas les profils perso)
 - Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
@@ -210,6 +210,42 @@ notait « autopromo d'inconnu » sous 40 et **détruisait donc exactement le sig
 le label a besoin** — ne jamais revenir à un axe unique. Priorité explicite aux
 artistes français / à la scène locale sur l'axe emergence.
 API : `GET /articles?sort=emergence&min_emergence=...`.
+
+## Qui parle : `sources.categorie` (décision du 2026-09-17)
+
+Le feed priorise les posts des COMPTES D'ARTISTES (électro, musiques dures — hard
+techno, hardstyle, hardcore —, pop à tendance électro) : un artiste qui annonce sa
+sortie est l'actu primaire. Les comptes MÉDIAS (Guettapen, Tsugi, Mixmag, DJ Mag,
+Electro News, Pop Crave, Konbini, Booska-P, AllTime EDM, Billboard, FIP...) sont un
+**filet de sécurité** : reposter leur contenu serait du plagiat, donc ils notent
+nettement plus bas (décote 15-20, plafond 59 pour une actu ordinaire) — SAUF une
+actu majeure que les artistes ne couvriront pas (loi qui menace la scène,
+annulation de festival, décès, fermeture de club), qui garde sa note pour ne pas
+être ratée. Festivals/labels/clubs : annonce officielle = source primaire, promo
+courante 40-55. Et un post SANS INFORMATION (légende vide — titre « Post
+Instagram » —, emojis/hashtags seuls, selfie, « link in bio », teaser d'idole sans
+fait) note sous 30 quel que soit le compte : The Weeknd et IVE y prenaient 75. Les
+vraies actus pop/K-pop gardent leurs notes hautes ; l'axe emergence n'est pas
+touché.
+
+Mécanique : colonne `sources.categorie` (VARCHAR + CHECK, migration 0016, NULL =
+inconnu) ; `build_user_prompt` passe « Format : » (post Instagram, article de
+presse, post Reddit, tweet) et « Type de compte : » ; règles 5 et 6 du
+`SYSTEM_PROMPT`. Éditable au dashboard (panneau Sources), via `PATCH /sources/{id}`
+et `add_source --categorie`.
+
+**Pré-filtre local** : même prompt, plus `CONSIGNE_PREFILTRE` — la décote média ne
+doit jamais le faire noter sous 45 un contenu qui porte un fait ; seuls le bruit
+évident et les posts vides passent dessous. Sans ça, le 4B, plus brutal, écarterait
+les exceptions « actu majeure » que Claude aurait repêchées à 60+.
+
+Classement des sources existantes : `uv run python -m scripts.categoriser_sources
+[--apply]` (sans option : le plan). Mapping explicite des comptes Instagram connus
+(médias, festivals, labels, clubs — Keinemusik est un collectif, donc artiste),
+tout autre compte Instagram = artiste, RSS/Reddit = média, X = NULL. Le mapping
+explicite fait foi ; les défauts ne remplissent qu'une catégorie vide, pour ne
+jamais écraser un classement manuel. Idempotent. Conséquence assumée : les flux RSS
+de presse passent en `media` et notent donc plus bas qu'avant.
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
