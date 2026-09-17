@@ -139,7 +139,7 @@ def test_la_chaine_complete_d_un_reel(db_session, video):
     rapport = outils.tourner(db_session, R0 + dt.timedelta(minutes=20))
     assert outils.publies_reel == [(["r_reel.mp4", "r_cover.jpg"], True)]
     assert (creneau.etat, creneau.ig_media_id, rapport.publies) == (EtatCreneau.PUBLIE, "ig-reel", 1)
-    assert "🎥 via @saralandry" in outils.legendes[0]
+    assert "🎥 @saralandry" in outils.legendes[0]
 
 
 def test_un_reel_en_apercu_n_est_pas_publie(db_session, video):

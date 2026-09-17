@@ -30,7 +30,13 @@ from app.content import video as video_mod
 from app.content.export import telecharger as telecharger_media
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.render import render_post
-from app.content.visuels import lire_fichier_cache, urls_interdites, visuels_autorises
+from app.content.visuels import (
+    ORIGINE_ARTICLE,
+    lire_fichier_cache,
+    origine_interdite,
+    urls_interdites,
+    visuels_autorises,
+)
 from app.publish.images import ImageInexploitable, normaliser
 
 logger = logging.getLogger(__name__)
@@ -70,7 +76,17 @@ def medias_du_carrousel(post, article) -> list[dict]:
     ]
     actifs = getattr(post, "assets", None)
     if actifs is not None:
-        candidats += [_media_d_actif(a) for a in actifs if a.get("type") in (PHOTO, VIDEO)]
+        # La policy est RE-VERIFIEE a la relecture : un actif pose quand la source
+        # etait autorisee ne part pas si elle est passee en compte media depuis,
+        # ni si son URL est devenue interdite.
+        interdite_maintenant = origine_interdite(getattr(article, "source", None))
+        candidats += [
+            _media_d_actif(a)
+            for a in actifs
+            if a.get("type") in (PHOTO, VIDEO)
+            and not (a.get("origine") == ORIGINE_ARTICLE and interdite_maintenant)
+            and not ({a.get("url"), a.get("preview_url")} & interdites)
+        ]
     else:
         candidats += [m for m in visuels_autorises(article) if m.get("type") in (PHOTO, VIDEO)]
     fond = post.slides[0].get("image_url") if post.slides else None

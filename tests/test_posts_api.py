@@ -645,6 +645,21 @@ def test_une_slide_legacy_migree_valide_postout(client, db_session):
     assert reponse_liste.status_code == 200
 
 
+def test_l_api_expose_les_visuels_et_le_credit(client, db_session):
+    """Le dashboard doit pouvoir montrer d'ou vient chaque visuel, et qui est
+    credite en legende."""
+    post = _post(db_session, _article(db_session))
+    post.credit = "@fredagain"
+    post.assets = [{"type": "photo", "url": "https://cdn.ig/f.jpg", "origine": "artiste",
+                    "compte": "@fredagain", "fichier": "file:///cache/f.jpg"}]
+    db_session.commit()
+
+    corps = client.get(f"/posts/{post.id}").json()
+
+    assert corps["credit"] == "@fredagain"
+    assert corps["assets"][0]["compte"] == "@fredagain"
+
+
 def _post_sur_un_creneau(db, etat, erreur=None, dans=dt.timedelta(hours=1)):
     article = _article(db)
     post = _post(db, article, variants=_quatre_variantes())

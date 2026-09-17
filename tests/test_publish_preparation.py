@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.content.render import RenduIndisponible, RenduSlide
 from app.models import SourceCategorie, SourceType
+from app.content.visuels import ORIGINE_ARTICLE, actif
 from app.publish.preparation import PreparationImpossible, medias_du_carrousel, preparer_fichiers
 
 
@@ -226,6 +227,18 @@ def test_les_visuels_d_un_compte_media_instagram_ne_sont_jamais_repris(tmp_path)
     assert medias_du_carrousel(_post(), article) == []
     artiste = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.ARTISTE)
     assert len(medias_du_carrousel(_post(), _article_medias(_video(), source=artiste))) == 1
+
+
+def test_un_actif_du_post_devenu_interdit_n_est_plus_repris():
+    """Relecture d'un `assets` pose quand la source etait encore autorisee : si
+    elle est passee en compte media depuis, ses visuels ne partent pas."""
+    source = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.MEDIA)
+    photo = {"type": "photo", "url": "https://img/p.jpg", "preview_url": None,
+             "duration_ms": None, "width": None, "height": None}
+    article = _article_medias(photo, source=source)
+    post = _post()
+    post.assets = [actif(photo, origine=ORIGINE_ARTICLE, permalink="https://www.instagram.com/p/G/")]
+    assert medias_du_carrousel(post, article) == []
 
 
 def test_neuf_medias_au_plus_apres_la_cover(tmp_path):

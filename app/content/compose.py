@@ -24,7 +24,7 @@ from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.media import PHOTO
-from app.content.visuels import visuels_autorises
+from app.content.visuels import image_de_fond, visuels_autorises
 from app.models import Article, Post
 
 logger = logging.getLogger(__name__)
@@ -357,20 +357,38 @@ def _fond_par_defaut(article: Article) -> str | None:
 
 
 def create_post(
-    db: Session, article: Article, draft: PostDraft, template: str = "kinda_post"
+    db: Session,
+    article: Article,
+    draft: PostDraft,
+    template: str = "kinda_post",
+    visuels=None,
 ) -> Post:
-    """Persiste un brouillon : les quatre variantes, et une cover sans retenue.
+    """Persiste un brouillon : les quatre variantes, une cover sans retenue, et les
+    visuels choisis (`ChoixVisuels`, cf. `choix_visuels.py`).
+
+    Avec `visuels` : les actifs retenus AVANT l'appel paye sont ceux que le post
+    publiera -- le fond de cover est leur premiere image (la copie locale d'une
+    photo d'artiste, dont l'URL du CDN Instagram aura expire au gel) et le credit
+    en decoule. Un choix vide est un choix : aucun fond, aucun actif.
+
+    Sans `visuels` (composition a la main, appels anterieurs a la regle) : le fond
+    vient des medias AUTORISES de l'article et `assets` reste NULL.
 
     Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
     doit rester lisible sans lui.
     """
     premiere = draft.variantes[0]
+    if visuels is not None:
+        actifs, credit, fond = list(visuels.actifs), visuels.credit, image_de_fond(visuels.actifs)
+    else:
+        actifs, credit, fond = None, credit_video(article), _fond_par_defaut(article)
     post = Post(
         article_id=article.id,
         article_title=article.title,
         article_url=article.url,
         source_name=article.source.name if article.source is not None else None,
-        credit=credit_video(article),
+        credit=credit,
+        assets=actifs,
         template=template,
         caption=draft.caption,
         hashtags=draft.hashtags or None,
@@ -382,7 +400,7 @@ def create_post(
                 "headline": premiere.headline,
                 "title": premiere.title,
                 "subtitle": premiere.subtitle,
-                "image_url": _fond_par_defaut(article),
+                "image_url": fond,
             }
         ],
         variants={

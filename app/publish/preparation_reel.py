@@ -23,13 +23,15 @@ import secrets
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
 from app.config import settings
-from app.content.media import VIDEO, lien_de_reel, video_recuperable, videos_exploitables
+from app.content.media import CLES, VIDEO, lien_de_reel, video_recuperable, videos_exploitables
 from app.content.render import _USER_AGENT, render_post
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
+from app.content.visuels import ORIGINE_ARTICLE, origine_interdite, urls_interdites
 from app.publish.images import ImageInexploitable, en_jpeg
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 
@@ -53,17 +55,50 @@ class LienExpire(PreparationImpossible):
     """La `media_url` repond 4xx : lien signe expire, ou media retire."""
 
 
-def source_de_la_video(post, article) -> tuple[str, str] | None:
-    for slide in post.slides[1:]:
-        if slide.get("kind") == "media" and slide.get("type") == VIDEO and slide.get("url"):
-            return API, slide["url"]
-    if article is None:
+def _actif_publiable(choisi: dict, article, interdites: set[str]) -> bool:
+    """La policy des visuels est RE-VERIFIEE a la relecture de `post.assets` : un
+    actif pose quand la source etait autorisee ne doit pas partir si elle est
+    passee en compte media Instagram depuis, ni si son URL est devenue interdite."""
+    if choisi.get("origine") == ORIGINE_ARTICLE and origine_interdite(
+        getattr(article, "source", None)
+    ):
+        return False
+    return not ({choisi.get("url"), choisi.get("preview_url")} & interdites)
+
+
+def _porteur_video(post, article):
+    """Ce qui porte la video du reel : l'actif video choisi a la composition (le
+    post d'un artiste cite), sinon l'article -- jamais un compte media Instagram."""
+    interdites = urls_interdites(article)
+    for choisi in getattr(post, "assets", None) or []:
+        if choisi.get("type") == VIDEO and _actif_publiable(choisi, article, interdites):
+            return SimpleNamespace(
+                url=choisi.get("permalink"),
+                media=[{cle: choisi.get(cle) for cle in CLES}],
+            )
+    if article is None or origine_interdite(getattr(article, "source", None)):
         return None
-    videos = videos_exploitables(article.media, int(settings.publication_reel_duree_max_s * 1000))
+    return article
+
+
+def source_de_la_video(post, article) -> tuple[str, str] | None:
+    interdites = urls_interdites(article)
+    for slide in post.slides[1:]:
+        if (
+            slide.get("kind") == "media"
+            and slide.get("type") == VIDEO
+            and slide.get("url")
+            and slide["url"] not in interdites
+        ):
+            return API, slide["url"]
+    porteur = _porteur_video(post, article)
+    if porteur is None:
+        return None
+    videos = videos_exploitables(porteur.media, int(settings.publication_reel_duree_max_s * 1000))
     if videos:
         return API, videos[0]["url"]
-    if video_recuperable(article.media, article.url):
-        return YTDLP, article.url
+    if video_recuperable(porteur.media, porteur.url):
+        return YTDLP, porteur.url
     return None
 
 
@@ -238,7 +273,10 @@ def preparer_reel(
         raise PreparationImpossible("accroche trop longue : la cover deborde")
 
     plafond = settings.publication_reel_source_max_mo * MO
-    source = _video_source(*origine, article, dossier, plafond, telecharger, recuperer_ytdlp)
+    # Le repli yt-dlp d'un lien expire vise le permalink du PORTEUR : le post de
+    # l'artiste quand la video vient de lui, pas la page de l'article.
+    porteur = _porteur_video(post, article) or article
+    source = _video_source(*origine, porteur, dossier, plafond, telecharger, recuperer_ytdlp)
     try:
         try:
             infos_source = sonder(source)

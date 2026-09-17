@@ -155,6 +155,10 @@ class PostOut(BaseModel):
     article_title: str
     article_url: str
     source_name: str | None
+    # Les visuels retenus (origine, compte, permalink, copie locale) et le credit
+    # qui en decoule. NULL = post anterieur a la regle des visuels (2026-09-17).
+    assets: list[dict] | None = None
+    credit: str | None = None
     status: PostStatus
     template: str
     caption: str

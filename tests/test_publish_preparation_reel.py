@@ -10,8 +10,10 @@ import pytest
 from PIL import Image
 
 from app.content.media import entree
+from app.content.visuels import ORIGINE_ARTICLE, ORIGINE_ARTISTE, actif
 from app.content.render import RenduSlide
 from app.content.video import AssemblageIndisponible
+from app.models import SourceCategorie, SourceType
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.publish.preparation_reel import (
     API,
@@ -182,6 +184,47 @@ def test_un_lien_expire_d_un_post_video_seul_retombe_sur_yt_dlp(tmp_path):
     outils = {**_outils(), "telecharger": _expire}
     preparer_reel(_post(), _article(VIDEO), tmp_path, recuperer_ytdlp=recuperer, **outils)
     assert [appel[0] for appel in recuperer.appels] == ["https://www.instagram.com/p/AAA/"]
+
+
+REEL_FRED = "https://www.instagram.com/reel/FRED/"
+
+
+def _post_avec_actif(video, origine=ORIGINE_ARTISTE):
+    post = _post()
+    post.assets = [actif(video, origine=origine, compte="@fredagain", permalink=REEL_FRED)]
+    return post
+
+
+def _article_media_ig(*medias):
+    """Un article venu d'un compte MEDIA Instagram : son info est publiable, ses
+    videos jamais."""
+    source = SimpleNamespace(type=SourceType.INSTAGRAM, categorie=SourceCategorie.MEDIA, url="ig:guettapen")
+    return SimpleNamespace(media=list(medias), url="https://www.instagram.com/reel/GUET/", source=source)
+
+
+def test_la_video_d_un_artiste_vient_de_son_permalink():
+    assert source_de_la_video(_post_avec_actif(SANS_URL), _article_media_ig(VIDEO)) == (YTDLP, REEL_FRED)
+    assert source_de_la_video(_post_avec_actif(VIDEO), _article_media_ig()) == (API, "https://cdn/v.mp4")
+
+
+def test_jamais_la_video_d_un_compte_media():
+    slide = {"kind": "media", "type": "video", "url": "https://cdn/v.mp4"}
+    assert source_de_la_video(_post("kinda_reel", "@x", slide), _article_media_ig(VIDEO)) is None
+    assert source_de_la_video(_post(), _article_media_ig(VIDEO)) is None
+
+
+def test_un_actif_devenu_interdit_n_est_plus_publie():
+    """Relecture d'un `assets` pose avant que la source passe en `media` : l'actif
+    de l'article ne part pas, et son URL non plus."""
+    assert source_de_la_video(_post_avec_actif(VIDEO, ORIGINE_ARTICLE), _article_media_ig(VIDEO)) is None
+    assert source_de_la_video(_post_avec_actif(VIDEO), _article_media_ig(VIDEO)) is None
+
+
+def test_un_lien_d_artiste_expire_retombe_sur_son_permalink(tmp_path):
+    recuperer = Recuperer()
+    outils = {**_outils(), "telecharger": _expire}
+    preparer_reel(_post_avec_actif(VIDEO), _article_media_ig(), tmp_path, recuperer_ytdlp=recuperer, **outils)
+    assert [appel[0] for appel in recuperer.appels] == [REEL_FRED]
 
 
 def test_yt_dlp_indisponible_pour_ce_gel_differe_sans_exclure(tmp_path):
