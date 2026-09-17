@@ -1,5 +1,6 @@
 import datetime as dt
 
+from app.content.media import entree
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, Source, SourceType
 from app.schedule.slots import prochains_horaires
 from app.schedule.store import (
@@ -138,3 +139,10 @@ def test_un_article_deja_parti_en_apercu_ou_publie_n_est_plus_candidat(db_sessio
     ])
     db_session.commit()
     assert [c.article_id for c in candidats_eligibles(db_session, MAINTENANT)] == [libre.id]
+
+
+def test_un_reel_sans_media_url_reste_candidat_carrousel_par_sa_vignette(db_session):
+    article = _article(db_session, _source(db_session), 1, media=False)
+    article.media = [entree("video", None, preview_url="https://cdn/v.jpg")]
+    db_session.commit()
+    assert [c.article_id for c in candidats_eligibles(db_session, MAINTENANT)] == [article.id]

@@ -8,6 +8,8 @@ Un tweet video etait jusqu'ici indistinguable d'un tweet photo : l'API X ne renv
 types, dont ce module est le consommateur principal.
 """
 
+from urllib.parse import urlsplit
+
 PHOTO = "photo"
 VIDEO = "video"
 GIF = "gif"
@@ -72,3 +74,42 @@ def raison_pas_de_reel(media: list[dict] | None) -> str | None:
             f"maximum {DUREE_MAX_REEL_MS // 1000} s pour un reel"
         )
     return "aucune video exploitable"  # pragma: no cover -- filet
+
+
+def est_lien_instagram(url: str | None) -> bool:
+    """Un lien dont l'HOTE est instagram.com. Pas un `in` sur la chaine :
+    « https://evil.example/www.instagram.com/... » ne doit pas passer, yt-dlp
+    n'est jamais lance ailleurs qu'Instagram."""
+    if not url:
+        return False
+    hote = (urlsplit(url).hostname or "").lower()
+    return hote == "instagram.com" or hote.endswith(".instagram.com")
+
+
+def lien_de_reel(url: str | None) -> bool:
+    """Un permalink de reel : `/reel/<code>/` (ou `/reels/<code>/`)."""
+    if not est_lien_instagram(url):
+        return False
+    segments = [s for s in urlsplit(url).path.split("/") if s]
+    return len(segments) >= 2 and segments[0] in ("reel", "reels")
+
+
+def video_recuperable(media: list[dict] | None, permalink: str | None) -> bool:
+    """Une video que yt-dlp saura recuperer sur la page du post, AU GEL.
+
+    Distincte de `videos_exploitables` a dessein : celle-ci repond « y a-t-il un
+    fichier a telecharger directement ? » (export manuel, switch REELS), celle-la
+    « un reel automatique peut-il aller le chercher ? ». Meta omet `media_url`
+    des reels d'artistes (musique protegee) : sans cette seconde question, ils
+    seraient tous ineligibles.
+
+    Deux indices : un permalink de reel, ou un post dont le SEUL media est une
+    video sans URL. Un carrousel (`/p/` a plusieurs medias) est ecarte : yt-dlp
+    rendrait une liste, sans dire quel element est la video.
+    """
+    if not est_lien_instagram(permalink):
+        return False
+    if lien_de_reel(permalink):
+        return True
+    media = media or []
+    return len(media) == 1 and media[0].get("type") == VIDEO and not media[0].get("url")
