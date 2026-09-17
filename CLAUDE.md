@@ -535,11 +535,16 @@ Un créneau GELE dont `publier_a` tombe dans les `publication_avance_s` (660 s,
 un intervalle + marge) à venir est traité dès ce passage, **en mode `reel`
 seulement** : réclamation (GELE → ECHEC committé, inchangée), tunnel, conteneur
 (carrousel ou REELS, jusqu'à FINISHED), puis **attente dans le tunnel ouvert**
-jusqu'à `publier_a` (jamais plus que l'avance ; conteneur prêt après l'heure :
-aucune attente), **mode relu** juste avant `media_publish`. Relu `apercu` → pas
-de `media_publish`, état APERCU ; relu `arret` → pas de `media_publish`, le
-créneau **redevient GELE** (exclusion levée, dossier gardé : il partira si l'on
-repasse en `reel` avant la limite de retard). En `apercu`, un créneau à venir
+jusqu'à `publier_a`, par pas de 30 s relus sur l'horloge murale (jamais plus que
+l'avance au total ; conteneur prêt après l'heure : aucune attente). En mode
+`reel`, **retard puis mode sont relus** juste avant `media_publish` — pour TOUT
+créneau, pas seulement ceux attendus : les enfants vidéo d'un carrousel peuvent
+retenir le conteneur des minutes. Retard > 90 min (Mac endormi pendant
+l'attente) → pas de `media_publish`, MANQUE, exclusion levée, notifié, dossier
+effacé. Relu `apercu` → état APERCU ; relu `arret` → le créneau **redevient
+GELE** par écriture conditionnelle sur l'état réclamé (si le dashboard est passé
+entre-temps, son choix prime ; sinon exclusion levée, dossier gardé : il partira
+si l'on repasse en `reel` avant la limite de retard). En `apercu`, un créneau à venir
 n'est pas réclamé d'avance : il attend son heure. `publie_le` = heure réelle de
 publication. Crochets : `publier_fichiers` / `publier_reel` acceptent
 `attendre_jusqu_a` et `encore_publier` (appelés dans le `with heberger(...)`),

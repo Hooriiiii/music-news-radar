@@ -405,15 +405,25 @@ def _mode_courant(lire_mode) -> str:
     return mode if mode in MODES else "arret"
 
 
+PAS_ATTENTE_S = 30
+
+
 def _attendre_l_heure(cible: dt.datetime, horloge, dormir) -> None:
-    """Dort jusqu'a `cible`, jamais plus que l'avance : une horloge incoherente
-    ne doit pas suspendre l'agent. Conteneur pret apres l'heure : aucune attente."""
-    restant = (cible - horloge()).total_seconds()
-    if restant > 0:
-        dormir(min(restant, settings.publication_avance_s))
+    """Dort jusqu'a `cible` par pas courts, relus sur l'horloge MURALE : un Mac
+    mis en veille pendant l'attente ne rallonge pas l'attente, il se voit au
+    reveil (et `_encore_publier` jugera le retard). Jamais plus que l'avance au
+    total. Conteneur pret apres l'heure : aucune attente."""
+    fin = min(cible, horloge() + dt.timedelta(seconds=settings.publication_avance_s))
+    while (restant := (fin - horloge()).total_seconds()) > 0:
+        dormir(min(restant, PAS_ATTENTE_S))
 
 
-def _mode_relu(decision: dict, lire_mode) -> bool:
+def _encore_publier(decision: dict, lire_mode, publier_a: dt.datetime, horloge) -> bool:
+    """Relu juste avant media_publish : le retard d'abord (Mac endormi pendant
+    l'attente, enfants video longs a encoder), puis le mode."""
+    if horloge() - publier_a > dt.timedelta(minutes=settings.publication_retard_max_minutes):
+        decision["mode"] = "manque"
+        return False
     decision["mode"] = _mode_courant(lire_mode)
     return decision["mode"] == "reel"
 
@@ -502,13 +512,17 @@ def _publier(
         # Publication a l'heure affichee : conteneur cree d'avance, attente dans
         # le tunnel ouvert, mode RELU juste avant media_publish. Un processus tue
         # pendant l'attente laisse l'ECHEC de la reclamation : post perdu, jamais double.
+        # En reel, mode ET retard sont relus avant media_publish meme pour un
+        # creneau deja du : l'encodage des enfants video peut durer des minutes.
         decision = {"mode": mode}
+        reclame = _attendu(creneau)
         crochets = {}
-        if a_venir:
-            crochets = {
-                "attendre_jusqu_a": partial(_attendre_l_heure, utc(creneau.publier_a), horloge, dormir),
-                "encore_publier": partial(_mode_relu, decision, lire_mode),
-            }
+        if mode == "reel":
+            crochets["encore_publier"] = partial(
+                _encore_publier, decision, lire_mode, utc(creneau.publier_a), horloge
+            )
+        if a_venir and mode == "reel":
+            crochets["attendre_jusqu_a"] = partial(_attendre_l_heure, utc(creneau.publier_a), horloge, dormir)
         try:
             identifiant = publier(
                 _dossier(creneau),
@@ -535,9 +549,18 @@ def _publier(
             # Arret choisi pendant l'attente : rien n'est parti (le conteneur non
             # publie expire seul). Le creneau redevient GELE, dossier conserve :
             # il partira si l'on repasse en reel avant la limite de retard.
-            creneau.etat = EtatCreneau.GELE
-            creneau.erreur = "publication suspendue : mode arret choisi avant l'heure"
-            db.commit()
+            # Ecriture CONDITIONNELLE : si le dashboard est passe, son choix prime.
+            _ecrire_si(
+                db, creneau, reclame,
+                etat=EtatCreneau.GELE, erreur="publication suspendue : mode arret choisi avant l'heure",
+            )
+            continue
+        if mode == "manque":
+            # Trop tard au moment de media_publish : rien n'est parti, l'article
+            # peut revenir dans la file.
+            if _ecrire_si(db, creneau, reclame, etat=EtatCreneau.MANQUE, erreur="retard au moment de publier"):
+                _compter_manque(creneau, reclame, set(publieurs), rapport)
+                _effacer_dossier(creneau)
             continue
         creneau.ig_media_id = identifiant
         creneau.erreur = None

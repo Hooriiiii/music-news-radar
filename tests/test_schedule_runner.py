@@ -50,7 +50,7 @@ class Outils:
             raise self.erreur_preparation
         return ["p_01.jpg"]
 
-    def publier(self, dossier, noms, legende, publier_vraiment):
+    def publier(self, dossier, noms, legende, publier_vraiment, **_crochets):
         self.publies.append((noms, publier_vraiment))
         if self.erreur_publication:
             raise self.erreur_publication
@@ -212,7 +212,7 @@ def test_une_publication_interrompue_n_est_jamais_retentee(db_session, article):
     outils = Outils()
     etats_vus = []
 
-    def publier_puis_crash(dossier, noms, legende, publier_vraiment):
+    def publier_puis_crash(dossier, noms, legende, publier_vraiment, **_crochets):
         outils.publies.append((noms, publier_vraiment))
         # Une autre session voit ce qui est COMMITTE au moment de l'appel.
         with sessionmaker(bind=db_session.get_bind())() as autre:
@@ -592,7 +592,10 @@ class Horloge:
 
     def dormir(self, secondes):
         self.sommeils.append(secondes)
-        self.moment += dt.timedelta(seconds=secondes)
+        self.moment += dt.timedelta(seconds=secondes) + self.saut
+        self.saut = dt.timedelta(0)
+
+    saut = dt.timedelta(0)
 
 
 class OutilsPonctuels(Outils):
@@ -647,7 +650,8 @@ def test_un_creneau_a_cinq_minutes_part_a_l_heure_affichee(db_session, article):
 
     # Reclame (ECHEC committe) AVANT le conteneur, attente jusqu'a l'heure, puis publication.
     assert outils.etats_pendant_conteneur == [EtatCreneau.ECHEC]
-    assert horloge.sommeils == [300]
+    # Pas courts contre l'horloge murale : un Mac en veille pendant l'attente se voit.
+    assert horloge.sommeils == [30] * 10
     assert outils.journal == ["conteneur", ("media_publish", H0)]
     assert (creneau.etat, rapport.publies) == (EtatCreneau.PUBLIE, 1)
     assert utc(creneau.publie_le) == H0
@@ -739,4 +743,76 @@ def test_l_attente_ne_depasse_jamais_l_avance(db_session, article, monkeypatch):
 
     outils.tourner_ponctuel(db_session)
 
-    assert horloge.sommeils == [120]
+    assert sum(horloge.sommeils) == 120 and max(horloge.sommeils) <= 30
+
+
+def test_un_mac_endormi_pendant_l_attente_donne_un_manque_sans_publication(tmp_path, db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    _dossier_de(creneau).mkdir(parents=True, exist_ok=True)
+    # Le Mac s'endort pendant l'attente et se reveille trois heures plus tard.
+    horloge.saut = dt.timedelta(hours=3)
+
+    rapport = outils.tourner_ponctuel(db_session)
+
+    assert outils.journal == ["conteneur", "abandon"]
+    assert (creneau.etat, rapport.manques, rapport.publies) == (EtatCreneau.MANQUE, 1, 0)
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert not _dossier_de(creneau).exists()
+    assert outils.notifications
+
+
+def test_un_creneau_du_relit_mode_et_retard_juste_avant_media_publish(db_session, article):
+    """Hors attente aussi : des enfants video peuvent retenir le conteneur longtemps."""
+    horloge = Horloge(H0 + dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.duree_conteneur_s = 100 * 60
+
+    outils.tourner_ponctuel(db_session)
+
+    assert outils.journal == ["conteneur", "abandon"]
+    assert creneau.etat == EtatCreneau.MANQUE
+
+
+def test_un_creneau_du_repasse_en_apercu_pendant_le_conteneur_ne_publie_pas(db_session, article):
+    horloge = Horloge(H0 + dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+    outils.duree_conteneur_s = 1
+    original = outils.publier
+
+    def publier(*args, **kwargs):
+        outils.mode = "apercu"
+        return original(*args, **kwargs)
+
+    outils.publier = publier
+    outils.tourner_ponctuel(db_session)
+    assert outils.publies == []
+    assert creneau.etat == EtatCreneau.APERCU
+
+
+def test_le_retour_en_gele_ne_passe_pas_sur_un_changement_du_dashboard(db_session, article):
+    horloge = Horloge(H0 - dt.timedelta(minutes=5))
+    outils = OutilsPonctuels(horloge)
+    creneau = _gele_h0(db_session, outils)
+
+    def arret_et_dashboard():
+        outils.mode = "arret"
+        # Le dashboard libere le creneau pendant l'attente : son choix prime.
+        with _dashboard(db_session) as dashboard:
+            libere = _creneau(dashboard, H0)
+            libere.etat, libere.article_id, libere.post_id = EtatCreneau.LIBRE, None, None
+            dashboard.commit()
+
+    outils.pendant_attente = arret_et_dashboard
+    outils.tourner_ponctuel(db_session)
+
+    db_session.expire_all()
+    assert (creneau.etat, creneau.post_id) == (EtatCreneau.LIBRE, None)
+    assert outils.publies == []
+
+
+def _dossier_de(creneau):
+    return settings.publication_dir / str(creneau.id)

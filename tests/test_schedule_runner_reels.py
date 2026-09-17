@@ -57,11 +57,11 @@ class Outils:
             raise self.erreur_preparation_reel
         return ["r_reel.mp4", "r_cover.jpg"]
 
-    def publier(self, dossier, noms, legende, publier_vraiment):
+    def publier(self, dossier, noms, legende, publier_vraiment, **_crochets):
         self.publies.append((noms, publier_vraiment))
         return "ig42"
 
-    def publier_reel(self, dossier, noms, legende, publier_vraiment):
+    def publier_reel(self, dossier, noms, legende, publier_vraiment, **_crochets):
         self.publies_reel.append((noms, publier_vraiment))
         self.legendes.append(legende)
         return "ig-reel"
