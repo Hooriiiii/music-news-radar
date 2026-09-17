@@ -189,7 +189,11 @@ déjà, avec latence et doublons. La stratégie : taper AU NIVEAU DE LA SOURCE �
 - primaire : comptes d'artistes/labels, organisateurs de festivals ;
 - presse qui *break* l'actu : Mixmag, RA, Pitchfork, Tsugi, DJ Mag (électro),
   Music Business Worldwide + CMU + Billboard (business/pop) — flux RSS gratuits ;
-- social brut : X UGC/radar, Reddit.
+- primaire aussi, depuis 2026-09-17 : comptes Instagram PROFESSIONNELS d'artistes,
+  labels, festivals et médias via `business_discovery` (source `instagram`,
+  gratuite) — la philosophie ne change pas : on lit le compte qui produit l'actu,
+  jamais un reposteur ;
+- social brut : X UGC/radar (éteint, voir plus bas), Reddit.
 Corollaire coût : Billboard RSS (gratuit) rend les comptes X @billboard/@billboardcharts/
 @chartdata redondants -> candidats à couper.
 
@@ -326,7 +330,9 @@ se voit directement sur le feed.
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul deux carrousels par jour, choisis dans le flux scoré. Pas de reel :
-aucune source ne fournit plus de vidéo (X à sec, source Instagram abandonnée).
+aucune source ne fournissait plus de vidéo (X à sec) au moment de la conception ;
+la source Instagram, réintroduite le 2026-09-17 avec un jeton Facebook distinct
+(voir « Deux jetons Meta »), peut en ramener.
 Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révision du
 2026-09-16.
 
@@ -334,6 +340,20 @@ Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révisi
 `kindanewsfrance` déclaré testeur : une app non revue publie sur ses comptes
 testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine dans
 `meta_token_path` (droits 600) ; `.env` n'est que la valeur initiale. Alerte à J-7.
+
+**Deux jetons Meta, jamais interchangeables.**
+- `META_ACCESS_TOKEN` (`IGAA…`, connexion Instagram, `graph.instagram.com`) :
+  **publication**. Rafraîchi automatiquement (ci-dessus).
+- `META_FB_ACCESS_TOKEN` (`EAA…`, jeton utilisateur de connexion **Facebook**,
+  `graph.facebook.com`) : **source Instagram** (`business_discovery`, que le jeton
+  de connexion Instagram ne sait pas appeler). Portées : `instagram_basic`,
+  `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`,
+  `business_management`. **60 jours une fois étendu, AUCUN rafraîchissement
+  automatique** : le renouveler à la main dans le Graph API Explorer, puis
+  débogueur de jeton → « Étendre », et le reporter dans `.env`. Expiré, Meta
+  répond code 190 : chaque source Instagram passe en erreur avec un message qui
+  dit quoi faire, et la notification de fin de run le signale.
+`META_IG_USER_ID` et `META_API_VERSION` sont communs aux deux usages.
 
 **La file.** 6 créneaux (3 jours × 2), heure tirée dans 08:30-11:00 et 17:00-19:30
 (Paris) avec une graine dérivée de la date — sinon l'heure glisserait à chaque
@@ -562,11 +582,24 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   A&R — est invisible de cette API. La source Instagram COMPLETE les RSS, elle ne
   les remplace pas. Et les `media_url` du CDN Instagram sont SIGNEES et EXPIRENT
   en quelques jours : stocker l'URL puis la servir plus tard donne un 404
-  silencieux, d'ou le telechargement de l'asset au moment du gel (chantier C).
+  silencieux, d'ou le telechargement de l'asset au moment du gel.
+- **Source Instagram** (`app/sources/instagram.py`) : jeton `meta_fb_access_token`
+  UNIQUEMENT (voir « Deux jetons Meta »). Absent (ou `META_IG_USER_ID` absent), la
+  source est SAUTÉE en silence et rend zéro item — comme les alertes sans webhook ;
+  run_pipeline ne casse pas. Une erreur Graph lève un `RuntimeError` lisible (sans
+  le jeton, que l'URL de requête porte), attrapé par `run_ingest`, consigné dans
+  `sources.state.last_error` et remonté par `diagnostiquer`. État : `dernier_post`
+  (date du post le plus récent vu). Migration `0015_source_instagram` (CHECK
+  `sources.type` élargi) — elle était numérotée 0014 avant de rejoindre `main`,
+  où `0014_creneaux` avait pris le numéro.
 - **Les sources X sont eteintes** (2026-09-11) : la facturation developer.x.com
   n'est plus active, les 85 sources actives (sur 100 au total) renvoyaient 402 a
   chaque run et noyaient la supervision. `scripts/desactiver_sources_x.py` les
-  eteint sans les supprimer — leur `since_id` est conserve.
+  eteint sans les supprimer — leur `since_id` est conserve. **Déjà appliqué en
+  production le 2026-09-17** (à la main ; ids sauvegardés dans
+  `~/Library/Application Support/Kinda/sources_x_desactivees.json`). Le script
+  reste, idempotent : le relancer ne touche rien. Le code de l'adapter X est
+  conservé intact.
 - **`op.f()` ne s'appelle QUE dans un callable de migration.** Pose au niveau
   module, il leve `NameError: Can't invoke function 'f', as the proxy object
   has not yet been established` — mais seulement sur les chemins qui chargent
