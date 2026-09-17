@@ -115,7 +115,11 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
     la file de publication Instagram. Sort immédiatement en mode `arret`, le défaut
     (`PUBLICATION_MODE` dans `.env`). Une exception inattendue est notifiée (au plus
     une fois par heure, état dans `publication_panne.json` à côté du jeton) et le
-    script sort en code 1.
+    script sort en code 1. Un passage peut **dépasser 10 minutes** (yt-dlp,
+    ffmpeg, tunnel, attente du conteneur chez Meta) : launchd ne lance jamais
+    une seconde instance tant que la première tourne (`StartInterval` ne
+    chevauche pas), le passage suivant part simplement en retard. D'où la
+    relecture du mode avant chaque réclamation (voir « Publication automatique »).
 
   **Renommage de l'agent, et son piège.** L'agent s'appelait
   `com.musicnewsradar.ingest`. launchd identifie un agent par son LABEL, pas par
@@ -378,9 +382,10 @@ centré — sur une vidéo de concert, ce qui compte est souvent hors du centre.
 
 La cover ne dure qu'**une frame** : elle sert de vignette de couverture, pas de
 carton d'introduction. `frames_cover` est paramétrable parce qu'Instagram
-réencode à l'import et qu'une frame unique peut ne pas survivre. Le moyen fiable
-viendra de l'API Meta, qui permet de fournir explicitement l'image de couverture
-d'un reel.
+réencode à l'import et qu'une frame unique peut ne pas survivre. Pour les reels
+**publiés automatiquement**, c'est désormais fait : le conteneur `REELS` reçoit
+la cover explicitement via `cover_url` (voir « Reels automatiques »), la frame
+n'est plus qu'un filet pour l'export manuel.
 
 **Figma n'est jamais appelé à l'exécution.** Son API REST est en lecture seule sur
 le contenu d'un fichier ; l'écriture passe par l'API Plugin, qui n'existe que dans
@@ -500,10 +505,27 @@ Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 migration 0017) ; fenêtres reel propres (`PUBLICATION_REEL_FENETRES`, défaut
 `12:00-14:00,20:30-22:30`), `PUBLICATION_CRENEAUX_REEL=0` les désactive.
 `publier_a` reste unique tous formats confondus : `slots.py` refuse des fenêtres
-qui se chevauchent. Arbitrage **reels d'abord**, un article n'occupe jamais deux
+qui se chevauchent — en ne vérifiant que les formats ACTIFS (le carrousel seul ;
+le reel, contre lui-même et les carrousels, seulement s'il a des créneaux). Des
+fenêtres reel fautives sautent les reels à l'arbitrage, les carrousels sont
+programmés quand même, puis l'erreur remonte (notifiée à chaque passage).
+
+**Reels en opt-in explicite.** `reels_actifs` vaut **false** tant que la case
+« Reels auto » n'a pas été cochée au dashboard (clé absente, fichier illisible
+ou valeur invalide = coupés). Motif : la production tournait déjà en mode `reel`
+au moment de la fusion ; un défaut à true aurait publié des reels sans décision.
+Le mode est **relu avant chaque réclamation** (`tourner(lire_mode=...)`,
+`mode_effectif` dans l'agent) : repasser en `apercu` pendant un long passage
+empêche tout `media_publish`, `arret` ne réclame plus rien. Un reel gelé qui finit
+en « Manqué » parce que les reels ont été coupés est notifié comme tel
+(« reels coupés »), pas comme un Mac en veille. Arbitrage **reels d'abord**, un article n'occupe jamais deux
 créneaux. Éligible en reel : vidéo avec URL directe (≤ 90 s ou durée inconnue),
 compte artiste/festival/label/club (`PUBLICATION_REEL_CATEGORIES`), source
-Instagram (crédit). Le gel (`app/publish/preparation_reel.py`) télécharge la
+Instagram (crédit), durée connue d'au moins **3 s** (`PUBLICATION_REEL_DUREE_MIN_S` ;
+une vidéo plus courte reste bonne pour un carrousel). L'éligibilité est revérifiée
+au gel : un article devenu inapte (vidéo retirée, compte reclassé) libère son
+créneau sans exclusion. Un brouillon `kinda_reel` antérieur au crédit est
+complété (`credit_video`) à la reprise ou au gel, jamais exclu pour ça. Le gel (`app/publish/preparation_reel.py`) télécharge la
 vidéo, l'assemble (`assembler_reel`, sans edit list, GOP fermé), sonde source et
 sortie contre les specs Meta, et fige `<prefixe>_reel.mp4` puis
 `<prefixe>_cover.jpg` ; la publication crée un conteneur `REELS` avec
@@ -514,14 +536,22 @@ ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
 Meta omet `media_url` des reels à musique protégée ; la vidéo vient alors de
 `app/publish/ytdlp.py`, **au gel seulement** : API d'abord, yt-dlp sur le
-permalink sinon (et en repli d'un lien CDN expiré). Dépendance uv épinglée
+permalink sinon (et en repli d'un lien CDN expiré — seulement pour un permalink
+de reel ou un post dont la vidéo est le seul média ; un carrousel `/p/` n'a pas
+de repli, le lien expiré exclut). Dépendance uv épinglée
 (`yt-dlp>=2026.8.19`, la version Homebrew 2025.12.08 échoue sur « login
 required »), lancée par `sys.executable -m yt_dlp` avec `--ignore-config
 --no-cookies --no-cookies-from-browser` — **jamais de cookies ni de connexion**.
 Un téléchargement par passage ; après une panne (session exigée, 429, erreur
 inconnue), notification avec la commande de mise à jour et **pause de 60
 minutes** (`ytdlp_etat.json` à côté du jeton) ; pendant la pause, une raison sur
-le créneau, sans notification. Vidéo supprimée/privée : article exclu. Sources
+le créneau, sans notification. Vidéo supprimée/privée : article exclu. **Règle
+des 3 échecs par lien** : une panne d'allure systémique n'exclut rien, mais après
+3 pannes de suite sur le MÊME lien l'article est exclu (sinon un reel cassé
+bloquerait tous les autres) ; les compteurs vivent dans `ytdlp_etat.json`
+(clé `echecs`, par URL), remis à zéro au succès ou à l'exclusion. Coût assumé :
+une panne globale de yt-dlp exclut un article toutes les ~3 h.
+`scripts.tester_publication` supprime `essais/<id>/` en fin d'essai. Sources
 en VP9 : `assembler_reel` réencode tout en H.264/AAC. Coupe-circuits : case
 « Reels auto » du dashboard (`reels_actifs` dans `publication.json`,
 `/publication/reels`) pour tous les reels, `PUBLICATION_REEL_YTDLP=false` pour
@@ -529,6 +559,11 @@ yt-dlp seul. **Mettre à jour yt-dlp** quand la notification le demande :
 `uv lock --upgrade-package yt-dlp && uv sync`, puis committer `uv.lock`.
 Risques acceptés : CGU Instagram, fragilité, détection de droits à la
 republication, limitation de l'IP résidentielle — démarrer en `apercu`.
+
+**Avant un `alembic downgrade 0016`** (retire `creneaux.format` et
+`posts.credit`) : décocher « Reels auto », attendre que plus aucun créneau reel ne
+soit « Gelé » (publié, aperçu ou manqué), puis descendre. Sinon un reel gelé
+perdrait en cours de route son format et son crédit obligatoire.
 
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
