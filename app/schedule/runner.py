@@ -60,12 +60,11 @@ from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visu
 from app.content.compose import CompositionError, create_post
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
-from app.content.visuels import origine_interdite, purger_cache
+from app.content.visuels import image_de_fond, origine_interdite, purger_cache
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.schedule.store import (
     TEMPLATES,
-    a_une_image,
     actifs_interdits,
     appliquer_arbitrage,
     post_a_reprendre,
@@ -248,17 +247,21 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     visuel autorise (`assets == []`, un post fait a la main au dashboard), ou
     portant l'actif d'un compte d'artiste passe `media` depuis la composition.
 
-    Le cas `assets == []` est le plus sournois : le brouillon existe, la file le
+    Le cas sans fond est le plus sournois : le brouillon existe, la file le
     trouve deja compose et le gel partirait sur le fond de secours. La file ne
     publie que ce qui porte un visuel : le creneau recompose, et si l'article n'a
     toujours aucun visuel autorise il sort par le chemin normal (AucunVisuel).
+    Jamais d'exclusion ici -- une inadequation de filtre n'est pas la faute de
+    l'article.
     """
     if post is None:
         return False
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))
-    if not post.assets:
-        return not a_une_image(article)
+    if image_de_fond(post.assets) is None:
+        # Aucun fond extractible : liste vide, ou des actifs qui ne portent
+        # qu'une video sans vignette.
+        return True
     return bool(actifs_interdits(db, post))
 
 

@@ -315,3 +315,26 @@ def test_un_5xx_et_un_429_sont_passagers_un_404_non():
     _, raison = telecharger("https://cdn/x.jpg", client=_ClientQuiEchoue(erreur))
     assert not echec_transitoire(raison)
     assert "404" in raison
+
+
+def test_la_raison_d_un_media_absent_ne_montre_pas_le_drapeau_interne():
+    """`medias_manquants.txt` est lu par un humain : le prefixe qui sert a
+    classer les echecs en interne n'a rien a y faire."""
+    from app.content.export import PREFIXE_TRANSPORT, raison_lisible
+
+    assert raison_lisible(f"{PREFIXE_TRANSPORT}ConnectTimeout") == "ConnectTimeout"
+    assert raison_lisible("HTTP 404") == "HTTP 404"
+    assert raison_lisible(None) == ""
+
+    post = SimpleNamespace(
+        slides=[{"kind": "cover"}, {"kind": "media", "type": "photo", "url": "https://cdn/x.jpg"}],
+        template="kinda_post", article_url=None, assets=None,
+    )
+    contenu = construire_zip(
+        post, [], "legende",
+        telecharger=lambda url: (None, f"{PREFIXE_TRANSPORT}ConnectTimeout"),
+    )
+    with zipfile.ZipFile(io.BytesIO(contenu)) as archive:
+        texte = archive.read("medias_manquants.txt").decode()
+    assert "ConnectTimeout" in texte
+    assert PREFIXE_TRANSPORT not in texte

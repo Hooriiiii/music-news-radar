@@ -66,6 +66,12 @@ def echec_transitoire(raison: str | None) -> bool:
     return bool(raison) and raison.startswith(PREFIXE_TRANSPORT)
 
 
+def raison_lisible(raison: str | None) -> str:
+    """La raison d'un echec, sans le drapeau interne de classement : c'est ce qui
+    part dans `medias_manquants.txt`, que lit un humain."""
+    return (raison or "").removeprefix(PREFIXE_TRANSPORT)
+
+
 def telecharger(
     url: str,
     plafond: int = PLAFOND_OCTETS,
@@ -194,7 +200,7 @@ def construire_zip(
                 continue
             contenu, extension_ou_raison = telecharger(url)
             if contenu is None:
-                manquants.append(f"{url} : {extension_ou_raison}")
+                manquants.append(f"{url} : {raison_lisible(extension_ou_raison)}")
                 continue
             extension = extension_ou_raison
             if extension == ".bin":

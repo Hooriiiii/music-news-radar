@@ -274,3 +274,41 @@ def test_une_coupure_reseau_differe_au_lieu_d_exclure(db_session, fred, guettape
 
     with pytest.raises(VisuelsDifferes, match="reseau"):
         _choisir(db_session, article, telecharger=telecharger)
+
+
+def test_une_video_sans_vignette_ne_compte_pas_comme_visuel_propre(db_session, fred):
+    """Repro : une video avec URL mais SANS vignette ne donne aucun fond de cover.
+    Elle ne doit pas etre prise pour un visuel propre -- sinon le brouillon part
+    sans fond et le gel exclut un article parfaitement bon."""
+    charlotte = _source(db_session, "Charlotte de Witte (IG)", "charlottedewitte")
+    article = _article(db_session, charlotte, mentioned=["Fred again.."],
+                       media=[entree("video", "https://cdn.ig/sans-vignette.mp4")])
+    _article(db_session, fred, "GTA soundtrack", media=[entree("photo", "https://cdn.ig/fred.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+
+    choix = _choisir(db_session, article, lecteur=Lecteur())
+
+    assert [(a["origine"], a["url"]) for a in choix.actifs] == [("artiste", "https://cdn.ig/fred.jpg")]
+
+
+def test_une_video_sans_vignette_et_sans_artiste_donne_une_raison_lisible(db_session):
+    artiste = _source(db_session, "Charlotte de Witte (IG)", "charlottedewitte")
+    article = _article(db_session, artiste, "Un set a Bruxelles",
+                       media=[entree("video", "https://cdn.ig/sans-vignette.mp4")])
+    with pytest.raises(AucunVisuel, match="aucune image"):
+        _choisir(db_session, article)
+
+
+def test_une_video_avec_vignette_reste_un_visuel_propre(db_session, fred):
+    article = _article(db_session, fred, media=[
+        entree("video", "https://cdn.ig/v.mp4", preview_url="https://cdn.ig/v.jpg"),
+    ])
+    assert [a["type"] for a in _choisir(db_session, article).actifs] == ["video"]
+
+
+def test_une_photo_emmene_la_video_sans_vignette_du_meme_post(db_session, fred):
+    article = _article(db_session, fred, media=[
+        entree("photo", "https://cdn.ig/p.jpg"),
+        entree("video", "https://cdn.ig/v.mp4"),
+    ])
+    assert [a["type"] for a in _choisir(db_session, article).actifs] == ["photo", "video"]

@@ -341,3 +341,29 @@ def test_le_choix_du_passage_rend_une_horloge_aware(monkeypatch):
     )
     script.choix_du_passage()(None, None, FormatCreneau.CARROUSEL, BASE.replace(tzinfo=None))
     assert vus == [BASE]
+
+
+def test_un_brouillon_sans_fond_extractible_est_relache_pas_exclu(db_session, fred):
+    """Un brouillon dont les actifs ne donnent AUCUN fond (video sans vignette) :
+    le gel le relache, il n'excluait pas l'article -- une inadequation de filtre
+    n'est jamais la faute de l'article."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    sans_fond = actif(entree("video", "https://cdn.ig/v.mp4"), origine="article",
+                      compte="@fredagain", article_id=article.id)
+    post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
+                caption="L", slides=[{"kind": "cover", "image_url": None}],
+                template="kinda_post", assets=[sans_fond])
+    db_session.add(post)
+    db_session.commit()
+    creneau = Creneau(publier_a=BASE + dt.timedelta(hours=1), article_id=article.id,
+                      post_id=post.id, etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(creneau)
+    db_session.commit()
+
+    outils = Outils()
+    outils.tourner(db_session)
+    db_session.refresh(creneau)
+    db_session.refresh(article)
+    assert creneau.post_id is None
+    assert creneau.erreur == "gel refuse : le post n'a pas de visuel publiable"
+    assert article.file_exclu_raison is None

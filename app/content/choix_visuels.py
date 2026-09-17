@@ -34,6 +34,7 @@ from app.content.visuels import (
     actif,
     chemin_cache,
     credit_des_actifs,
+    image_de,
     origine_interdite,
     raison_sans_artiste,
     urls_interdites,
@@ -89,7 +90,13 @@ def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
         for m in medias
         if m.get("type") in (PHOTO, VIDEO) and (m.get("url") or m.get("preview_url"))
     ]
-    return ChoixVisuels([en_actif(m) for m in publiables], compte) if publiables else None
+    # Il faut au moins une IMAGE FIXE : c'est elle qui fera le fond de la cover.
+    # Une video avec URL mais sans vignette n'en donne aucune -- meme definition
+    # que `store.a_une_image`, sinon la file retiendrait un article dont le
+    # brouillon partirait sans fond, et le gel l'exclurait pour de bon.
+    if not publiables or not any(image_de(m) for m in publiables):
+        return None
+    return ChoixVisuels([en_actif(m) for m in publiables], compte)
 
 
 def _comptes_autorises(db: Session, comptes: list[CompteArtiste]) -> list[CompteArtiste]:

@@ -5,6 +5,7 @@ import datetime as dt
 import itertools
 from types import SimpleNamespace
 
+from app.content import actifs_artistes
 from app.content.actifs_artistes import (
     PostArtiste,
     classer,
@@ -140,3 +141,24 @@ def test_posts_en_base_des_comptes_cites_seulement(db_session):
     (post,) = posts_en_base(db_session, [compte], MAINTENANT)
     assert (post.article_id, post.permalink, post.compte) == (recent.id, recent.url, compte)
     assert post.publie_le.tzinfo is not None
+
+
+def test_posts_en_base_est_borne_aux_plus_recents(db_session, monkeypatch):
+    """Borne de lecture : un compte tres actif ne fait pas remonter des centaines
+    de posts (la requete tourne par article candidat a l'arbitrage)."""
+    monkeypatch.setattr(actifs_artistes, "LIMITE_POSTS", 3)
+    source = Source(name="Fred again.. (IG)", type=SourceType.INSTAGRAM, url="ig:fredagain",
+                    categorie=SourceCategorie.ARTISTE)
+    db_session.add(source)
+    db_session.commit()
+    compte = CompteArtiste(source.id, "fredagain", "Fred again..", None)
+    for n in range(6):
+        db_session.add(Article(
+            source_id=source.id, url=f"https://www.instagram.com/p/L{n}/", title=f"Post {n}",
+            raw_hash=f"l{n:063d}", media=[PHOTO],
+            published_at=MAINTENANT - dt.timedelta(days=n + 1),
+        ))
+    db_session.commit()
+
+    titres = [p.titre for p in posts_en_base(db_session, [compte], MAINTENANT)]
+    assert sorted(titres) == ["Post 0", "Post 1", "Post 2"]
