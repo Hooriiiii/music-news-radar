@@ -15,15 +15,18 @@ le script sort en code 1, que launchd enregistre et que `--status` affiche.
 import datetime as dt
 import json
 import logging
+from functools import partial
 
 from app.config import settings
 from app.content.compose import make_claude_composer
 from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.delivery.notify import notifier
 from app.publish.jeton import JetonIndisponible, alerte_expiration, enregistrer, rafraichir_si_necessaire
-from app.publish.mode import mode_effectif
+from app.publish.mode import mode_effectif, reels_actifs
 from app.publish.preparation import preparer_fichiers
-from app.publish.publier import publier_fichiers
+from app.publish.preparation_reel import preparer_reel
+from app.publish.publier import publier_fichiers, publier_reel
+from app.publish.ytdlp import RecuperateurYtdlp
 from app.schedule.runner import RapportPublication, tourner
 
 # A cote du jeton : meme dossier applicatif, hors du depot.
@@ -80,6 +83,23 @@ def _compositeur_paresseux():
     return composer
 
 
+def outils_reel() -> dict:
+    """Les outils reel d'UN passage.
+
+    Coupes au dashboard (`reels_actifs`) : aucun outil, donc rien n'est gele ni
+    publie en reel. Le recuperateur yt-dlp est NEUF a chaque passage : c'est lui
+    qui porte le budget d'un telechargement par passage. `PUBLICATION_REEL_YTDLP`
+    a false : pas de recuperateur, seules les videos directes de l'API partent.
+    """
+    if not reels_actifs():
+        return {"preparer_reel": None, "publier_reel": None}
+    recuperer = RecuperateurYtdlp() if settings.publication_reel_ytdlp else None
+    return {
+        "preparer_reel": partial(preparer_reel, recuperer_ytdlp=recuperer),
+        "publier_reel": publier_reel,
+    }
+
+
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     mode = mode_effectif()
@@ -107,6 +127,7 @@ def main() -> None:
             rapport = tourner(
                 db, maintenant, mode=mode, composer=_compositeur_paresseux(),
                 preparer=preparer_fichiers, publier=publier_fichiers, notifier=notifier,
+                **outils_reel(),
             )
     except Exception as exc:  # noqa: BLE001
         en_panne = True
