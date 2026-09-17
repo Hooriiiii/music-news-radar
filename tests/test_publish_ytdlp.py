@@ -403,3 +403,17 @@ def test_un_flux_avant_fusion_n_est_pas_la_video(tmp_path):
     faux = FauxPartiel(ecrire=False)
     with pytest.raises(YtdlpIndisponible, match="aucun fichier"):
         _recuperateur(tmp_path, faux)(REEL, tmp_path / "1", 100_000_000)
+
+
+def test_attente_dit_sans_rien_lancer_si_le_passage_doit_attendre(tmp_path):
+    faux = FauxYtdlp()
+    recuperer = _recuperateur(tmp_path, faux)
+    assert recuperer.attente() is None
+    (tmp_path / FICHIER_ETAT).write_text(
+        json.dumps({"pause_jusqu_a": (MAINTENANT + dt.timedelta(minutes=5)).isoformat()})
+    )
+    assert isinstance(recuperer.attente(), YtdlpEnAttente)
+    (tmp_path / FICHIER_ETAT).unlink()
+    recuperer(REEL, tmp_path / "1", 100_000_000)
+    assert "un telechargement par passage" in str(recuperer.attente())
+    assert len(faux.commandes) == 1

@@ -453,3 +453,23 @@ def test_la_chaine_complete_avec_ffmpeg(tmp_path):
     noms = preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path / "fige", rendre=_rendre(),
                          recuperer_ytdlp=Recuperer(octets=octets))
     assert (tmp_path / "fige" / noms[0]).stat().st_size > 0
+
+
+def test_une_pause_yt_dlp_connue_n_allume_pas_chromium(tmp_path):
+    """Pause ou budget epuise : l'attente part AVANT le rendu de la cover."""
+    from app.publish.ytdlp import YtdlpEnAttente
+
+    recuperer = Recuperer()
+    recuperer.attente = lambda: YtdlpEnAttente("yt-dlp en pause jusqu'a 11:00 UTC")
+    outils = {**_outils(), "rendre": _interdit}
+    with pytest.raises(YtdlpEnAttente, match="pause"):
+        preparer_reel(_post(), _article(SANS_URL, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **outils)
+    assert recuperer.appels == []
+
+
+def test_une_pause_yt_dlp_ne_bloque_pas_une_video_directe(tmp_path):
+    from app.publish.ytdlp import YtdlpEnAttente
+
+    recuperer = Recuperer()
+    recuperer.attente = lambda: YtdlpEnAttente("yt-dlp en pause")
+    preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=recuperer, **_outils())

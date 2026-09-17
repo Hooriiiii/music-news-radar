@@ -312,19 +312,27 @@ class RecuperateurYtdlp:
             raise PreparationImpossible(f"video source trop lourde : plus de {plafond / MO:.0f} Mo")
         return octets
 
-    def __call__(self, url: str, dossier: Path, plafond: int) -> bytes:
-        if not est_lien_instagram(url):
-            raise PreparationImpossible("yt-dlp n'est lance que sur un lien https instagram.com")
-        maintenant = self.horloge()
+    def attente(self) -> YtdlpEnAttente | None:
+        """L'attente a lever maintenant (pause ou budget epuise), sans rien lancer
+        ni rien consommer : le gel la verifie avant de rendre la cover."""
         etat = lire_etat(self.chemin_etat)
         pause = _date(etat.get("pause_jusqu_a"))
-        if pause is not None and maintenant < pause:
-            raise YtdlpEnAttente(
+        if pause is not None and self.horloge() < pause:
+            return YtdlpEnAttente(
                 f"yt-dlp en pause jusqu'a {pause:%H:%M} UTC apres une panne "
                 f"({etat.get('derniere_erreur') or 'sans message'})"
             )
         if self.restants <= 0:
-            raise YtdlpEnAttente("yt-dlp : un telechargement par passage au plus, repris au passage suivant")
+            return YtdlpEnAttente("yt-dlp : un telechargement par passage au plus, repris au passage suivant")
+        return None
+
+    def __call__(self, url: str, dossier: Path, plafond: int) -> bytes:
+        if not est_lien_instagram(url):
+            raise PreparationImpossible("yt-dlp n'est lance que sur un lien https instagram.com")
+        maintenant = self.horloge()
+        attente = self.attente()
+        if attente is not None:
+            raise attente
         # Construite AVANT de consommer le budget : ffmpeg absent leve ici
         # (AssemblageIndisponible, panne systemique) sans rien ecrire.
         commande = self.commande(url, dossier, plafond)

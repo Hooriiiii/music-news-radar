@@ -206,6 +206,12 @@ def preparer_reel(
     # AssemblageIndisponible ICI = ffmpeg ou ffprobe absent : panne de la
     # machine, elle remonte telle quelle et n'exclut rien.
     verifier_outils()
+    if origine[0] == YTDLP and recuperer_ytdlp is not None:
+        # Pause ou budget deja connus : inutile d'allumer Chromium pour la cover.
+        attente = getattr(recuperer_ytdlp, "attente", None)
+        attente = attente() if attente is not None else None
+        if attente is not None:
+            raise attente
 
     dossier.mkdir(parents=True, exist_ok=True)
     for ancien in [*dossier.glob("*.mp4"), *dossier.glob("*.jpg")]:

@@ -97,11 +97,15 @@ def _effacer_dossier(creneau: Creneau) -> None:
     shutil.rmtree(_dossier(creneau), ignore_errors=True)
 
 
-def _menage(db) -> None:
+TERMINES = (EtatCreneau.LIBRE, EtatCreneau.PUBLIE, EtatCreneau.APERCU, EtatCreneau.ECHEC, EtatCreneau.MANQUE)
+
+
+def _menage(db, maintenant: dt.datetime) -> None:
     """Les gros fichiers d'un creneau termine. Les chemins nominaux effacent deja
     leur dossier ; le menage rattrape un crash apres reclamation ou un gel
     interrompu, qui laisseraient des dizaines de Mo de video sur le disque.
-    `essais/` (script d'essai) n'est pas un nombre : jamais touche."""
+    `essais/` (script d'essai) n'est pas un nombre : jamais touche. Un creneau
+    GELE, ou PROGRAMME a venir, garde toujours son dossier."""
     racine = settings.publication_dir
     if not racine.is_dir():
         return
@@ -109,7 +113,9 @@ def _menage(db) -> None:
         if not (dossier.is_dir() and dossier.name.isdigit()):
             continue
         creneau = db.get(Creneau, int(dossier.name))
-        if creneau is None or creneau.etat != EtatCreneau.GELE:
+        if creneau is None or creneau.etat in TERMINES or (
+            creneau.etat != EtatCreneau.GELE and utc(creneau.publier_a) <= maintenant
+        ):
             shutil.rmtree(dossier, ignore_errors=True)
 
 
@@ -200,7 +206,9 @@ def _marquer_manques(db, maintenant: dt.datetime, rapport: RapportPublication) -
             _effacer_dossier(creneau)
 
 
-def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication) -> bool:
+def _composer(
+    db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication, formats: set
+) -> bool:
     horizon = maintenant + dt.timedelta(hours=settings.publication_composition_heures)
     creneaux = db.scalars(
         select(Creneau)
@@ -220,6 +228,12 @@ def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportP
         if creneau.post_id is not None or creneau.article_id is None:
             continue
         attendu = _attendu(creneau)
+        if creneau.format not in formats:
+            # Reels coupes : pas d'appel Claude paye pour un post qui ne partira pas.
+            erreur = f"composition suspendue : aucun outil pour le format {creneau.format.value}"
+            if creneau.erreur != erreur:
+                _ecrire_si(db, creneau, attendu, erreur=erreur)
+            continue
         article = db.get(Article, creneau.article_id, populate_existing=True)
         if article is None:
             _liberer(db, creneau, attendu, "article purge")
@@ -290,16 +304,19 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             # Pas d'exclusion : l'article n'y est pour rien, c'est la file qui a bouge.
             erreur = "gel refuse : le post ne correspond pas a l'article du creneau"
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
-            _ecrire_si(db, creneau, attendu, erreur=erreur)
+            if creneau.erreur != erreur:
+                _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
         if post.template != TEMPLATES[creneau.format]:
-            # Le switch POST/REELS a ete bascule au dashboard : pas la faute de l'article.
+            # Le switch POST/REELS a ete bascule au dashboard : pas la faute de
+            # l'article. Le creneau lache le post ; la composition suivante reprend
+            # ou compose un post au bon gabarit.
             erreur = (
                 f"gel refuse : le post est au gabarit {post.template}, "
                 f"le creneau attend {TEMPLATES[creneau.format]}"
             )
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
-            _ecrire_si(db, creneau, attendu, erreur=erreur)
+            _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
             continue
         article = db.get(Article, post.article_id, populate_existing=True) if post.article_id else None
         if _deja_publie(article, post):
@@ -484,10 +501,10 @@ def tourner(
         _publier(db, maintenant, mode, publieurs, notifier, rapport, horloge)
 
     etape("retards", lambda: _marquer_manques(db, maintenant, rapport))
-    etape("menage", lambda: _menage(db))
+    etape("menage", lambda: _menage(db, maintenant))
     etape("publication", publication)
     etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))
-    exclusions = bool(etape("composition", lambda: _composer(db, maintenant, composer, notifier, rapport)))
+    exclusions = bool(etape("composition", lambda: _composer(db, maintenant, composer, notifier, rapport, set(preparateurs) & set(publieurs))))
     exclusions = bool(etape("gel", lambda: _geler(db, maintenant, preparateurs, notifier, rapport))) or exclusions
     if exclusions:
         # Le creneau libere se remplit tout de suite ; sa composition viendra au

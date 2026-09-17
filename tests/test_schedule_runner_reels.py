@@ -11,7 +11,9 @@ from app.content.video import AssemblageIndisponible
 from app.models import (
     Article, Creneau, EtatCreneau, FormatCreneau, Post, Source, SourceCategorie, SourceType,
 )
+from app.publish.preparation import PreparationDifferee
 from app.publish.ytdlp import MISE_A_JOUR, YtdlpEnAttente, YtdlpIndisponible
+import app.schedule.runner as runner
 from app.schedule.runner import tourner
 from app.schedule.slots import prochains_horaires
 from app.schedule.store import utc
@@ -30,6 +32,8 @@ class Outils:
         self.composes, self.prepares, self.prepares_reel = [], [], []
         self.publies, self.publies_reel, self.legendes, self.notifications = [], [], [], []
         self.erreur_preparation_reel = None
+        # Erreurs consommees une par appel, avant `erreur_preparation_reel`.
+        self.erreurs_preparation_reel = []
 
     def composer(self, article):
         self.composes.append(article.id)
@@ -41,6 +45,11 @@ class Outils:
 
     def preparer_reel(self, post, article, dossier):
         self.prepares_reel.append(post.id)
+        if self.erreurs_preparation_reel:
+            erreur = self.erreurs_preparation_reel.pop(0)
+            if erreur is not None:
+                raise erreur
+            return ["r_reel.mp4", "r_cover.jpg"]
         if self.erreur_preparation_reel:
             raise self.erreur_preparation_reel
         return ["r_reel.mp4", "r_cover.jpg"]
@@ -206,15 +215,84 @@ def test_une_panne_yt_dlp_notifie_la_commande_de_mise_a_jour(db_session, video):
     assert video.file_exclu_raison is None
 
 
-def test_un_post_au_mauvais_gabarit_n_est_pas_gele_ni_exclu(db_session, video):
-    reel = _epingle(db_session, BASE + dt.timedelta(hours=1), FormatCreneau.REEL, video,
-                    _post(db_session, video, "kinda_post", "@saralandry"))
+def test_un_post_au_mauvais_gabarit_est_detache_puis_recompose(db_session, video):
+    """Le switch POST/REELS bascule au dashboard : le creneau lache le post, sans
+    exclure l'article, et le passage suivant compose au bon gabarit."""
+    mauvais = _post(db_session, video, "kinda_post", "@saralandry")
+    reel = _epingle(db_session, BASE + dt.timedelta(hours=1), FormatCreneau.REEL, video, mauvais)
     outils = Outils()
     outils.tourner(db_session, BASE)
-    assert reel.etat == EtatCreneau.PROGRAMME and "gabarit" in reel.erreur
+    assert (reel.etat, reel.post_id, reel.article_id) == (EtatCreneau.PROGRAMME, None, video.id)
+    assert "gabarit" in reel.erreur
     assert outils.prepares_reel == []
     db_session.refresh(video)
     assert video.file_exclu_raison is None
+
+    outils.tourner(db_session, BASE + dt.timedelta(minutes=10))
+    assert outils.composes == [video.id]
+    assert db_session.get(Post, reel.post_id).template == "kinda_reel"
+
+
+def test_un_brouillon_carrousel_n_est_pas_repris_sur_un_creneau_reel(db_session, video):
+    _post(db_session, video, "kinda_post", "@saralandry")
+    reel = Creneau(publier_a=BASE + dt.timedelta(hours=5), format=FormatCreneau.REEL, article_id=video.id,
+                   etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(reel)
+    db_session.commit()
+    outils = Outils()
+    outils.tourner(db_session, BASE)
+    assert outils.composes == [video.id]
+    assert db_session.get(Post, reel.post_id).template == "kinda_reel"
+
+
+def test_un_article_inapte_au_reel_libere_le_creneau_sans_composer_de_reel(db_session):
+    photo = _photo(db_session)
+    reel = Creneau(publier_a=BASE + dt.timedelta(hours=5), format=FormatCreneau.REEL, article_id=photo.id,
+                   etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(reel)
+    db_session.commit()
+    Outils().tourner(db_session, BASE)
+    assert (reel.etat, reel.article_id, reel.post_id) == (EtatCreneau.LIBRE, None, None)
+    assert "reel impossible" in reel.erreur
+    assert db_session.query(Post).filter(Post.template == "kinda_reel").count() == 0
+    db_session.refresh(photo)
+    assert photo.file_exclu_raison is None
+
+
+def test_une_attente_sur_un_reel_n_empeche_pas_le_gel_du_suivant(db_session, video):
+    premier = _epingle(db_session, BASE + dt.timedelta(minutes=30), FormatCreneau.REEL, video,
+                       _post(db_session, video, "kinda_reel", "@saralandry"))
+    second = _epingle(db_session, BASE + dt.timedelta(minutes=45), FormatCreneau.REEL, video,
+                      _post(db_session, video, "kinda_reel", "@saralandry"))
+    outils = Outils()
+    outils.erreurs_preparation_reel = [PreparationDifferee("assemblage abandonne : delai depasse"), None]
+    outils.tourner(db_session, BASE)
+    assert premier.etat == EtatCreneau.PROGRAMME and "differe" in premier.erreur
+    assert second.etat == EtatCreneau.GELE
+    assert outils.notifications == []
+
+
+def test_sans_outils_reel_aucun_reel_n_est_compose(db_session, video):
+    """Reels coupes : pas d'appel Claude paye pour un reel qui ne partira pas."""
+    reel = Creneau(publier_a=BASE + dt.timedelta(hours=5), format=FormatCreneau.REEL, article_id=video.id,
+                   etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(reel)
+    db_session.commit()
+    outils = Outils()
+    outils.tourner(db_session, BASE, avec_reels=False)
+    assert outils.composes == []
+    assert (reel.etat, reel.post_id, reel.article_id) == (EtatCreneau.PROGRAMME, None, video.id)
+
+
+def test_le_menage_garde_un_creneau_programme_a_venir(db_session, video):
+    post = _post(db_session, video, "kinda_reel", "@saralandry")
+    avenir = _epingle(db_session, BASE + dt.timedelta(hours=30), FormatCreneau.REEL, video, post)
+    passe = _epingle(db_session, BASE - dt.timedelta(minutes=5), FormatCreneau.REEL, video, post)
+    for creneau in (avenir, passe):
+        (settings.publication_dir / str(creneau.id)).mkdir(parents=True)
+    runner._menage(db_session, BASE)
+    restants = sorted(p.name for p in settings.publication_dir.iterdir())
+    assert restants == [str(avenir.id)]
 
 
 def test_sans_outils_reel_un_reel_gele_attend_sans_planter(db_session, video):
