@@ -553,7 +553,7 @@ def test_une_panne_inattendue_de_composition_ne_bloque_pas_un_creneau_gele(db_se
     assert _creneau_h0(db_session).etat == EtatCreneau.GELE
     _second_article(db_session, article)
 
-    def create_post_en_panne(db, art, draft):
+    def create_post_en_panne(db, art, draft, **_):
         raise ValueError("bug inattendu")
 
     monkeypatch.setattr(runner, "create_post", create_post_en_panne)

@@ -13,6 +13,13 @@ Dans l'ordre :
 Chaque etape est isolee : une exception inattendue est consignee et notifiee, et
 le passage continue.
 
+Deux formats, carrousel et reel, suivent le meme cycle. Seuls changent le
+gabarit compose, le preparateur du gel et le publieur, choisis selon
+`creneau.format`. Une panne systemique ne suspend que son format : ffmpeg
+absent ne bloque pas le gel d'un carrousel. Une ATTENTE (PreparationDifferee :
+pause ou budget de yt-dlp) n'est ni une faute ni une panne : une raison sur le
+creneau, sans exclusion ni notification.
+
 Un article en defaut (composition ou gel impossible) est EXCLU de la file et son
 creneau libere. Une panne systemique (credits, reseau, disque) n'exclut rien : la
 faute n'est pas a l'article.
@@ -45,9 +52,9 @@ from sqlalchemy.exc import InvalidRequestError
 from app.config import settings
 from app.content.compose import CompositionError, create_post
 from app.content.legende import texte_legende
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
-from app.publish.preparation import PreparationImpossible
-from app.schedule.store import appliquer_arbitrage, post_a_reprendre, utc
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
+from app.publish.preparation import PreparationDifferee, PreparationImpossible
+from app.schedule.store import TEMPLATES, appliquer_arbitrage, post_a_reprendre, raison_ineligible_reel, utc
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +95,22 @@ def _dossier(creneau: Creneau) -> Path:
 def _effacer_dossier(creneau: Creneau) -> None:
     # Best effort : un dossier qui resiste ne vaut pas d'interrompre le passage.
     shutil.rmtree(_dossier(creneau), ignore_errors=True)
+
+
+def _menage(db) -> None:
+    """Les gros fichiers d'un creneau termine. Les chemins nominaux effacent deja
+    leur dossier ; le menage rattrape un crash apres reclamation ou un gel
+    interrompu, qui laisseraient des dizaines de Mo de video sur le disque.
+    `essais/` (script d'essai) n'est pas un nombre : jamais touche."""
+    racine = settings.publication_dir
+    if not racine.is_dir():
+        return
+    for dossier in racine.iterdir():
+        if not (dossier.is_dir() and dossier.name.isdigit()):
+            continue
+        creneau = db.get(Creneau, int(dossier.name))
+        if creneau is None or creneau.etat != EtatCreneau.GELE:
+            shutil.rmtree(dossier, ignore_errors=True)
 
 
 def _relire(db, creneau: Creneau) -> bool:
@@ -204,7 +227,14 @@ def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportP
         if _deja_publie(article, None):
             _liberer(db, creneau, attendu, "article deja publie")
             continue
-        post_id = post_a_reprendre(db, article.id)
+        template = TEMPLATES[creneau.format]
+        if creneau.format == FormatCreneau.REEL:
+            raison = raison_ineligible_reel(article)
+            if raison is not None:
+                # Pas d'exclusion : l'article reste bon pour un carrousel.
+                _liberer(db, creneau, attendu, f"reel impossible : {raison}")
+                continue
+        post_id = post_a_reprendre(db, article.id, template)
         if post_id is None:
             try:
                 draft = composer(article)
@@ -219,7 +249,7 @@ def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportP
                 _prevenir(notifier, erreur)
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
-            post_id = create_post(db, article, draft).id
+            post_id = create_post(db, article, draft, template=template).id
             rapport.composes += 1
         # Si le dashboard a change le creneau pendant la composition, son choix
         # prime : le post reste un brouillon, repris plus tard si l'article revient.
@@ -227,7 +257,7 @@ def _composer(db, maintenant: dt.datetime, composer, notifier, rapport: RapportP
     return exclusions
 
 
-def _geler(db, maintenant: dt.datetime, preparer, notifier, rapport: RapportPublication) -> bool:
+def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: RapportPublication) -> bool:
     seuil = maintenant + dt.timedelta(hours=settings.publication_gel_heures)
     creneaux = db.scalars(
         select(Creneau)
@@ -239,10 +269,19 @@ def _geler(db, maintenant: dt.datetime, preparer, notifier, rapport: RapportPubl
         .order_by(Creneau.publier_a)
     ).all()
     exclusions = False
+    formats_en_panne: set = set()
     for creneau in creneaux:
         if not _relire(db, creneau) or creneau.etat != EtatCreneau.PROGRAMME or creneau.post_id is None:
             continue
+        if creneau.format in formats_en_panne:
+            continue
         attendu = _attendu(creneau)
+        preparer = preparateurs.get(creneau.format)
+        if preparer is None:
+            erreur = f"aucun preparateur pour le format {creneau.format.value}"
+            if creneau.erreur != erreur:
+                _ecrire_si(db, creneau, attendu, erreur=erreur)
+            continue
         post = db.get(Post, creneau.post_id, populate_existing=True)
         if post is None:
             _liberer(db, creneau, attendu, "post supprime")
@@ -253,24 +292,42 @@ def _geler(db, maintenant: dt.datetime, preparer, notifier, rapport: RapportPubl
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
             _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
+        if post.template != TEMPLATES[creneau.format]:
+            # Le switch POST/REELS a ete bascule au dashboard : pas la faute de l'article.
+            erreur = (
+                f"gel refuse : le post est au gabarit {post.template}, "
+                f"le creneau attend {TEMPLATES[creneau.format]}"
+            )
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
+            _ecrire_si(db, creneau, attendu, erreur=erreur)
+            continue
         article = db.get(Article, post.article_id, populate_existing=True) if post.article_id else None
         if _deja_publie(article, post):
             _liberer(db, creneau, attendu, "article deja publie")
             continue
         try:
             noms = preparer(post, article, _dossier(creneau))
+        except PreparationDifferee as exc:
+            # Pause ou budget de yt-dlp : le creneau attend le passage suivant.
+            # Ni exclusion ni notification (la panne l'a deja ete, une fois), et
+            # le format n'est pas suspendu : un reel a video directe peut geler.
+            erreur = f"gel differe : {exc}"[:1000]
+            if creneau.erreur != erreur:
+                _ecrire_si(db, creneau, attendu, erreur=erreur)
+            continue
         except PreparationImpossible as exc:
             _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)
             exclusions = True
             continue
-        except Exception as exc:  # noqa: BLE001 -- rendu, disque, reseau : panne systemique
+        except Exception as exc:  # noqa: BLE001 -- rendu, ffmpeg, disque, reseau : panne systemique
             # Le creneau reste PROGRAMME : retente au passage suivant, tant que le
-            # delai de retard le permet.
+            # delai de retard le permet. Seul son format est suspendu.
             erreur = f"gel interrompu : {exc}"[:1000]
             rapport.erreurs.append(erreur)
             _ecrire_si(db, creneau, attendu, erreur=erreur)
             _prevenir(notifier, erreur)
-            break
+            formats_en_panne.add(creneau.format)
+            continue
         if _ecrire_si(
             db, creneau, attendu,
             fichiers=noms, etat=EtatCreneau.GELE, gele_le=maintenant, erreur=None,
@@ -280,7 +337,7 @@ def _geler(db, maintenant: dt.datetime, preparer, notifier, rapport: RapportPubl
 
 
 def _publier(
-    db, maintenant: dt.datetime, mode: str, publier, notifier, rapport: RapportPublication, horloge
+    db, maintenant: dt.datetime, mode: str, publieurs: dict, notifier, rapport: RapportPublication, horloge
 ) -> None:
     creneaux = db.scalars(
         select(Creneau)
@@ -305,6 +362,14 @@ def _publier(
             if _ecrire_si(db, creneau, attendu, etat=EtatCreneau.MANQUE):
                 rapport.manques += 1
                 _effacer_dossier(creneau)
+            continue
+
+        publier = publieurs.get(creneau.format)
+        if publier is None:
+            # Il reste GELE : il finira en MANQUE si aucun publieur n'arrive a temps.
+            erreur = f"aucun publieur pour le format {creneau.format.value}"
+            if creneau.erreur != erreur:
+                _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
 
         if post is None or post.article_id != creneau.article_id:
@@ -371,7 +436,17 @@ def _publier(
 
 
 def tourner(
-    db, maintenant: dt.datetime, *, mode: str, composer, preparer, publier, notifier, horloge=None
+    db,
+    maintenant: dt.datetime,
+    *,
+    mode: str,
+    composer,
+    preparer,
+    publier,
+    notifier,
+    horloge=None,
+    preparer_reel=None,
+    publier_reel=None,
 ) -> RapportPublication:
     if mode not in MODES:
         raise ValueError(f"mode de publication inconnu : {mode!r}, attendu {MODES}")
@@ -379,6 +454,12 @@ def tourner(
     if mode == "arret":
         return rapport
     horloge = horloge or _maintenant_reel
+    preparateurs = {FormatCreneau.CARROUSEL: preparer}
+    publieurs = {FormatCreneau.CARROUSEL: publier}
+    if preparer_reel is not None:
+        preparateurs[FormatCreneau.REEL] = preparer_reel
+    if publier_reel is not None:
+        publieurs[FormatCreneau.REEL] = publier_reel
 
     def etape(nom: str, fonction):
         # Une etape en panne ne doit pas emporter les suivantes, et surtout pas
@@ -400,13 +481,14 @@ def tourner(
             return None
 
     def publication():
-        _publier(db, maintenant, mode, publier, notifier, rapport, horloge)
+        _publier(db, maintenant, mode, publieurs, notifier, rapport, horloge)
 
     etape("retards", lambda: _marquer_manques(db, maintenant, rapport))
+    etape("menage", lambda: _menage(db))
     etape("publication", publication)
     etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))
     exclusions = bool(etape("composition", lambda: _composer(db, maintenant, composer, notifier, rapport)))
-    exclusions = bool(etape("gel", lambda: _geler(db, maintenant, preparer, notifier, rapport))) or exclusions
+    exclusions = bool(etape("gel", lambda: _geler(db, maintenant, preparateurs, notifier, rapport))) or exclusions
     if exclusions:
         # Le creneau libere se remplit tout de suite ; sa composition viendra au
         # passage suivant.
