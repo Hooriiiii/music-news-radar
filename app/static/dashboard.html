@@ -201,6 +201,7 @@
   <form class="src-form" id="src-form">
     <input id="s-name" class="full" placeholder="Nom (ex. Fred Again — compte fan)" required>
     <select id="s-type">
+      <option value="instagram">Instagram</option>
       <option value="x">X / Twitter</option>
       <option value="rss">Flux RSS</option>
       <option value="reddit_rss">Subreddit</option>
@@ -348,6 +349,7 @@ for (const id of ["category", "source", "sort"])
 // --- Panneau Sources ---
 
 const HINTS = {
+  instagram: "Convention ig:<compte>, ex. ig:tsugimag (ou l'URL instagram.com/<compte> complète). Compte professionnel (business/creator) uniquement — business_discovery ne voit pas les profils perso.",
   x: 'Compte : https://x.com/pseudo · Recherche : #tag OR #tag2 · Clips fans : ugc:("Artiste") has:videos · Radar auto : radar:',
   rss: "L'URL du flux RSS/Atom (souvent /feed ou /rss.xml).",
   reddit_rss: "L'URL du subreddit, ex. https://www.reddit.com/r/electronicmusic",

@@ -23,3 +23,12 @@ def test_registry_maps_reddit_rss_to_reddit_adapter():
 def test_registry_rejects_unimplemented_type():
     with pytest.raises(NotImplementedError):
         get_adapter(make_source(SourceType.BLUESKY))
+
+
+def test_le_registry_connait_instagram():
+    from app.models import Source, SourceType
+    from app.sources import get_adapter
+    from app.sources.instagram import InstagramAdapter
+
+    source = Source(id=1, name="Tsugi IG", type=SourceType.INSTAGRAM, url="ig:tsugimag")
+    assert isinstance(get_adapter(source), InstagramAdapter)

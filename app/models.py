@@ -29,6 +29,7 @@ class SourceType(str, enum.Enum):
     REDDIT_RSS = "reddit_rss"
     BLUESKY = "bluesky"
     X = "x"
+    INSTAGRAM = "instagram"
 
 
 class ArticleStatus(str, enum.Enum):

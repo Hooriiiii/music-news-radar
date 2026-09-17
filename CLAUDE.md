@@ -64,7 +64,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
-- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
+- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...]`
+  (Instagram : URL au format `ig:<compte>`, ex. `ig:tsugimag` — compte professionnel
+  business/creator uniquement, `business_discovery` ne voit pas les profils perso)
 - Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
   (sans `--apply` : affiche le plan ; idempotent par URL)
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
@@ -141,7 +143,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
   restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
-- Tests : `uv run pytest` (un seul test : `uv run pytest tests/test_api.py::test_health`)
+- Tests : `uv run pytest`
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
 - Parité modèles ↔ migrations : `uv run alembic check` (nécessite une base à jour)
@@ -158,7 +160,7 @@ Le principe central : la couche `app/sources/` est PLUGGABLE (un adapter par sou
 contrat défini dans `sources/base.py` : `fetch() -> list[RawItem]`), tout le reste du
 pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
 `sources/__init__.py` mappe le champ `sources.type` en base (`rss`, `reddit_rss`,
-`bluesky`, `x`) vers la classe adapter.
+`bluesky`, `x`, `instagram`) vers la classe adapter.
 
 - `app/models.py` — les 3 tables (Source, Article, Digest). Enums stockés en VARCHAR +
   CHECK (`native_enum=False`), pas d'enum natif Postgres. JSONB via `JSONVariant`
@@ -187,7 +189,11 @@ déjà, avec latence et doublons. La stratégie : taper AU NIVEAU DE LA SOURCE �
 - primaire : comptes d'artistes/labels, organisateurs de festivals ;
 - presse qui *break* l'actu : Mixmag, RA, Pitchfork, Tsugi, DJ Mag (électro),
   Music Business Worldwide + CMU + Billboard (business/pop) — flux RSS gratuits ;
-- social brut : X UGC/radar, Reddit.
+- primaire aussi, depuis 2026-09-17 : comptes Instagram PROFESSIONNELS d'artistes,
+  labels, festivals et médias via `business_discovery` (source `instagram`,
+  gratuite) — la philosophie ne change pas : on lit le compte qui produit l'actu,
+  jamais un reposteur ;
+- social brut : X UGC/radar (éteint, voir plus bas), Reddit.
 Corollaire coût : Billboard RSS (gratuit) rend les comptes X @billboard/@billboardcharts/
 @chartdata redondants -> candidats à couper.
 
@@ -324,7 +330,9 @@ se voit directement sur le feed.
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul deux carrousels par jour, choisis dans le flux scoré. Pas de reel :
-aucune source ne fournit plus de vidéo (X à sec, source Instagram abandonnée).
+aucune source ne fournissait plus de vidéo (X à sec) au moment de la conception ;
+la source Instagram, réintroduite le 2026-09-17 avec un jeton Facebook distinct
+(voir « Deux jetons Meta »), peut en ramener.
 Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révision du
 2026-09-16.
 
@@ -332,6 +340,29 @@ Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`, révisi
 `kindanewsfrance` déclaré testeur : une app non revue publie sur ses comptes
 testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine dans
 `meta_token_path` (droits 600) ; `.env` n'est que la valeur initiale. Alerte à J-7.
+
+**Deux jetons Meta, jamais interchangeables.**
+- `META_ACCESS_TOKEN` (`IGAA…`, connexion Instagram, `graph.instagram.com`) :
+  **publication**. Rafraîchi automatiquement (ci-dessus).
+- `META_FB_ACCESS_TOKEN` (`EAA…`, jeton utilisateur de connexion **Facebook**,
+  `graph.facebook.com`) : **source Instagram** (`business_discovery`, que le jeton
+  de connexion Instagram ne sait pas appeler). Portées : `instagram_basic`,
+  `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`,
+  `business_management`. **60 jours une fois étendu, AUCUN rafraîchissement
+  automatique** (il faudrait le secret de l'app) : le renouveler à la main —
+  developers.facebook.com/tools/explorer → Generate Access Token → ⓘ → outil de
+  débogage → « Étendre le jeton d'accès » → remplacer `META_FB_ACCESS_TOKEN` dans
+  `.env`. Étendu le 2026-09-17 : `expires_at` 2026-11-16,
+  `data_access_expires_at` 2026-12-16.
+  **Alerte d'échéance** (`app/sources/instagram_jeton.py`) : à chaque run horaire,
+  `run_pipeline` interroge `debug_token` et notifie (macOS) à **J-7** ou dès
+  l'expiration, **au plus une fois par jour** (date dans
+  `sourcing_token_alert.json` à côté de `meta_token_path`). Sautée sans jeton ;
+  une panne réseau ne donne qu'un warning (type d'exception seulement, jamais le
+  texte, qui porterait l'URL donc le jeton). Expiré malgré tout, Meta répond
+  code 190 : chaque source Instagram passe en erreur avec un message qui dit quoi
+  faire, et la notification de fin de run le signale aussi.
+`META_IG_USER_ID` et `META_API_VERSION` sont communs aux deux usages.
 
 **La file.** 6 créneaux (3 jours × 2), heure tirée dans 08:30-11:00 et 17:00-19:30
 (Paris) avec une graine dérivée de la date — sinon l'heure glisserait à chaque
@@ -555,6 +586,37 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   seulement en vérifiant la transformation à la main sur un cluster jetable, pas
   par une erreur SQL. Nommer l'alias différemment de toute colonne existante
   (`media_url`, pas `url`) évite le piège.
+- **`business_discovery` ne voit que les comptes PROFESSIONNELS** (business ou
+  creator). Un artiste emergent en profil perso — soit une bonne part du deal-flow
+  A&R — est invisible de cette API. La source Instagram COMPLETE les RSS, elle ne
+  les remplace pas. Et les `media_url` du CDN Instagram sont SIGNEES et EXPIRENT
+  en quelques jours : stocker l'URL puis la servir plus tard donne un 404
+  silencieux, d'ou le telechargement de l'asset au moment du gel.
+- **Source Instagram** (`app/sources/instagram.py`) : jeton `meta_fb_access_token`
+  UNIQUEMENT (voir « Deux jetons Meta »). Absent (ou `META_IG_USER_ID` absent), la
+  source est SAUTÉE en silence et rend zéro item — comme les alertes sans webhook ;
+  run_pipeline ne casse pas. Une erreur Graph lève un `RuntimeError` lisible (sans
+  le jeton, que l'URL de requête porte), attrapé par `run_ingest`, consigné dans
+  `sources.state.last_error` et remonté par `diagnostiquer`. État : `dernier_post`
+  (date du post le plus récent vu). Migration `0015_source_instagram` (CHECK
+  `sources.type` élargi) — elle était numérotée 0014 avant de rejoindre `main`,
+  où `0014_creneaux` avait pris le numéro.
+- **Les sources X sont eteintes** (2026-09-11) : la facturation developer.x.com
+  n'est plus active, les 85 sources actives (sur 100 au total) renvoyaient 402 a
+  chaque run et noyaient la supervision. `scripts/desactiver_sources_x.py` les
+  eteint sans les supprimer — leur `since_id` est conserve. **Déjà appliqué en
+  production le 2026-09-17** (à la main ; ids sauvegardés dans
+  `~/Library/Application Support/Kinda/sources_x_desactivees.json`). Le script
+  reste, idempotent : le relancer ne touche rien. Le code de l'adapter X est
+  conservé intact.
+- **`op.f()` ne s'appelle QUE dans un callable de migration.** Pose au niveau
+  module, il leve `NameError: Can't invoke function 'f', as the proxy object
+  has not yet been established` — mais seulement sur les chemins qui chargent
+  les revisions hors contexte de migration (`alembic history`, `alembic check`) ;
+  `alembic upgrade` passe, ce qui rend le defaut invisible a l'usage courant.
+  Aucun test n'importait les migrations, si bien que la suite entiere passait
+  au vert dessus : d'ou la sentinelle `tests/test_migrations.py`, qui les fait
+  toutes charger sans base de donnees.
 
 ## Conventions
 

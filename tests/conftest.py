@@ -22,6 +22,27 @@ def _pas_de_prefiltre_ambiant(monkeypatch):
     monkeypatch.setattr(settings, "local_scoring_enabled", False)
 
 
+@pytest.fixture(autouse=True)
+def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
+    """Aucun test ne lit ni n'ecrit dans ~/Library/Application Support/Kinda.
+
+    Sans ca, le `publication.json` pose depuis le vrai dashboard (mode `apercu`)
+    primait sur le mode force par un test, qui echouait selon l'etat de la
+    machine -- et un test pouvait ecraser le jeton ou le mode reels.
+    """
+    applicatif = tmp_path / "application-support-kinda"
+    monkeypatch.setattr(settings, "meta_token_path", applicatif / "instagram_token.json")
+    monkeypatch.setattr(settings, "publication_mode_path", applicatif / "publication.json")
+    monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
+
+
+@pytest.fixture(autouse=True)
+def _pas_de_jeton_sourcing_ambiant(monkeypatch):
+    """Le `.env` de l'utilisateur porte un vrai META_FB_ACCESS_TOKEN : sans ca,
+    chaque `run_pipeline` de test appellerait debug_token chez Meta."""
+    monkeypatch.setattr(settings, "meta_fb_access_token", None)
+
+
 @pytest.fixture()
 def db_session():
     engine = create_engine(

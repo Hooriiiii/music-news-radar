@@ -55,6 +55,8 @@ def main() -> None:
         print("  \u26a0 supervision :")
         for probleme in report.problemes:
             print(f"      {probleme}")
+    if report.alerte_jeton_sourcing:
+        print(f"  \u26a0 jeton sourcing Instagram : {report.alerte_jeton_sourcing}")
 
 
 if __name__ == "__main__":
