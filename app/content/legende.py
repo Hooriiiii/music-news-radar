@@ -13,12 +13,16 @@ def texte_legende(post) -> str:
     parties = [post.caption]
     if hashtags:
         parties.append(" ".join(hashtags))
+    credit = getattr(post, "credit", None)
+    if credit:
+        pictogramme = "🎥" if getattr(post, "template", None) == "kinda_reel" else "📸"
+        parties.append(f"{pictogramme} via {credit}")
     parties.append(f"Source : {post.article_url}")
     texte = "\n\n".join(parties)
     if len(texte) <= LEGENDE_MAX:
         return texte
-    # On coupe la legende elle-meme, jamais la source : citer l'editeur est le
-    # minimum de bonne foi quand on reprend ses images.
+    # On coupe la legende elle-meme, jamais le credit ni la source : citer le
+    # compte et l'editeur est le minimum de bonne foi quand on reprend leurs medias.
     fin = "\n\n".join(parties[1:])
     place = LEGENDE_MAX - len(fin) - len("\n\n") - len("…")
     return post.caption[: max(place, 0)].rstrip() + "…" + "\n\n" + fin

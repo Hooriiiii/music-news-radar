@@ -26,3 +26,25 @@ def test_une_legende_trop_longue_est_coupee_sans_perdre_la_source():
     assert len(texte) <= LEGENDE_MAX
     assert texte.endswith("Source : https://tsugi.fr/a")
     assert "…" in texte
+
+
+def test_le_credit_d_un_reel_precede_la_source():
+    post = _post()
+    post.credit, post.template = "@saralandry", "kinda_reel"
+    assert texte_legende(post) == (
+        "Une legende 🎧 ✨\n\n#electro\n\n🎥 via @saralandry\n\nSource : https://tsugi.fr/a"
+    )
+
+
+def test_le_credit_d_un_carrousel_a_son_propre_pictogramme():
+    post = _post(hashtags=())
+    post.credit, post.template = "@tsugimag", "kinda_post"
+    assert "📸 via @tsugimag\n\nSource : https://tsugi.fr/a" in texte_legende(post)
+
+
+def test_le_credit_n_est_jamais_coupe():
+    post = _post(caption="x" * 3000)
+    post.credit, post.template = "@saralandry", "kinda_reel"
+    texte = texte_legende(post)
+    assert len(texte) <= LEGENDE_MAX
+    assert texte.endswith("🎥 via @saralandry\n\nSource : https://tsugi.fr/a")
