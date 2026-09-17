@@ -295,7 +295,7 @@ Soit **≤ ~13 appels Haiku/jour** de plus sur ~100-190 aujourd'hui (+7 à +10 %
 6. **Élection et engagements** : un représentant engagé ne change jamais ; un représentant non engagé peut changer alors qu'un créneau `PROGRAMME` sans post le portait — l'arbitrage suivant le remplace (l'article devenu doublon n'est plus candidat), comportement voulu.
 7. **Re-notation sur un résumé local** : un représentant remis à noter a perdu sa caption ; Claude juge sur le résumé du 4B. Moins bon qu'à l'ingestion, meilleur que l'écart.
 8. **Cache disque** : 3 images par composition, purgées à 7 jours — quelques Mo.
-9. **Brouillons antérieurs** : un créneau déjà **gelé** a ses fichiers figés et partirait tel quel — la mise en service liste ces créneaux et les fait sauter avant la fusion. Un créneau programmé dont le brouillon a un fond interdit est recomposé (brouillon non repris), et le gel refuse en dernier recours un fond interdit (exclusion).
+9. **Brouillons antérieurs** : un créneau déjà **gelé** a ses fichiers figés et partirait tel quel — la mise en service liste ces créneaux et les fait sauter avant la fusion. Un créneau programmé dont le brouillon a un fond interdit est recomposé (brouillon non repris), et le gel refuse en dernier recours un fond interdit (exclusion). **Dans l'autre sens** (retour arrière après la fusion) : un post composé sur cette branche porte un fond `file://` dans `visuels_cache_dir`, que le code précédent ne sait pas lire — vider ou repointer `slides[0].image_url` de ces brouillons avant un downgrade.
 
 ## Questions ouvertes (défauts proposés, appliqués par le plan)
 

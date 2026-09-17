@@ -773,14 +773,29 @@ raison via `store.raison_sans_visuel`, sans appel réseau — un artiste suivi c
 suffit à dire « pas encore », le vrai verdict attend la composition) mais sort
 de la file de publication. À la composition, deux issues distinctes :
 `AucunVisuel` exclut l'article (« composition impossible : … », comme un échec
-de composition classique) — y compris quand une panne réseau PERSISTANTE
-empêche de copier une image trouvée ; `VisuelsDifferes` pose seulement la raison
-« composition differee : … » sur le créneau, sans exclure ni notifier, et
-attend le passage suivant — cas d'un budget/quota de lecture épuisé, ou d'une
-panne de copie jugée transitoire (`echec_transitoire`). Un brouillon aux
-`assets` vides n'est jamais gelé ; une cover sans fond (aucune image trouvable)
-fait lever une erreur de préparation plutôt que de geler un post sans image.
+de composition classique) : l'article n'a aucun visuel autorisé — hors sujet,
+hors fenêtre, ou aucun artiste suivi cité. Une panne de TRANSPORT ne donne
+jamais ça : elle lève toujours `VisuelsDifferes`, qui pose seulement la raison
+« composition differee : … » sur le créneau, sans exclure ni notifier, et attend
+le passage suivant (budget/quota de lecture épuisé, ou copie en échec
+transitoire — `echec_transitoire`) ; une panne persistante refait donc le même
+report à chaque passage, jusqu'à ce que le retard fasse passer le créneau en
+`MANQUE`. Un brouillon sans visuel publiable n'est jamais gelé : `assets` vides,
+aucun fond extractible, actif devenu interdit, ou fond de cover **effacé à la
+main au dashboard** — le créneau lâche le post (pas d'exclusion : l'article n'y
+est pour rien) et la composition suivante en refait un. Et si le fond est un
+`file://` dont la copie a disparu du cache, le gel DIFFÈRE
+(`PreparationDifferee`) : jamais une publication sur l'image de secours du
+gabarit.
 `export.zip` filtre les visuels interdits avant de les inclure.
+
+**Mise en service et retour arrière** (point 9 du design) : un créneau déjà
+**gelé** part avec ses fichiers figés — les lister et les faire sauter avant la
+fusion. Et un post composé SUR CETTE BRANCHE porte un fond `file://` qui pointe
+dans `visuels_cache_dir` : ce chemin n'a aucun sens pour le code d'avant (et
+`lire_fichier_cache` n'existe pas), donc avant un retour arrière il faut **vider
+ou repointer** le fond de ces brouillons (`slides[0].image_url`), sinon leur
+cover part sur l'image de secours du gabarit.
 
 ## Dédup à deux étages
 

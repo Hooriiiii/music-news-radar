@@ -311,6 +311,13 @@ def candidats_eligibles(
     # Un seul index pour toute la liste : il fait deux requetes, pas une par article.
     index = construire_index(db)
     if reel:
+        # COUT CONNU de l'arbitrage reel, assume tant que les reels sont coupes :
+        # la garde appelle `posts_en_base` UNE FOIS PAR ARTICLE sans video propre
+        # (jusqu'a LIMITE_REEL requetes par passage). Le remede serait de hisser
+        # cette lecture hors de la boucle -- un seul `posts_en_base` pour l'union
+        # des comptes cites, puis `classer` en memoire. A faire quand les reels
+        # seront allumes, pas avant : `reels_actifs()` est faux par defaut et
+        # cette branche ne tourne qu'en test.
         def garde(a):
             return raison_ineligible_reel(a, index=index, maintenant=maintenant) is None
     else:
