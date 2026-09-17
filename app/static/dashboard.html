@@ -177,6 +177,7 @@
     <button class="chip" data-preset="media">🖼 Avec média</button>
     <button class="chip" data-preset="reviewed">✓ Vus</button>
     <button class="chip" data-preset="used">📸 Postés</button>
+    <button class="chip" data-preset="instagram">📷 Instagram</button>
     <select id="category">
       <option value="">Toutes catégories</option>
       <option value="new_release">Release</option><option value="announcement">Annonce</option>
@@ -258,6 +259,9 @@ const PRESETS = {
   media:    { has_media: true, min_relevance: 40 },
   reviewed: { status: "reviewed" },
   used:     { status: "used" },
+  // Tous les posts Instagram, notes ou non : la vue « A traiter » masque ceux qui
+  // attendent encore leur note.
+  instagram: { source_type: "instagram" },
 };
 let preset = "fresh";
 
@@ -266,7 +270,7 @@ const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 
 async function load() {
-  const params = new URLSearchParams({ limit: 100, sort: document.getElementById("sort").value });
+  const params = new URLSearchParams({ limit: 200, sort: document.getElementById("sort").value });
   for (const [k, v] of Object.entries(PRESETS[preset])) params.set(k, v);
   const category = document.getElementById("category").value;
   const source = document.getElementById("source").value;

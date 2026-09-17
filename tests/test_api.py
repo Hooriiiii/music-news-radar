@@ -307,3 +307,23 @@ def test_dashboard_permet_de_classer_une_source(client):
     html = client.get("/").text
     assert 'id="s-categorie"' in html
     assert 'class="categorie"' in html
+
+
+def test_filter_articles_by_source_type(client, db_session):
+    from app.models import Source, SourceType
+
+    rss = make_source(db_session)
+    insta = Source(name="Anyma (IG)", type=SourceType.INSTAGRAM, url="ig:anyma")
+    db_session.add(insta)
+    db_session.commit()
+    make_article(db_session, rss, title="Article RSS", raw_hash="typ1")
+    make_article(db_session, insta, title="Post Instagram", raw_hash="typ2")
+
+    titles = [a["title"] for a in client.get("/articles", params={"source_type": "instagram"}).json()]
+    assert titles == ["Post Instagram"]
+
+
+def test_le_dashboard_a_un_filtre_instagram(client):
+    html = client.get("/").text
+    assert 'data-preset="instagram"' in html
+    assert 'source_type: "instagram"' in html

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Article, ArticleStatus
+from app.models import Article, ArticleStatus, Source, SourceType
 from app.schemas import ArticleOut
 
 router = APIRouter(prefix="/articles", tags=["articles"])
@@ -20,6 +20,7 @@ def list_articles(
     min_hotness: int | None = Query(None, ge=0, le=100),
     min_emergence: int | None = Query(None, ge=0, le=100),
     source_id: int | None = None,
+    source_type: SourceType | None = None,
     category: str | None = None,
     has_media: bool | None = None,
     since: dt.datetime | None = None,
@@ -42,6 +43,8 @@ def list_articles(
         stmt = stmt.where(Article.emergence_score >= min_emergence)
     if source_id is not None:
         stmt = stmt.where(Article.source_id == source_id)
+    if source_type is not None:
+        stmt = stmt.join(Source, Article.source_id == Source.id).where(Source.type == source_type)
     if category is not None:
         stmt = stmt.where(Article.category == category)
     if has_media is not None:
