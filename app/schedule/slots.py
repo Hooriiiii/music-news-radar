@@ -39,8 +39,23 @@ def fenetres(format_: str = CARROUSEL) -> list[str]:
     return [settings.publication_fenetre_matin, settings.publication_fenetre_apres_midi]
 
 
-def verifier_fenetres() -> None:
-    bornes = [(format_, texte, *_fenetre(texte)) for format_ in (CARROUSEL, REEL) for texte in fenetres(format_)]
+def _formats_verifies(format_: str | None) -> tuple[str, ...]:
+    """Seuls les formats ACTIFS sont verifies : des fenetres reel fautives ne
+    doivent jamais empecher de programmer un carrousel. Le carrousel se verifie
+    seul ; le reel, s'il a des creneaux, contre lui-meme et les carrousels."""
+    if format_ == CARROUSEL or settings.publication_creneaux_reel <= 0:
+        return (CARROUSEL,)
+    return (CARROUSEL, REEL)
+
+
+def verifier_fenetres(format_: str | None = None) -> None:
+    bornes = []
+    for format_verifie in _formats_verifies(format_):
+        for texte in fenetres(format_verifie):
+            try:
+                bornes.append((format_verifie, texte, *_fenetre(texte)))
+            except ValueError as exc:
+                raise FenetresInvalides(f"fenetre {texte!r} ({format_verifie}) illisible, attendu HH:MM-HH:MM") from exc
     for rang, (format_a, texte_a, debut_a, fin_a) in enumerate(bornes):
         if fin_a < debut_a:
             raise FenetresInvalides(f"fenetre {texte_a} ({format_a}) : la fin precede le debut")
@@ -53,7 +68,7 @@ def verifier_fenetres() -> None:
 
 
 def horaires_du_jour(jour: dt.date, format_: str = CARROUSEL) -> list[dt.datetime]:
-    verifier_fenetres()
+    verifier_fenetres(format_)
     fuseau = ZoneInfo(settings.publication_fuseau)
     graine = "kinda" if format_ == CARROUSEL else f"kinda-{format_}"
     horaires = []

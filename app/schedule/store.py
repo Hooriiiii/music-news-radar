@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.publish.mode import reels_actifs
 from app.schedule.queue import Candidat, Place, arbitrer
-from app.schedule.slots import prochains_horaires
+from app.schedule.slots import FenetresInvalides, prochains_horaires
 
 # Un creneau dans l'un de ces etats ne bouge plus.
 VERROUILLES = frozenset({
@@ -219,8 +219,16 @@ def _tenus_ailleurs(db: Session, maintenant: dt.datetime, format_: FormatCreneau
 def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
     tous: list[Creneau] = []
     places_ce_passage: set[int] = set()
+    fenetres_fautives: FenetresInvalides | None = None
     for format_ in ORDRE_ARBITRAGE:
-        creneaux = synchroniser_creneaux(db, maintenant, format_)
+        try:
+            creneaux = synchroniser_creneaux(db, maintenant, format_)
+        except FenetresInvalides as exc:
+            # Des fenetres reel fautives ne bloquent pas les carrousels : le
+            # format fautif est saute, l'erreur remonte a la fin pour se voir.
+            db.rollback()
+            fenetres_fautives = exc
+            continue
         occupes = _tenus_ailleurs(db, maintenant, format_) | places_ce_passage
         candidats = [c for c in candidats_eligibles(db, maintenant, format_) if c.article_id not in occupes]
         places = [
@@ -238,6 +246,8 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
         db.commit()
         places_ce_passage |= {c.article_id for c in creneaux if c.article_id is not None}
         tous += creneaux
+    if fenetres_fautives is not None:
+        raise fenetres_fautives
     return sorted(tous, key=lambda c: utc(c.publier_a))
 
 

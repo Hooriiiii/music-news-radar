@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.config import settings
-from app.schedule.slots import FenetresInvalides, horaires_du_jour, prochains_horaires
+from app.schedule.slots import FenetresInvalides, horaires_du_jour, prochains_horaires, verifier_fenetres
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -112,4 +112,33 @@ def test_deux_fenetres_qui_se_touchent_sont_refusees(monkeypatch):
     """Bornes incluses : le tirage peut tomber sur la minute de fin."""
     monkeypatch.setattr(settings, "publication_reel_fenetres", "11:00-12:00")
     with pytest.raises(FenetresInvalides):
-        horaires_du_jour(dt.date(2026, 9, 20))
+        horaires_du_jour(dt.date(2026, 9, 20), "reel")
+
+
+# --- M5 : seuls les formats actifs sont verifies ---------------------------------------
+
+
+def test_des_fenetres_reel_fautives_ne_cassent_pas_les_carrousels(monkeypatch):
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00")
+    jour = dt.date(2026, 9, 20)
+    assert len(horaires_du_jour(jour)) == 2
+    with pytest.raises(FenetresInvalides):
+        horaires_du_jour(jour, "reel")
+
+
+def test_des_fenetres_reel_illisibles_ne_cassent_pas_les_carrousels(monkeypatch):
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "midi")
+    assert len(horaires_du_jour(dt.date(2026, 9, 20))) == 2
+
+
+def test_sans_creneau_reel_les_fenetres_reel_ne_sont_pas_verifiees(monkeypatch):
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00")
+    monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
+    verifier_fenetres()
+    verifier_fenetres("reel")
+
+
+def test_avec_des_creneaux_reel_toutes_les_fenetres_sont_verifiees(monkeypatch):
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00")
+    with pytest.raises(FenetresInvalides):
+        verifier_fenetres()

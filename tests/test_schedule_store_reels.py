@@ -10,7 +10,7 @@ from app.models import (
     Article, Creneau, EtatCreneau, FormatCreneau, Post, Source, SourceCategorie, SourceType,
 )
 from app.publish.mode import enregistrer_reels
-from app.schedule.slots import prochains_horaires
+from app.schedule.slots import FenetresInvalides, prochains_horaires
 from app.schedule.store import (
     appliquer_arbitrage,
     candidats_eligibles,
@@ -210,3 +210,14 @@ def test_un_carrousel_gele_garde_son_article_hors_des_reels(db_session):
     db_session.commit()
     creneaux = appliquer_arbitrage(db_session, MAINTENANT)
     assert all(c.article_id is None for c in creneaux if c.format == FormatCreneau.REEL)
+
+
+def test_des_fenetres_reel_fautives_n_empechent_pas_la_file_des_carrousels(db_session, monkeypatch):
+    """M5 : l'erreur de fenetres reel remonte (elle doit se voir), mais les
+    creneaux carrousel sont synchronises et arbitres quand meme."""
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00")
+    with pytest.raises(FenetresInvalides):
+        appliquer_arbitrage(db_session, MAINTENANT)
+    creneaux = db_session.query(Creneau).all()
+    assert len(creneaux) == 6
+    assert {c.format for c in creneaux} == {FormatCreneau.CARROUSEL}
