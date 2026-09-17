@@ -18,8 +18,10 @@ T-2h, une video morte est une exclusion propre, visible au dashboard.
 Ordre des fichiers figes : la video, puis la cover (`cover_url` chez Meta).
 """
 
+import re
 import secrets
 import subprocess
+import time
 from pathlib import Path
 
 import httpx
@@ -33,6 +35,13 @@ from app.publish.preparation import PreparationDifferee, PreparationImpossible
 
 MO = 1024 * 1024
 DELAI_TELECHARGEMENT_S = 120.0
+# Delai TOTAL : celui d'httpx borne chaque lecture, pas un flux qui goutte.
+DELAI_TOTAL_S = 300.0
+# Statuts qui disent « plus tard », pas « jamais » : ni exclusion, ni repli yt-dlp.
+STATUTS_TRANSITOIRES = (408, 429)
+TYPES_BINAIRES = ("application/octet-stream", "binary/octet-stream")
+# ffmpeg a court de ressources : la faute est a la machine, pas a la video.
+_PANNE_MACHINE = re.compile(r"No space left on device|Cannot allocate memory", re.IGNORECASE)
 CODECS_VIDEO = ("h264", "hevc")
 CADENCE_MIN, CADENCE_MAX = 23.0, 60.0
 ECHANTILLONNAGE_MAX = 48_000
@@ -58,11 +67,27 @@ def source_de_la_video(post, article) -> tuple[str, str] | None:
     return None
 
 
-def telecharger_video(url: str, plafond: int, *, client: httpx.Client | None = None) -> bytes:
+def _refuser_hors_https(url) -> None:
+    if httpx.URL(str(url)).scheme != "https":
+        raise PreparationImpossible(f"lien video hors https refuse : {url}")
+
+
+def telecharger_video(
+    url: str, plafond: int, *, client: httpx.Client | None = None, horloge=time.monotonic
+) -> bytes:
+    _refuser_hors_https(url)
+    debut = horloge()
     propre = client is None
     client = client or httpx.Client(follow_redirects=True, timeout=DELAI_TELECHARGEMENT_S)
     try:
         with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as reponse:
+            # Une redirection vers http:// ne passe pas, meme si elle aboutit.
+            for etape in [*reponse.history, reponse]:
+                _refuser_hors_https(etape.url)
+            if reponse.status_code in STATUTS_TRANSITOIRES:
+                raise PreparationDifferee(
+                    f"video momentanement indisponible (HTTP {reponse.status_code}), retentee au passage suivant"
+                )
             if 400 <= reponse.status_code < 500:
                 raise LienExpire(
                     f"video indisponible (HTTP {reponse.status_code}) : lien expire ou retire"
@@ -70,7 +95,11 @@ def telecharger_video(url: str, plafond: int, *, client: httpx.Client | None = N
             # 5xx : HTTPStatusError remonte, panne systemique retentee.
             reponse.raise_for_status()
             type_ = reponse.headers.get("content-type", "").split(";")[0].strip().lower()
-            if type_ and not type_.startswith("video/") and type_ != "application/octet-stream":
+            if type_ == "text/html":
+                # Portail captif (Wi-Fi d'hotel) ou page d'erreur d'un proxy : le
+                # reseau de la machine, pas l'article.
+                raise PreparationDifferee(f"le lien n'est pas une video ({type_}), retente au passage suivant")
+            if type_ and not type_.startswith("video/") and type_ not in TYPES_BINAIRES:
                 raise PreparationImpossible(f"le lien n'est pas une video ({type_})")
             octets = bytearray()
             for morceau in reponse.iter_bytes():
@@ -78,6 +107,10 @@ def telecharger_video(url: str, plafond: int, *, client: httpx.Client | None = N
                 # En cours de lecture : Content-Length peut manquer ou mentir.
                 if len(octets) > plafond:
                     raise PreparationImpossible(f"video source trop lourde : plus de {plafond / MO:.0f} Mo")
+                if horloge() - debut > DELAI_TOTAL_S:
+                    raise PreparationDifferee(
+                        f"telechargement abandonne : delai de {DELAI_TOTAL_S:.0f} s depasse"
+                    )
             return bytes(octets)
     finally:
         if propre:
@@ -119,6 +152,13 @@ def verifier_sortie(infos: dict, poids: int) -> None:
         raise PreparationImpossible("reel hors specifications Meta : " + ", ".join(problemes))
 
 
+def _panne_machine(exc: AssemblageIndisponible) -> bool:
+    code = getattr(exc, "returncode", None)
+    if code is not None and code < 0:
+        return True
+    return bool(_PANNE_MACHINE.search(f"{getattr(exc, 'stderr', '')}\n{exc}"))
+
+
 def _video_source(origine, url, article, dossier, plafond, telecharger, recuperer_ytdlp) -> bytes:
     if origine == API:
         try:
@@ -127,8 +167,13 @@ def _video_source(origine, url, article, dossier, plafond, telecharger, recupere
             # Repli sur la page du post : yt-dlp sait souvent recuperer ce que le
             # lien signe ne donne plus. Hors Instagram, ou sans yt-dlp, la faute reste.
             permalink = getattr(article, "url", None)
-            if recuperer_ytdlp is None or not est_lien_instagram(permalink):
+            if not est_lien_instagram(permalink):
                 raise
+            if recuperer_ytdlp is None:
+                # Le repli existe, yt-dlp est seulement coupe (.env) : on attend.
+                raise PreparationDifferee(
+                    "lien video expire, repli yt-dlp desactive (PUBLICATION_REEL_YTDLP)"
+                ) from None
             url = permalink
     elif recuperer_ytdlp is None:
         # Pas une faute de l'article : yt-dlp a ete coupe (.env) apres la
@@ -177,15 +222,26 @@ def preparer_reel(
     plafond = settings.publication_reel_source_max_mo * MO
     source = _video_source(*origine, article, dossier, plafond, telecharger, recuperer_ytdlp)
     try:
-        verifier_source(sonder(source))
+        try:
+            infos_source = sonder(source)
+            verifier_source(infos_source)
+        except (KeyError, ValueError) as exc:
+            # Un flux que ffprobe decrit sans duree, ou avec une valeur absurde :
+            # propre a cette video. L'exclure evite de rebruler le budget yt-dlp.
+            raise PreparationImpossible(f"video source inexploitable a la sonde : {exc!r}") from exc
         # Reencodage complet (libx264 + aac) : une source VP9 de yt-dlp en sort en H.264.
         reel = assembler(rendus[0].png, source)
         infos = sonder(reel)
-    # Les outils sont presents (verifie plus haut) : un echec ici vient de l'entree.
     except AssemblageIndisponible as exc:
+        # Les outils sont presents (verifie plus haut). Un binaire tue par un
+        # signal, ou a court de disque ou de memoire : panne de la machine, qui
+        # remonte telle quelle. Tout autre echec vient de l'entree.
+        if _panne_machine(exc):
+            raise
         raise PreparationImpossible(f"video inexploitable : {exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise PreparationImpossible(f"assemblage abandonne : delai de {exc.timeout:.0f} s depasse") from exc
+        # Le plus souvent une machine chargee : retente au passage suivant.
+        raise PreparationDifferee(f"assemblage abandonne : delai de {exc.timeout:.0f} s depasse") from exc
     verifier_sortie(infos, len(reel))
 
     try:

@@ -44,7 +44,16 @@ DELAI_MAX_S = 300
 
 
 class AssemblageIndisponible(RuntimeError):
-    """ffmpeg manquant, ou entree illisible. Message affichable tel quel."""
+    """ffmpeg manquant, ou entree illisible. Message affichable tel quel.
+
+    `returncode` et `stderr` portent ce qu'a rendu le binaire quand il a tourne :
+    l'appelant y distingue une machine a court de ressources (disque plein,
+    memoire, processus tue) d'une entree fautive."""
+
+    def __init__(self, message: str, *, returncode: int | None = None, stderr: str = "") -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr
 
 
 # launchd ne fournit qu'un PATH minimal -- /usr/bin, /bin, /usr/sbin, /sbin et
@@ -106,7 +115,10 @@ def sonder(video: bytes) -> dict:
             capture_output=True, text=True, timeout=DELAI_MAX_S,
         )
         if resultat.returncode != 0:
-            raise AssemblageIndisponible(f"video illisible : {resultat.stderr.strip()[:200]}")
+            raise AssemblageIndisponible(
+                f"video illisible : {resultat.stderr.strip()[:200]}",
+                returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
+            )
         donnees = json.loads(resultat.stdout)
 
     flux_video = next((f for f in donnees["streams"] if f["codec_type"] == "video"), None)
@@ -204,5 +216,8 @@ def assembler_reel(
             # Les dernieres lignes seulement : une trace ffmpeg complete fait
             # des centaines de lignes et n'est pas affichable dans le dashboard.
             fin = "\n".join(resultat.stderr.strip().splitlines()[-4:])
-            raise AssemblageIndisponible(f"assemblage impossible : {fin[:400]}")
+            raise AssemblageIndisponible(
+                f"assemblage impossible : {fin[:400]}",
+                returncode=resultat.returncode, stderr=resultat.stderr[-4000:],
+            )
         return sortie.read_bytes()

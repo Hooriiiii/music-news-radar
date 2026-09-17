@@ -222,15 +222,134 @@ def test_une_video_illisible_est_une_faute(tmp_path):
         preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
 
 
-def test_un_assemblage_trop_long_est_une_faute(tmp_path):
+def test_un_assemblage_trop_long_est_differe(tmp_path):
+    """Un delai depasse vient le plus souvent d'une machine chargee : on retente."""
     outils = _outils()
 
     def trop_long(cover, video):
         raise subprocess.TimeoutExpired("ffmpeg", 300)
 
     outils["assembler"] = trop_long
-    with pytest.raises(PreparationImpossible, match="delai"):
+    with pytest.raises(PreparationDifferee, match="delai") as attente:
         preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+    assert not isinstance(attente.value, PreparationImpossible)
+
+
+@pytest.mark.parametrize(
+    "returncode, stderr",
+    [
+        (1, "Error writing trailer: No space left on device"),
+        (1, "av_malloc failed: Cannot allocate memory"),
+        (-9, ""),
+    ],
+)
+def test_un_ffmpeg_tue_ou_a_court_de_ressources_est_systemique(tmp_path, returncode, stderr):
+    outils = _outils()
+
+    def panne(cover, video):
+        raise AssemblageIndisponible("assemblage impossible", returncode=returncode, stderr=stderr)
+
+    outils["assembler"] = panne
+    with pytest.raises(AssemblageIndisponible):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+def test_un_ffmpeg_en_echec_ordinaire_reste_une_faute(tmp_path):
+    outils = _outils()
+
+    def echec(cover, video):
+        raise AssemblageIndisponible("assemblage impossible : Invalid data", returncode=1, stderr="Invalid data")
+
+    outils["assembler"] = echec
+    with pytest.raises(PreparationImpossible, match="Invalid data"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+def test_assembler_reel_expose_le_code_et_la_sortie_d_erreur(monkeypatch):
+    from app.content import video
+
+    monkeypatch.setattr(video, "_exiger_ffmpeg", lambda nom: nom)
+    monkeypatch.setattr(video, "sonder", lambda octets: {"has_audio": True})
+    monkeypatch.setattr(
+        video.subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, -9, stdout="", stderr="debut\nNo space left on device"),
+    )
+    with pytest.raises(AssemblageIndisponible) as erreur:
+        video.assembler_reel(b"png", b"mp4")
+    assert erreur.value.returncode == -9
+    assert "No space left on device" in erreur.value.stderr
+
+
+@pytest.mark.parametrize("erreur", [KeyError("duration"), ValueError("could not convert")])
+def test_un_flux_source_bizarre_est_une_faute(tmp_path, erreur):
+    outils = _outils()
+
+    def bizarre(octets):
+        raise erreur
+
+    outils["sonder"] = bizarre
+    with pytest.raises(PreparationImpossible, match="sonde"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **outils)
+
+
+@pytest.mark.parametrize(
+    "defaut, motif",
+    [
+        ({"width": 720, "height": 1280}, "dimensions 720x1280"),
+        ({"audio_codec": "opus"}, "codec audio opus"),
+        ({"sample_rate": 96000}, "echantillonnage 96000"),
+        ({"duration": 2.0}, "duree 2.0"),
+    ],
+)
+def test_chaque_spec_de_sortie_est_controlee(tmp_path, defaut, motif):
+    with pytest.raises(PreparationImpossible, match=motif):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(sortie={**SORTIE, **defaut}))
+
+
+def test_une_sortie_trop_lourde_est_refusee(tmp_path, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "publication_reel_max_mo", 0)
+    with pytest.raises(PreparationImpossible, match="poids"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils())
+
+
+def test_une_cover_inexploitable_est_une_faute(tmp_path, monkeypatch):
+    from app.publish import preparation_reel
+    from app.publish.images import ImageInexploitable
+
+    def inexploitable(octets):
+        raise ImageInexploitable("image corrompue")
+
+    monkeypatch.setattr(preparation_reel, "en_jpeg", inexploitable)
+    with pytest.raises(PreparationImpossible, match="cover inexploitable"):
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils())
+
+
+def test_un_lien_expire_sans_yt_dlp_sur_instagram_differe(tmp_path):
+    """yt-dlp coupe par .env : le repli existe, il est seulement indisponible."""
+    def expire(url, plafond):
+        raise LienExpire("video indisponible (HTTP 403) : lien expire ou retire")
+
+    outils = {**_outils(), "telecharger": expire}
+    with pytest.raises(PreparationDifferee, match="yt-dlp") as attente:
+        preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=None, **outils)
+    assert not isinstance(attente.value, PreparationImpossible)
+
+
+@pytest.mark.parametrize("statut", [408, 429])
+def test_un_statut_transitoire_differe_sans_repli(tmp_path, statut):
+    client = _client(lambda requete: httpx.Response(statut))
+    with pytest.raises(PreparationDifferee, match=str(statut)) as attente:
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+    assert not isinstance(attente.value, PreparationImpossible)
+
+    def transitoire(url, plafond):
+        return telecharger_video(url, plafond, client=_client(lambda requete: httpx.Response(statut)))
+
+    outils = {**_outils(), "telecharger": transitoire}
+    with pytest.raises(PreparationDifferee):
+        preparer_reel(_post(), _article(VIDEO, url=REEL), tmp_path, recuperer_ytdlp=_interdit, **outils)
 
 
 def test_ffmpeg_absent_est_une_panne_systemique(tmp_path):
@@ -275,10 +394,47 @@ def test_une_video_trop_lourde_est_refusee_en_cours_de_lecture():
         telecharger_video("https://cdn/v.mp4", 1000, client=client)
 
 
-def test_une_page_html_n_est_pas_une_video():
+def test_une_page_html_est_un_portail_captif_differe():
+    """Un Wi-Fi d'hotel rend une page HTML : la faute n'est pas a l'article."""
     client = _client(lambda requete: httpx.Response(200, headers={"content-type": "text/html"}, content=b"<html>"))
+    with pytest.raises(PreparationDifferee, match="pas une video") as attente:
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+    assert not isinstance(attente.value, PreparationImpossible)
+
+
+def test_un_autre_type_n_est_pas_une_video():
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": "image/jpeg"}, content=b"jpg"))
     with pytest.raises(PreparationImpossible, match="pas une video"):
         telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+@pytest.mark.parametrize("type_", ["application/octet-stream", "binary/octet-stream"])
+def test_un_flux_binaire_est_accepte(type_):
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": type_}, content=b"mp4"))
+    assert telecharger_video("https://cdn/v.mp4", 1000, client=client) == b"mp4"
+
+
+def test_une_redirection_hors_https_est_refusee():
+    def gestionnaire(requete):
+        if requete.url.scheme == "https":
+            return httpx.Response(302, headers={"location": "http://cdn/v.mp4"})
+        return httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"mp4")
+
+    client = httpx.Client(transport=httpx.MockTransport(gestionnaire), follow_redirects=True)
+    with pytest.raises(PreparationImpossible, match="https"):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client)
+
+
+def test_une_url_hors_https_est_refusee():
+    with pytest.raises(PreparationImpossible, match="https"):
+        telecharger_video("http://cdn/v.mp4", 1000, client=_client(_interdit))
+
+
+def test_un_telechargement_interminable_est_differe():
+    temps = iter([0.0, 301.0, 302.0, 303.0])
+    client = _client(lambda requete: httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"mp4"))
+    with pytest.raises(PreparationDifferee, match="delai"):
+        telecharger_video("https://cdn/v.mp4", 1000, client=client, horloge=lambda: next(temps))
 
 
 # --- Chaine reelle, ffmpeg compris ------------------------------------------------
