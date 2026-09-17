@@ -85,7 +85,25 @@ def image_de(entree_media: dict) -> str | None:
 
 
 def image_de_fond(actifs: list[dict] | None) -> str | None:
-    return next((image for a in actifs or [] if (image := image_de(a))), None)
+    """Le fond de la cover : une VRAIE photo d'abord, la vignette d'une video
+    seulement a defaut. Un carrousel ouvre souvent sur une video, et sa vignette
+    est une image de secours -- l'ancien `_fond_par_defaut` prenait deja la photo
+    en premier."""
+    actifs = actifs or []
+    photos = [a for a in actifs if a.get("type") == PHOTO]
+    return next((image for a in [*photos, *actifs] if (image := image_de(a))), None)
+
+
+def a_une_image_autorisee(article) -> bool:
+    """Vrai si l'article porte au moins une image fixe que Kinda peut publier.
+
+    LE prédicat, unique par construction : la file (`store.a_une_image`) et le
+    choix des visuels (`choix_visuels._propres`) doivent voir exactement la meme
+    chose. Deux definitions voisines suffisaient a retenir un article dans la
+    file (un `gif` ou un `type` absent avec vignette) puis a l'exclure a la
+    composition, avec une raison fausse -- verrouille par un test-sentinelle
+    parametre (`tests/test_visuels.py`)."""
+    return any(image_de(m) for m in visuels_autorises(article))
 
 
 def credit_des_actifs(actifs: list[dict] | None) -> str | None:

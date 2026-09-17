@@ -21,9 +21,9 @@ from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
 from app.content.visuels import (
     ORIGINE_ARTISTE,
+    a_une_image_autorisee,
     origine_interdite,
     raison_sans_artiste,
-    visuels_autorises,
 )
 from app.models import (
     Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus, Source, SourceType,
@@ -85,11 +85,10 @@ def synchroniser_creneaux(
 
 def a_une_image(article: Article) -> bool:
     # Sans image AUTORISEE, la cover partirait sur le fond de secours : pas
-    # publiable. Un compte media Instagram n'en fournit jamais.
-    return any(
-        (m.get("type") == "photo" and m.get("url")) or m.get("preview_url")
-        for m in visuels_autorises(article)
-    )
+    # publiable. Un compte media Instagram n'en fournit jamais. DELEGUE au seul
+    # predicat de `app.content.visuels` : la file et le choix des visuels
+    # (`choix_visuels._propres`) ne doivent jamais diverger.
+    return a_une_image_autorisee(article)
 
 
 def comptes_cites(article: Article, index: IndexComptes) -> list[CompteArtiste]:

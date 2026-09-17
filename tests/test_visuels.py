@@ -25,9 +25,10 @@ from app.content.visuels import (
     urls_interdites,
     visuels_autorises,
 )
-from app.models import Article, Source, SourceCategorie, SourceType
+from app.content.choix_visuels import _propres
+from app.models import Article, FormatCreneau, Source, SourceCategorie, SourceType
 from app.publish.preparation import PreparationImpossible, medias_du_carrousel, preparer_fichiers
-from app.schedule.store import candidats_eligibles
+from app.schedule.store import a_une_image, candidats_eligibles
 
 UTC = dt.timezone.utc
 MAINTENANT = dt.datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
@@ -248,3 +249,50 @@ def test_le_cache_perd_ses_images_trop_vieilles():
     assert not vieille.exists() and recente.exists()
     # Idempotent, et sans dossier il ne se plaint pas.
     assert purger_cache(maintenant) == 0
+
+
+def test_le_fond_prefere_une_vraie_photo_a_la_vignette_d_une_video():
+    """Un carrousel ouvre souvent sur une video : sa vignette est une image de
+    secours, pas le meilleur fond de cover (l'ancien `_fond_par_defaut` prenait
+    deja la photo d'abord)."""
+    video = actif(entree("video", "https://cdn.ig/clip.mp4", preview_url="https://cdn.ig/vignette.jpg"),
+                  origine=ORIGINE_ARTICLE)
+    photo = actif(PHOTO_IG, origine=ORIGINE_ARTICLE)
+    assert image_de_fond([video, photo]) == "https://cdn.ig/guettapen.jpg"
+    # Sans aucune photo, la vignette reste le seul fond possible.
+    assert image_de_fond([video]) == "https://cdn.ig/vignette.jpg"
+
+
+# Les formes de medias vues en base (API X, Instagram, RSS) : le `type` peut
+# valoir gif, None, ou manquer, et l'URL peut n'etre qu'une vignette.
+FORMES_MEDIAS = [
+    {"type": "photo", "url": "https://p/a.jpg"},
+    {"type": "photo", "preview_url": "https://p/b.jpg"},
+    {"type": "photo"},
+    {"type": "video", "url": "https://v/a.mp4", "preview_url": "https://v/a.jpg"},
+    {"type": "video", "url": "https://v/b.mp4"},
+    {"type": "video", "preview_url": "https://v/c.jpg"},
+    {"type": "gif", "preview_url": "https://g/a.jpg"},
+    {"type": "gif", "url": "https://g/b.gif"},
+    {"type": None, "preview_url": "https://n/a.jpg"},
+    {"url": "https://x/a.jpg"},
+]
+
+
+@pytest.mark.parametrize("media", FORMES_MEDIAS, ids=lambda m: f"{m.get('type')}-{sorted(m)}")
+def test_sentinelle_la_file_et_le_choix_voient_le_meme_visuel(media):
+    """Verrou : `store.a_une_image` (la file) et `choix_visuels._propres` (la
+    composition) doivent rendre le MEME verdict sur chaque forme de media. Un
+    gif ou un type absent qui passait l'un et pas l'autre faisait retenir un
+    article dans la file, puis l'excluait au choix des visuels, avec une raison
+    fausse."""
+    article = _article(_source(SourceType.RSS), media)
+    article.id = 1
+    assert a_une_image(article) == (_propres(article, FormatCreneau.CARROUSEL) is not None)
+
+
+def test_sentinelle_un_compte_media_instagram_n_a_de_visuel_pour_personne():
+    article = _article(_source(), PHOTO_IG)
+    article.id = 1
+    assert a_une_image(article) is False
+    assert _propres(article, FormatCreneau.CARROUSEL) is None

@@ -27,10 +27,11 @@ from app.content.actifs_artistes import Retenu, classer, medias_utilisables, pos
 from app.content.credit import credit_video
 from app.content.export import echec_transitoire, telecharger as telecharger_media
 from app.content.lecture_artistes import LectureDifferee
-from app.content.media import PHOTO, VIDEO
+from app.content.media import VIDEO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
+    a_une_image_autorisee,
     actif,
     chemin_cache,
     credit_des_actifs,
@@ -83,18 +84,16 @@ def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
         videos = medias_utilisables(medias, article.url, format_)
         return ChoixVisuels([en_actif(videos[0])], compte) if videos else None
 
-    # Photos ET videos : le carrousel publie les deux (le gel telecharge la video,
-    # et retombe sur sa vignette). Un media sans aucune URL n'est pas un visuel.
-    publiables = [
-        m
-        for m in medias
-        if m.get("type") in (PHOTO, VIDEO) and (m.get("url") or m.get("preview_url"))
-    ]
-    # Il faut au moins une IMAGE FIXE : c'est elle qui fera le fond de la cover.
-    # Une video avec URL mais sans vignette n'en donne aucune -- meme definition
-    # que `store.a_une_image`, sinon la file retiendrait un article dont le
-    # brouillon partirait sans fond, et le gel l'exclurait pour de bon.
-    if not publiables or not any(image_de(m) for m in publiables):
+    # Tout ce qui donne une image fixe (photo, vignette, gif) -- c'est elle qui
+    # fera le fond de la cover -- PLUS les videos publiables (le gel telecharge
+    # la video, et retombe sur sa vignette). Un `gif` ne sert donc que de fond :
+    # `medias_du_carrousel` ne publie, lui, que des photos et des videos.
+    publiables = [m for m in medias if image_de(m) or (m.get("type") == VIDEO and m.get("url"))]
+    # Il faut au moins une IMAGE FIXE. Une video avec URL mais sans vignette n'en
+    # donne aucune -- MEME predicat que la file (`a_une_image_autorisee`), sinon
+    # elle retiendrait un article dont le brouillon partirait sans fond, et le gel
+    # l'exclurait pour de bon.
+    if not a_une_image_autorisee(article):
         return None
     return ChoixVisuels([en_actif(m) for m in publiables], compte)
 
