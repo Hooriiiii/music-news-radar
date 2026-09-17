@@ -56,12 +56,21 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import InvalidRequestError
 
 from app.config import settings
+from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visuels
 from app.content.compose import CompositionError, create_post
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
+from app.content.visuels import origine_interdite, purger_cache
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
-from app.schedule.store import TEMPLATES, appliquer_arbitrage, post_a_reprendre, raison_ineligible_reel, utc
+from app.schedule.store import (
+    TEMPLATES,
+    actifs_interdits,
+    appliquer_arbitrage,
+    post_a_reprendre,
+    raison_ineligible_reel,
+    utc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +130,9 @@ def _menage(db, maintenant: dt.datetime) -> None:
     interrompu, qui laisseraient des dizaines de Mo de video sur le disque.
     `essais/` (script d'essai) n'est pas un nombre : jamais touche. Un creneau
     GELE, ou PROGRAMME a venir, garde toujours son dossier."""
+    # Les copies locales des visuels d'artistes : elles ne servent qu'entre la
+    # composition et le gel, personne d'autre ne les efface.
+    purger_cache(maintenant)
     racine = settings.publication_dir
     if not racine.is_dir():
         return
@@ -223,6 +235,23 @@ def _completer_credit(db, post: Post, article: Article | None) -> None:
         db.commit()
 
 
+def _choix_sans_lecture(db, article, format_, maintenant):
+    # Par defaut, aucune lecture Graph : l'agent planifie passe un lecteur borne
+    # (scripts/run_publication.py), les tests et les appels directs n'en ont pas.
+    return choisir_visuels(db, article, format_=format_, maintenant=maintenant)
+
+
+def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
+    """Un brouillon dont les visuels ne sont plus publiables : compose avant la
+    regle du 2026-09-17 sur un compte media (`assets` NULL), ou portant l'actif
+    d'un compte d'artiste passe `media` depuis la composition."""
+    if post is None:
+        return False
+    if post.assets is None:
+        return origine_interdite(getattr(article, "source", None))
+    return bool(actifs_interdits(db, post))
+
+
 def _marquer_manques(
     db, maintenant: dt.datetime, rapport: RapportPublication, formats_actifs: set
 ) -> None:
@@ -243,7 +272,7 @@ def _marquer_manques(
 
 
 def _composer(
-    db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication, formats: set
+    db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication, formats: set, choisir
 ) -> bool:
     horizon = maintenant + dt.timedelta(hours=settings.publication_composition_heures)
     creneaux = db.scalars(
@@ -279,15 +308,35 @@ def _composer(
             continue
         template = TEMPLATES[creneau.format]
         if creneau.format == FormatCreneau.REEL:
-            raison = raison_ineligible_reel(article)
+            raison = raison_ineligible_reel(article, maintenant=maintenant)
             if raison is not None:
                 # Pas d'exclusion : l'article reste bon pour un carrousel.
                 _liberer(db, creneau, attendu, f"reel impossible : {raison}")
                 continue
         post_id = post_a_reprendre(db, article.id, template)
         if post_id is not None:
-            _completer_credit(db, db.get(Post, post_id, populate_existing=True), article)
+            brouillon = db.get(Post, post_id, populate_existing=True)
+            if _brouillon_perime(db, brouillon, article):
+                # Compose avant la regle du 2026-09-17, ou sur un compte passe
+                # media depuis : un nouveau brouillon est compose avec des
+                # visuels autorises.
+                post_id = None
+            else:
+                _completer_credit(db, brouillon, article)
         if post_id is None:
+            # Les visuels AVANT l'appel paye : pas de composition pour un post qui
+            # ne partirait pas.
+            try:
+                visuels = choisir(db, article, creneau.format, maintenant)
+            except VisuelsDifferes as exc:
+                erreur = f"composition differee : {exc}"[:1000]
+                if creneau.erreur != erreur:
+                    _ecrire_si(db, creneau, attendu, erreur=erreur)
+                continue
+            except AucunVisuel as exc:
+                _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
+                exclusions = True
+                continue
             try:
                 draft = composer(article)
             except CompositionError as exc:
@@ -301,7 +350,7 @@ def _composer(
                 _prevenir(notifier, erreur)
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
-            post_id = create_post(db, article, draft, template=template).id
+            post_id = create_post(db, article, draft, template=template, visuels=visuels).id
             rapport.composes += 1
         # Si le dashboard a change le creneau pendant la composition, son choix
         # prime : le post reste un brouillon, repris plus tard si l'article revient.
@@ -360,8 +409,21 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         if _deja_publie(article, post):
             _liberer(db, creneau, attendu, "article deja publie")
             continue
+        if actifs_interdits(db, post):
+            # La source d'un actif est RELUE au gel : un compte d'artiste reclasse
+            # `media` depuis la composition ne doit pas voir son visuel publie.
+            # L'article n'y est pour rien : le creneau lache le post, et la
+            # composition suivante en refait un avec des visuels autorises.
+            erreur = "gel refuse : visuel interdit (compte devenu media depuis la composition)"
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
+            _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
+            continue
         if creneau.format == FormatCreneau.REEL:
-            raison = raison_ineligible_reel(article) if article is not None else "article purge"
+            raison = (
+                raison_ineligible_reel(article, maintenant=maintenant)
+                if article is not None
+                else "article purge"
+            )
             if raison is not None:
                 # L'article a change depuis la composition (video retiree, compte
                 # reclasse) : il reste bon pour un carrousel, pas d'exclusion.
@@ -602,6 +664,7 @@ def tourner(
     preparer_reel=None,
     publier_reel=None,
     lire_mode=None,
+    choisir=None,
     dormir=None,
 ) -> RapportPublication:
     if mode not in MODES:
@@ -613,6 +676,7 @@ def tourner(
     dormir = dormir or time.sleep
     # Relu avant chaque reclamation (voir _publier). Par defaut : le mode du debut.
     lire_mode = lire_mode or (lambda: mode)
+    choisir = choisir or _choix_sans_lecture
     preparateurs = {FormatCreneau.CARROUSEL: preparer}
     publieurs = {FormatCreneau.CARROUSEL: publier}
     if preparer_reel is not None:
@@ -647,7 +711,12 @@ def tourner(
     etape("menage", lambda: _menage(db, maintenant))
     etape("publication", publication)
     etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))
-    exclusions = bool(etape("composition", lambda: _composer(db, maintenant, composer, notifier, rapport, formats_actifs)))
+    exclusions = bool(
+        etape(
+            "composition",
+            lambda: _composer(db, maintenant, composer, notifier, rapport, formats_actifs, choisir),
+        )
+    )
     exclusions = bool(etape("gel", lambda: _geler(db, maintenant, preparateurs, notifier, rapport))) or exclusions
     if exclusions:
         # Le creneau libere se remplit tout de suite ; sa composition viendra au

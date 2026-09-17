@@ -13,15 +13,23 @@ et les carrousels piochent dans le reste.
 import datetime as dt
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.config import settings
+from app.content.actifs_artistes import classer, posts_en_base
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
-from app.content.visuels import visuels_autorises
-from app.models import (
-    Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus, SourceType,
+from app.content.visuels import (
+    ORIGINE_ARTISTE,
+    origine_interdite,
+    raison_sans_artiste,
+    visuels_autorises,
 )
+from app.models import (
+    Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus, Source, SourceType,
+)
+from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, construire_index
+from app.sources.instagram import compte_depuis_url
 from app.publish.mode import reels_actifs
 from app.schedule.queue import Candidat, Place, arbitrer
 from app.schedule.slots import FenetresInvalides, prochains_horaires
@@ -84,6 +92,76 @@ def _a_une_image(article: Article) -> bool:
     )
 
 
+def comptes_cites(article: Article, index: IndexComptes) -> list[CompteArtiste]:
+    return index.cites(
+        textes=[article.title, article.summary],
+        noms=article.mentioned_artists or [],
+        exclure_source_id=article.source_id,
+    )
+
+
+def raison_sans_visuel(article: Article, index: IndexComptes | None = None) -> str | None:
+    """None si l'article aura un visuel autorise, sinon la raison, affichable.
+
+    Sans reseau : un artiste suivi cite suffit, son visuel sera cherche a la
+    composition (en base, puis en direct). Si rien n'est trouve alors, l'article
+    sera exclu avec la raison precise.
+    """
+    if _a_une_image(article):
+        return None
+    if index is None:
+        db = object_session(article)
+        if db is None:
+            return raison_sans_artiste(article)
+        index = construire_index(db)
+    if comptes_cites(article, index):
+        return None
+    return raison_sans_artiste(article)
+
+
+def actifs_interdits(db: Session, post: Post) -> list[dict]:
+    """Les actifs d'un post que la policy refuse MAINTENANT.
+
+    La source d'un actif d'artiste est RELUE (par l'`article_id` du post
+    d'origine, sinon par son handle) : un compte passe en categorie `media`
+    APRES la composition ne doit pas voir son visuel publie. `preparation.py`
+    tient la meme ceinture pour les medias de l'article lui-meme, mais il n'a
+    pas de session pour remonter au compte d'un actif d'artiste.
+    """
+    actifs = getattr(post, "assets", None) or []
+    artistes = [a for a in actifs if a.get("origine") == ORIGINE_ARTISTE]
+    if not artistes:
+        return []
+    ids = {a["article_id"] for a in artistes if a.get("article_id")}
+    handles = {a["compte"].lstrip("@").lower() for a in artistes if a.get("compte")}
+    par_article: dict[int, Source] = {}
+    if ids:
+        par_article = {
+            article_id: source
+            for article_id, source in db.execute(
+                select(Article.id, Source)
+                .join(Source, Source.id == Article.source_id)
+                .where(Article.id.in_(ids))
+            )
+        }
+    par_handle: dict[str, Source] = {}
+    if handles:
+        par_handle = {
+            compte_depuis_url(source.url).lower(): source
+            for source in db.scalars(
+                select(Source).where(Source.url.in_([f"ig:{handle}" for handle in handles]))
+            )
+        }
+    interdits = []
+    for actif_ in artistes:
+        source = par_article.get(actif_.get("article_id"))
+        if source is None and actif_.get("compte"):
+            source = par_handle.get(actif_["compte"].lstrip("@").lower())
+        if source is not None and origine_interdite(source):
+            interdits.append(actif_)
+    return interdits
+
+
 def categories_reel() -> set[str]:
     return {c.strip() for c in settings.publication_reel_categories.split(",") if c.strip()}
 
@@ -126,9 +204,30 @@ def raison_reel_propre(article: Article) -> str | None:
     return _raison_ineligible_reel(article, source_video_reel(article))
 
 
-def raison_ineligible_reel(article: Article) -> str | None:
-    """None si l'article peut partir en reel, sinon la raison, affichable."""
-    return raison_reel_propre(article)
+def raison_ineligible_reel(
+    article: Article, *, index: IndexComptes | None = None, maintenant: dt.datetime | None = None
+) -> str | None:
+    """None si l'article peut partir en reel, sinon la raison, affichable.
+
+    Le chemin propre d'abord (sa video, son compte). A defaut, la video d'un
+    artiste suivi cite, EN BASE seulement : l'arbitrage ne lit jamais le reseau.
+    """
+    raison = raison_reel_propre(article)
+    if raison is None:
+        return None
+    db = object_session(article)
+    if db is None:
+        return raison
+    index = index if index is not None else construire_index(db)
+    comptes = comptes_cites(article, index)
+    if not comptes:
+        return raison
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+    if classer(
+        article, posts_en_base(db, comptes, maintenant), format_=FormatCreneau.REEL, maintenant=maintenant
+    ):
+        return None
+    return raison
 
 
 def _raison_ineligible_reel(article: Article, source_video: str | None) -> str | None:
@@ -186,7 +285,15 @@ def candidats_eligibles(
             )
         )
     )
-    garde = (lambda a: raison_ineligible_reel(a) is None) if reel else _a_une_image
+    # Un seul index pour toute la liste : il fait deux requetes, pas une par article.
+    index = construire_index(db)
+    if reel:
+        def garde(a):
+            return raison_ineligible_reel(a, index=index, maintenant=maintenant) is None
+    else:
+        def garde(a):
+            return raison_sans_visuel(a, index) is None
+
     return [
         Candidat(a.id, a.relevance_score, a.hotness_score or 0, utc(a.published_at or a.fetched_at), a.id in composes)
         for a in articles
