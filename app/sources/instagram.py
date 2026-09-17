@@ -14,6 +14,7 @@ Jeton : `META_FB_ACCESS_TOKEN`, un jeton utilisateur FACEBOOK (EAA...). Jamais
 import datetime as dt
 import logging
 import re
+import unicodedata
 
 import httpx
 
@@ -54,6 +55,47 @@ def titre_depuis_caption(caption: str | None) -> str:
     return phrase
 
 
+# Garde-fou « post quasi vide » (voir `scoring.appliquer_garde_fous`) : sous ce
+# nombre de mots significatifs, une caption ne porte pas d'information.
+MOTS_MIN_CAPTION = 6
+
+# Le bandeau de metriques que `_summary_with_metrics` accole a la caption. Il doit
+# pouvoir etre retire : ses chiffres ne sont pas des mots de la caption.
+_BANDEAU_DEBUT = "[Instagram : "
+_BANDEAU_FIN = re.compile(r"(?:^|\n\n)\[Instagram : [^\n]*\]\s*$")
+_URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_HASHTAG_MENTION = re.compile(r"[#@]\S+")
+
+
+def caption_depuis_summary(summary: str | None) -> str:
+    """La caption brute d'un summary construit par `_summary_with_metrics`.
+
+    Valable seulement AVANT le scoring : `apply_score` remplace ensuite le summary
+    par le resume du modele, et la caption est perdue.
+    """
+    if not summary:
+        return ""
+    return _BANDEAU_FIN.sub("", summary).strip()
+
+
+def mots_significatifs(texte: str | None) -> int:
+    """Les mots qui portent du sens, une fois retires URLs, hashtags, @mentions,
+    emojis, ponctuation et unicode decoratif.
+
+    NFKC d'abord : les lettres « mathematiques » (𝚖𝚊𝚍𝚎) redeviennent de l'ASCII.
+    Un mot compte s'il contient au moins une lettre ou un chiffre (« I-VIEW »,
+    « feat. », « D-3 » comptent pour un).
+    """
+    texte = unicodedata.normalize("NFKC", texte or "")
+    texte = _URL.sub(" ", texte)
+    texte = _HASHTAG_MENTION.sub(" ", texte)
+    return sum(1 for jeton in texte.split() if any(c.isalnum() for c in jeton))
+
+
+def caption_quasi_vide(caption: str | None) -> bool:
+    return mots_significatifs(caption) < MOTS_MIN_CAPTION
+
+
 def _summary_with_metrics(caption: str | None, noeud: dict, followers: int | None) -> str | None:
     """La caption, plus les metriques d'engagement -- meme idee que
     `_summary_with_metrics` de `x_api.py` : le scoring Claude juge la hotness
@@ -68,7 +110,7 @@ def _summary_with_metrics(caption: str | None, noeud: dict, followers: int | Non
     parts = [f"{likes or 0} likes", f"{comments or 0} commentaires"]
     if followers is not None:
         parts.append(f"{followers} abonnes")
-    bandeau = f"[Instagram : {' · '.join(parts)}]"
+    bandeau = f"{_BANDEAU_DEBUT}{' · '.join(parts)}]"
     return f"{caption}\n\n{bandeau}" if caption else bandeau
 
 
