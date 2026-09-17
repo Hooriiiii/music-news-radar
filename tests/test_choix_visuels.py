@@ -14,7 +14,7 @@ from app.content.lecture_artistes import LectureDifferee
 from app.content.media import entree
 from app.config import settings
 from app.models import Article, FormatCreneau, Source, SourceCategorie, SourceType
-from app.pipeline.comptes_artistes import construire_index
+from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, cle_artiste, construire_index
 
 UTC = dt.timezone.utc
 MAINTENANT = dt.datetime(2026, 9, 17, 20, 0, tzinfo=UTC)
@@ -224,3 +224,38 @@ def test_une_vignette_d_artiste_n_est_jamais_un_actif(db_session, fred, guettape
     with pytest.raises(AucunVisuel):
         _choisir(db_session, article, telecharger=telechargement)
     assert telechargement.urls == []
+
+
+def test_un_compte_media_cite_ne_fournit_jamais_de_visuel(db_session, guettapen):
+    """Ceinture au niveau du choix : meme si un compte media Instagram entre dans
+    l'index (classement manuel, regression amont), ses visuels sont interdits."""
+    electro = _source(db_session, "Electro News (IG)", "electronews", SourceCategorie.MEDIA)
+    _article(db_session, electro, "GTA soundtrack le generique", date=DATE_ACTU - dt.timedelta(days=1),
+             media=[entree("photo", "https://cdn.ig/electronews.jpg")])
+    article = _article(db_session, guettapen, mentioned=["Electro News"])
+    compte = CompteArtiste(source_id=electro.id, handle="electronews", nom="Electro News",
+                           dernier_appel=None)
+    index = IndexComptes({electro.id: compte}, {cle_artiste("Electro News"): compte})
+    telechargement, lecteur = Telechargement(), Lecteur()
+
+    with pytest.raises(AucunVisuel):
+        _choisir(db_session, article, index=index, telecharger=telechargement, lecteur=lecteur)
+
+    assert telechargement.urls == [] and lecteur.appels == []
+
+
+def test_un_compte_media_cite_n_empeche_pas_l_artiste(db_session, fred, guettapen):
+    """Le compte media est ecarte, pas le reste des comptes cites."""
+    electro = _source(db_session, "Electro News (IG)", "electronews", SourceCategorie.MEDIA)
+    _article(db_session, electro, "GTA soundtrack le generique", date=DATE_ACTU - dt.timedelta(days=1),
+             media=[entree("photo", "https://cdn.ig/electronews.jpg")])
+    _article(db_session, fred, "GTA soundtrack le generique", date=DATE_ACTU - dt.timedelta(days=1),
+             media=[entree("photo", "https://cdn.ig/fred.jpg")])
+    article = _article(db_session, guettapen, mentioned=["Electro News", "Fred again.."])
+    comptes = {s.id: CompteArtiste(s.id, h, n, None) for s, h, n in
+               ((electro, "electronews", "Electro News"), (fred, "fredagain", "Fred again.."))}
+    index = IndexComptes(comptes, {cle_artiste(c.nom): c for c in comptes.values()})
+
+    choix = _choisir(db_session, article, index=index)
+    assert [a["url"] for a in choix.actifs] == ["https://cdn.ig/fred.jpg"]
+    assert choix.credit == "@fredagain"

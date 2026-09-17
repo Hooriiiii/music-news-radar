@@ -226,3 +226,25 @@ def test_le_gel_lit_les_copies_locales_sans_telecharger(tmp_path):
 
     noms = preparer_fichiers(post, _article(_source()), tmp_path / "gel", rendre=rendre, telecharger=_interdit)
     assert len(noms) == 2
+
+
+def test_le_cache_perd_ses_images_trop_vieilles():
+    """`visuels_cache_jours` : les copies locales ne sont utiles que le temps d'un
+    creneau, et personne ne les nettoyait."""
+    import os
+
+    from app.content.visuels import purger_cache
+
+    maintenant = dt.datetime(2026, 9, 17, 20, 0, tzinfo=dt.timezone.utc)
+    vieille = chemin_cache("https://cdn.ig/vieille.jpg")
+    recente = chemin_cache("https://cdn.ig/recente.jpg")
+    vieille.parent.mkdir(parents=True, exist_ok=True)
+    for chemin in (vieille, recente):
+        chemin.write_bytes(b"x")
+    age = (maintenant - dt.timedelta(days=settings.visuels_cache_jours + 1)).timestamp()
+    os.utime(vieille, (age, age))
+
+    assert purger_cache(maintenant) == 1
+    assert not vieille.exists() and recente.exists()
+    # Idempotent, et sans dossier il ne se plaint pas.
+    assert purger_cache(maintenant) == 0

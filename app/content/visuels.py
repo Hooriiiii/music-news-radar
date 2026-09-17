@@ -109,3 +109,23 @@ def lire_fichier_cache(uri: str | None) -> bytes | None:
     if not chemin.is_relative_to(settings.visuels_cache_dir.resolve()) or not chemin.is_file():
         return None
     return chemin.read_bytes()
+
+
+def purger_cache(maintenant: dt.datetime) -> int:
+    """Supprime les copies locales de plus de `visuels_cache_jours` et rend leur
+    nombre. Une image ne sert que le temps d'un creneau (composition puis gel) :
+    sans menage, le dossier grossit indefiniment. Jamais d'exception -- un
+    passage planifie ne doit pas tomber sur un fichier recalcitrant."""
+    dossier = settings.visuels_cache_dir
+    if not dossier.is_dir():
+        return 0
+    limite = (maintenant - dt.timedelta(days=settings.visuels_cache_jours)).timestamp()
+    supprimes = 0
+    for chemin in dossier.iterdir():
+        try:
+            if chemin.is_file() and chemin.stat().st_mtime < limite:
+                chemin.unlink()
+                supprimes += 1
+        except OSError:
+            continue
+    return supprimes

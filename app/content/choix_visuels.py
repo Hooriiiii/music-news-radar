@@ -19,6 +19,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -33,11 +34,13 @@ from app.content.visuels import (
     actif,
     chemin_cache,
     credit_des_actifs,
+    origine_interdite,
     raison_sans_artiste,
+    urls_interdites,
     visuels_autorises,
 )
-from app.models import Article, FormatCreneau
-from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.models import Article, FormatCreneau, Source
+from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, construire_index
 from app.schedule.store import raison_reel_propre
 
 logger = logging.getLogger(__name__)
@@ -89,6 +92,32 @@ def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
     return ChoixVisuels([en_actif(m) for m in publiables], compte) if publiables else None
 
 
+def _comptes_autorises(db: Session, comptes: list[CompteArtiste]) -> list[CompteArtiste]:
+    """Les comptes cites dont Kinda peut publier les visuels.
+
+    Ceinture : la regle « jamais l'image d'un compte media Instagram » est
+    re-verifiee ICI, sur la source en base, et pas seulement heritee du filtre de
+    `construire_index` -- un classement manuel, un lien de fiche artiste pose a
+    cote ou une regression amont suffiraient sinon a faire reposter le visuel
+    d'un media concurrent."""
+    if not comptes:
+        return []
+    sources = {
+        source.id: source
+        for source in db.scalars(
+            select(Source).where(Source.id.in_([compte.source_id for compte in comptes]))
+        )
+    }
+    autorises = []
+    for compte in comptes:
+        source = sources.get(compte.source_id)
+        if source is None or origine_interdite(source):
+            logger.info("Visuels de @%s ecartes : origine interdite", compte.handle)
+            continue
+        autorises.append(compte)
+    return autorises
+
+
 def _en_actif_artiste(retenu: Retenu, entree_media: dict, fichier: str | None = None) -> dict:
     return actif(
         entree_media,
@@ -101,7 +130,9 @@ def _en_actif_artiste(retenu: Retenu, entree_media: dict, fichier: str | None = 
     )
 
 
-def _copier_images(retenus: list[Retenu], telecharger) -> list[dict]:
+def _copier_images(
+    retenus: list[Retenu], telecharger, interdites: set[str] = frozenset()
+) -> list[dict]:
     """Les photos des posts retenus, copiees dans le cache local, au plus
     `visuels_max_photos`. Une copie en echec est sautee : l'URL signee du CDN
     Instagram a pu expirer entre l'ingestion et maintenant."""
@@ -114,7 +145,7 @@ def _copier_images(retenus: list[Retenu], telecharger) -> list[dict]:
             # `medias_utilisables` ne rend que des photos avec URL pour un
             # carrousel : une vignette de video n'est jamais un actif d'artiste.
             url = entree_media.get("url")
-            if not url or url in vues:
+            if not url or url in vues or url in interdites:
                 continue
             vues.add(url)
             octets, extension = telecharger(url)
@@ -148,6 +179,7 @@ def choisir_visuels(
         noms=article.mentioned_artists or [],
         exclure_source_id=article.source_id,
     )
+    comptes = _comptes_autorises(db, comptes)
     if not comptes:
         if format_ == FormatCreneau.REEL:
             raise AucunVisuel(raison_reel_propre(article))
@@ -178,7 +210,7 @@ def choisir_visuels(
         if nouveaux:
             retenus = classer(article, [*posts, *nouveaux], format_=format_, maintenant=maintenant)
 
-    actifs = _copier_images(retenus, telecharger)
+    actifs = _copier_images(retenus, telecharger, urls_interdites(article))
     if actifs:
         return ChoixVisuels(actifs, credit_des_actifs(actifs))
     if differe is not None:
