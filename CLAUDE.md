@@ -561,7 +561,9 @@ vidéo, l'assemble (`assembler_reel`, sans edit list, GOP fermé), sonde source 
 sortie contre les specs Meta, et fige `<prefixe>_reel.mp4` puis
 `<prefixe>_cover.jpg` ; la publication crée un conteneur `REELS` avec
 `cover_url` explicite (sondage 15 s, 10 min max). Crédit `🎥 via @compte`
-obligatoire (`posts.credit`), jamais coupé. ffmpeg absent = panne systémique qui
+obligatoire (`posts.credit`), jamais coupé. **Plus de ligne « Source : <url> »** sous la légende
+(2026-09-17, demande de l'utilisateur) — ni à la publication ni dans l'export zip
+(`app/content/legende.py`) ; le crédit reste. ffmpeg absent = panne systémique qui
 ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**

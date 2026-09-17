@@ -345,7 +345,7 @@ def test_exporter_un_post(client, db_session, monkeypatch):
         legende = archive.read("caption.txt").decode("utf-8")
         assert "Une legende." in legende
         assert "#electro" in legende
-        assert post.article_url in legende
+        assert post.article_url not in legende
 
 
 def test_exporter_un_post_inexistant(client):
