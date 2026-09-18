@@ -640,8 +640,8 @@ rendus dans une police).
 
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
-Kinda publie seul **deux carrousels et deux reels par jour**, choisis dans le flux
-scoré. Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`
+Kinda publie seul **trois carrousels et trois reels par jour** (2026-09-18 ; deux
+et deux auparavant), choisis dans le flux scoré. Design : `docs/superpowers/specs/2026-09-11-publication-meta-design.md`
 (révision du 2026-09-16) pour la file, et
 `docs/superpowers/specs/2026-09-17-reels-automatiques-design.md` pour les reels.
 
@@ -673,9 +673,16 @@ testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine da
   faire, et la notification de fin de run le signale aussi.
 `META_IG_USER_ID` et `META_API_VERSION` sont communs aux deux usages.
 
-**La file.** 6 créneaux (3 jours × 2), heure tirée dans 08:30-11:00 et 17:00-19:30
-(Paris) avec une graine dérivée de la date — sinon l'heure glisserait à chaque
-passage. Le coût dicte le calendrier : composition Claude à J-1, gel (rendu et
+**La file.** 9 créneaux (3 jours × 3), heure tirée dans les fenêtres de
+`PUBLICATION_FENETRES` (Paris, défaut `08:30-10:30,14:30-16:30,19:00-20:15`) avec
+une graine dérivée de la date — sinon l'heure glisserait à chaque passage. Les
+fenêtres carrousel sont une **liste séparée par des virgules**, exactement comme
+celles des reels : une fenêtre = un post par jour, donc changer la cadence est
+une ligne de `.env`, jamais une ligne de code. L'ancien couple
+`PUBLICATION_FENETRE_MATIN` / `…_APRES_MIDI` survit en **repli** : il n'est lu
+que si `PUBLICATION_FENETRES` est VIDE (`slots.fenetres()`), pour qu'un `.env`
+d'avant ne soit pas ignoré en silence — mais la bonne migration est de le
+réécrire en liste. Le coût dicte le calendrier : composition Claude à J-1, gel (rendu et
 téléchargements) à T-2h, publication à l'heure. **Au-delà de 90 minutes de retard,
 on ne publie pas** : un Mac rouvert le soir lâcherait sinon la journée d'un coup.
 
@@ -849,7 +856,10 @@ Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
 **Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
 migration 0017) ; fenêtres reel propres (`PUBLICATION_REEL_FENETRES`, défaut
-`12:00-14:00,20:30-22:30`), `PUBLICATION_CRENEAUX_REEL=0` les désactive.
+`11:00-12:30,17:00-18:30,21:00-22:30`), `PUBLICATION_CRENEAUX_REEL=0` les
+désactive. Les six fenêtres du défaut s'alternent sur la journée (carrousel le
+matin, l'après-midi et en début de soirée ; reel à midi, en fin d'après-midi et
+tard) et laissent au moins 30 minutes entre elles.
 `publier_a` reste unique tous formats confondus : `slots.py` refuse des fenêtres
 qui se chevauchent — en ne vérifiant que les formats ACTIFS (le carrousel seul ;
 le reel, contre lui-même et les carrousels, seulement s'il a des créneaux). Des

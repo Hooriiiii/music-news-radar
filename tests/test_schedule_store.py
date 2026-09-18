@@ -51,12 +51,37 @@ def _post(db, article):
     return post
 
 
-def test_synchroniser_cree_six_creneaux_une_seule_fois(db_session):
+def test_synchroniser_cree_neuf_creneaux_une_seule_fois(db_session):
     synchroniser_creneaux(db_session, MAINTENANT)
     creneaux = synchroniser_creneaux(db_session, MAINTENANT)
-    assert len(creneaux) == 6
-    assert db_session.query(Creneau).count() == 6
-    assert [utc(c.publier_a) for c in creneaux] == prochains_horaires(MAINTENANT, 6)
+    assert len(creneaux) == 9
+    assert db_session.query(Creneau).count() == 9
+    assert [utc(c.publier_a) for c in creneaux] == prochains_horaires(MAINTENANT, 9)
+
+
+def test_passer_de_six_a_neuf_creneaux_complete_la_file_sans_la_casser(db_session, monkeypatch):
+    """Le cas de la montee en cadence : une file deja programmee sur l'ancien
+    compte doit se COMPLETER, pas se vider ni se dupliquer."""
+    monkeypatch.setattr(settings, "publication_creneaux", 6)
+    avant = synchroniser_creneaux(db_session, MAINTENANT)
+    assert len(avant) == 6
+    avant[0].etat = EtatCreneau.GELE
+    avant[1].epingle = True
+    db_session.commit()
+    gele, epingle = utc(avant[0].publier_a), utc(avant[1].publier_a)
+
+    monkeypatch.setattr(settings, "publication_creneaux", 9)
+    apres = synchroniser_creneaux(db_session, MAINTENANT)
+
+    heures = [utc(c.publier_a) for c in apres]
+    assert len(heures) == 9
+    assert len(set(heures)) == 9, "aucune collision d'horaire"
+    assert heures == sorted(heures)
+    assert heures == prochains_horaires(MAINTENANT, 9)
+    # Le gele et l'epingle sont les MEMES lignes, pas des doublons recrees.
+    conserves = {c.id for c in avant[:2]}
+    assert conserves <= {c.id for c in apres}
+    assert gele in heures and epingle in heures
 
 
 def test_un_creneau_futur_hors_grille_est_retire_sauf_s_il_est_epingle(db_session):
@@ -94,7 +119,7 @@ def test_appliquer_remplit_dans_l_ordre_et_laisse_le_reste_libre(db_session):
     moyen = _article(db_session, source, 1, relevance=70)
     meilleur = _article(db_session, source, 2, relevance=90)
     creneaux = appliquer_arbitrage(db_session, MAINTENANT)
-    assert [c.article_id for c in creneaux] == [meilleur.id, moyen.id, None, None, None, None]
+    assert [c.article_id for c in creneaux] == [meilleur.id, moyen.id] + [None] * 7
     assert [c.etat for c in creneaux[:3]] == [EtatCreneau.PROGRAMME, EtatCreneau.PROGRAMME, EtatCreneau.LIBRE]
 
 
@@ -134,7 +159,7 @@ def test_deux_passages_donnent_la_meme_file(db_session):
     premiere = [c.article_id for c in appliquer_arbitrage(db_session, MAINTENANT)]
     seconde = [c.article_id for c in appliquer_arbitrage(db_session, MAINTENANT)]
     assert premiere == seconde
-    assert db_session.query(Creneau).count() == 6
+    assert db_session.query(Creneau).count() == 9
 
 
 def test_un_article_deja_parti_en_apercu_ou_publie_n_est_plus_candidat(db_session):

@@ -112,7 +112,7 @@ def test_remplacer_par_un_article_deja_publie_est_refuse(client, db_session):
 def test_recalculer_cree_la_file(client, db_session):
     reponse = client.post("/schedule/rebuild")
     assert reponse.status_code == 200
-    assert len(reponse.json()) == 6
+    assert len(reponse.json()) == 9
 
 
 def test_epingler_un_creneau_vide_est_refuse(client, db_session):
