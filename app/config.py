@@ -206,6 +206,17 @@ class Settings(BaseSettings):
     # concert d'il y a trois semaines fait parfaitement l'affaire.
     fond_secours_max_photos: int = 6
     fond_secours_fenetre_jours: int = 30
+    # DERNIER recours, apres le compte source et les artistes cites : une image
+    # du WEB (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en
+    # dernier recours »). Une seule recherche par composition, memorisee par
+    # requete -- une recomposition, ou un second creneau, ne repaie rien.
+    visuels_web_enabled: bool = True
+    visuels_web_max_candidats: int = 3
+    visuels_web_cache_path: Path = (
+        Path.home() / "Library/Application Support/Kinda/visuels_web.json"
+    )
+    # Court : la « photo recente » d'un artiste ne l'est plus une semaine apres.
+    visuels_web_cache_jours: int = 3
 
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton

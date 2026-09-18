@@ -10,13 +10,18 @@ Les images d'artistes sont COPIEES en local : les URL du CDN Instagram sont
 signees et expirent, et le gel vient ~22 h apres la composition. Une video de
 reel ne l'est pas : le gel la telecharge (API) ou la recupere (yt-dlp).
 
-Et, pour le seul FOND de la cover, deux RESERVES (2026-09-18) attachees au
+Et, pour le seul FOND de la cover, trois RESERVES (2026-09-18) attachees au
 resultat sous forme de lots paresseux (`ChoixVisuels.secours`) : les photos du
-compte qui a publie l'actu (`photos_du_compte`), puis celles des artistes suivis
-cites (`photos_des_artistes_cites`). La composition ne les ouvre que si le fond
-retenu est encore une affiche, et s'arrete au premier lot qui donne une vraie
-photo. Si aucun ne donne, la cover part sur le fond Kinda -- jamais sur une
-affiche.
+compte qui a publie l'actu (`photos_du_compte`), celles des artistes suivis
+cites (`photos_des_artistes_cites`), puis le WEB (`photos_du_web`). La
+composition ne les ouvre que si le fond retenu est encore une affiche, et
+s'arrete au premier lot qui donne une vraie photo. Si aucun ne donne, la cover
+part sur le fond Kinda -- jamais sur une affiche.
+
+3. et, quand rien de tout cela n'a donne, le WEB en dernier recours
+   (`recherche_web.py`, 2026-09-18 : « ne saute pas l'actu, cherche une image sur
+   le web en dernier recours ») -- une image du web plutot qu'un article saute.
+   Jamais la VIDEO d'un reel, seulement des images.
 
 Deux issues sans visuel : `AucunVisuel` (l'article n'en a pas, il sort de la
 file) et `VisuelsDifferes` (la lecture en direct attend son budget ou le quota :
@@ -35,13 +40,15 @@ from app.config import settings
 from app.content.actifs_artistes import Retenu, classer, medias_utilisables, posts_en_base
 from app.content.credit import credit_video
 from app.content.export import echec_transitoire, telecharger as telecharger_media
-from app.content.illustration import Lot
+from app.content.illustration import Lot, meilleures_photos
 from app.content.lecture_artistes import LectureDifferee
-from app.content.media import VIDEO
+from app.content.media import PHOTO, VIDEO
+from app.content.recherche_web import attribution_de, candidats_du_web, credit_de
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
+    ORIGINE_WEB,
     a_une_image_autorisee,
     actif,
     chemin_cache,
@@ -93,7 +100,7 @@ class ChoixVisuels:
     # parce que c'est ici que vivent la session, l'article et le lecteur Graph du
     # passage -- avec son budget --, et que la composition, qui en a besoin, ne
     # les a pas tous. Cf. `photos_du_compte`, `photos_des_artistes_cites` et
-    # `illustration.eviter_l_affiche`.
+    # `photos_du_web` et `illustration.eviter_l_affiche`.
     secours: list[Lot] = field(default_factory=list)
 
 
@@ -230,6 +237,7 @@ def _reel(
     *,
     maintenant: dt.datetime,
     telecharger,
+    chercheur_web=None,
 ) -> ChoixVisuels:
     """Les visuels d'un reel : le porteur de la VIDEO, et une IMAGE DE FOND.
 
@@ -259,10 +267,36 @@ def _reel(
                 raise VisuelsDifferes(
                     "copie du fond de cover impossible (reseau) : nouvelle tentative au prochain passage"
                 )
-            raise AucunVisuel(RAISON_SANS_FOND)
+            # Dernier recours : le web. JAMAIS pour la video du reel -- seulement
+            # pour le fond de sa cover, qui est une image rendue par Chromium.
+            copies = _actifs_du_web(
+                article, maintenant=maintenant, telecharger=telecharger,
+                chercheur=chercheur_web, maximum=1,
+            )
+            if not copies:
+                raise AucunVisuel(RAISON_SANS_FOND)
         actifs += copies
     credit = credit_des_actifs(actifs)
     return ChoixVisuels(actifs, credit or (propres.credit if propres is not None else None))
+
+
+def _avec_fond_du_web(
+    article: Article,
+    propres: ChoixVisuels | None,
+    maintenant: dt.datetime,
+    telecharger,
+    raison: str,
+    chercheur_web=None,
+) -> ChoixVisuels:
+    """Un reel qui a sa video mais aucun fond, et aucun artiste suivi cite pour
+    en donner un : le web fournit le FOND, jamais la video."""
+    actifs = list(propres.actifs) if propres is not None else []
+    fond = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                          chercheur=chercheur_web, maximum=1)
+    if not fond:
+        raise AucunVisuel(raison)
+    actifs += fond
+    return ChoixVisuels(actifs, credit_des_actifs(actifs))
 
 
 def _fenetre_secours() -> dict:
@@ -389,6 +423,88 @@ def photos_des_artistes_cites(
     return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
 
 
+def photos_du_web(
+    article: Article,
+    *,
+    maintenant: dt.datetime,
+    telecharger=telecharger_media,
+    chercheur=None,
+    maximum: int | None = None,
+) -> list[str]:
+    """Des photos trouvees SUR LE WEB, copiees en local. Le dernier barreau.
+
+    « ne saute pas l'actu, cherche une image sur le web en dernier recours »
+    (utilisateur, 2026-09-18) : apres les medias de l'actu, le compte qui l'a
+    publiee et les artistes suivis cites, il ne reste que l'aplat Kinda -- et un
+    article n'a pas a partir sans image quand le web en a une.
+
+    `recherche_web` fait le choix des pages et l'extraction de leur `og:image` ;
+    ici on ne fait que RAPATRIER, comme pour une photo d'artiste, parce que la
+    composition precede le gel de ~22 h et qu'une URL d'editeur peut bouger.
+    """
+    trouves = candidats_du_web(article, maintenant=maintenant, chercheur=chercheur)
+    plafond = settings.visuels_web_max_candidats if maximum is None else maximum
+    return _copier_urls(
+        [candidat.image for candidat in trouves], telecharger, urls_interdites(article), plafond
+    )
+
+
+def _copier_urls(urls, telecharger, interdites: set[str], maximum: int) -> list[str]:
+    """Les URL rapatriees dans le cache local, en `file://`. Une copie en echec
+    est sautee, jamais fatale : le web est un CONFORT de plus, pas une source."""
+    fichiers: list[str] = []
+    vues: set[str] = set()
+    for url in urls:
+        if len(fichiers) >= maximum:
+            break
+        if not url or url in vues or url in interdites:
+            continue
+        vues.add(url)
+        octets, extension = telecharger(url)
+        if octets is None:
+            logger.info("image du web inaccessible (%s) : %s", url, extension)
+            continue
+        chemin = chemin_cache(url, extension if extension in EXTENSIONS_IMAGE else ".jpg")
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        chemin.write_bytes(octets)
+        fichiers.append(chemin.resolve().as_uri())
+    return fichiers
+
+
+def actif_du_web(fichier: str, *, maintenant: dt.datetime) -> dict:
+    """Une copie locale venue du web, en actif CREDITE.
+
+    Le credit (`compte`) est le domaine du site : « 📸 ra.co » une fois le
+    pictogramme pose par la legende. Il est reconstitue depuis le cache des
+    requetes (`recherche_web.attribution_de`), parce que le fond publie n'est
+    qu'un `file://` et qu'il doit rester creditable apres un redemarrage.
+    """
+    attribution = attribution_de(fichier, maintenant=maintenant)
+    return actif(
+        {"type": PHOTO, "url": None},
+        origine=ORIGINE_WEB,
+        compte=credit_de(attribution),
+        permalink=attribution.page if attribution else None,
+        fichier=fichier,
+    )
+
+
+def _actifs_du_web(
+    article: Article, *, maintenant: dt.datetime, telecharger, chercheur=None, maximum=None
+) -> list[dict]:
+    """Les photos du web, jugees puis mises en actifs -- vide si le web n'a rien.
+
+    Juge INDULGENT (`garder_inconnues`) : ici l'alternative n'est pas le fond
+    Kinda mais l'article SAUTE, et une image non jugee (vision coupee, quota)
+    vaut mieux que pas d'article. Une affiche averee, elle, reste ecartee.
+    """
+    photos = photos_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                           chercheur=chercheur)
+    retenues = meilleures_photos(photos, garder_inconnues=True)
+    plafond = settings.visuels_max_photos if maximum is None else maximum
+    return [actif_du_web(url, maintenant=maintenant) for url in retenues[:plafond]]
+
+
 def choisir_visuels(
     db: Session,
     article: Article,
@@ -398,6 +514,7 @@ def choisir_visuels(
     lecteur=None,
     index: IndexComptes | None = None,
     telecharger=telecharger_media,
+    chercheur_web=None,
 ) -> ChoixVisuels:
     """Les visuels du post, ET de quoi rattraper un fond qui serait une affiche.
 
@@ -407,7 +524,7 @@ def choisir_visuels(
     """
     choix = _choisir_visuels(
         db, article, format_=format_, maintenant=maintenant, lecteur=lecteur,
-        index=index, telecharger=telecharger,
+        index=index, telecharger=telecharger, chercheur_web=chercheur_web,
     )
     choix.secours = [
         Lot(
@@ -419,6 +536,14 @@ def choisir_visuels(
             ORIGINE_ARTISTE,
             partial(photos_des_artistes_cites, db, article, maintenant=maintenant,
                     telecharger=telecharger, index=index),
+        ),
+        # Le dernier barreau : le web. Ouvert seulement si les deux precedents
+        # n'ont rien donne -- une recherche est payee, et le compte de l'actu
+        # reste toujours la meilleure source d'une photo de l'actu.
+        Lot(
+            ORIGINE_WEB,
+            partial(photos_du_web, article, maintenant=maintenant, telecharger=telecharger,
+                    chercheur=chercheur_web),
         ),
     ]
     return choix
@@ -433,6 +558,7 @@ def _choisir_visuels(
     lecteur,
     index: IndexComptes | None,
     telecharger,
+    chercheur_web=None,
 ) -> ChoixVisuels:
     propres = _propres(article, format_)
     if propres is not None and (
@@ -449,16 +575,24 @@ def _choisir_visuels(
     comptes = _comptes_autorises(db, comptes)
     if not comptes:
         if format_ == FormatCreneau.REEL:
-            # Soit l'article n'a pas de video, soit il n'a aucune image pour le
-            # fond de sa cover -- et aucun artiste suivi cite pour en fournir une.
-            raise AucunVisuel(raison_reel_propre(article) or RAISON_SANS_FOND)
+            # Sans video, le web ne peut rien : il ne sert JAMAIS la video d'un
+            # reel, seulement le fond de sa cover.
+            if raison_reel_propre(article) is not None:
+                raise AucunVisuel(raison_reel_propre(article))
+            return _avec_fond_du_web(article, propres, maintenant, telecharger,
+                                     RAISON_SANS_FOND, chercheur_web)
+        actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                                chercheur=chercheur_web)
+        if actifs:
+            return ChoixVisuels(actifs, credit_des_actifs(actifs))
         raise AucunVisuel(raison_sans_artiste(article))
 
     posts = posts_en_base(db, comptes, maintenant)
     retenus = classer(article, posts, format_=format_, maintenant=maintenant)
 
     if format_ == FormatCreneau.REEL:
-        return _reel(article, propres, retenus, posts, maintenant=maintenant, telecharger=telecharger)
+        return _reel(article, propres, retenus, posts, maintenant=maintenant,
+                     telecharger=telecharger, chercheur_web=chercheur_web)
 
     differe: LectureDifferee | None = None
     if lecteur is not None and not any(r.sur_le_sujet for r in retenus):
@@ -479,6 +613,12 @@ def _choisir_visuels(
         return ChoixVisuels(actifs, credit_des_actifs(actifs))
     if differe is not None:
         raise VisuelsDifferes(str(differe)) from differe
+    # Les artistes suivis cites n'ont rien de recent : le web, en dernier recours,
+    # plutot que de sauter l'actu.
+    actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                            chercheur=chercheur_web)
+    if actifs:
+        return ChoixVisuels(actifs, credit_des_actifs(actifs))
     if panne_transport:
         # Des visuels existaient, seule la copie a echoue et pour une raison
         # passagere : on retente au passage suivant plutot que d'exclure.

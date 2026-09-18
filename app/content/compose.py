@@ -12,6 +12,7 @@ retente donc lui-meme, jusqu'a `max_attempts` fois, et leve `CompositionError`
 si aucune tentative n'aboutit.
 """
 
+import datetime as dt
 import logging
 
 import anthropic
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
@@ -28,7 +30,9 @@ from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
+    ORIGINE_WEB,
     actif,
+    credit_des_actifs,
     image_de,
     image_de_fond,
     origine_du_fond,
@@ -376,11 +380,17 @@ def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
     image propre.
     """
     connues = {image_de(a) for a in actifs}
+    maintenant = dt.datetime.now(dt.timezone.utc)
     nouveaux: list[dict] = []
     for url in choisi.photos[: settings.visuels_max_photos]:
         if url in connues:
             continue
         connues.add(url)
+        if choisi.origine == ORIGINE_WEB:
+            # Une image du web se cite : le domaine du site part dans le credit
+            # de la legende (« 📸 ra.co »), jamais coupe.
+            nouveaux.append(actif_du_web(url, maintenant=maintenant))
+            continue
         nouveaux.append(actif({"type": PHOTO, "url": None}, origine=choisi.origine, fichier=url))
     return nouveaux
 
@@ -445,6 +455,11 @@ def create_post(
         # SLIDES. Sans cela, un article dont l'unique image est une affiche part
         # avec la cover seule -- le post Noisia (cf. `actifs_de_secours`).
         actifs += actifs_de_secours(choisi, actifs)
+        # Le credit est RELU sur les actifs finaux : une image venue du web
+        # arrive apres coup (reserve ouverte par `eviter_l_affiche`) et doit
+        # etre citee. `or credit` garde le credit d'origine quand aucun actif ne
+        # porte de compte (composition a la main, article sans compte source).
+        credit = credit_des_actifs(actifs) or credit
         if actifs and fond is None:
             # Des actifs choisis mais aucun fond extractible : la cover partirait
             # sur l'image de secours du gabarit, et le gel refuserait le post a

@@ -35,6 +35,7 @@ from app.content.visuels import (
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_KINDA,
+    ORIGINE_WEB,
 )
 from app.models import Article, Source, SourceCategorie, SourceType
 from app.pipeline.comptes_artistes import CompteArtiste
@@ -247,10 +248,11 @@ def test_le_secours_est_borne_en_nombre_de_photos(db_session):
     assert len(urls) == settings.fond_secours_max_photos
 
 
-def test_le_choix_des_visuels_attache_les_deux_reserves(db_session):
+def test_le_choix_des_visuels_attache_les_trois_reserves(db_session):
     """Le secours porte le budget de lecture DU PASSAGE : il est fabrique la ou
-    ce budget vit, et voyage avec les visuels jusqu'a la composition. Deux lots,
-    dans l'ordre : le compte de l'actu, puis les artistes suivis cites."""
+    ce budget vit, et voyage avec les visuels jusqu'a la composition. Trois lots,
+    dans l'ordre : le compte de l'actu, les artistes suivis cites, puis le WEB --
+    le dernier barreau avant le fond Kinda (2026-09-18)."""
     trans = _source(db_session)
     article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
     _article(db_session, trans, "Retour en images sur les Transmusicales",
@@ -260,7 +262,7 @@ def test_le_choix_des_visuels_attache_les_deux_reserves(db_session):
     choix = choisir_visuels(db_session, article, maintenant=MAINTENANT,
                             telecharger=Telechargement(), lecteur=Lecteur())
 
-    assert [lot.origine for lot in choix.secours] == [ORIGINE_COMPTE, ORIGINE_ARTISTE]
+    assert [lot.origine for lot in choix.secours] == [ORIGINE_COMPTE, ORIGINE_ARTISTE, ORIGINE_WEB]
     urls = choix.secours[0].photos()
     assert len(urls) == 1 and urls[0].startswith("file://")
 
