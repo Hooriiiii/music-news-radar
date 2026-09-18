@@ -235,10 +235,13 @@ class Settings(BaseSettings):
     # --- Publication automatique ---
     # Les fichiers figes au gel (T-2h), un sous-dossier par creneau.
     publication_dir: Path = Path.home() / "Library/Application Support/Kinda/publication"
-    # Meta exige des proportions entre 4:5 et 1,91:1 (documentation, 2026-09-16) :
-    # la cover 3:4 est recadree en 4:5. A passer a 0.75 seulement si un essai reel
-    # montre que Meta accepte le 3:4.
-    publication_ratio_min: float = 0.8
+    # Cadrage des images du carrousel (toutes sorties en 1080x1350, le format de
+    # la cover, parce qu'Instagram impose le ratio du PREMIER element a tous les
+    # autres). Une image qu'il faudrait agrandir plus que `upscale_max` fois, ou
+    # dont le recadrage jetterait plus de `perte_max` de la surface, est ECARTEE
+    # du carrousel plutot que publiee massacree -- voir app/publish/images.py.
+    publication_crop_upscale_max: float = 2.2
+    publication_crop_perte_max: float = 0.60
     # Fenetres de publication, heure de Paris. L'heure exacte est tiree au hasard
     # dans chaque fenetre, pour ne pas publier comme une horloge.
     publication_fuseau: str = "Europe/Paris"

@@ -354,3 +354,67 @@ def test_le_fond_kinda_est_un_fond_publiable(tmp_path):
     # La cover, PLUS l'affiche : elle reste une slide honnete du carrousel, elle
     # ne fait simplement plus le fond du titre.
     assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
+
+
+def _telecharger_formats(formats):
+    """Une image par URL, aux dimensions demandees : {url: (largeur, hauteur)}."""
+
+    def telecharger(url):
+        return _png(*formats[url]), ".png"
+
+    return telecharger
+
+
+def test_toutes_les_images_du_carrousel_sortent_au_format_publie(tmp_path):
+    """Instagram impose a tout le carrousel le ratio du PREMIER element : une
+    photo paysage laissee telle quelle revenait coupee n'importe comment
+    (2026-09-18, « sinon les images rendent bizarre »)."""
+    noms = preparer_fichiers(
+        _post(), _article("https://img/paysage.jpg", "https://img/portrait.jpg"), tmp_path,
+        rendre=_rendre(),
+        telecharger=_telecharger_formats({
+            "https://img/paysage.jpg": (3200, 1800),
+            "https://img/portrait.jpg": (1080, 1920),
+        }),
+    )
+    assert len(noms) == 3
+    for nom in noms:
+        assert Image.open(tmp_path / nom).size == (1080, 1350)
+
+
+def test_une_image_que_le_cadrage_abimerait_est_simplement_sautee(tmp_path):
+    """Ni erreur, ni exclusion : le panoramique n'est pas dans le carrousel, la
+    photo correcte y est."""
+    noms = preparer_fichiers(
+        _post(), _article("https://img/pano.jpg", "https://img/ok.jpg"), tmp_path,
+        rendre=_rendre(),
+        telecharger=_telecharger_formats({
+            "https://img/pano.jpg": (3000, 700),
+            "https://img/ok.jpg": (1600, 1600),
+        }),
+    )
+    assert len(noms) == 2
+    assert Image.open(tmp_path / noms[1]).size == (1080, 1350)
+
+
+def test_un_carrousel_vide_par_le_cadrage_dit_pourquoi(tmp_path):
+    """Le seul visuel est un panoramique : l'article sort de la file (regle de la
+    cover seule), avec la raison -- sinon l'exclusion serait muette."""
+    with pytest.raises(PreparationImpossible, match="cover seule.*trop eloignee"):
+        preparer_fichiers(
+            _post_kinda(), _article("https://img/pano.jpg"), tmp_path,
+            rendre=_rendre(),
+            telecharger=_telecharger_formats({"https://img/pano.jpg": (3000, 700)}),
+        )
+
+
+def test_une_vignette_trop_petite_est_sautee(tmp_path):
+    noms = preparer_fichiers(
+        _post(), _article("https://img/vignette.jpg", "https://img/ok.jpg"), tmp_path,
+        rendre=_rendre(),
+        telecharger=_telecharger_formats({
+            "https://img/vignette.jpg": (320, 240),
+            "https://img/ok.jpg": (1600, 1600),
+        }),
+    )
+    assert len(noms) == 2

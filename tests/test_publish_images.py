@@ -1,11 +1,17 @@
-"""Les images que Meta acceptera : JPEG, 4:5 a 1,91:1, 1440 px de large au plus."""
+"""Les images que Meta acceptera : JPEG, 1080x1350 exactement, 8 Mo au plus."""
 
 import io
 
 import pytest
 from PIL import Image
 
-from app.publish.images import ImageInexploitable, en_jpeg, normaliser
+from app.publish.images import (
+    FORMAT_CARROUSEL,
+    ImageEcartee,
+    ImageInexploitable,
+    cadrer_carrousel,
+    en_jpeg,
+)
 
 
 def _image(largeur, hauteur, mode="RGB", format_="PNG"):
@@ -20,58 +26,93 @@ def _dimensions(octets):
     return image.format, image.size, image.mode
 
 
-def test_la_cover_du_post_traverse_la_normalisation_intacte():
+def test_la_cover_du_post_traverse_le_cadrage_intacte():
     """Depuis le 2026-09-18, `kinda_post` est rendu NATIVEMENT en 1080x1350.
 
-    C'est le test qui ferme le defaut signale par l'utilisateur : tant que la
-    cover etait dessinee en 3:4, la normalisation lui prenait 45 px en haut et
-    45 px en bas, donc un tiers de la marge du logo et de celle de l'accroche.
-    Un recadrage ici serait la reapparition du meme defaut."""
-    assert _dimensions(normaliser(_image(1080, 1350))) == ("JPEG", (1080, 1350), "RGB")
+    Elle est deja au format du carrousel : ni agrandissement, ni recadrage."""
+    assert _dimensions(cadrer_carrousel(_image(1080, 1350))) == ("JPEG", (1080, 1350), "RGB")
 
 
-def test_une_image_3_4_reste_recadree_en_4_5():
-    """La regle Meta, elle, n'a pas bouge : une PHOTO d'actu en 3:4 (les slides
-    du carrousel, qui ne passent pas par le gabarit) est toujours recadree."""
-    assert _dimensions(normaliser(_image(1080, 1440))) == ("JPEG", (1080, 1350), "RGB")
+def test_une_photo_paysage_est_recadree_au_format_du_carrousel():
+    """Instagram recadre chaque element au ratio du PREMIER : une photo de presse
+    16:9 laissee en paysage revenait coupee n'importe comment. On cadre nous-memes."""
+    assert _dimensions(cadrer_carrousel(_image(3200, 1800)))[1] == FORMAT_CARROUSEL
 
 
-def test_une_image_carree_reste_intacte():
-    assert _dimensions(normaliser(_image(1080, 1080)))[1] == (1080, 1080)
+def test_une_photo_carree_est_recadree_au_format_du_carrousel():
+    assert _dimensions(cadrer_carrousel(_image(2000, 2000)))[1] == FORMAT_CARROUSEL
 
 
-def test_un_panoramique_est_recadre_a_1_91():
-    assert _dimensions(normaliser(_image(2000, 500)))[1] == (955, 500)
+def test_une_photo_portrait_9_16_est_recadree_au_format_du_carrousel():
+    assert _dimensions(cadrer_carrousel(_image(1080, 1920)))[1] == FORMAT_CARROUSEL
 
 
-def test_une_image_trop_large_est_reduite_a_1440():
-    assert _dimensions(normaliser(_image(3000, 2000)))[1] == (1440, 960)
+def test_le_recadrage_est_centre():
+    """Le sujet d'une photo est au centre : c'est la bande centrale qu'on garde."""
+    source = Image.new("RGB", (2400, 1350), (0, 0, 0))
+    source.paste(Image.new("RGB", (200, 1350), (255, 255, 255)), (1100, 0))
+    tampon = io.BytesIO()
+    source.save(tampon, "PNG")
+    cadree = Image.open(io.BytesIO(cadrer_carrousel(tampon.getvalue())))
+    assert cadree.getpixel((540, 675))[0] > 200  # la bande blanche est restee au centre
+    assert cadree.getpixel((10, 675))[0] < 60  # et le noir aux bords
+
+
+def test_un_panoramique_est_ecarte_plutot_que_massacre():
+    """2000x500 (4:1) : un cadrage 4:5 en jetterait 80 %. Mieux vaut pas de slide."""
+    with pytest.raises(ImageEcartee, match="trop eloignee"):
+        cadrer_carrousel(_image(2000, 500))
+
+
+def test_une_banniere_verticale_est_ecartee():
+    """400x2000 (1:5) : 75 % de l'image partirait au recadrage."""
+    with pytest.raises(ImageEcartee, match="trop eloignee"):
+        cadrer_carrousel(_image(400, 2000))
+
+
+def test_un_16_9_reste_publiable():
+    """55 % de perte, juste sous la borne : c'est le format de presse le plus
+    courant, l'ecarter viderait les carrousels."""
+    assert _dimensions(cadrer_carrousel(_image(2400, 1350)))[1] == FORMAT_CARROUSEL
+
+
+def test_une_vignette_trop_petite_est_ecartee():
+    """400x300 : il faudrait l'agrandir 4,5 fois pour remplir le cadre."""
+    with pytest.raises(ImageEcartee, match="trop petite"):
+        cadrer_carrousel(_image(400, 300))
+
+
+def test_une_image_a_peine_reduite_passe():
+    """1200x1500 : facteur 0,9, aucun agrandissement."""
+    assert _dimensions(cadrer_carrousel(_image(1200, 1500)))[1] == FORMAT_CARROUSEL
+
+
+def test_les_deux_seuils_sont_reglables():
+    petite = _image(400, 500)
+    with pytest.raises(ImageEcartee):
+        cadrer_carrousel(petite)
+    assert _dimensions(cadrer_carrousel(petite, upscale_max=3.0))[1] == FORMAT_CARROUSEL
+
+    panoramique = _image(3000, 750)
+    with pytest.raises(ImageEcartee):
+        cadrer_carrousel(panoramique)
+    assert _dimensions(cadrer_carrousel(panoramique, perte_max=0.9))[1] == FORMAT_CARROUSEL
+
+
+def test_une_image_ecartee_est_une_image_inexploitable():
+    """Le gel attrape `ImageInexploitable` : une image ecartee doit y entrer,
+    sinon elle ferait echouer la preparation au lieu d'etre simplement sautee."""
+    assert issubclass(ImageEcartee, ImageInexploitable)
 
 
 def test_un_png_transparent_devient_un_jpeg_rgb():
-    format_, _, mode = _dimensions(normaliser(_image(1080, 1080, mode="RGBA")))
+    format_, _, mode = _dimensions(cadrer_carrousel(_image(2000, 2000, mode="RGBA")))
     assert (format_, mode) == ("JPEG", "RGB")
-
-
-def test_le_seuil_de_proportion_est_reglable():
-    """Si Meta accepte un jour le 3:4, publication_ratio_min passe a 0.75."""
-    assert _dimensions(normaliser(_image(1080, 1440), ratio_min=0.75))[1] == (1080, 1440)
 
 
 def test_des_octets_qui_ne_sont_pas_une_image_sont_refuses():
     with pytest.raises(ImageInexploitable):
-        normaliser(b"<html>pas une image</html>")
-
-
-def test_une_image_trop_petite_est_refusee():
-    with pytest.raises(ImageInexploitable):
-        normaliser(_image(100, 100))
-
-
-def test_une_banniere_trop_etroite_apres_recadrage_est_refusee():
-    """Une banniere 728x90 (8.09:1) est recadree a 171x90, sous les 320 px."""
-    with pytest.raises(ImageInexploitable):
-        normaliser(_image(728, 90))
+        cadrer_carrousel(b"<html>pas une image</html>")
 
 
 def test_la_cover_d_un_reel_garde_son_9_16():
