@@ -11,6 +11,7 @@ from app.content.export import construire_zip
 from app.content.lecture_artistes import LecteurComptes
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
+from app.content.teinte import palette_du_post
 from app.content.visuels import fond_de_cover
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
@@ -215,7 +216,9 @@ def rendre_covers(post_id: int, db: Session = Depends(get_db)):
     # `fond_de_cover` et non une lecture directe : meme normalisation que la file
     # et le gel (un `str(None)` vaut un fond absent, cf. app.content.visuels).
     try:
-        rendus = render_covers(variantes, fond_de_cover(post), post.template)
+        rendus = render_covers(
+            variantes, fond_de_cover(post), post.template, palette_du_post(post)
+        )
     except RenduIndisponible as exc:
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -237,7 +240,7 @@ def rendre_post(post_id: int, db: Session = Depends(get_db)):
     """
     post = _post_ou_404(db, post_id)
     try:
-        rendus = render_post(post.slides, post.template)
+        rendus = render_post(post.slides, post.template, palette_du_post(post))
     except RenduIndisponible as exc:
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -260,7 +263,7 @@ def exporter_post(post_id: int, db: Session = Depends(get_db)):
         # `render_post` ne rend plus que les covers (kind: "cover") -- les
         # medias de l'actu (kind: "media") sont a telecharger tels quels,
         # role que `construire_zip` prend en charge.
-        rendus = render_post(post.slides, post.template)
+        rendus = render_post(post.slides, post.template, palette_du_post(post))
     except RenduIndisponible as exc:
         # 503 et pas 500 : la cause est une dependance locale manquante, pas un bug.
         raise HTTPException(status_code=503, detail=str(exc)) from exc

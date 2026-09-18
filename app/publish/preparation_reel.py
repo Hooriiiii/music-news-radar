@@ -30,6 +30,7 @@ import httpx
 from app.config import settings
 from app.content.media import CLES, VIDEO, lien_de_reel, video_recuperable, videos_exploitables
 from app.content.render import _USER_AGENT, render_post
+from app.content.teinte import palette_du_post
 from app.content.urls import url_propre
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
 from app.content.visuels import ORIGINE_ARTICLE, origine_interdite, urls_interdites
@@ -275,7 +276,7 @@ def preparer_reel(
 
     # La cover AVANT la video : une cover fautive ne doit pas consommer le
     # telechargement yt-dlp du passage. RenduIndisponible (Chromium absent) remonte.
-    rendus = rendre(post.slides, "kinda_reel")
+    rendus = rendre(post.slides, "kinda_reel", palette_du_post(post))
     if not rendus:
         raise PreparationImpossible("la cover n'a pas pu etre rendue")
     if rendus[0].overflow:

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from app.content.layout import GABARIT_POST
+from app.content.layout import GABARIT_POST, GABARIT_REEL, PALETTE_VERTE
 from app.content.render import (
     RenduIndisponible,
     build_document,
@@ -77,10 +77,14 @@ def test_le_document_porte_les_variables_du_gabarit():
 # proprement vers la geometrie de la maquette si la variable manquait -- il ne
 # cree pas de seconde source de verite.
 _VALEURS_INTERDITES = {
-    "kinda_post": ("80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195"),
+    # Les deux teintes y figurent : une couleur de palette en dur dans la feuille
+    # rendrait le vert des actus ecologie inoperant, sans erreur ni test rouge.
+    "kinda_post": (
+        "80px", "-0.06em", "1.15", "77px", "76px", "253, 139, 195", "53, 199, 122",
+    ),
     "kinda_reel": (
         "84.3px", "75.3px", "1.1", "-0.02em", "-0.08em",
-        "#FD8BC3", "#FFF7FA", "#1D1D1D", "77px", "-0.6deg",
+        "#FD8BC3", "#35C77A", "#FFF7FA", "#1D1D1D", "77px", "-0.6deg",
     ),
 }
 
@@ -634,3 +638,36 @@ def test_erreur_de_rendu_normale_n_est_pas_masquee(monkeypatch):
 
     with pytest.raises(ValueError, match="gabarit invalide"):
         render_post([{"headline": "Une **accroche**", "image_url": None}])
+
+
+def test_le_document_porte_la_teinte_demandee():
+    """La teinte est une valeur de `layout.py` comme les autres : le CSS n'en
+    declare aucune, il consomme les variables. Si elles ne sont pas injectees, le
+    surlignage disparait sans erreur."""
+    vert = build_document(
+        GABARIT_POST,
+        {"headline": "Une **accroche**"},
+        "data:image/jpeg;base64,AAA",
+        palette_=PALETTE_VERTE,
+    )
+    rose = build_document(
+        GABARIT_POST, {"headline": "Une **accroche**"}, "data:image/jpeg;base64,AAA"
+    )
+
+    assert "--headline-mark-background: rgba(53, 199, 122, 0.8);" in vert
+    assert "--voile-teinte: rgba(53, 199, 122, 0.3);" in vert
+    assert "--headline-mark-background: rgba(253, 139, 195, 0.8);" in rose
+
+
+def test_la_cover_reel_porte_la_teinte_elle_aussi():
+    """Meme regle sur les deux gabarits : l'utilisateur n'a pas demande une
+    exception pour les reels."""
+    document = build_document(
+        GABARIT_REEL,
+        {"title": "**Hellfest**", "subtitle": "passe au **solaire**"},
+        "data:image/jpeg;base64,AAA",
+        palette_=PALETTE_VERTE,
+    )
+
+    assert "--title-background: #35C77A;" in document
+    assert "--subtitle-background: #FFF7FA;" in document

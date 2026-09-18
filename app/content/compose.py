@@ -23,6 +23,8 @@ from app.config import settings
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
+from app.content.illustration import choisir_illustration
+from app.content.teinte import teinte_de_article
 from app.content.visuels import image_de_fond, visuels_autorises
 from app.models import Article, Post
 
@@ -339,7 +341,7 @@ def make_claude_composer(
     return composer
 
 
-def _fond_par_defaut(article: Article) -> str | None:
+def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     """La photo de l'article, sinon la vignette d'une video.
 
     Une actu video n'a pas de photo, et sa vignette fait un fond de cover
@@ -348,7 +350,7 @@ def _fond_par_defaut(article: Article) -> str | None:
     """
     # DELEGUE a `image_de_fond`, meme regle et meme nettoyage d'URL que pour les
     # actifs choisis : deux definitions du fond finiraient par diverger.
-    return image_de_fond(visuels_autorises(article))
+    return image_de_fond(visuels_autorises(article), selecteur)
 
 
 def create_post(
@@ -357,6 +359,7 @@ def create_post(
     draft: PostDraft,
     template: str = "kinda_post",
     visuels=None,
+    selecteur_fond=choisir_illustration,
 ) -> Post:
     """Persiste un brouillon : les quatre variantes, une cover sans retenue, et les
     visuels choisis (`ChoixVisuels`, cf. `choix_visuels.py`).
@@ -369,12 +372,20 @@ def create_post(
     Sans `visuels` (composition a la main, appels anterieurs a la regle) : le fond
     vient des medias AUTORISES de l'article et `assets` reste NULL.
 
+    `selecteur_fond` classe les images candidates avant d'en retenir une (cf.
+    `app/content/illustration.py`) : l'utilisateur veut une illustration de
+    l'evenement ou de l'artiste, jamais une affiche de line-up. C'est le SEUL
+    endroit ou ce juge visuel est paye -- une fois par composition, quel que soit
+    le gabarit, donc la cover reel suit la meme regle. Le passer a None rend le
+    comportement d'avant (la premiere image exploitable).
+
     Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
     doit rester lisible sans lui.
     """
     premiere = draft.variantes[0]
     if visuels is not None:
-        actifs, credit, fond = list(visuels.actifs), visuels.credit, image_de_fond(visuels.actifs)
+        actifs, credit = list(visuels.actifs), visuels.credit
+        fond = image_de_fond(actifs, selecteur_fond)
         if actifs and fond is None:
             # Des actifs choisis mais aucun fond extractible : la cover partirait
             # sur l'image de secours du gabarit, et le gel refuserait le post a
@@ -386,7 +397,9 @@ def create_post(
                 f"visuels sans image de fond pour l'article {article.id} : {len(actifs)} actif(s)"
             )
     else:
-        actifs, credit, fond = None, credit_video(article), _fond_par_defaut(article)
+        actifs = None
+        credit = credit_video(article)
+        fond = _fond_par_defaut(article, selecteur_fond)
     post = Post(
         article_id=article.id,
         article_title=article.title,
@@ -411,6 +424,10 @@ def create_post(
         variants={
             "variantes": [v.model_dump() for v in draft.variantes],
             "retenue": None,
+            # La teinte est FIGEE ici : l'article sera purge a 14 jours, le post
+            # doit rester rendable sans lui (meme motif que les champs
+            # denormalises ci-dessus). Editable ensuite sans re-scorer.
+            "palette": teinte_de_article(article),
         },
     )
     db.add(post)

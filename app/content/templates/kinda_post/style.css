@@ -58,7 +58,8 @@ body {
    Ils rendent le logo et l'accroche lisibles sur n'importe quelle photo.
    Ordre CSS = du plus haut au plus bas dans la pile :
      1. noir bas   (234:29) y=623 h=817  0 -> 0.8
-     2. rose bas   (234:28) y=623 h=817  0 -> 0.3   (la teinte Kinda)
+     2. teinte bas (234:28) y=623 h=817  0 -> 0.3   (la teinte Kinda : rose par
+        defaut, VERTE pour une actu ecologie -- cf. `Palette` dans layout.py)
      3. noir haut  (234:11) y=0   h=727  0.8 -> 0   (retourne dans Figma)
 
    Le voile bas n'a plus de hauteur figee : `--scrim-height` suit la hauteur
@@ -67,7 +68,8 @@ body {
    sombre, illisible sur une photo claire. Le voile HAUT, lui, ne depend pas du
    texte : sa hauteur (727px) et les trois couleurs des degrades restent une
    recette decorative fixe, exposee en variables (`--voile-*`) pour que le
-   test-sentinelle reste strict sur les valeurs de MISE EN PAGE.
+   test-sentinelle reste strict sur les valeurs de MISE EN PAGE. La teinte, elle,
+   n'est pas decorative-fixe : elle depend de l'ARTICLE (voir `Palette`).
 
    La valeur de repli 817px est celle de la maquette. Elle n'est pas un
    provisoire : un `var()` sans repli invalide la propriete ENTIERE, pas
@@ -80,7 +82,7 @@ body {
   background-repeat: no-repeat;
   background-image:
     linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--voile-noir)),
-    linear-gradient(to bottom, var(--voile-rose-debut), var(--voile-rose)),
+    linear-gradient(to bottom, var(--voile-teinte-debut), var(--voile-teinte)),
     linear-gradient(to bottom, var(--voile-noir), rgba(0, 0, 0, 0));
   background-size:
     var(--slide-width) var(--scrim-height, 817px),
@@ -131,7 +133,8 @@ body {
   hyphens: none;
 }
 
-/* Le surlignage rose. Les rectangles de Figma (234:31 / 237:41 / 234:32) ne
+/* Le surlignage a la teinte du post (rose, ou vert sur une actu ecologie).
+   Les rectangles de Figma (234:31 / 237:41 / 234:32) ne
    sont PAS reproduits en dur : ce <mark> suit le texte tout seul.
 
    box-decoration-break: clone est ce qui fait que le fond se redessine sur

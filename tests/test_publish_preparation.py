@@ -19,7 +19,7 @@ def _png(largeur, hauteur):
 
 
 def _rendre(overflow=False):
-    def rendre(slides, template):
+    def rendre(slides, template, palette_=None):
         rendre.appels.append((slides, template))
         return [RenduSlide(png=_png(1080, 1440), scale=1.0, lines={}, overflow=overflow)]
 
@@ -75,7 +75,7 @@ def test_une_cover_qui_deborde_n_est_jamais_publiee(tmp_path):
 def test_chromium_absent_n_est_pas_une_preparation_impossible(tmp_path):
     # Panne systemique : elle doit remonter telle quelle, sinon le runner
     # exclurait les articles un par un pour une faute qui n'est pas la leur.
-    def rendre(slides, template):
+    def rendre(slides, template, palette_=None):
         raise RenduIndisponible("Chromium Playwright est absent")
 
     with pytest.raises(RenduIndisponible, match="Chromium"):

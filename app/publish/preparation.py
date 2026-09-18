@@ -31,6 +31,7 @@ from app.content.export import telecharger as telecharger_media
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.urls import url_propre
 from app.content.render import render_post
+from app.content.teinte import palette_du_post
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     fond_de_cover,
@@ -200,7 +201,7 @@ def preparer_fichiers(
 
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.
-    rendus = rendre(post.slides, "kinda_post")
+    rendus = rendre(post.slides, "kinda_post", palette_du_post(post))
     if not rendus:
         raise PreparationImpossible("la cover n'a pas pu etre rendue")
     if rendus[0].overflow:

@@ -446,3 +446,17 @@ def test_system_prompt_priorise_les_comptes_d_artistes():
     assert "hard techno" in lowered
     # la règle pop/K-pop reste en place
     assert "ne les déprioris jamais" in lowered
+
+
+def test_la_categorie_ecologie_existe_et_est_expliquee_au_modele():
+    from app.pipeline.scoring import SYSTEM_PROMPT, Category
+
+    """L'axe « musique x ecologie » etait valorise par le prompt sans avoir de
+    categorie : impossible d'habiller ces actus d'une couleur propre. La regle
+    doit aussi dire ce qui n'en est PAS une, sinon toute photo de nature y passe."""
+    assert Category.ECOLOGY.value == "ecology"
+    assert "ecology :" in SYSTEM_PROMPT
+    assert "ne suffisent PAS" in SYSTEM_PROMPT
+    # L'ordre de la liste de categories fait foi : `ecology` prime sur
+    # event_festival, sinon une edition qui verdit serait rangee en festival.
+    assert SYSTEM_PROMPT.index("ecology :") < SYSTEM_PROMPT.index("event_festival :")

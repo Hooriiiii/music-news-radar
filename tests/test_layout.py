@@ -9,6 +9,8 @@ import pytest
 
 from app.content.layout import (
     GABARIT_POST,
+    PALETTE_ROSE,
+    PALETTE_VERTE,
     VOILE_MINIMUM,
     Ajustement,
     Gabarit,
@@ -214,7 +216,7 @@ def test_variables_css_expose_la_recette_des_voiles():
 
     assert "--voile-noir: rgba(0, 0, 0, 0.8);" in css
     assert "--voile-haut-hauteur: 727px;" in css
-    assert "--voile-rose-debut: rgba(253, 139, 195, 0);" in css
+    assert "--voile-teinte-debut: rgba(253, 139, 195, 0);" in css
 
 
 def test_variables_css_expose_la_geometrie_du_logo_du_gabarit():
@@ -299,8 +301,14 @@ def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
     sous_titre, zone_sous_titre = GABARIT_REEL.roles["subtitle"]
 
     assert (GABARIT_REEL.width, GABARIT_REEL.height) == (1080, 1920)
-    assert titre.background == "#FD8BC3"
+    # La bande de titre porte la TEINTE de l'article (rose par defaut, verte sur
+    # une actu ecologie) : elle n'est donc plus une couleur figee du gabarit.
+    assert titre.bande_teinte is True
+    assert titre.background is None
+    assert PALETTE_ROSE.hexa == "#FD8BC3"
     assert titre.color == "#FFF7FA"
+    # La bande creme, elle, est NEUTRE : aucune teinte ne la traverse.
+    assert sous_titre.bande_teinte is False
     assert sous_titre.background == "#FFF7FA"
     assert sous_titre.color == "#1D1D1D"
     # La bande rose est DROITE, la creme est inclinee : confirme par l'utilisateur
@@ -321,3 +329,62 @@ def test_variables_css_expose_le_centre_du_bloc_quand_il_existe():
 
     assert "--block-center: 42.9%;" in variables_css(GABARIT_REEL, scale=1.0)
     assert "--block-center" not in variables_css(GABARIT_POST, scale=1.0)
+
+
+def test_la_palette_teinte_le_voile_et_le_mark_du_post():
+    """Une seule couleur gouverne le voile et le surlignage : c'est pourquoi la
+    palette porte un RGB et non trois chaines."""
+    rose = variables_css(GABARIT_POST, scale=1.0)
+    vert = variables_css(GABARIT_POST, scale=1.0, palette_=PALETTE_VERTE)
+
+    assert "--voile-teinte: rgba(253, 139, 195, 0.3);" in rose
+    assert "--headline-mark-background: rgba(253, 139, 195, 0.8);" in rose
+    assert "--voile-teinte: rgba(53, 199, 122, 0.3);" in vert
+    assert "--voile-teinte-debut: rgba(53, 199, 122, 0);" in vert
+    assert "--headline-mark-background: rgba(53, 199, 122, 0.8);" in vert
+    # Le reste de la mise en page ne bouge pas d'une teinte a l'autre.
+    assert "--headline-font-size: 80px;" in vert
+
+
+def test_la_palette_teinte_la_bande_de_titre_du_reel_mais_pas_la_creme():
+    """Sur le reel, la teinte ne porte que la bande de TITRE : la bande creme du
+    sous-titre est neutre et le reste, quelle que soit l'actu."""
+    from app.content.layout import GABARIT_REEL
+
+    vert = variables_css(GABARIT_REEL, scale=1.0, palette_=PALETTE_VERTE)
+
+    assert "--title-background: #35C77A;" in vert
+    assert "--subtitle-background: #FFF7FA;" in vert
+    assert "--title-background: #FD8BC3;" in variables_css(GABARIT_REEL, scale=1.0)
+
+
+def test_la_charte_reste_le_defaut_de_variables_css():
+    """Aucun appelant ne doit avoir a demander le rose : c'est la charte."""
+    assert variables_css(GABARIT_POST, scale=1.0) == variables_css(
+        GABARIT_POST, scale=1.0, palette_=PALETTE_ROSE
+    )
+
+
+def test_une_palette_inconnue_degrade_vers_la_charte():
+    """Le nom vient d'une colonne JSONB editable au dashboard : un nom inconnu
+    doit degrader, jamais casser un rendu."""
+    from app.content.layout import palette
+
+    assert palette("bleue") is PALETTE_ROSE
+    assert palette(None) is PALETTE_ROSE
+    assert palette("verte") is PALETTE_VERTE
+
+
+def test_le_vert_est_cale_sur_la_luminance_du_rose():
+    """La parite de contraste est le POURQUOI de ce vert precis : le contraste
+    percu du design ne doit pas bouger d'une actu a l'autre. Si quelqu'un change
+    la couleur a l'oeil, ce test le dit."""
+
+    def luminance(rgb):
+        canaux = []
+        for valeur in rgb:
+            v = valeur / 255
+            canaux.append(v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * canaux[0] + 0.7152 * canaux[1] + 0.0722 * canaux[2]
+
+    assert abs(luminance(PALETTE_VERTE.rgb) - luminance(PALETTE_ROSE.rgb)) < 0.01

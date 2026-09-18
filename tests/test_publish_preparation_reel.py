@@ -39,7 +39,7 @@ def _png(largeur=1080, hauteur=1920):
 
 
 def _rendre(overflow=False):
-    def rendre(slides, template):
+    def rendre(slides, template, palette_=None):
         rendre.appels.append(template)
         return [RenduSlide(png=_png(), scale=1.0, lines={}, overflow=overflow)]
 

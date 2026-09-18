@@ -478,6 +478,65 @@ accroche devient un `<mark>` que le CSS reflow tout seul. Dans Figma ce sont des
 rectangles à repositionner à la main — le rendu HTML est ici plus robuste que
 l'original.
 
+**La teinte suit l'actu : rose par défaut, VERTE pour l'écologie** (demande de
+l'utilisateur, 2026-09-18). Une seule couleur gouverne le voile bas du post, le
+`<mark>` des deux gabarits et la bande de titre du reel — d'où `Palette` dans
+`layout.py`, qui porte un RGB décliné en opacités et non trois chaînes. Le vert
+`#35C77A` est **calé sur la LUMINANCE du rose** `#FD8BC3` (0.430 contre 0.433,
+soit 2.10:1 contre 2.09:1 face au texte crème `#FFF7FA`) : le contraste perçu du
+design ne bouge pas d'une actu à l'autre, seule la couleur change. Un vert plus
+sombre lirait mieux sous le texte, mais relever le contraste des DEUX teintes est
+une décision de direction artistique, pas un effet de bord — un test-sentinelle
+(`tests/test_layout.py`) échoue si quelqu'un déplace la couleur à l'œil.
+
+Le signal est la catégorie de scoring **`ecology`**, ajoutée le même jour. Aucune
+migration : `articles.category` est un `VARCHAR(100)` **sans contrainte CHECK**
+(migration 0001), et l'API `/articles` filtre sur la chaîne libre — un test
+vérifie que chaque valeur de `Category` a son option au dashboard, sinon une
+catégorie produite par le scoring resterait invisible. La règle du prompt exige
+que l'écologie soit LE SUJET (festival qui verdit son édition, prise de position
+climat, tournée durable, menace climatique sur un événement) : une affiche verte,
+une photo de nature ou un nom de label évoquant la nature ne suffisent pas. Elle
+prime sur `event_festival` — l'édition qui passe au renouvelable est `ecology`,
+son line-up reste `event_festival`.
+
+Le nom de palette est **figé dans `posts.variants["palette"]`** à la composition
+(`app/content/teinte.py`), pas relu depuis l'article : l'article est purgé à 14
+jours et le post doit rester rendable sans lui, même motif que ses champs
+dénormalisés. Le champ est donc aussi le point où le dashboard pourra forcer une
+teinte sans re-scorer. Conséquence câblée : `PATCH /posts/{id}` écrit `variants`
+en FUSION (`{**post.variants, ...}`) et non en bloc — l'écrire en bloc ferait
+disparaître la palette au premier choix de variante.
+
+**Le fond de la cover est une ILLUSTRATION, jamais une affiche**
+(`app/content/illustration.py`, 2026-09-18). C'était la première image
+exploitable ; or une affiche de line-up est exactement ce qu'un compte de
+festival publie en tête de carrousel, et superposer l'accroche Kinda à un visuel
+déjà couvert de texte donne une cover illisible et redondante. Une affiche ne se
+reconnaît ni à son ratio (souvent 4:5, comme une photo de concert), ni à son URL,
+ni à ses métadonnées : elle se reconnaît à ce qu'on y VOIT, d'où un modèle de
+vision (`visuels_model`, défaut Haiku) qui rend un verdict strict par image
+(`{affiche, sujet: scene|portrait|autre, note}`).
+
+Trois règles de coût : on ne juge **que s'il y a un choix** (au moins deux
+candidats — payer pour confirmer l'unique image disponible ne changerait rien) ;
+au plus 3 images **réduites à 512 px** dans UN appel, le coût en jetons suivant
+la SURFACE (une photo de presse en 2000×1333 coûte ~3 550 jetons, sa vignette
+~230) ; et le verdict est **mémorisé par URL** dans `illustration_cache_path`,
+donc une recomposition ne repaie rien. Total mesuré : ~1 400 jetons d'entrée et
+un appel par composition, soit ~0,002 $.
+
+Et une règle de robustesse qui prime : ce module **ne lève jamais**. Pas de clé
+API, vision coupée (`ILLUSTRATION_VISION_ENABLED=false`), réseau mort, JSON hors
+schéma, image illisible → il rend `None` et l'appelant garde la première image.
+Un verdict manquant vaut « neutre », qui passe devant une affiche avérée et
+derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
+affiche. Si TOUS les candidats sont des affiches, on garde la moins mauvaise —
+le repli vers une photo d'artiste suivi vit en amont, dans `choix_visuels`, et se
+décide avant la composition ; mieux vaut une cover sur une affiche qu'un créneau
+perdu. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel suit
+la même règle sans code en double.
+
 Les posts ne sont **jamais purgés** (archive éditoriale, même motif que
 `artist_mentions`) et publier un post bascule son article en `USED`, ce qui le
 protège aussi.
