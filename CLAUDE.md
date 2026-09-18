@@ -1036,10 +1036,24 @@ sonde réelle : les URL sont lues dans les blocs `web_search_tool_result` et
 **jamais dans le texte du modèle**, qui a inventé deux liens absents des
 résultats ; et `image_de_partage` est résolu à l'appel, pas en valeur par défaut,
 sinon le module n'est pas testable sans réseau. Requête déterministe (c'est la
-clé du cache) : artistes cités d'abord, sinon le nom propre en tête du titre
-(« Les Transmusicales », pas la phrase entière, qui ne ramènerait que des
-reprises de l'article), plus un indice de discipline — la `categorie` de la
+clé du cache) et en QUATRE reprises, parce qu'elle ne doit jamais renoncer :
+artistes cités → nom propre en tête du titre (« Les Transmusicales », pas la
+phrase entière, qui ne ramènerait que des reprises de l'article) → **nom de la
+source** nettoyé de son suffixe de canal (« Transmusicales (IG) » →
+« Transmusicales »), et seulement d'un compte qui NOMME son sujet (festival,
+label, club, artiste — « Tsugi festival photo » ramènerait le logo de Tsugi) →
+les noms propres du titre. Plus un indice de discipline : la `categorie` de la
 source le donne quand le texte ne le dit pas.
+
+**Le défaut qui a valu cette cascade** (mesuré en production, article 18260,
+2026-09-18) : « Le voile se lève sur le programme des 48es Rencontres Trans
+Musicales », source « Transmusicales (IG) », `mentioned_artists` VIDE. Les deux
+premières reprises échouaient (titre commençant par un verbe, aucun artiste
+cité), la requête valait None, et le dernier recours ne partait JAMAIS — sur le
+cas même pour lequel il a été écrit. La requête produite est désormais
+« Transmusicales festival photo ». Verrouillé par un test de bout en bout
+(`tests/test_visuels_web.py`) qui prouve que l'aplat Kinda n'est atteint
+qu'APRÈS une recherche web restée bredouille.
 
 **Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
 c'est un projet perso donc c'est ok »). En contrepartie le site est TOUJOURS

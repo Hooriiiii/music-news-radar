@@ -48,6 +48,9 @@ import anthropic
 from app.config import settings
 from app.content.urls import url_propre
 from app.models import SourceCategorie
+# Les mots vides FR + EN du rapprochement de titres : meme besoin ici, et une
+# seconde liste finirait par diverger de celle-la.
+from app.pipeline.cluster import _STOPWORDS as MOTS_VIDES
 from app.pipeline.illustrations import image_de_partage
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,20 @@ DISCIPLINE_DEFAUT = "concert"
 # mais qui ne suffisent jamais a le constituer.
 _ARTICLES = frozenset({"le", "la", "les", "l", "un", "une", "des", "du", "de", "d"})
 _MOT = re.compile(r"[\w'’.\-]+", re.UNICODE)
+# Le canal, toujours en suffixe entre parentheses : « Transmusicales (IG) ».
+_PARENTHESES = re.compile(r"\([^)]*\)")
+# Combien de mots du titre au plus dans le tout dernier repli. Au-dela, la
+# requete redevient une phrase, et une phrase ne ramene que des reprises.
+MOTS_DE_TITRE = 6
+
+# Les categories de source qui NOMMENT leur sujet : un compte de festival, de
+# label, de club ou d'artiste parle de lui-meme. Un media parle des autres.
+CATEGORIES_QUI_NOMMENT = (
+    SourceCategorie.FESTIVAL,
+    SourceCategorie.LABEL,
+    SourceCategorie.CLUB,
+    SourceCategorie.ARTISTE,
+)
 
 
 @dataclass(frozen=True)
@@ -156,15 +173,71 @@ def _nom_d_evenement(titre: str) -> str | None:
     return " ".join(tete)
 
 
-def requete_pour(article) -> str | None:
-    """La requete envoyee a la recherche web, ou None si l'article ne dit rien.
+def nom_de_source(nom: str | None) -> str | None:
+    """Le nom d'une source sans son canal entre parentheses, ou None s'il ne
+    reste rien.
 
-    Les ARTISTES CITES d'abord : un nom d'artiste ramene des photos de lui, ce
-    qui est exactement ce qu'un fond de cover demande. A defaut, le nom de
-    l'evenement. Deterministe expres -- c'est la cle du cache.
+    Toutes les sources du projet portent leur canal en suffixe --
+    « Transmusicales (IG) », « Tsugi (RSS) », « Festivals Bretagne (Bing News) ».
+    Le garder chercherait « Transmusicales IG photo ».
     """
-    noms = [nom.strip() for nom in (getattr(article, "mentioned_artists", None) or []) if nom and nom.strip()]
-    sujet = " ".join(noms[:2]) if noms else _nom_d_evenement(getattr(article, "title", ""))
+    propre = re.sub(r"\s+", " ", _PARENTHESES.sub(" ", nom or "")).strip()
+    return propre or None
+
+
+def _mots_du_titre(titre: str) -> str | None:
+    """Les premiers mots PORTEURS du titre -- le tout dernier repli.
+
+    Mieux vaut une requete imparfaite qu'aucune requete : sans elle l'article est
+    saute, et c'est precisement ce que l'utilisateur a refuse. Mots vides et mots
+    courts otes, ordre du titre garde.
+    """
+    mots = [
+        mot
+        for mot in _MOT.findall(titre or "")
+        if len(mot) >= 4 and mot.lower() not in _ARTICLES and mot.lower() not in MOTS_VIDES
+    ]
+    # Les NOMS PROPRES du titre des qu'il y en a assez pour faire un sujet :
+    # « Rencontres Trans Musicales » vaut infiniment mieux que « voile leve
+    # programme 48es Rencontres Trans », qui n'est que la phrase raccourcie.
+    propres = [mot for mot in mots if mot[:1].isupper()]
+    retenus = propres if len(propres) >= 2 else mots
+    return " ".join(retenus[:MOTS_DE_TITRE]) or None
+
+
+def requete_pour(article) -> str | None:
+    """La requete envoyee a la recherche web, ou None si l'article ne dit RIEN.
+
+    Quatre reprises, dans l'ordre -- et ce qui compte est qu'on ne renonce qu'a
+    la toute fin. La premiere version s'arretait a (2) et rendait None pour
+    l'article 18260 (« Le voile se leve sur le programme des 48es Rencontres
+    Trans Musicales », `mentioned_artists` vide) : le dernier recours ne partait
+    jamais, sur le cas meme pour lequel il a ete ecrit.
+
+    1. les ARTISTES CITES : un nom d'artiste ramene des photos de lui, ce qui est
+       exactement ce qu'un fond de cover demande ;
+    2. le nom propre en TETE DE TITRE (« Les Transmusicales devoilent... ») ;
+    3. le NOM DE LA SOURCE, nettoye -- mais seulement d'un compte qui NOMME son
+       sujet (`CATEGORIES_QUI_NOMMENT`) : « Tsugi festival photo » ramenerait le
+       logo de Tsugi, jamais l'actu ;
+    4. les mots porteurs du titre.
+
+    Deterministe expres : c'est la cle du cache.
+    """
+    noms = [
+        nom.strip()
+        for nom in (getattr(article, "mentioned_artists", None) or [])
+        if nom and nom.strip()
+    ]
+    titre = getattr(article, "title", "") or ""
+    source = getattr(article, "source", None)
+    nomme_son_sujet = getattr(source, "categorie", None) in CATEGORIES_QUI_NOMMENT
+    sujet = (
+        (" ".join(noms[:2]) if noms else None)
+        or _nom_d_evenement(titre)
+        or (nom_de_source(getattr(source, "name", None)) if nomme_son_sujet else None)
+        or _mots_du_titre(titre)
+    )
     if not sujet:
         return None
     return f"{sujet} {indice_discipline(article)} photo"
@@ -281,6 +354,10 @@ def candidats_du_web(
     chemin_cache: Path | None = None,
 ) -> list[Candidat]:
     """Des images du web pour cet article, au plus `visuels_web_max_candidats`.
+
+    `maintenant` est OBLIGATOIRE et nomme : c'est l'horloge du cache (TTL des
+    requetes), et tout le choix des visuels fait deja circuler la sienne -- une
+    horloge implicite ferait diverger le TTL d'un passage a l'autre.
 
     Jamais d'exception : une liste vide veut dire « le web non plus n'a rien »,
     et l'appelant part sur le fond Kinda.
