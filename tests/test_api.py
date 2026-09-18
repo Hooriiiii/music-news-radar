@@ -1,4 +1,5 @@
 import datetime as dt
+import pathlib
 
 from app.models import Article, ArticleStatus, Source, SourceType
 
@@ -139,6 +140,31 @@ def test_filter_articles_by_category(client, db_session):
 
     titles = [x["title"] for x in client.get("/articles", params={"category": "drama"}).json()]
     assert titles == ["Drame"]
+
+
+def test_filter_articles_by_ecology(client, db_session):
+    """La categorie `ecology` (2026-09-18) traverse le filtre comme les autres :
+    `articles.category` est un VARCHAR libre, l'API ne connait aucune liste.
+    C'est ce qui a permis d'ajouter la categorie sans migration."""
+    source = make_source(db_session)
+    a = make_article(db_session, source, title="Festival au solaire", raw_hash="eco1")
+    a.category = "ecology"
+    b = make_article(db_session, source, title="Line-up", raw_hash="eco2")
+    b.category = "event_festival"
+    db_session.commit()
+
+    titles = [x["title"] for x in client.get("/articles", params={"category": "ecology"}).json()]
+    assert titles == ["Festival au solaire"]
+
+
+def test_le_dashboard_propose_la_categorie_ecologie():
+    """Sentinelle : une categorie que le scoring produit mais que le selecteur du
+    dashboard ignore est une categorie invisible a l'usage."""
+    from app.pipeline.scoring import Category
+
+    page = pathlib.Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    for categorie in Category:
+        assert f'value="{categorie.value}"' in page, categorie.value
 
 
 def test_sort_articles_by_relevance(client, db_session):

@@ -465,3 +465,73 @@ def test_create_post_sans_choix_reste_historique(db_session):
 
     assert post.assets is None
     assert post.slides[0]["image_url"] == "https://tsugi.fr/photo.jpg"
+
+
+def test_create_post_fige_la_teinte_de_larticle(db_session):
+    """L'article sera purge a 14 jours : la teinte doit survivre sur le post,
+    comme le titre et l'URL denormalises."""
+    article = _article(db_session)
+    article.category = "ecology"
+    db_session.commit()
+
+    post = create_post(db_session, article, _draft())
+
+    assert post.variants["palette"] == "verte"
+
+
+def test_create_post_laisse_la_charte_aux_autres_actus(db_session):
+    article = _article(db_session)
+    article.category = "event_festival"
+    db_session.commit()
+
+    assert create_post(db_session, article, _draft()).variants["palette"] == "rose"
+
+
+def test_create_post_ecarte_laffiche_du_fond_de_cover(db_session):
+    """Le juge visuel ne choisit pas la premiere image mais la moins « affiche ».
+    Ici : l'affiche de line-up arrive en tete, la photo de scene la remplace."""
+    article = _article(db_session)
+    article.media = [
+        {"type": "photo", "url": "https://tsugi.fr/affiche.jpg"},
+        {"type": "photo", "url": "https://tsugi.fr/scene.jpg"},
+    ]
+    db_session.commit()
+    vus = []
+
+    def selecteur(candidats):
+        vus.append(list(candidats))
+        return "https://tsugi.fr/scene.jpg"
+
+    post = create_post(db_session, article, _draft(), selecteur_fond=selecteur)
+
+    assert vus == [["https://tsugi.fr/affiche.jpg", "https://tsugi.fr/scene.jpg"]]
+    assert post.slides[0]["image_url"] == "https://tsugi.fr/scene.jpg"
+
+
+def test_la_cover_reel_suit_la_meme_regle(db_session):
+    """Un seul chemin de composition pour les deux gabarits : l'utilisateur n'a
+    pas demande d'exception pour les reels."""
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [
+            actif(entree("photo", "https://cdn/affiche.jpg"), origine="article"),
+            actif(entree("photo", "https://cdn/live.jpg"), origine="article"),
+        ],
+        "@festival",
+    )
+
+    post = create_post(
+        db_session, article, _draft(), template="kinda_reel", visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/live.jpg",
+    )
+
+    assert post.slides[0]["image_url"] == "https://cdn/live.jpg"
+
+
+def test_un_juge_muet_garde_le_premier_candidat(db_session):
+    """Degradation : None veut dire « je n'ai rien a dire », pas « pas de fond »."""
+    article = _article(db_session)
+
+    post = create_post(db_session, article, _draft(), selecteur_fond=lambda candidats: None)
+
+    assert post.slides[0]["image_url"] == "https://tsugi.fr/photo.jpg"

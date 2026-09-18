@@ -25,6 +25,54 @@ SCRIM_MARGE = 465
 VOILE_MINIMUM = 817
 
 
+# --- Palettes -------------------------------------------------------------
+# La teinte d'accent d'une cover : le voile du post, le <mark> des deux gabarits
+# et la bande de titre du reel. Une SEULE couleur les gouverne tous, declinee en
+# opacites -- c'est pourquoi la palette porte un RGB et non trois chaines.
+#
+# Le vert existe parce que l'axe « musique x ecologie » est l'un des quatre axes
+# editoriaux du compte (cf. CLAUDE.md) et que l'utilisateur veut qu'il se VOIE.
+# Il est cale sur la LUMINANCE du rose de la charte (0.430 contre 0.433, soit
+# 2.10:1 contre 2.09:1 face au texte creme #FFF7FA) : le contraste percu du
+# design ne bouge donc pas d'une actu a l'autre, seule la couleur change. Un vert
+# plus sombre lirait mieux sous le texte creme, mais il romprait la parite avec
+# un rose valide par le proprietaire du design -- relever les deux est une
+# decision de direction artistique, pas un effet de bord de cette tache.
+VOILE_ALPHA = 0.3
+MARK_ALPHA = 0.8
+
+
+@dataclass(frozen=True)
+class Palette:
+    """La teinte d'accent d'une cover, declinee en opacites."""
+
+    nom: str
+    rgb: tuple[int, int, int]
+
+    def rgba(self, alpha: float) -> str:
+        r, v, b = self.rgb
+        return f"rgba({r}, {v}, {b}, {alpha})"
+
+    @property
+    def hexa(self) -> str:
+        return "#{:02X}{:02X}{:02X}".format(*self.rgb)
+
+
+PALETTE_ROSE = Palette(nom="rose", rgb=(253, 139, 195))   # #FD8BC3, la charte
+PALETTE_VERTE = Palette(nom="verte", rgb=(53, 199, 122))  # #35C77A, actus ecologie
+
+PALETTES: dict[str, Palette] = {p.nom: p for p in (PALETTE_ROSE, PALETTE_VERTE)}
+
+
+def palette(nom: str | None) -> Palette:
+    """La palette nommee, la rose par defaut.
+
+    Jamais de KeyError : le nom vient d'une colonne JSONB editable au dashboard,
+    et un nom inconnu doit degrader vers la charte, pas casser un rendu.
+    """
+    return PALETTES.get(nom or "", PALETTE_ROSE)
+
+
 @dataclass(frozen=True)
 class Typo:
     """Les regles typographiques d'un role de texte."""
@@ -34,9 +82,15 @@ class Typo:
     letter_spacing: float     # em
     color: str
     # Bande de fond qui epouse le texte (cover reel). None = pas de bande.
+    # Une bande NEUTRE (la creme du sous-titre) porte sa couleur ici ; une bande
+    # TEINTEE (le titre) la tient de la palette -- cf. `bande_teinte`.
     background: str | None = None
-    # Fond du <mark> (surlignage rose du post). None = pas de surlignage.
-    mark_background: str | None = None
+    # La bande de fond prend la teinte de la PALETTE (rose par defaut, verte pour
+    # une actu ecologie) au lieu d'une couleur figee.
+    bande_teinte: bool = False
+    # Le role porte un <mark> surligne a la teinte de la palette. Booleen et non
+    # couleur : la teinte depend de l'ARTICLE, pas du gabarit.
+    mark_teinte: bool = False
     # Degres. Negatif = antihoraire. Releve a -0.6 sur la bande creme du reel.
     tilt: float = 0.0
 
@@ -250,7 +304,7 @@ GABARIT_POST = Gabarit(
                 line_height=1.15,
                 letter_spacing=-0.06,
                 color="#FFF7FA",
-                mark_background="rgba(253, 139, 195, 0.8)",
+                mark_teinte=True,
             ),
             Zone(
                 left=77,
@@ -307,7 +361,7 @@ GABARIT_REEL = Gabarit(
                 line_height=1.1,
                 letter_spacing=-0.02,
                 color="#FFF7FA",
-                background="#FD8BC3",
+                bande_teinte=True,
                 tilt=0.0,
             ),
             Zone(
@@ -359,7 +413,12 @@ def hauteur_voile(gabarit_: Gabarit, role: str, mesure: Mesure) -> float:
     return max(VOILE_MINIMUM, mesure.height + zone.anchor_offset + SCRIM_MARGE)
 
 
-def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = None) -> str:
+def variables_css(
+    gabarit_: Gabarit,
+    scale: float,
+    scrim_height: float | None = None,
+    palette_: Palette = PALETTE_ROSE,
+) -> str:
     """Les valeurs du gabarit, en variables CSS. Le CSS n'a plus de nombres.
 
     Les variables absentes ne sont PAS ecrites a vide : un `background: ;`
@@ -377,7 +436,10 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
     # -- une valeur en dur dans la feuille est une regle qui echappe aux tests.
     lignes += [
         "--voile-noir: rgba(0, 0, 0, 0.8);",
-        "--voile-rose: rgba(253, 139, 195, 0.3);",
+        # La TEINTE, elle, depend de l'article : rose par defaut, verte pour une
+        # actu ecologie. Meme couleur de base pour le voile, le <mark> et la
+        # bande de titre du reel -- une seule decision, trois usages.
+        f"--voile-teinte: {palette_.rgba(VOILE_ALPHA)};",
         "--voile-haut-hauteur: 727px;",
         # Geometrie du logo : elle vient du GABARIT, pas d'ici -- `top` depend du
         # rognage de la grille Instagram, donc de la hauteur de la toile (cf.
@@ -386,9 +448,9 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
         f"--logo-right: {gabarit_.logo.right}px;",
         f"--logo-top: {gabarit_.logo.top}px;",
         f"--logo-width: {gabarit_.logo.width}px;",
-        # Point de depart transparent du degrade rose : complete `--voile-rose`,
-        # qui n'en porte que l'arrivee.
-        "--voile-rose-debut: rgba(253, 139, 195, 0);",
+        # Point de depart transparent du degrade teinte : complete
+        # `--voile-teinte`, qui n'en porte que l'arrivee.
+        f"--voile-teinte-debut: {palette_.rgba(0)};",
     ]
 
     if gabarit_.block_center is not None:
@@ -406,10 +468,11 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
             f"--{role}-align: {zone.align};",
             f"--{role}-tilt: {typo.tilt}deg;",
         ]
-        if typo.background is not None:
-            lignes.append(f"--{role}-background: {typo.background};")
-        if typo.mark_background is not None:
-            lignes.append(f"--{role}-mark-background: {typo.mark_background};")
+        fond = palette_.hexa if typo.bande_teinte else typo.background
+        if fond is not None:
+            lignes.append(f"--{role}-background: {fond};")
+        if typo.mark_teinte:
+            lignes.append(f"--{role}-mark-background: {palette_.rgba(MARK_ALPHA)};")
     if scrim_height is not None:
         lignes.append(f"--scrim-height: {round(scrim_height)}px;")
     return ":root {\n  " + "\n  ".join(lignes) + "\n}"

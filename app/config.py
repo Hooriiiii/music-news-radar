@@ -179,6 +179,23 @@ class Settings(BaseSettings):
     visuels_cache_dir: Path = Path.home() / "Library/Application Support/Kinda/visuels"
     visuels_cache_jours: int = 7
 
+    # --- Fond de cover : une illustration, jamais une affiche ---
+    # Un juge visuel (Claude vision) classe les images candidates avant d'en faire
+    # le fond d'une cover. Coupe-circuit : a false, on garde la premiere image
+    # exploitable, c'est-a-dire le comportement d'avant le 2026-09-18.
+    illustration_vision_enabled: bool = True
+    # Haiku suffit : la question posee est « affiche ou photo ? », pas une analyse
+    # fine. Trois images reduites a 512 px coutent ~1 400 jetons d'entree.
+    visuels_model: str = "claude-haiku-4-5"
+    illustration_max_candidats: int = 3
+    illustration_taille_px: int = 512
+    # Verdicts memorises par URL : une recomposition (ou un second creneau sur le
+    # meme article) ne repaie pas le juge.
+    illustration_cache_path: Path = (
+        Path.home() / "Library/Application Support/Kinda/illustrations.json"
+    )
+    illustration_cache_jours: int = 7
+
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
     # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant

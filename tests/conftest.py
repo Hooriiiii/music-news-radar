@@ -35,6 +35,7 @@ def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "publication_mode_path", applicatif / "publication.json")
     monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
     monkeypatch.setattr(settings, "visuels_cache_dir", applicatif / "visuels")
+    monkeypatch.setattr(settings, "illustration_cache_path", applicatif / "illustrations.json")
 
 
 @pytest.fixture()
@@ -53,6 +54,14 @@ def _pas_de_jeton_sourcing_ambiant(monkeypatch):
     """Le `.env` de l'utilisateur porte un vrai META_FB_ACCESS_TOKEN : sans ca,
     chaque `run_pipeline` de test appellerait debug_token chez Meta."""
     monkeypatch.setattr(settings, "meta_fb_access_token", None)
+
+
+@pytest.fixture(autouse=True)
+def _pas_de_juge_visuel_ambiant(monkeypatch):
+    """Le `.env` de l'utilisateur porte une vraie ANTHROPIC_API_KEY : sans ca,
+    chaque `create_post` de test enverrait des images a Claude vision. Les tests
+    du juge injectent le leur (`juge=`), qui ne passe jamais par ce reglage."""
+    monkeypatch.setattr(settings, "illustration_vision_enabled", False)
 
 
 @pytest.fixture()

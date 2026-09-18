@@ -24,7 +24,16 @@ from playwright.sync_api import Browser, sync_playwright
 from app.content.highlight import to_html
 from app.content.urls import url_propre, url_telechargeable
 from app.content.visuels import lire_fichier_cache
-from app.content.layout import Ajustement, Gabarit, Mesure, gabarit, hauteur_voile, variables_css
+from app.content.layout import (
+    PALETTE_ROSE,
+    Ajustement,
+    Gabarit,
+    Mesure,
+    Palette,
+    gabarit,
+    hauteur_voile,
+    variables_css,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,7 @@ def build_document(
     image_data_uri: str,
     scale: float = 1.0,
     scrim_height: float | None = None,
+    palette_: Palette = PALETTE_ROSE,
 ) -> str:
     """Assemble le HTML autonome d'une slide (feuille, police et images inlinees).
 
@@ -164,7 +174,7 @@ def build_document(
     css = Markup((TEMPLATES_DIR / gabarit_.name / "style.css").read_text(encoding="utf-8"))
     return env.get_template(f"{gabarit_.name}/slide.html.j2").render(
         css=css,
-        variables=Markup(variables_css(gabarit_, scale, scrim_height)),
+        variables=Markup(variables_css(gabarit_, scale, scrim_height, palette_)),
         logo_data_uri=_logo_data_uri(),
         image_data_uri=image_data_uri,
         textes={role: Markup(to_html(textes[role])) for role in gabarit_.roles},
@@ -232,7 +242,13 @@ class RenduSlide:
     overflow: bool
 
 
-def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str) -> RenduSlide:
+def _render_one(
+    page,
+    gabarit_: Gabarit,
+    textes: dict[str, str],
+    image_uri: str,
+    palette_: Palette = PALETTE_ROSE,
+) -> RenduSlide:
     """Rend une slide : mesure, ajuste, puis capture.
 
     Deux passes AU MINIMUM, et c'est structurel : la hauteur du voile depend de la
@@ -241,7 +257,10 @@ def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str)
     ajustement = Ajustement(gabarit_)
     mesures: dict[str, Mesure] = {}
     while (echelle := ajustement.prochaine_echelle()) is not None:
-        page.set_content(build_document(gabarit_, textes, image_uri, echelle), wait_until="load")
+        page.set_content(
+            build_document(gabarit_, textes, image_uri, echelle, palette_=palette_),
+            wait_until="load",
+        )
         page.evaluate("document.fonts.ready")
         mesures = {role: mesurer_role(page, role) for role in gabarit_.roles}
         ajustement.enregistrer(mesures)
@@ -263,7 +282,8 @@ def _render_one(page, gabarit_: Gabarit, textes: dict[str, str], image_uri: str)
         if role_principal in mesures:
             voile = hauteur_voile(gabarit_, role_principal, mesures[role_principal])
     page.set_content(
-        build_document(gabarit_, textes, image_uri, resultat.scale, voile), wait_until="load"
+        build_document(gabarit_, textes, image_uri, resultat.scale, voile, palette_),
+        wait_until="load",
     )
     page.evaluate("document.fonts.ready")
     return RenduSlide(
@@ -301,8 +321,16 @@ def mesurer_bandes(slide: dict, template: str = "kinda_reel") -> dict[str, list[
         return {role: list(mesurer_role(page, role).line_widths) for role in gabarit_.roles}
 
 
-def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduSlide]:
-    """Rend chaque slide du post. Un seul Chromium pour tout le post."""
+def render_post(
+    slides: list[dict],
+    template: str = "kinda_post",
+    palette_: Palette = PALETTE_ROSE,
+) -> list[RenduSlide]:
+    """Rend chaque slide du post. Un seul Chromium pour tout le post.
+
+    `palette_` est la teinte de l'article (rose par defaut, verte pour une actu
+    ecologie) : elle vient du post, cf. `app/content/teinte.py`.
+    """
     gabarit_ = gabarit(template)
     # Un `kind: "media"` est une photo ou une video de l'actu : elle part telle
     # quelle dans l'export, sans passer par le gabarit. Le defaut sur "cover"
@@ -321,12 +349,15 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[RenduS
         for slide in covers:
             image_uri = fetch_image_data_uri(slide.get("image_url"))
             textes = {role: slide[role] for role in gabarit_.roles}
-            rendus.append(_render_one(page, gabarit_, textes, image_uri))
+            rendus.append(_render_one(page, gabarit_, textes, image_uri, palette_))
     return rendus
 
 
 def render_covers(
-    variantes: list[dict], image_url: str | None, template: str = "kinda_post"
+    variantes: list[dict],
+    image_url: str | None,
+    template: str = "kinda_post",
+    palette_: Palette = PALETTE_ROSE,
 ) -> list[RenduSlide]:
     """Rend les covers de plusieurs variantes sur le MEME fond.
 
@@ -352,5 +383,5 @@ def render_covers(
         )
         for variante in variantes:
             textes = {role: variante[role] for role in gabarit_.roles}
-            rendus.append(_render_one(page, gabarit_, textes, image_uri))
+            rendus.append(_render_one(page, gabarit_, textes, image_uri, palette_))
     return rendus

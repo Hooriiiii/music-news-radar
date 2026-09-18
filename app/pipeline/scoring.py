@@ -24,6 +24,10 @@ class Category(str, Enum):
     NEW_RELEASE = "new_release"
     ANNOUNCEMENT = "announcement"
     EVENT_FESTIVAL = "event_festival"
+    # Ajoutee le 2026-09-18. `articles.category` est un VARCHAR(100) SANS
+    # contrainte CHECK (cf. `app/models.py` et la migration 0001) : une valeur
+    # de plus ne demande aucune migration.
+    ECOLOGY = "ecology"
     INDUSTRY = "industry"
     GEAR_TECH = "gear_tech"
     CULTURE = "culture"
@@ -96,7 +100,10 @@ sans intérêt, et ne fais jamais de la Bretagne le sujet principal du compte.
    - INFOS POSITIVES / feel-good (initiative solidaire, record, retour attendu, \
 belle histoire) : à mettre en avant, ce compte aime le positif.
    - MUSIQUE × ÉCOLOGIE / ENVIRONNEMENT (festival éco-responsable, prise de position \
-climat d'un artiste, innovation durable dans l'événementiel) : angle recherché, 60+.
+climat d'un artiste, innovation durable dans l'événementiel) : angle recherché, 60+. \
+Ces actus-là se rangent dans la catégorie `ecology` (voir plus bas) : le compte \
+les habille d'une couleur qui leur est propre, la catégorie n'est donc pas qu'une \
+étiquette de tri.
    - Les GROSSES actus musicales générales qui font parler, même transverses.
 4. Hors ligne : rap/hip-hop, rock, metal, country, jazz, classique quand l'actu est \
 purement interne à ces genres — relevance <40, SAUF si elle relève d'un des axes \
@@ -156,23 +163,33 @@ donc les cas où deux catégories sembleraient convenir.
   1. rip : un décès. Rien d'autre ne prime là-dessus.
   2. drama : conflit, polémique, accusation, procès, clash public, séparation \
 houleuse, annulation pour scandale.
-  3. event_festival : le sujet est un ÉVÉNEMENT physique daté — festival, soirée, \
+  3. ecology : le SUJET de l'actu est le rapport de la musique à l'ÉCOLOGIE ou \
+au CLIMAT — festival qui verdit son édition (énergie, mobilité, déchets, \
+gobelets, bilan carbone), prise de position climat d'un artiste ou d'un label, \
+tournée ou événementiel durable, innovation technique pour réduire l'empreinte, \
+menace climatique sur un événement (canicule, sécheresse, inondation). Il faut \
+que l'écologie soit LE SUJET, pas un détail : une affiche verte, une photo de \
+nature, un festival « en plein air », un nom d'artiste ou de label qui évoque la \
+nature, ou une simple mention en passant ne suffisent PAS. Dans le doute, prends \
+la catégorie suivante qui s'applique. Prime sur event_festival : une édition qui \
+passe au 100 % renouvelable est `ecology`, son line-up reste `event_festival`.
+  4. event_festival : le sujet est un ÉVÉNEMENT physique daté — festival, soirée, \
 club, rave. Line-up, programmation, édition, billetterie, bilan, annulation, \
 fermeture ou ouverture de lieu. Vaut MÊME quand l'actu est une annonce : un \
 line-up dévoilé est `event_festival`, jamais `announcement`.
-  4. new_release : de la musique DÉJÀ ÉCOUTABLE — single, EP, album, remix, mix, \
+  5. new_release : de la musique DÉJÀ ÉCOUTABLE — single, EP, album, remix, mix, \
 clip sortis. Le critère est la disponibilité immédiate, pas le fait qu'on en parle.
-  5. announcement : quelque chose est annoncé POUR PLUS TARD et n'est pas un \
-événement au sens 3 — sortie à venir, tournée, date, collaboration confirmée, \
-retour d'un artiste. Si c'est déjà écoutable, c'est 4 ; si c'est un festival ou \
-une soirée, c'est 3.
-  6. gear_tech : matériel, logiciel, plugin, contrôleur, synthé, IA musicale, \
+  6. announcement : quelque chose est annoncé POUR PLUS TARD et n'est pas un \
+événement au sens 4 — sortie à venir, tournée, date, collaboration confirmée, \
+retour d'un artiste. Si c'est déjà écoutable, c'est 5 ; si c'est un festival ou \
+une soirée, c'est 4.
+  7. gear_tech : matériel, logiciel, plugin, contrôleur, synthé, IA musicale, \
 outils de production.
-  7. industry : le business — labels, streaming, droits, chiffres de vente, \
+  8. industry : le business — labels, streaming, droits, chiffres de vente, \
 rachats, nominations, plateformes, réglementation.
-  8. culture : analyse, portrait, interview, rétrospective, tendance de fond, \
+  9. culture : analyse, portrait, interview, rétrospective, tendance de fond, \
 histoire d'un genre. Du contenu de fond, pas une actu chaude.
-  9. other : rien de ce qui précède.
+  10. other : rien de ce qui précède.
 - imprint : le label ou la maison de disques concerné(e) si identifiable, sinon null.
 - summary : résumé factuel en français, 1 à 2 phrases, publiable tel quel.
 - artists : la liste des artistes/DJs/groupes POP ou ÉLECTRO mentionnés (nom propre \

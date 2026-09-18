@@ -321,7 +321,7 @@ def test_exporter_un_post(client, db_session, monkeypatch):
     article = _article(db_session)
     post = _post(db_session, article)
 
-    def faux_rendu(slides, template):
+    def faux_rendu(slides, template, palette_=None):
         return [RenduSlide(png=b"PNG_1", scale=1.0, lines={"headline": 1}, overflow=False)]
 
     monkeypatch.setattr("app.api.posts.render_post", faux_rendu)
@@ -359,7 +359,7 @@ def test_render_persiste_le_rapport(client, db_session, monkeypatch):
     article = _article(db_session)
     post = _post(db_session, article)
 
-    def faux_render(slides, template="kinda_post"):
+    def faux_render(slides, template="kinda_post", palette_=None):
         return [
             RenduSlide(png=b"PNG", scale=1.0, lines={"headline": 3}, overflow=False),
             RenduSlide(png=b"PNG", scale=0.7, lines={"headline": 6}, overflow=True),
@@ -447,6 +447,19 @@ def test_retenir_une_variante_invalide_le_rapport_de_rendu(client, db_session):
     assert post.render_report is None
 
 
+def test_retenir_une_variante_ne_perd_pas_la_teinte(client, db_session):
+    """`variants` porte AUSSI la palette du post depuis le 2026-09-18 : l'ecrire
+    en bloc plutot qu'en fusion la ferait disparaitre au premier clic, et la
+    cover repasserait en rose sur une actu ecologie."""
+    article = _article(db_session)
+    post = _post(db_session, article, variants={**_quatre_variantes(), "palette": "verte"})
+
+    assert client.patch(f"/posts/{post.id}", json={"variante_retenue": 1}).status_code == 200
+
+    db_session.refresh(post)
+    assert post.variants["palette"] == "verte"
+
+
 def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
     """Deux endpoints distincts et non un seul : la generation coute un appel
     Claude, le rendu coute un Chromium. Recharger la page ne doit pas repayer
@@ -454,7 +467,7 @@ def test_covers_rend_quatre_data_uris(client, db_session, monkeypatch):
     article = _article(db_session)
     post = _post(db_session, article, variants=_quatre_variantes())
 
-    def faux_render_covers(variantes, image_url, template):
+    def faux_render_covers(variantes, image_url, template, palette_=None):
         assert len(variantes) == 4
         assert template == post.template
         # Overflow different par variante, expres : ce n'est pas un simple
