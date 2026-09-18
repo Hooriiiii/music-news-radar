@@ -48,7 +48,7 @@ Le dashboard ne sert plus qu'à consulter le flux : il permet aussi de préparer
    Le surlignage rose se pilote directement dans le texte : entoure un passage de
    `**deux astérisques**` pour le mettre en évidence sur le rendu final.
 3. Remplace l'image d'une slide si besoin (par URL — pas d'upload de fichier).
-4. Valide le post, puis télécharge le zip des visuels générés (PNG 1080×1440, un
+4. Valide le post, puis télécharge le zip des visuels générés (PNG 1080×1350, un
    par slide).
 5. Publie le zip à la main sur Instagram (aucune publication automatique n'est
    prévue pour l'instant).

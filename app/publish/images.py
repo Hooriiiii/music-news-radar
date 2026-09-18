@@ -5,9 +5,17 @@ plus, largeur de 320 a 1440 px, proportions entre 4:5 et 1,91:1. Une image hors
 de ces bornes fait echouer le conteneur -- et seulement au moment de publier,
 c'est-a-dire trop tard. D'ou une normalisation systematique au gel.
 
-La cover `kinda_post` (1080x1440, soit 3:4) est elle-meme hors bornes : elle est
-recadree AU CENTRE en 1080x1350. 45 px partent en haut et en bas ; le logo (87 px
-du haut) et le bloc d'accroche (76 px du bas) restent dans l'image.
+La cover `kinda_post` ne subit PLUS aucun recadrage : elle est rendue nativement
+en 1080x1350, c'est-a-dire exactement au 4:5 minimal, et traverse donc cette
+fonction intacte. Jusqu'au 2026-09-18 elle etait dessinee en 1080x1440 (3:4) puis
+recadree ici au centre : 45 px partaient en haut et en bas, soit la moitie de la
+marge du logo (87 -> 42) et 60 % de celle de l'accroche (76 -> 31). Les marges
+publiees n'etaient plus celles du design, et cela se voyait. La correction vit
+dans `app/content/layout.py` (`GABARIT_POST.height`), pas ici : cette fonction
+applique la regle de Meta et ne connait aucun gabarit.
+
+Les autres images d'un carrousel (les photos de l'actu) restent, elles, recadrees
+au besoin : elles arrivent dans n'importe quel format.
 
 `en_jpeg` sert la cover d'un reel, qui echappe aux regles de proportions du fil.
 """

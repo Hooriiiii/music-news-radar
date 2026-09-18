@@ -23,7 +23,7 @@ from app.config import settings
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
-from app.content.illustration import choisir_illustration
+from app.content.illustration import choisir_illustration, eviter_l_affiche
 from app.content.teinte import teinte_de_article
 from app.content.visuels import image_de_fond, visuels_autorises
 from app.models import Article, Post
@@ -360,6 +360,7 @@ def create_post(
     template: str = "kinda_post",
     visuels=None,
     selecteur_fond=choisir_illustration,
+    verdicts_fond=None,
 ) -> Post:
     """Persiste un brouillon : les quatre variantes, une cover sans retenue, et les
     visuels choisis (`ChoixVisuels`, cf. `choix_visuels.py`).
@@ -379,13 +380,27 @@ def create_post(
     le gabarit, donc la cover reel suit la meme regle. Le passer a None rend le
     comportement d'avant (la premiere image exploitable).
 
+    Quand le fond retenu est ENCORE une affiche -- le cas ou tous les candidats en
+    sont, comme le carrousel de line-up des Transmusicales --, on va chercher une
+    photo sur le compte qui a publie l'actu (`visuels.secours`, cf.
+    `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que pour injecter
+    un juge dans les tests.
+
     Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
     doit rester lisible sans lui.
     """
     premiere = draft.variantes[0]
     if visuels is not None:
         actifs, credit = list(visuels.actifs), visuels.credit
-        fond = image_de_fond(actifs, selecteur_fond)
+        # Le fond retenu peut etre une affiche malgre le juge, quand TOUS les
+        # candidats en sont (un carrousel de line-up). On va alors chercher une
+        # photo sur le compte qui a publie l'actu -- et seulement alors.
+        fond = eviter_l_affiche(
+            image_de_fond(actifs, selecteur_fond),
+            # `getattr` : des appels plus anciens passent un objet partiel.
+            getattr(visuels, "secours", None),
+            verdicts=verdicts_fond,
+        )
         if actifs and fond is None:
             # Des actifs choisis mais aucun fond extractible : la cover partirait
             # sur l'image de secours du gabarit, et le gel refuserait le post a

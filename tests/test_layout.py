@@ -22,6 +22,9 @@ from app.content.layout import (
     tient,
     variables_css,
 )
+# Le rapport minimal que Meta accepte dans le fil : c'est LUI qui dicte la
+# hauteur du gabarit post depuis le 2026-09-18, d'ou l'import ici.
+from app.publish.images import RATIO_MIN
 
 
 _LOGO_ESSAI = Logo(right=77, top=87, width=150)
@@ -155,7 +158,10 @@ def test_le_gabarit_post_porte_les_valeurs_de_la_maquette():
     change sans repasser par REFERENCE.md, ce test le dit."""
     typo, zone = GABARIT_POST.roles["headline"]
 
-    assert (GABARIT_POST.width, GABARIT_POST.height) == (1080, 1440)
+    # 1350 et non les 1440 de la frame : le post est rendu NATIVEMENT au format
+    # publie (cf. `test_le_post_est_rendu_au_format_publie`). Les marges de la
+    # maquette, elles, sont intouchees -- c'est le point.
+    assert (GABARIT_POST.width, GABARIT_POST.height) == (1080, 1350)
     assert typo.font_size == 80
     assert typo.line_height == 1.15
     assert typo.letter_spacing == -0.06
@@ -166,6 +172,34 @@ def test_le_gabarit_post_porte_les_valeurs_de_la_maquette():
     # qu'a 5 lignes le sujet de la photo reste visible sous le texte. Voir le
     # commentaire de `GABARIT_POST` pour le releve complet.
     assert zone.max_lines == 5
+
+
+def test_le_post_est_rendu_au_format_publie():
+    """Le defaut du 2026-09-18, et la raison d'etre de cette hauteur.
+
+    La cover etait dessinee en 1080x1440 (3:4) puis RECADREE AU CENTRE en
+    1080x1350 par `app/publish/images.py`, parce que Meta refuse le 3:4 dans le
+    fil. Ce recadrage mangeait 45 px en haut et 45 px en bas : le logo, pose a
+    87 px du bord, arrivait a 42 px du bord publie, et l'accroche ancree a 76 px
+    du bas a 31 px. Toutes les marges que le designer a posees contre les bords
+    etaient donc fausses d'un tiers a la publication.
+
+    La correction n'est pas un reglage de marges, c'est de rendre au format
+    publie : si le rapport du gabarit est deja celui que Meta accepte, plus rien
+    n'est recadre et les marges de la maquette sont celles qu'on voit.
+    """
+    assert GABARIT_POST.width / GABARIT_POST.height == pytest.approx(RATIO_MIN)
+
+
+def test_les_marges_de_la_maquette_sont_celles_qui_sont_publiees():
+    """Le corollaire, verifie sur les deux marges dont l'utilisateur s'est
+    plaint : plus aucun ecart entre ce qui est rendu et ce qui est publie."""
+    _, zone = GABARIT_POST.roles["headline"]
+    rogne = (GABARIT_POST.height - GABARIT_POST.width / RATIO_MIN) / 2
+
+    assert rogne == pytest.approx(0)
+    assert GABARIT_POST.logo.top - rogne == pytest.approx(87)
+    assert zone.anchor_offset - rogne == pytest.approx(76)
 
 
 def test_hauteur_voile_retrouve_la_valeur_de_la_maquette():

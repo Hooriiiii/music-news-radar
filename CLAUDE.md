@@ -399,7 +399,7 @@ slide 2+ = médias de l'actu, kind: "media" -> laissés passer tels quels
 
 La cover est proposée en **4 variantes** (`Post.variants`, quatre formulations
 de la même info, jamais quatre angles différents) sur le MÊME fond, et sur deux
-formats — `template` sur le post : `kinda_post` (1080×1440, POST, toujours
+formats — `template` sur le post : `kinda_post` (1080×1350, POST, toujours
 disponible) et `kinda_reel` (1080×1920, REELS, disponible seulement quand
 l'article a une vidéo exploitable). Chaque variante porte trois textes :
 `headline` (gabarit post) et le couple `title`/`subtitle` (gabarit reel, deux
@@ -531,11 +531,26 @@ API, vision coupée (`ILLUSTRATION_VISION_ENABLED=false`), réseau mort, JSON ho
 schéma, image illisible → il rend `None` et l'appelant garde la première image.
 Un verdict manquant vaut « neutre », qui passe devant une affiche avérée et
 derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
-affiche. Si TOUS les candidats sont des affiches, on garde la moins mauvaise —
-le repli vers une photo d'artiste suivi vit en amont, dans `choix_visuels`, et se
-décide avant la composition ; mieux vaut une cover sur une affiche qu'un créneau
-perdu. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel suit
-la même règle sans code en double.
+affiche. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel
+suit la même règle sans code en double.
+
+**Et si tout est une affiche, on va chercher une photo sur le compte qui a publié
+l'actu** (2026-09-18, `choix_visuels.photos_du_compte` +
+`illustration.eviter_l_affiche`). Post 40 (Transmusicales) : cinq visuels, cinq
+affiches de line-up — le juge ne pouvait que rendre la moins mauvaise. Demande de
+l'utilisateur : « si tu trouves pas, va trouver une belle photo sur le compte
+Instagram de l'info en question ». Le compte est donc relu par le chemin existant
+(base d'abord, `LecteurComptes`/`business_discovery` ensuite, avec ses budgets :
+2 lectures/passage, 24/jour, cache 6 h, pause sur le quota), **jamais** un compte
+`categorie=media`, et les photos sont COPIÉES en local (les URL signées du CDN
+expirent avant le gel). Elles passent devant le même juge ; si elles sont elles
+aussi des affiches, on garde le fond d'origine — une affiche d'ailleurs ne vaut
+pas mieux que l'affiche de l'actu, et mieux vaut une cover sur une affiche qu'un
+créneau perdu. Ce chemin **ne coûte rien** tant que le fond retenu n'est pas une
+affiche avérée : ni lecture de compte, ni téléchargement, ni jeton. Le secours
+voyage depuis `choisir_visuels` (où vivent la session et le budget du passage)
+jusqu'à `create_post` sous forme de fonction, dans `ChoixVisuels.secours` ; il
+alimente le FOND seulement, jamais `assets` — le carrousel reste celui de l'actu.
 
 Les posts ne sont **jamais purgés** (archive éditoriale, même motif que
 `artist_mentions`) et publier un post bascule son article en `USED`, ce qui le
@@ -620,8 +635,16 @@ Le sélecteur segmenté vit dans le panneau Programmation du dashboard, à côt�
 
 **Règles Meta vérifiées dans la documentation (2026-09-16)** : JPEG uniquement,
 8 Mo, 320 à 1440 px de large, proportions 4:5 à 1,91:1, carrousel de 10, légende de
-2200 caractères et 30 hashtags. La cover `kinda_post` (3:4) est donc recadrée au
-centre en 1080×1350 par `app/publish/images.py` (`publication_ratio_min`).
+2200 caractères et 30 hashtags. **La cover `kinda_post` est rendue NATIVEMENT en
+1080×1350** (4:5) : elle traverse `app/publish/images.py` intacte. Jusqu'au
+2026-09-18 elle était dessinée en 1080×1440 (3:4) puis recadrée au centre, ce qui
+lui prenait 45 px en haut et en bas — la moitié de la marge du logo (87 → 42) et
+60 % de celle de l'accroche (76 → 31). Les marges publiées n'étaient donc plus
+celles du design, et cela se voyait. Les valeurs du dessin n'ont pas bougé (77
+latéral, 87 logo, 76 accroche, voiles 817/727) : elles se comptent depuis un bord
+ou depuis le bloc de texte, et seuls 90 px de PHOTO disparaissent du milieu du
+cadre. Les photos de l'actu, elles, sont toujours recadrées
+(`publication_ratio_min`).
 
 **Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
 post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel

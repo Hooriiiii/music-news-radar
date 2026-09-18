@@ -228,7 +228,7 @@ def test_le_gel_lit_les_copies_locales_sans_telecharger(tmp_path):
     post = SimpleNamespace(slides=[{"kind": "cover", "image_url": copies[0]["fichier"]}], assets=copies)
 
     def rendre(slides, template, palette_=None):
-        return [RenduSlide(png=_image(1080, 1440), scale=1.0, lines={}, overflow=False)]
+        return [RenduSlide(png=_image(1080, 1350), scale=1.0, lines={}, overflow=False)]
 
     noms = preparer_fichiers(post, _article(_source()), tmp_path / "gel", rendre=rendre, telecharger=_interdit)
     assert len(noms) == 2
