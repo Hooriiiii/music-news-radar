@@ -93,11 +93,30 @@ def recouvrement(titre_article: str, post: PostArtiste) -> int:
 
 
 def classer(
-    article, posts: list[PostArtiste], *, format_: FormatCreneau, maintenant: dt.datetime
+    article,
+    posts: list[PostArtiste],
+    *,
+    format_: FormatCreneau,
+    maintenant: dt.datetime,
+    fenetre_jours: int | None = None,
+    generique_jours: int | None = None,
 ) -> list[Retenu]:
+    """Les posts utilisables, du plus au moins pertinent.
+
+    Les deux fenetres sont surchargeables parce que tous les appelants n'ont pas
+    la meme exigence : un visuel de CARROUSEL doit illustrer l'actu (d'ou 10 et
+    5 jours), un FOND DE COVER n'a qu'a etre une belle photo du bon compte --
+    `choix_visuels.photos_du_compte` remonte donc bien plus loin, sans quoi un
+    compte de festival en pleine saison d'annonces ne propose que des affiches.
+    """
     reference = _utc(article.published_at or article.fetched_at) or maintenant
-    debut = reference - dt.timedelta(days=settings.visuels_artiste_fenetre_jours)
-    generique = dt.timedelta(days=settings.visuels_artiste_generique_jours)
+    fenetre = settings.visuels_artiste_fenetre_jours if fenetre_jours is None else fenetre_jours
+    debut = reference - dt.timedelta(days=fenetre)
+    generique = dt.timedelta(
+        days=settings.visuels_artiste_generique_jours
+        if generique_jours is None
+        else generique_jours
+    )
     retenus = []
     for post in posts:
         publie = _utc(post.publie_le)
@@ -124,14 +143,19 @@ def classer(
 
 
 def posts_en_base(
-    db: Session, comptes: list[CompteArtiste], maintenant: dt.datetime
+    db: Session,
+    comptes: list[CompteArtiste],
+    maintenant: dt.datetime,
+    fenetre_jours: int | None = None,
 ) -> list[PostArtiste]:
+    """Les posts des comptes en base. `fenetre_jours` accompagne celui de
+    `classer` : elargir l'un sans l'autre ne servirait a rien, la requete ne
+    remonterait pas les posts que le classement accepterait."""
     if not comptes:
         return []
     par_source = {compte.source_id: compte for compte in comptes}
-    depuis = maintenant - dt.timedelta(
-        days=settings.visuels_artiste_fenetre_jours + settings.publication_fraicheur_jours
-    )
+    fenetre = settings.visuels_artiste_fenetre_jours if fenetre_jours is None else fenetre_jours
+    depuis = maintenant - dt.timedelta(days=fenetre + settings.publication_fraicheur_jours)
     vu = func.coalesce(Article.published_at, Article.fetched_at)
     articles = db.scalars(
         select(Article)

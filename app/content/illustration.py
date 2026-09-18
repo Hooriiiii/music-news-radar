@@ -24,10 +24,12 @@ Trois regles de cout, dans cet ordre :
      recomposition, ou un second creneau sur le meme article, ne repaie rien.
 
 Et quand il n'y a rien a choisir parce que TOUT est une affiche (le carrousel de
-line-up d'un festival), `eviter_l_affiche` va chercher une photo sur le compte
-qui a publie l'actu -- demande de l'utilisateur du 2026-09-18 sur le post des
-Transmusicales. Ce chemin ne coute rien tant que le fond retenu n'est pas une
-affiche averee : ni lecture de compte, ni telechargement, ni jeton.
+line-up d'un festival), `eviter_l_affiche` ouvre des RESERVES : le compte qui a
+publie l'actu, puis les artistes suivis cites. Si aucune ne donne de vraie photo,
+la cover part sur le fond Kinda -- mieux vaut le fond Kinda qu'une affiche
+(utilisateur, 2026-09-18 : « ya toujours l'affiche en fond !! »). Ce chemin ne
+coute rien tant que le fond retenu n'est pas une affiche averee : ni lecture de
+compte, ni telechargement, ni jeton.
 
 Et une regle de robustesse qui prime sur tout : ce module ne LEVE JAMAIS. Pas de
 cle API, modele en panne, reseau coupe, JSON hors schema, image illisible -> il
@@ -41,6 +43,7 @@ import io
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -51,7 +54,12 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.content.export import telecharger as telecharger_media
 from app.content.urls import url_propre
-from app.content.visuels import lire_fichier_cache
+from app.content.visuels import (
+    FOND_KINDA,
+    ORIGINE_ARTICLE,
+    ORIGINE_KINDA,
+    lire_fichier_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,9 +276,9 @@ def choisir_illustration(
     candidat), quand la vision est coupee, et quand tout echoue.
 
     Si TOUS les candidats sont des affiches, on rend quand meme la moins mauvaise
-    (la mieux notee) : le chemin de repli vers une photo d'artiste suivi vit en
-    amont, dans `choix_visuels`, et se decide avant la composition -- mieux vaut
-    une cover sur une affiche qu'un creneau perdu.
+    (la mieux notee). Ce n'est PAS le dernier mot : `eviter_l_affiche`, en aval,
+    reprend ce fond, constate qu'il est une affiche, ouvre les reserves et, a
+    defaut, part sur le fond Kinda. Ici on ne fait que classer.
     """
     try:
         return _choisir(candidats, juge, maintenant, chemin_cache)
@@ -348,68 +356,126 @@ def _choisir(candidats, juge, maintenant, chemin_cache) -> str | None:
     meilleur = max(range(len(retenus)), key=lambda i: _rang(i, verdicts[i]))
     if all(v.affiche for v in verdicts):
         logger.info(
-            "tous les fonds candidats sont des affiches : on garde la moins mauvaise (%s)",
+            "tous les fonds candidats sont des affiches : %s passe la main a "
+            "`eviter_l_affiche`",
             retenus[meilleur],
         )
     return retenus[meilleur]
 
 
-# --- Le dernier recours : une photo du compte qui a publie l'actu ----------
+# --- Le dernier recours : chercher ailleurs, sinon l'aplat Kinda ----------
 
 
-def eviter_l_affiche(fond: str | None, secours=None, *, verdicts=None, **options) -> str | None:
-    """Remplacer un fond qui est encore une AFFICHE par une photo du compte.
+@dataclass(frozen=True)
+class Lot:
+    """Une RESERVE de photos de remplacement, et d'ou elle vient.
+
+    `photos` est une fonction sans argument qui rend des URL de photos
+    RAPATRIEES EN LOCAL (cf. `choix_visuels.photos_du_compte` et
+    `photos_des_artistes_cites`). Une fonction et non une liste : un lot ne doit
+    rien couter -- ni lecture Graph, ni telechargement -- tant que le fond retenu
+    n'est pas une affiche averee.
+    """
+
+    origine: str
+    photos: Callable[[], list[str]]
+
+
+@dataclass(frozen=True)
+class Fond:
+    """Le fond retenu, et d'ou il vient. L'origine est POSEE et non deduite : une
+    fois le fond ecrit dans `slides[0].image_url`, plus rien ne dirait s'il vient
+    de l'actu, du compte, d'un artiste ou de l'aplat Kinda -- et c'est
+    precisement ce que le dashboard doit montrer."""
+
+    url: str | None
+    origine: str
+
+
+def eviter_l_affiche(
+    fond: str | None,
+    *lots: Lot | None,
+    origine: str = ORIGINE_ARTICLE,
+    verdicts=None,
+    **options,
+) -> Fond:
+    """JAMAIS une affiche en fond de cover. Chercher ailleurs, sinon l'aplat Kinda.
 
     Demande de l'utilisateur, 2026-09-18, sur le post des Transmusicales : « pour
     le post des Trans c'est toujours une affiche en background sur la premiere
     slide. Si tu trouves pas, va trouver une belle photo sur le compte Instagram
-    de l'info en question. »
+    de l'info en question. » Puis, apres une troisieme republication du meme
+    post : « ya toujours l'affiche en fond !! ».
 
-    `choisir_illustration` ECARTE une affiche quand il existe une photo a lui
-    preferer. Le cas des Trans est celui ou il n'y en a pas : le compte du
-    festival a publie un carrousel d'affiches de line-up, les cinq candidats sont
-    donc des affiches, et le juge rend la moins mauvaise. C'est ici qu'on va
-    chercher ailleurs.
+    La premiere version gardait « la moins mauvaise des affiches » quand aucune
+    reserve ne donnait mieux. C'etait le defaut : une affiche moins chargee reste
+    une affiche, illisible sous l'accroche et redondante avec elle. La regle est
+    donc devenue absolue -- MIEUX VAUT LE FOND KINDA QU'UNE AFFICHE.
 
-    `secours` est une fonction sans argument qui rend des URL de photos
-    RAPATRIEES EN LOCAL (cf. `choix_visuels.photos_du_compte`). Elle n'est
-    appelee QUE si le fond est une affiche averee : quand la premiere image est
-    deja une bonne photo, rien n'est lu, rien n'est telecharge, rien n'est paye.
+    `choisir_illustration` ECARTE deja une affiche quand il existe une photo a
+    lui preferer parmi les medias de l'actu. On n'arrive ici que lorsqu'il n'y en
+    a pas : le compte du festival a publie un carrousel d'affiches de line-up.
 
-    Trois issues, dans l'ordre de preference : la meilleure photo du compte ; a
-    defaut le fond d'origine (une affiche d'ailleurs ne vaut pas mieux que
-    l'affiche de l'actu) ; et jamais d'exception -- la file continue avec ce
-    qu'elle avait.
+    Les `lots` sont ouverts DANS L'ORDRE, et seulement tant qu'aucun n'a donne :
+    le compte de l'actu d'abord (c'est son actu), les artistes suivis cites
+    ensuite. On s'arrete au premier lot qui contient une vraie photo.
+
+    Quatre issues : le fond d'origine (ce n'est pas une affiche, ou on n'a pas pu
+    le juger -- ne pas savoir n'est pas savoir) ; la meilleure photo du premier
+    lot qui en offre une ; le fond Kinda ; et jamais d'exception -- une panne du
+    juge laisse le fond d'origine, une panne d'un lot laisse le fond Kinda,
+    puisque l'affiche, elle, est averee.
     """
-    if not fond or secours is None:
-        return fond
+    if not fond:
+        return Fond(fond, origine)
     rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
     try:
         verdict = rendre([fond]).get(fond)
-        if verdict is None or not verdict.affiche:
-            # Une photo, ou un verdict qu'on n'a pas pu rendre. Ne pas savoir
-            # n'est pas savoir que c'est une affiche : on ne depense rien.
-            return fond
-        # Une place est laissee au fond d'origine dans le lot juge, pour que la
-        # comparaison porte sur les memes criteres que le choix initial.
-        candidats = [url for url in (secours() or []) if url][
-            : max(1, settings.illustration_max_candidats - 1)
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning("fond non juge (%s) : fond d'origine conserve", type(exc).__name__)
+        return Fond(fond, origine)
+    if verdict is None or not verdict.affiche:
+        # Une photo, ou un verdict qu'on n'a pas pu rendre. Ne pas savoir n'est
+        # pas savoir que c'est une affiche : on ne depense rien et le fond reste.
+        # C'est aussi le comportement quand la vision est coupee.
+        return Fond(fond, origine)
+    for lot in lots:
+        retenu = _meilleure_photo(lot, rendre)
+        if retenu is not None:
+            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, retenu)
+            return Fond(retenu, lot.origine)
+    logger.info("aucune photo trouvee, tout est une affiche : cover sur le fond Kinda")
+    return Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def _meilleure_photo(lot: Lot | None, rendre) -> str | None:
+    """La meilleure VRAIE photo d'un lot, ou None -- lot absent, vide, tout en
+    affiches, ou en panne (un lot qui casse prive d'une alternative ; il ne rend
+    pas l'affiche publiable pour autant).
+
+    Un candidat qu'on n'a pas su juger n'est JAMAIS retenu : c'est la difference
+    avec le classement de `choisir_illustration`, ou l'inconnu passe devant une
+    affiche averee. Ici l'alternative est le fond Kinda, qui est sur -- on ne lui
+    prefere qu'une image dont le juge a dit qu'elle n'est pas une affiche."""
+    if lot is None:
+        return None
+    try:
+        candidats = [url for url in (lot.photos() or []) if url][
+            : max(1, settings.fond_secours_max_photos)
         ]
         if not candidats:
-            return fond
-        connus = rendre([*candidats, fond])
-        meilleur = max(
-            range(len(candidats)),
-            key=lambda i: _rang(i, connus.get(candidats[i], VERDICT_INCONNU)),
-        )
-        retenu = candidats[meilleur]
-        if connus.get(retenu, VERDICT_INCONNU).affiche:
-            logger.info("le compte source n'offre que des affiches : fond d'origine conserve")
-            return fond
-        logger.info("fond de cover remplace par une photo du compte source : %s", retenu)
-        return retenu
+            return None
+        connus = rendre(candidats)
+        photos = [url for url in candidats if url in connus and not connus[url].affiche]
+        if not photos:
+            logger.info("la reserve « %s » n'offre que des affiches", lot.origine)
+            return None
+        meilleure = max(range(len(photos)), key=lambda i: _rang(i, connus[photos[i]]))
+        return photos[meilleure]
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning(
-            "fond de secours abandonne (%s) : fond d'origine conserve", type(exc).__name__
+            "reserve « %s » abandonnee (%s)",
+            getattr(lot, "origine", "?"),
+            type(exc).__name__,
         )
-        return fond
+        return None

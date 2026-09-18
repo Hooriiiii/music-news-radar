@@ -33,6 +33,7 @@ from app.content.urls import url_propre
 from app.content.render import render_post
 from app.content.teinte import palette_du_post
 from app.content.visuels import (
+    FOND_KINDA,
     ORIGINE_ARTICLE,
     fond_de_cover,
     lire_fichier_cache,
@@ -118,6 +119,12 @@ def verifier_fond(post, article) -> str:
     garde passe et le rendu retombe EN SILENCE sur l'image de secours du gabarit.
     """
     fond = fond_de_cover(post)
+    if fond == FOND_KINDA:
+        # L'aplat Kinda est un fond VALABLE, choisi a la composition parce que
+        # tout le reste etait une affiche (2026-09-18). Le distinguer d'un fond
+        # absent est tout l'interet de la sentinelle : sans ce cas, le gel
+        # refuserait le post a chaque passage jusqu'a MANQUE.
+        return fond
     if fond and fond in urls_interdites(article):
         # Brouillon compose avant la regle du 2026-09-17 : jamais publie.
         raise PreparationImpossible("fond de cover tire d'un compte media Instagram : visuel interdit")

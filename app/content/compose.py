@@ -25,7 +25,12 @@ from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.illustration import choisir_illustration, eviter_l_affiche
 from app.content.teinte import teinte_de_article
-from app.content.visuels import image_de_fond, visuels_autorises
+from app.content.visuels import (
+    ORIGINE_ARTICLE,
+    image_de_fond,
+    origine_du_fond,
+    visuels_autorises,
+)
 from app.models import Article, Post
 
 logger = logging.getLogger(__name__)
@@ -381,10 +386,15 @@ def create_post(
     comportement d'avant (la premiere image exploitable).
 
     Quand le fond retenu est ENCORE une affiche -- le cas ou tous les candidats en
-    sont, comme le carrousel de line-up des Transmusicales --, on va chercher une
-    photo sur le compte qui a publie l'actu (`visuels.secours`, cf.
-    `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que pour injecter
-    un juge dans les tests.
+    sont, comme le carrousel de line-up des Transmusicales --, on ouvre les
+    reserves attachees aux visuels (`visuels.secours` : le compte de l'actu, puis
+    les artistes cites), et a defaut la cover part sur le FOND KINDA. Jamais une
+    affiche (cf. `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que
+    pour injecter un juge dans les tests.
+
+    L'origine du fond retenu est gardee dans `variants["fond"]` : une fois l'URL
+    ecrite dans la slide, plus rien ne dirait si elle vient de l'actu, du compte,
+    d'un artiste ou de l'aplat Kinda -- et c'est ce que le dashboard montre.
 
     Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
     doit rester lisible sans lui.
@@ -395,12 +405,15 @@ def create_post(
         # Le fond retenu peut etre une affiche malgre le juge, quand TOUS les
         # candidats en sont (un carrousel de line-up). On va alors chercher une
         # photo sur le compte qui a publie l'actu -- et seulement alors.
-        fond = eviter_l_affiche(
-            image_de_fond(actifs, selecteur_fond),
+        retenu = image_de_fond(actifs, selecteur_fond)
+        choisi = eviter_l_affiche(
+            retenu,
             # `getattr` : des appels plus anciens passent un objet partiel.
-            getattr(visuels, "secours", None),
+            *(getattr(visuels, "secours", None) or []),
+            origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
             verdicts=verdicts_fond,
         )
+        fond, origine_fond = choisi.url, choisi.origine
         if actifs and fond is None:
             # Des actifs choisis mais aucun fond extractible : la cover partirait
             # sur l'image de secours du gabarit, et le gel refuserait le post a
@@ -415,6 +428,7 @@ def create_post(
         actifs = None
         credit = credit_video(article)
         fond = _fond_par_defaut(article, selecteur_fond)
+        origine_fond = ORIGINE_ARTICLE
     post = Post(
         article_id=article.id,
         article_title=article.title,
@@ -443,6 +457,11 @@ def create_post(
             # doit rester rendable sans lui (meme motif que les champs
             # denormalises ci-dessus). Editable ensuite sans re-scorer.
             "palette": teinte_de_article(article),
+            # D'ou vient le fond de la cover (article | compte | artiste |
+            # kinda). Ici et non sur la slide : `slides[0]` est reecrite a chaque
+            # choix de variante et editable au dashboard, alors que l'origine est
+            # un fait de la composition -- fige au meme titre que la palette.
+            "fond": {"origine": origine_fond},
         },
     )
     db.add(post)

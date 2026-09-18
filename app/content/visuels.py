@@ -18,6 +18,43 @@ from app.models import SourceCategorie, SourceType
 
 ORIGINE_ARTICLE = "article"
 ORIGINE_ARTISTE = "artiste"
+# D'ou vient le FOND de la cover -- les deux ci-dessus, plus ces deux-la, qui
+# n'ont de sens que pour un fond : le compte qui a publie l'actu, et le refus.
+ORIGINE_COMPTE = "compte"
+ORIGINE_KINDA = "kinda"
+
+# Le fond Kinda : l'aplat sombre du gabarit (`app/content/assets/fallback.jpg`),
+# celui-la meme sur lequel une cover retombe quand une image est introuvable.
+#
+# Ce n'est PAS une URL, c'est un CHOIX, et il lui fallait une valeur explicite.
+# Un fond absent (`None`) veut dire « ce post n'a pas de visuel » et le gel le
+# refuse (`preparation.verifier_fond`) ; `FOND_KINDA` veut dire « on a cherche,
+# tout etait une affiche, on assume l'aplat ». Sans cette distinction, la seule
+# facon d'ecarter une affiche aurait ete de laisser le fond vide -- et la file
+# aurait refuse le post a chaque passage jusqu'a MANQUE.
+#
+# La regle qu'il porte, posee par l'utilisateur le 2026-09-18 apres trois
+# republications du post des Transmusicales (« ya toujours l'affiche en fond !! ») :
+# MIEUX VAUT LE FOND KINDA QU'UNE AFFICHE. L'accroche y reste lisible -- c'est le
+# fond pour lequel le gabarit a ete dessine.
+#
+# Le schema `kinda:` n'est ni http(s) ni `file://` : aucune requete ne part,
+# aucun fichier n'est lu, et les gardes existantes le voient deja comme non
+# telechargeable.
+FOND_KINDA = "kinda:fond"
+
+
+def origine_du_fond(actifs: list[dict] | None, fond: str | None) -> str | None:
+    """L'origine de l'actif dont l'image sert de fond, ou None.
+
+    Le fond est une URL choisie parmi les images des actifs : c'est le seul lien
+    qui reste entre lui et l'actif d'ou il vient. On le retrouve pour SAVOIR
+    d'ou vient le fond publie (article, artiste), information que le dashboard
+    affiche et que le post garde."""
+    for entree in actifs or []:
+        if fond and image_de(entree) == fond:
+            return entree.get("origine")
+    return None
 
 
 def origine_interdite(source) -> bool:

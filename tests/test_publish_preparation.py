@@ -263,3 +263,24 @@ def test_une_cover_sans_fond_n_est_jamais_publiee(tmp_path):
     post = SimpleNamespace(slides=[cover], assets=[])
     with pytest.raises(PreparationImpossible, match="aucun fond"):
         preparer_fichiers(post, _article(), tmp_path, rendre=_rendre(), telecharger=_telecharger())
+
+
+def test_le_fond_kinda_est_un_fond_publiable(tmp_path):
+    """L'inverse du test precedent : `FOND_KINDA` n'est pas une absence de fond,
+    c'est le choix assume de l'aplat sombre plutot qu'une affiche de line-up. Le
+    gel doit le laisser passer -- sinon la file refuserait le post a chaque
+    passage jusqu'a MANQUE."""
+    from app.content.visuels import FOND_KINDA
+
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": FOND_KINDA}
+    post = SimpleNamespace(slides=[cover], assets=None)
+
+    noms = preparer_fichiers(
+        post, _article("https://img/affiche.jpg"), tmp_path,
+        rendre=_rendre(), telecharger=_telecharger(),
+    )
+
+    # La cover, PLUS l'affiche : elle reste une slide honnete du carrousel, elle
+    # ne fait simplement plus le fond du titre.
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]

@@ -196,11 +196,16 @@ class Settings(BaseSettings):
     )
     illustration_cache_jours: int = 7
     # Fond de SECOURS : quand le fond retenu est encore une affiche, on va
-    # chercher des photos sur le compte qui a publie l'actu (2026-09-18, le post
-    # des Transmusicales, dont le carrousel n'etait fait que d'affiches). Deux
-    # suffisent : chacune coute un telechargement et des jetons de vision, et il
-    # s'agit de trouver une photo correcte, pas la meilleure du compte.
-    fond_secours_max_photos: int = 2
+    # chercher des photos ailleurs -- d'abord sur le compte qui a publie l'actu,
+    # puis chez les artistes suivis cites (2026-09-18, le post des
+    # Transmusicales, dont le carrousel n'etait fait que d'affiches).
+    # Deux photos ne suffisaient pas : sur un compte de festival en pleine saison
+    # d'annonces, les deux derniers posts sont deux affiches de plus. Six
+    # candidats par reserve, et une fenetre bien plus large que celle des visuels
+    # d'artistes (10 j) -- un fond n'a pas a ILLUSTRER l'actu, une photo de
+    # concert d'il y a trois semaines fait parfaitement l'affaire.
+    fond_secours_max_photos: int = 6
+    fond_secours_fenetre_jours: int = 30
 
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
