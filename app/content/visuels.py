@@ -99,14 +99,46 @@ def image_de(entree_media: dict) -> str | None:
     return url_propre(entree_media.get("preview_url"))
 
 
-def image_de_fond(actifs: list[dict] | None) -> str | None:
+def candidats_de_fond(actifs: list[dict] | None) -> list[str]:
+    """Les images fixes exploitables comme fond, de la plus a la moins probable.
+
+    Meme ordre que le premier choix historique : une VRAIE photo d'abord, la
+    vignette d'une video seulement a defaut. Extrait en liste pour qu'un
+    selecteur puisse CLASSER ces candidats au lieu de subir le premier.
+    """
+    actifs = actifs or []
+    photos = [a for a in actifs if a.get("type") == PHOTO]
+    vues: set[str] = set()
+    urls: list[str] = []
+    for entree in [*photos, *actifs]:
+        image = image_de(entree)
+        if image and image not in vues:
+            vues.add(image)
+            urls.append(image)
+    return urls
+
+
+def image_de_fond(actifs: list[dict] | None, selecteur=None) -> str | None:
     """Le fond de la cover : une VRAIE photo d'abord, la vignette d'une video
     seulement a defaut. Un carrousel ouvre souvent sur une video, et sa vignette
     est une image de secours -- l'ancien `_fond_par_defaut` prenait deja la photo
-    en premier."""
-    actifs = actifs or []
-    photos = [a for a in actifs if a.get("type") == PHOTO]
-    return next((image for a in [*photos, *actifs] if (image := image_de(a))), None)
+    en premier.
+
+    Sans `selecteur`, la fonction reste PURE (ni reseau, ni API) : la file et le
+    gel l'appellent a chaque passage juste pour savoir si un fond existe.
+
+    Avec `selecteur` (`app/content/illustration.py`, un appel Claude vision) : le
+    candidat qui ressemble le moins a une affiche. Il ne peut que REORDONNER --
+    une reponse hors liste, ou None, retombe sur le premier candidat, pour qu'un
+    juge en panne ne fasse jamais perdre un fond valable.
+    """
+    candidats = candidats_de_fond(actifs)
+    if not candidats:
+        return None
+    if selecteur is None:
+        return candidats[0]
+    choisi = selecteur(candidats)
+    return choisi if choisi in candidats else candidats[0]
 
 
 def fond_de_cover(post) -> str | None:
