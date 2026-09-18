@@ -9,11 +9,17 @@ import pytest
 from PIL import Image
 
 from app.content.actifs_artistes import PostArtiste
-from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visuels
+from app.content.choix_visuels import (
+    AucunVisuel,
+    ChoixVisuels,
+    VisuelsDifferes,
+    choisir_visuels,
+    compte_du_visuel,
+)
 from app.content.export import PREFIXE_TRANSPORT
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import entree
-from app.content.visuels import image_de_fond
+from app.content.visuels import actif, image_de_fond
 from app.config import settings
 from app.models import Article, FormatCreneau, Source, SourceCategorie, SourceType
 from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, cle_artiste, construire_index
@@ -385,3 +391,32 @@ def test_un_reel_d_artiste_sans_vignette_prend_un_fond_chez_les_artistes(db_sess
 
     assert [(a["type"], a["origine"]) for a in choix.actifs] == [("video", "artiste"), ("photo", "artiste")]
     assert image_de_fond(choix.actifs).startswith("file://")
+
+
+def test_le_compte_d_un_reel_est_celui_de_la_video():
+    """Le fond de la cover vient souvent d'un autre compte (photo d'un artiste
+    cite) : c'est la VIDEO qu'on regarde, et c'est elle qui commande le titre --
+    le reel « BTS » publie sur une video de LE SSERAFIM (2026-09-18)."""
+    video = actif(entree("video", "https://cdn/v.mp4"), origine="article", compte="@le_sserafim")
+    fond = actif(entree("photo", "https://cdn/bts.jpg"), origine="artiste", compte="@bts")
+    choix = ChoixVisuels([video, fond], credit="@le_sserafim @bts")
+
+    assert compte_du_visuel(choix, FormatCreneau.REEL) == "@le_sserafim"
+
+
+def test_le_compte_d_un_carrousel_est_le_credit_complet():
+    """Toutes les photos sont a l'ecran : elles sont toutes creditees."""
+    photos = [
+        actif(entree("photo", "https://cdn/1.jpg"), origine="artiste", compte="@fredagain"),
+        actif(entree("photo", "https://cdn/2.jpg"), origine="artiste", compte="@bts"),
+    ]
+    choix = ChoixVisuels(photos, credit="@fredagain @bts")
+
+    assert compte_du_visuel(choix, FormatCreneau.CARROUSEL) == "@fredagain @bts"
+
+
+def test_un_reel_sans_compte_sur_sa_video_retombe_sur_le_credit():
+    video = actif(entree("video", "https://cdn/v.mp4"), origine="web")
+    choix = ChoixVisuels([video], credit="ra.co")
+
+    assert compte_du_visuel(choix, FormatCreneau.REEL) == "ra.co"

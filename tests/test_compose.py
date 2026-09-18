@@ -9,6 +9,7 @@ from app.content.compose import (
     CompositionError,
     CoverVariante,
     PostDraft,
+    appeler_compositeur,
     build_user_prompt,
     contient_emoji,
     create_post,
@@ -729,3 +730,64 @@ def test_composer_accepte_une_legende_sans_accents_apres_les_tentatives(db_sessi
 
 def test_le_prompt_exige_le_francais_accentue():
     assert "ACCENTUE" in SYSTEM_PROMPT and "intitulé" in SYSTEM_PROMPT
+
+
+def test_le_prompt_dit_de_quel_compte_vient_le_visuel(db_session):
+    """Le compositeur ne recoit que l'article : sans cette ligne, il ne sait pas
+    que la video vient de LE SSERAFIM et titre le premier nom du line-up (le reel
+    « BTS » du 2026-09-18)."""
+    article = _article(db_session)
+
+    assert "Compte du visuel publie : @le_sserafim" in build_user_prompt(article, "@le_sserafim")
+
+
+def test_le_prompt_tait_le_compte_du_visuel_quand_il_est_inconnu(db_session):
+    """Une composition a la main n'a pas cette information : pas de ligne vide."""
+    article = _article(db_session)
+
+    assert "Compte du visuel" not in build_user_prompt(article)
+
+
+def test_le_prompt_exige_de_nommer_l_artiste_de_la_video():
+    assert "Compte du visuel publie" in SYSTEM_PROMPT
+    assert "title" in SYSTEM_PROMPT and "AUCUN" in SYSTEM_PROMPT
+
+
+def test_le_compositeur_par_defaut_transmet_le_compte_du_visuel(db_session):
+    article = _article(db_session)
+    client = _FakeClient([_FakeParsedResponse(_draft())])
+
+    make_claude_composer(client=client, max_attempts=3)(article, compte_visuel="@le_sserafim")
+
+    assert "@le_sserafim" in _contenu_utilisateur(client.messages.appels[0])
+
+
+def test_un_compositeur_qui_ignore_le_compte_du_visuel_marche_toujours(db_session):
+    """Le crochet est injecte (run_publication, api/posts, des doubles de test) :
+    un compositeur ecrit avant cette regle ne doit pas planter -- une exception
+    ici passerait pour une panne systemique et poserait une erreur sur le creneau."""
+    article = _article(db_session)
+    bon = _draft()
+    recus = []
+
+    def ancien_compositeur(art):
+        recus.append(art)
+        return bon
+
+    assert appeler_compositeur(ancien_compositeur, article, "@le_sserafim") is bon
+    assert recus == [article]
+
+
+def test_un_compositeur_qui_accepte_le_compte_du_visuel_le_recoit(db_session):
+    article = _article(db_session)
+    bon = _draft()
+    recus = []
+
+    def compositeur(art, *, compte_visuel=None):
+        recus.append(compte_visuel)
+        return bon
+
+    assert appeler_compositeur(compositeur, article, "@le_sserafim") is bon
+    # Et sans compte connu, l'appel reste celui d'avant.
+    appeler_compositeur(compositeur, article)
+    assert recus == ["@le_sserafim", None]

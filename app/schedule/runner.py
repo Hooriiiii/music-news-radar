@@ -61,8 +61,13 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import InterfaceError, InvalidRequestError, OperationalError, PendingRollbackError
 
 from app.config import settings
-from app.content.choix_visuels import AucunVisuel, VisuelsDifferes, choisir_visuels
-from app.content.compose import CompositionError, create_post
+from app.content.choix_visuels import (
+    AucunVisuel,
+    VisuelsDifferes,
+    choisir_visuels,
+    compte_du_visuel,
+)
+from app.content.compose import CompositionError, appeler_compositeur, create_post
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
 from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite, purger_cache
@@ -367,7 +372,12 @@ def _composer(
                 exclusions = True
                 continue
             try:
-                draft = composer(article)
+                # Le compte du visuel part avec l'article : le compositeur ne
+                # sait pas, sinon, de qui est la video qu'il titre (le reel « BTS »
+                # publie sur une video de LE SSERAFIM, 2026-09-18).
+                draft = appeler_compositeur(
+                    composer, article, compte_du_visuel(visuels, creneau.format)
+                )
             except CompositionError as exc:
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
                 exclusions = True

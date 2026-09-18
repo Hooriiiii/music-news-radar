@@ -13,6 +13,7 @@ si aucune tentative n'aboutit.
 """
 
 import datetime as dt
+import inspect
 import logging
 import unicodedata
 
@@ -295,11 +296,20 @@ bande-son », « intitule », « depasse » sans accent font traduction automati
 ecris « pensé », « intitulé », « dépassé », « à », « ça », « où ». Jamais d'ASCII \
 approximatif.
 
+9. LE VISUEL COMMANDE LE NOM : quand la ligne « Compte du visuel publie » est \
+donnee, elle dit de QUI est la video ou la photo que le post affichera. Dans \
+`title` / `subtitle` -- les textes du REEL, qui sont poses sur cette video --, \
+l'artiste nomme doit etre CELUI-LA. Si l'actu cite plusieurs artistes (un \
+line-up, un plateau, un festival), nomme celui du visuel, ou n'en nomme AUCUN et \
+prends l'evenement comme sujet. Ne prends jamais le premier nom de la liste par \
+defaut : un titre qui annonce un artiste pendant qu'un autre est a l'ecran est \
+un contresens visible.
+
 N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom.\
 """
 
 
-def build_user_prompt(article: Article) -> str:
+def build_user_prompt(article: Article, compte_visuel: str | None = None) -> str:
     parts = [f"Titre : {article.title}"]
     if article.summary:
         parts.append(f"Resume : {article.summary[:2000]}")
@@ -311,6 +321,10 @@ def build_user_prompt(article: Article) -> str:
         parts.append(f"Categorie : {article.category}")
     if article.mentioned_artists:
         parts.append(f"Artistes cites : {', '.join(article.mentioned_artists)}")
+    if compte_visuel:
+        # Seulement quand elle est connue : une composition a la main, ou un
+        # appelant anterieur a cette regle, n'a pas cette information.
+        parts.append(f"Compte du visuel publie : {compte_visuel}")
     parts.append(f"URL : {article.url}")
     return "\n".join(parts)
 
@@ -328,14 +342,14 @@ def make_claude_composer(
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    def composer(article: Article) -> PostDraft:
+    def composer(article: Article, *, compte_visuel: str | None = None) -> PostDraft:
         derniere_erreur: Exception | None = None
         # Brouillon valide mais aux emojis hors bornes : rendu si aucune
         # tentative ne fait mieux, plutot que de perdre la composition.
         repli: PostDraft | None = None
         consigne: str | None = None
         for tentative in range(1, max_attempts + 1):
-            contenu = build_user_prompt(article)
+            contenu = build_user_prompt(article, compte_visuel)
             if consigne:
                 # Le SDK ne renvoie rien au modele : sans ce retour, la relance
                 # repart a l'aveugle et refait souvent la meme erreur.
@@ -402,6 +416,37 @@ def make_claude_composer(
         ) from derniere_erreur
 
     return composer
+
+
+def _accepte_le_compte(composer) -> bool:
+    try:
+        parametres = inspect.signature(composer).parameters
+    except (TypeError, ValueError):
+        # Un callable dont la signature n'est pas lisible (builtin, objet C) :
+        # on s'en tient a l'appel historique.
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parametres.values()):
+        return True
+    parametre = parametres.get("compte_visuel")
+    return parametre is not None and parametre.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
+def appeler_compositeur(composer, article: Article, compte_visuel: str | None = None) -> PostDraft:
+    """Appelle le crochet de composition, avec le compte du visuel s'il sait le recevoir.
+
+    Le compositeur est INJECTE (`scripts/run_publication.py`, `app/api/posts.py`,
+    des doubles dans les tests) : passer un argument de plus a un crochet ecrit
+    avant cette regle le ferait planter, et une exception ici passe pour une
+    panne systemique qui pose une erreur sur le creneau. L'introspection coute une
+    lecture de signature par composition -- quelques fois par jour --, et laisse
+    un crochet ancien fonctionner a l'identique.
+    """
+    if compte_visuel and _accepte_le_compte(composer):
+        return composer(article, compte_visuel=compte_visuel)
+    return composer(article)
 
 
 def _fond_par_defaut(article: Article, selecteur=None) -> str | None:

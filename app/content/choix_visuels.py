@@ -104,6 +104,27 @@ class ChoixVisuels:
     secours: list[Lot] = field(default_factory=list)
 
 
+def compte_du_visuel(choix, format_: FormatCreneau = FormatCreneau.CARROUSEL) -> str | None:
+    """Le compte dont vient le visuel que le post affichera, a dire au compositeur.
+
+    Le reel du 2026-09-18 titrait « BTS a l'iHeartRadio Festival » sur une video
+    de LE SSERAFIM : le modele avait pris le premier nom du line-up de l'article,
+    faute de savoir de qui etait la video. L'information existe pourtant ici, au
+    moment ou l'appel est paye.
+
+    Pour un REEL, c'est le compte du PORTEUR DE VIDEO et de lui seul : le fond de
+    sa cover vient souvent d'ailleurs (photo d'un artiste cite, image du web), et
+    c'est la video qu'on regarde. Pour un carrousel, le credit complet -- toutes
+    les photos sont a l'ecran.
+    """
+    actifs = list(getattr(choix, "actifs", None) or [])
+    if format_ == FormatCreneau.REEL:
+        video = next((a for a in actifs if a.get("type") == VIDEO and a.get("compte")), None)
+        if video is not None:
+            return video["compte"]
+    return getattr(choix, "credit", None)
+
+
 def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
     """Les visuels de l'article lui-meme, ou None s'il n'en a pas d'autorise."""
     medias = visuels_autorises(article)

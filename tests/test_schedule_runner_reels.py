@@ -34,13 +34,18 @@ def _draft():
 class Outils:
     def __init__(self):
         self.composes, self.prepares, self.prepares_reel = [], [], []
+        self.comptes_visuels = []
         self.publies, self.publies_reel, self.legendes, self.notifications = [], [], [], []
         self.erreur_preparation_reel = self.erreur_publication_reel = None
         # Erreurs consommees une par appel, avant `erreur_preparation_reel`.
         self.erreurs_preparation_reel = []
 
-    def composer(self, article):
+    # Ce double ACCEPTE le compte du visuel (celui de tests/test_schedule_runner.py
+    # ne le prend pas : les deux doivent marcher, c'est la retrocompatibilite du
+    # crochet).
+    def composer(self, article, *, compte_visuel=None):
         self.composes.append(article.id)
+        self.comptes_visuels.append(compte_visuel)
         return _draft()
 
     def preparer(self, post, article, dossier):
@@ -548,3 +553,19 @@ def test_un_tunnel_injoignable_sur_un_reel_n_exclut_pas_l_article(db_session, vi
     outils.tourner(db_session, BASE + dt.timedelta(minutes=10))
     assert (creneau.etat, creneau.ig_media_id) == (EtatCreneau.PUBLIE, "ig-reel")
     assert len(outils.publies_reel) == 2
+
+
+def test_le_compositeur_apprend_de_quel_compte_vient_la_video(db_session, video):
+    """Le reel du 2026-09-18 titrait « BTS » sur une video de LE SSERAFIM : le
+    modele prenait le premier nom du line-up, faute de savoir de qui etait la
+    video. L'information existe au moment ou l'appel est paye."""
+    reel = Creneau(publier_a=BASE + dt.timedelta(hours=5), format=FormatCreneau.REEL,
+                   article_id=video.id, etat=EtatCreneau.PROGRAMME, epingle=True)
+    db_session.add(reel)
+    db_session.commit()
+    outils = Outils()
+
+    outils.tourner(db_session, BASE)
+
+    assert (outils.composes, outils.comptes_visuels) == ([video.id], ["@saralandry"])
+    assert db_session.get(Post, reel.post_id).template == "kinda_reel"
