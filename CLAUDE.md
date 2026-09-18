@@ -1021,6 +1021,50 @@ actifs, séparés par une espace. Légende : « 📸 @artiste » (« 🎥 » pou
 le crédit du compte reste seul obligatoire, jamais coupé (`app/content/
 legende.py`).
 
+**Le dernier recours : une image du WEB** (2026-09-18, `app/content/
+recherche_web.py`). Après un post publié sur l'aplat Kinda parce que chaque
+candidat était une affiche de line-up : « ne saute pas l'actu, cherche une image
+sur le web en dernier recours. » L'échelle a donc un barreau de plus, et c'est
+le dernier : médias de l'actu → compte source → artistes suivis cités → **web**
+→ fond Kinda. Il ne s'ouvre jamais tant qu'un barreau au-dessus a donné.
+
+Mécanique : l'outil **`web_search`** de l'API Anthropic (server tool, variante de
+base `web_search_20250305` — `visuels_model` est Haiku 4.5) rend des PAGES, dont
+on extrait l'`og:image` avec le code déjà éprouvé de l'illustration des articles
+(`app/pipeline/illustrations.py`, 97 % de réussite). Deux pièges vérifiés sur
+sonde réelle : les URL sont lues dans les blocs `web_search_tool_result` et
+**jamais dans le texte du modèle**, qui a inventé deux liens absents des
+résultats ; et `image_de_partage` est résolu à l'appel, pas en valeur par défaut,
+sinon le module n'est pas testable sans réseau. Requête déterministe (c'est la
+clé du cache) : artistes cités d'abord, sinon le nom propre en tête du titre
+(« Les Transmusicales », pas la phrase entière, qui ne ramènerait que des
+reprises de l'article), plus un indice de discipline — la `categorie` de la
+source le donne quand le texte ne le dit pas.
+
+**Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
+c'est un projet perso donc c'est ok »). En contrepartie le site est TOUJOURS
+cité : le domaine part dans le crédit de la légende (« 📸 ra.co »), jamais
+coupé, sans « via » ni ligne « Source : » — mêmes règles que le crédit d'un
+compte. Il est reconstitué depuis le seul `file://` publié
+(`recherche_web.attribution_de` : le nom du fichier de cache EST le SHA-256 de
+l'URL d'origine), donc il survit à un redémarrage ; et `create_post` relit le
+crédit sur les actifs FINAUX, sinon une image arrivée par une réserve serait
+publiée sans dire d'où elle vient.
+
+Coût : une recherche par requête, mémorisée `visuels_web_cache_jours` (3) dans
+`visuels_web_cache_path` ; au plus `visuels_web_max_candidats` (3) pages ; image
+copiée dans `visuels_cache_dir` comme les autres ; coupe-circuit
+`VISUELS_WEB_ENABLED`. Banques d'images et réseaux sociaux sont écartés par
+domaine (leur `og:image` est un logo, et la règle du 2026-09-17 interdit déjà les
+visuels des comptes Instagram média). **Jamais pour la VIDÉO d'un reel** — un
+reel sans vidéo n'existe pas ; le web peut en revanche fournir le FOND de sa
+cover, qui est une image rendue par Chromium. Le juge visuel y est INDULGENT
+(`illustration.meilleures_photos(garder_inconnues=True)`) : pour une réserve de
+fond l'alternative est l'aplat Kinda, qui est sûr, mais ici l'alternative est de
+sauter l'actu — une image non jugée (vision coupée, quota) vaut mieux que rien.
+Une affiche avérée reste écartée. Le module ne lève JAMAIS : toute panne rend une
+liste vide et la cover part sur le fond Kinda.
+
 Sans visuel autorisé, l'article reste au dashboard (pastille « 🚫 sans visuel »,
 raison via `store.raison_sans_visuel`, sans appel réseau — un artiste suivi cité
 suffit à dire « pas encore », le vrai verdict attend la composition) mais sort

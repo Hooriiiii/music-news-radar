@@ -21,6 +21,10 @@ ORIGINE_ARTISTE = "artiste"
 # D'ou vient le FOND de la cover -- les deux ci-dessus, plus ces deux-la, qui
 # n'ont de sens que pour un fond : le compte qui a publie l'actu, et le refus.
 ORIGINE_COMPTE = "compte"
+# Le tout dernier recours avant l'aplat : une image trouvee sur le WEB
+# (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en dernier
+# recours »). Cf. `app/content/recherche_web.py`.
+ORIGINE_WEB = "web"
 ORIGINE_KINDA = "kinda"
 
 # Le fond Kinda : l'aplat sombre du gabarit (`app/content/assets/fallback.jpg`),

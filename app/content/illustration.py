@@ -455,6 +455,48 @@ def eviter_l_affiche(
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
 
+def classer_photos(candidats: list[str], rendre, *, garder_inconnues: bool = False) -> tuple[str, ...]:
+    """Les VRAIES photos d'une liste, la meilleure en tete, les affiches otees.
+
+    `garder_inconnues` dit quoi faire d'un candidat que le juge n'a pas su noter,
+    et la reponse depend de CE QU'ON A EN FACE. Pour une reserve de fond
+    (`_photos_du_lot`), l'alternative est le fond Kinda, qui est sur : on ne lui
+    prefere qu'une image dont le juge a dit qu'elle n'est pas une affiche.
+    Pour le dernier recours du web, l'alternative est de SAUTER L'ACTU : une
+    image non jugee (vision coupee, quota) vaut alors mieux que rien.
+    """
+    if not candidats:
+        return ()
+    connus = rendre(candidats)
+    retenues = [
+        url
+        for url in candidats
+        if (url in connus and not connus[url].affiche) or (garder_inconnues and url not in connus)
+    ]
+    if not retenues:
+        return ()
+    classees = sorted(
+        enumerate(retenues),
+        key=lambda paire: _rang(paire[0], connus.get(paire[1], VERDICT_INCONNU)),
+        reverse=True,
+    )
+    return tuple(url for _, url in classees)
+
+
+def meilleures_photos(
+    candidats, *, verdicts=None, garder_inconnues: bool = False, **options
+) -> tuple[str, ...]:
+    """`classer_photos`, avec le juge par defaut et la garantie de ne jamais
+    lever -- l'entree publique pour qui n'a pas de `Lot` a ouvrir."""
+    candidats = [url for url in (candidats or []) if url]
+    rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
+    try:
+        return classer_photos(candidats, rendre, garder_inconnues=garder_inconnues)
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning("classement des photos abandonne (%s)", type(exc).__name__)
+        return tuple(candidats) if garder_inconnues else ()
+
+
 def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
     """Les VRAIES photos d'un lot, la meilleure en tete -- vide si le lot est
     absent, vide, tout en affiches, ou en panne (un lot qui casse prive d'une
@@ -474,17 +516,10 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
         candidats = [url for url in (lot.photos() or []) if url][
             : max(1, settings.fond_secours_max_photos)
         ]
-        if not candidats:
-            return ()
-        connus = rendre(candidats)
-        photos = [url for url in candidats if url in connus and not connus[url].affiche]
-        if not photos:
+        photos = classer_photos(candidats, rendre)
+        if candidats and not photos:
             logger.info("la reserve « %s » n'offre que des affiches", lot.origine)
-            return ()
-        classees = sorted(
-            enumerate(photos), key=lambda paire: _rang(paire[0], connus[paire[1]]), reverse=True
-        )
-        return tuple(url for _, url in classees)
+        return photos
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning(
             "reserve « %s » abandonnee (%s)",

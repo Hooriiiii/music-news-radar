@@ -36,6 +36,7 @@ def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "publication_dir", applicatif / "publication")
     monkeypatch.setattr(settings, "visuels_cache_dir", applicatif / "visuels")
     monkeypatch.setattr(settings, "illustration_cache_path", applicatif / "illustrations.json")
+    monkeypatch.setattr(settings, "visuels_web_cache_path", applicatif / "visuels_web.json")
 
 
 @pytest.fixture()
@@ -62,6 +63,14 @@ def _pas_de_juge_visuel_ambiant(monkeypatch):
     chaque `create_post` de test enverrait des images a Claude vision. Les tests
     du juge injectent le leur (`juge=`), qui ne passe jamais par ce reglage."""
     monkeypatch.setattr(settings, "illustration_vision_enabled", False)
+
+
+@pytest.fixture(autouse=True)
+def _pas_de_recherche_web_ambiante(monkeypatch):
+    """Meme motif : sans ca, chaque choix de visuels sans issue lancerait une
+    vraie recherche web facturee. Les tests du dernier recours injectent leur
+    chercheur (`chercheur=`) ou rallument le reglage explicitement."""
+    monkeypatch.setattr(settings, "visuels_web_enabled", False)
 
 
 @pytest.fixture()
