@@ -21,7 +21,14 @@ from app.content.compose import actifs_de_secours
 from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.legende import texte_legende
 from app.content.media import entree
-from app.content.visuels import ORIGINE_ARTISTE, ORIGINE_COMPTE, ORIGINE_KINDA, ORIGINE_WEB
+from app.content.visuels import (
+    ORIGINE_ARTICLE,
+    ORIGINE_ARTISTE,
+    ORIGINE_COMPTE,
+    ORIGINE_KINDA,
+    ORIGINE_WEB,
+    image_de_fond,
+)
 from app.models import Article, Source, SourceCategorie, SourceType
 
 UTC = dt.timezone.utc
@@ -240,3 +247,67 @@ def test_l_attribution_survit_a_la_copie_locale(db_session, monkeypatch):
                              telecharger=_telecharger, chercheur=Chercheur())
 
     assert actif_du_web(fichiers[0], maintenant=MAINTENANT)["compte"] == "ra.co"
+
+
+# --- L'article 18260, de bout en bout -------------------------------------
+#
+# Le defaut mesure en production apres la fusion : « Le voile se leve sur le
+# programme des 48es Rencontres Trans Musicales », source « Transmusicales (IG) »,
+# `mentioned_artists` VIDE. La requete etait None, le dernier recours ne partait
+# jamais, et la cover repartait sur l'aplat Kinda -- sur le cas meme pour lequel
+# la fonctionnalite a ete ecrite.
+
+TITRE_18260 = "Le voile se leve sur le programme des 48es Rencontres Trans Musicales"
+AFFICHE_18260 = "https://cdn.ig/affiche-trans.jpg"
+
+
+def _trans(db):
+    source = Source(name="Transmusicales (IG)", type=SourceType.INSTAGRAM,
+                    url="ig:transmusicales", categorie=SourceCategorie.FESTIVAL)
+    db.add(source)
+    db.commit()
+    return source
+
+
+def _verdicts_sauf_l_affiche(urls):
+    return {url: (AFFICHE if url == AFFICHE_18260 else PHOTO) for url in urls}
+
+
+def _fond_de_l_article_18260(db, chercheur, monkeypatch, pages_ok=True):
+    monkeypatch.setattr(
+        "app.content.recherche_web.image_de_partage",
+        _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"} if pages_ok else {}),
+    )
+    article = _article(db, _trans(db), titre=TITRE_18260,
+                       media=[entree("photo", AFFICHE_18260)], artistes=())
+    choix = _visuels(db, article, chercheur_web=chercheur)
+    # Exactement le cablage de `create_post` : le fond retenu, puis les reserves.
+    return eviter_l_affiche(
+        image_de_fond(choix.actifs), *choix.secours,
+        origine=ORIGINE_ARTICLE, verdicts=_verdicts_sauf_l_affiche,
+    )
+
+
+def test_l_article_18260_trouve_son_fond_sur_le_web(db_session, monkeypatch):
+    """Le compte n'a rien d'autre en base, aucun artiste n'est cite : sans le
+    web, cette cover partait sur l'aplat Kinda."""
+    chercheur = Chercheur()
+
+    fond = _fond_de_l_article_18260(db_session, chercheur, monkeypatch)
+
+    assert fond.origine == ORIGINE_WEB
+    assert fond.url.startswith("file://")
+    # La requete est bien partie, et elle nomme le festival.
+    assert chercheur.requetes and "Transmusicales" in chercheur.requetes[0]
+    assert "(IG)" not in chercheur.requetes[0]
+
+
+def test_l_article_18260_ne_part_sur_l_aplat_que_si_le_web_n_a_rien(db_session, monkeypatch):
+    """La contrepartie : le fond Kinda reste l'issue, mais seulement APRES que le
+    web a ete essaye -- jamais avant."""
+    chercheur = Chercheur()
+
+    fond = _fond_de_l_article_18260(db_session, chercheur, monkeypatch, pages_ok=False)
+
+    assert fond.origine == ORIGINE_KINDA
+    assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"

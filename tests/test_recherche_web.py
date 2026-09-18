@@ -22,6 +22,7 @@ from app.content.recherche_web import (
     candidats_du_web,
     domaine_de,
     indice_discipline,
+    nom_de_source,
     requete_pour,
 )
 from app.content.visuels import chemin_cache
@@ -42,8 +43,9 @@ def cache(tmp_path, monkeypatch):
 _numeros = itertools.count()
 
 
-def _article(db, titre, artistes=(), resume=None, categorie=SourceCategorie.MEDIA):
-    source = Source(name="Tsugi (RSS)", type=SourceType.RSS,
+def _article(db, titre, artistes=(), resume=None, categorie=SourceCategorie.MEDIA,
+             nom_source="Tsugi (RSS)", type_source=SourceType.RSS):
+    source = Source(name=nom_source, type=type_source,
                     url="https://tsugi.example/feed", categorie=categorie)
     db.add(source)
     db.commit()
@@ -117,8 +119,69 @@ def test_la_requete_porte_un_indice_de_discipline(db_session):
     assert "festival" in requete_pour(festival)
 
 
-def test_un_article_sans_titre_ni_artiste_n_a_pas_de_requete(db_session):
-    article = _article(db_session, "")
+TITRE_18260 = "Le voile se leve sur le programme des 48es Rencontres Trans Musicales"
+
+
+def test_un_titre_qui_ne_commence_pas_par_un_nom_propre_passe_a_la_source(db_session):
+    """Le defaut mesure en production sur l'article 18260 : titre commencant par
+    « Le voile se leve... », `mentioned_artists` VIDE -- la requete etait None et
+    le dernier recours ne partait jamais, sur le cas meme pour lequel il existe.
+
+    Le compte qui a publie l'actu porte pourtant son nom : « Transmusicales (IG) ».
+    """
+    article = _article(db_session, TITRE_18260, nom_source="Transmusicales (IG)",
+                       type_source=SourceType.INSTAGRAM, categorie=SourceCategorie.FESTIVAL)
+
+    requete = requete_pour(article)
+
+    assert requete is not None
+    assert "Transmusicales" in requete
+    assert "(IG)" not in requete
+    assert "festival" in requete
+
+
+@pytest.mark.parametrize(
+    ("nom", "attendu"),
+    [
+        ("Transmusicales (IG)", "Transmusicales"),
+        ("Tsugi (RSS)", "Tsugi"),
+        ("Festivals Bretagne (Bing News)", "Festivals Bretagne"),
+        ("Hellfest", "Hellfest"),
+        ("(IG)", None),
+    ],
+)
+def test_le_nom_d_une_source_est_nettoye_de_ses_suffixes(nom, attendu):
+    """Les noms de sources portent tous le canal entre parentheses : le laisser
+    dans la requete chercherait « Transmusicales IG photo »."""
+    assert nom_de_source(nom) == attendu
+
+
+def test_le_nom_d_un_media_ne_sert_jamais_de_sujet(db_session):
+    """Chercher « Tsugi festival photo » ramenerait le logo de Tsugi, pas l'actu.
+    Seul un compte PRIMAIRE (festival, label, club, artiste) nomme son sujet."""
+    article = _article(db_session, TITRE_18260, nom_source="Tsugi (RSS)",
+                       categorie=SourceCategorie.MEDIA)
+
+    assert "Tsugi" not in requete_pour(article)
+
+
+def test_le_dernier_repli_est_le_titre_lui_meme(db_session):
+    """Ni artiste, ni nom propre en tete, ni source utilisable : plutot que de
+    renoncer -- et donc de sauter l'actu --, on cherche sur les mots du titre."""
+    article = _article(db_session, TITRE_18260, nom_source="Tsugi (RSS)",
+                       categorie=SourceCategorie.MEDIA)
+
+    requete = requete_pour(article)
+
+    # Les noms propres du titre, pas la phrase raccourcie : « Rencontres Trans
+    # Musicales » et non « voile leve programme 48es Rencontres Trans ».
+    assert requete == "Rencontres Trans Musicales concert photo"
+
+
+def test_un_article_sans_titre_ni_artiste_ni_source_n_a_pas_de_requete(db_session):
+    """La seule issue None qui reste : il n'y a litteralement rien a chercher."""
+    article = _article(db_session, "", nom_source="Tsugi (RSS)",
+                       categorie=SourceCategorie.MEDIA)
 
     assert requete_pour(article) is None
 
