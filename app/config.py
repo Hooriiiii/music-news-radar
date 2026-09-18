@@ -255,6 +255,11 @@ class Settings(BaseSettings):
     # media_publish. Un intervalle de l'agent (600 s) plus une marge : sinon un
     # post pouvait partir jusqu'a 10 minutes apres l'heure du dashboard.
     publication_avance_s: int = 660
+    # Un tunnel rapide met parfois plus de 90 s a etre visible du DNS public. Un
+    # essai = un tunnel entier (nouveau sous-domaine a chaque lancement), budget
+    # de DELAI_JOIGNABLE_S chacun : trois essais bornent l'attente a ~4,5 min,
+    # bien en deca des 90 minutes de retard tolere.
+    publication_tunnel_essais: int = 3
 
     # --- Reels automatiques (en plus des carrousels) ---
     # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =

@@ -12,6 +12,7 @@ from app.config import settings
 from app.content.compose import CompositionError, CoverVariante, PostDraft
 from app.content.render import RenduIndisponible
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
+from app.publish.hosting import TunnelInjoignable
 from app.publish.instagram import ErreurInstagram
 from app.publish.preparation import PreparationImpossible
 from app.schedule.runner import tourner
@@ -910,3 +911,42 @@ def test_une_connexion_coupee_pendant_la_publication_est_rattrapee(db_session, a
     # Une seule publication, comptee une fois : la reprise ne touche que la base.
     assert (rapport.publies, len(outils.publies)) == (1, 1)
     assert not rapport.erreurs
+
+
+def test_un_tunnel_injoignable_ne_exclut_pas_l_article_et_rend_le_creneau_gele(db_session, article, tmp_path):
+    """Un tunnel injoignable est une panne machine : rien n'est parti chez Meta
+    (le conteneur n'est cree qu'une fois le tunnel debout), les fichiers figes
+    restent valides, le creneau redevient GELE et le passage suivant retente."""
+    outils = Outils()
+    outils.erreur_publication = TunnelInjoignable("tunnel ouvert mais https://t/c injoignable apres 90 s")
+    _jusqu_a_publication(outils, db_session, H0)
+    creneau = _creneau_h0(db_session)
+    dossier = tmp_path / str(creneau.id)
+    dossier.mkdir(exist_ok=True)
+    (dossier / "p_01.jpg").write_bytes(b"x")
+
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert creneau.etat == EtatCreneau.GELE
+    assert "injoignable" in creneau.erreur
+    assert creneau.article_id == article.id and creneau.post_id is not None
+    assert len(outils.notifications) == 1
+
+    outils.erreur_publication = None
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.ig_media_id, creneau.erreur) == (EtatCreneau.PUBLIE, "ig42", None)
+    assert db_session.get(Article, article.id).status == ArticleStatus.USED
+    assert len(outils.publies) == 2
+    assert not dossier.exists()
+
+
+def test_un_tunnel_injoignable_trop_tard_finit_en_manque(db_session, article):
+    """Au-dela du retard maximal, le creneau GELE rendu par la panne de tunnel
+    suit la regle commune : MANQUE, jamais une publication du soir pour le matin."""
+    outils = Outils()
+    outils.erreur_publication = TunnelInjoignable("injoignable apres 90 s")
+    _jusqu_a_publication(outils, db_session, H0)
+    assert _creneau_h0(db_session).etat == EtatCreneau.GELE
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
+    assert _creneau_h0(db_session).etat == EtatCreneau.MANQUE
+    assert db_session.get(Article, article.id).file_exclu_raison is None

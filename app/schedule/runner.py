@@ -67,6 +67,7 @@ from app.content.credit import credit_video
 from app.content.legende import texte_legende
 from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite, purger_cache
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
+from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.schedule.store import (
     TEMPLATES,
@@ -581,6 +582,7 @@ def _publier(
     rapport: RapportPublication,
     horloge,
     dormir,
+    reportes: set,
 ) -> None:
     # Horloge fraiche + avance : un creneau a moins d'un intervalle de l'agent
     # est traite des maintenant, puis attendu (voir plus bas).
@@ -592,6 +594,11 @@ def _publier(
     ).all()
     for creneau in creneaux:
         if not _relire(db, creneau) or creneau.etat != EtatCreneau.GELE:
+            continue
+        if creneau.id in reportes:
+            # Son tunnel vient d'echouer dans ce meme passage : le rouvrir tout de
+            # suite couterait plusieurs minutes pour rien (et une seconde
+            # notification). Le passage suivant, dix minutes plus tard, retentera.
             continue
         attendu = _attendu(creneau)
         post = db.get(Post, creneau.post_id, populate_existing=True) if creneau.post_id else None
@@ -675,6 +682,32 @@ def _publier(
         _clore_transaction(db)
         try:
             identifiant = publier(dossier, fichiers, legende, mode == "reel", **crochets)
+        except HebergementIndisponible as exc:
+            # Panne MACHINE (cloudflared, reseau, tunnel injoignable), pas un
+            # defaut de l'article : rien n'a ete envoye a Meta, le conteneur
+            # n'etant cree qu'une fois le tunnel debout (voir app/publish/publier.py,
+            # ou `preparer_carrousel` / `preparer_reel` sont DANS le `with
+            # heberger(...)`). Retenter ne peut donc pas publier deux fois.
+            # L'exclusion posee a la reclamation est levee, le creneau redevient
+            # GELE avec ses fichiers (toujours valides, le dossier est conserve)
+            # et le passage suivant retente -- jusqu'a la limite de retard, qui
+            # le passera en MANQUE comme n'importe quel creneau gele.
+            faute = exc
+
+            def rendre():
+                if article is not None:
+                    article.file_exclu_raison = None
+                _ecrire_si(
+                    db, creneau, reclame,
+                    etat=EtatCreneau.GELE, erreur=f"hebergement indisponible : {faute}"[:1000],
+                )
+
+            _ecrire_apres_publication(db, rendre)
+            reportes.add(creneau.id)
+            message = f"publication de {_heure_locale(creneau.publier_a)} reportee : {exc}"
+            rapport.erreurs.append(message[:1000])
+            _prevenir(notifier, message)
+            continue
         except Exception as exc:  # noqa: BLE001 -- tout echec doit se voir
             # Alias : `exc` est efface a la sortie du bloc `except`, la fermeture
             # le lirait donc sur un nom disparu.
@@ -811,8 +844,12 @@ def tourner(
             _prevenir(notifier, message)
             return None
 
+    # Partage par les deux etapes de publication du passage : un creneau dont le
+    # tunnel vient d'echouer n'est pas repris a la seconde.
+    reportes: set = set()
+
     def publication():
-        _publier(db, maintenant, lire_mode, publieurs, notifier, rapport, horloge, dormir)
+        _publier(db, maintenant, lire_mode, publieurs, notifier, rapport, horloge, dormir, reportes)
 
     formats_actifs = set(preparateurs) & set(publieurs)
     etape("retards", lambda: _marquer_manques(db, maintenant, rapport, formats_actifs))
