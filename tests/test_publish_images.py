@@ -58,6 +58,38 @@ def test_le_recadrage_est_centre():
     assert cadree.getpixel((10, 675))[0] < 60  # et le noir aux bords
 
 
+def test_le_recadrage_vertical_garde_le_haut():
+    """Un portrait plus haut que 4:5 doit garder sa bande du HAUT, pas le centre.
+
+    2026-09-18, post Travis Scott instagram.com/p/Ddb-UMFjVSW/ slide 2 : un
+    centrage vertical a coupe la tete. Bande du haut blanche, bande du bas
+    noire : le resultat doit etre blanc en haut, et le noir du bas ne doit
+    plus se retrouver nulle part dans l'image cadree."""
+    largeur, hauteur = 1080, 2000
+    source = Image.new("RGB", (largeur, hauteur), (0, 0, 0))
+    source.paste(Image.new("RGB", (largeur, 200), (255, 255, 255)), (0, 0))
+    tampon = io.BytesIO()
+    source.save(tampon, "PNG")
+    cadree = Image.open(io.BytesIO(cadrer_carrousel(tampon.getvalue())))
+    assert cadree.getpixel((540, 5))[0] > 200  # la bande blanche du haut est restee
+    couleurs = {cadree.getpixel((x, y)) for x in (0, 539, 1079) for y in (0, 674, 1349)}
+    assert all(couleur[0] > 200 or couleur == (0, 0, 0) for couleur in couleurs)
+    # La derniere ligne de l'image cadree ne doit jamais etre la bande blanche
+    # du haut recopiee par erreur, et le pixel tout en bas doit venir du noir.
+    assert cadree.getpixel((540, 1349))[0] < 60
+
+
+def test_le_recadrage_horizontal_reste_centre_verticalement_neutre():
+    """Une image paysage reste centree horizontalement (bandes verticales)."""
+    source = Image.new("RGB", (2400, 1350), (0, 0, 0))
+    source.paste(Image.new("RGB", (200, 1350), (255, 255, 255)), (1100, 0))
+    tampon = io.BytesIO()
+    source.save(tampon, "PNG")
+    cadree = Image.open(io.BytesIO(cadrer_carrousel(tampon.getvalue())))
+    assert cadree.getpixel((540, 675))[0] > 200  # la bande blanche est restee au centre
+    assert cadree.getpixel((10, 675))[0] < 60  # et le noir aux bords
+
+
 def test_un_panoramique_est_ecarte_plutot_que_massacre():
     """2000x500 (4:1) : un cadrage 4:5 en jetterait 80 %. Mieux vaut pas de slide."""
     with pytest.raises(ImageEcartee, match="trop eloignee"):

@@ -11,8 +11,20 @@ element d'un carrousel au ratio du PREMIER, ici la cover `kinda_post` rendue en
 rognee par Instagram, sans qu'on maitrise ce qui est coupe (2026-09-18, « sinon
 les images rendent bizarre »). D'ou `cadrer_carrousel`, qui produit TOUS les
 elements du carrousel exactement en 1080x1350 : agrandissement/reduction pour
-REMPLIR le cadre, puis recadrage CENTRE. Meme convention que les videos, que
+REMPLIR le cadre, puis recadrage. Meme convention que les videos, que
 `video.py::transcoder_carrousel` sort deja en 1080x1350.
+
+Le recadrage n'est CENTRE que dans un sens. Une source plus LARGE que la
+cible (paysage) garde sa bande centrale : la largeur ne dit rien sur ou est le
+sujet, couper autant a gauche qu'a droite est le seul choix neutre. Une source
+plus HAUTE que la cible (portrait) garde au contraire sa bande du HAUT --
+jamais le centre. Constate en production le 2026-09-18 (post publie a 17h33,
+slide 2, instagram.com/p/Ddb-UMFjVSW/) : un centrage vertical a coupe la tete
+de Travis Scott sur une photo de concert plus haute que 4:5. Un photographe
+cadre deja son sujet en haut du portrait et laisse la marge perdue en bas
+(pieds, sol, scene) ; sur un portrait 2:3 ramene au 4:5 on ne retire que ~17 %
+de la hauteur, et retirer cette marge par le bas ne coute rien alors que la
+retirer par le haut decapite.
 
 Deux cas ou le recadrage abimerait plus qu'il n'arrange, et ou l'image est alors
 ECARTEE (`ImageEcartee`) plutot que publiee : elle n'est simplement pas dans le
@@ -106,7 +118,7 @@ def cadrer_carrousel(
     cible_l, cible_h = format_
     ratio_cible = cible_l / cible_h
 
-    # La zone du source qui a exactement le ratio de la cible, au centre.
+    # La zone du source qui a exactement le ratio de la cible.
     if largeur / hauteur > ratio_cible:
         zone_l, zone_h = round(hauteur * ratio_cible), hauteur
     else:
@@ -126,7 +138,12 @@ def cadrer_carrousel(
             f"{facteur:.1f} fois (maximum {upscale_max:.1f})"
         )
 
-    gauche, haut = (largeur - zone_l) // 2, (hauteur - zone_h) // 2
+    # Recadrage horizontal centre (couper autant a gauche qu'a droite) ;
+    # recadrage vertical ancre en HAUT -- voir le docstring du module pour la
+    # raison des deux regles.
+    gauche = (largeur - zone_l) // 2
+    recadrage_vertical = zone_l == largeur
+    haut = 0 if recadrage_vertical else (hauteur - zone_h) // 2
     image = image.crop((gauche, haut, gauche + zone_l, haut + zone_h))
     if image.size != format_:
         image = image.resize(format_, Image.LANCZOS)
