@@ -3,19 +3,32 @@
 Regles citees de la documentation Meta le 2026-09-16 : JPEG uniquement, 8 Mo au
 plus, largeur de 320 a 1440 px, proportions entre 4:5 et 1,91:1. Une image hors
 de ces bornes fait echouer le conteneur -- et seulement au moment de publier,
-c'est-a-dire trop tard. D'ou une normalisation systematique au gel.
+c'est-a-dire trop tard. D'ou une mise au format systematique au gel.
 
-La cover `kinda_post` ne subit PLUS aucun recadrage : elle est rendue nativement
-en 1080x1350, c'est-a-dire exactement au 4:5 minimal, et traverse donc cette
-fonction intacte. Jusqu'au 2026-09-18 elle etait dessinee en 1080x1440 (3:4) puis
-recadree ici au centre : 45 px partaient en haut et en bas, soit la moitie de la
-marge du logo (87 -> 42) et 60 % de celle de l'accroche (76 -> 31). Les marges
-publiees n'etaient plus celles du design, et cela se voyait. La correction vit
-dans `app/content/layout.py` (`GABARIT_POST.height`), pas ici : cette fonction
-applique la regle de Meta et ne connait aucun gabarit.
+Mais respecter les bornes de Meta NE SUFFIT PAS. Instagram recadre chaque
+element d'un carrousel au ratio du PREMIER, ici la cover `kinda_post` rendue en
+1080x1350 (4:5) : une photo de presse 16:9 laissee en paysage arrivait donc
+rognee par Instagram, sans qu'on maitrise ce qui est coupe (2026-09-18, « sinon
+les images rendent bizarre »). D'ou `cadrer_carrousel`, qui produit TOUS les
+elements du carrousel exactement en 1080x1350 : agrandissement/reduction pour
+REMPLIR le cadre, puis recadrage CENTRE. Meme convention que les videos, que
+`video.py::transcoder_carrousel` sort deja en 1080x1350.
 
-Les autres images d'un carrousel (les photos de l'actu) restent, elles, recadrees
-au besoin : elles arrivent dans n'importe quel format.
+Deux cas ou le recadrage abimerait plus qu'il n'arrange, et ou l'image est alors
+ECARTEE (`ImageEcartee`) plutot que publiee : elle n'est simplement pas dans le
+carrousel -- jamais une erreur, jamais une exclusion d'article.
+
+1. TROP PETITE (`UPSCALE_MAX`, 2,2) : la zone conservee ne remplit 1080x1350
+   qu'au prix d'un agrandissement superieur au facteur. 2,2 laisse passer
+   l'`og:image` standard de 1200x630 (facteur 2,14), qui est de loin
+   l'illustration la plus frequente du pipeline -- un seuil plus severe (1,3 par
+   exemple) l'ecarterait, donc viderait la plupart des carrousels et finirait par
+   exclure les articles faute de second visuel. Au-dela de 2,2, on est sur des
+   vignettes et des avatars (300-400 px) : l'agrandissement Lanczos s'y voit.
+2. TROP ELOIGNEE DU 4:5 (`PERTE_MAX`, 0,60) : le recadrage jetterait plus de
+   60 % des pixels. 0,60 garde le 16:9 (55 % de perte) et le 1,91:1 (58 %), les
+   deux formats de presse courants, et ecarte les panoramiques (>= 2,35:1) et
+   les bandeaux verticaux -- ceux dont il ne resterait qu'une tranche sans sujet.
 
 `en_jpeg` sert la cover d'un reel, qui echappe aux regles de proportions du fil.
 """
@@ -24,11 +37,14 @@ import io
 
 from PIL import Image, ImageOps
 
-RATIO_MIN = 4 / 5
-RATIO_MAX = 1.91
+FORMAT_CARROUSEL = (1080, 1350)
 LARGEUR_MIN = 320
 LARGEUR_MAX = 1440
 POIDS_MAX = 8 * 1024 * 1024
+# Agrandissement maximal tolere pour remplir le cadre, et part maximale de
+# l'image que le recadrage a le droit de jeter. Voir le docstring du module.
+UPSCALE_MAX = 2.2
+PERTE_MAX = 0.60
 # Qualites essayees dans l'ordre, jusqu'a passer sous les 8 Mo.
 QUALITES = (92, 85, 75, 65)
 # Fond des images transparentes : le noir de la charte Kinda.
@@ -37,6 +53,14 @@ FOND = (0x1D, 0x1D, 0x1D)
 
 class ImageInexploitable(ValueError):
     """L'image ne peut pas etre mise aux regles de Meta. Message affichable."""
+
+
+class ImageEcartee(ImageInexploitable):
+    """L'image est lisible, mais le cadrage 4:5 l'abimerait : on ne la publie pas.
+
+    Sous-classe d'`ImageInexploitable` a dessein : le gel attrape deja celle-ci
+    pour sauter un media, et une image ecartee doit etre sautee de la meme
+    facon -- ce n'est ni une panne ni un defaut de l'article."""
 
 
 def _ouvrir_rgb(octets: bytes) -> Image.Image:
@@ -65,31 +89,47 @@ def _jpeg_borne(image: Image.Image, poids_max: int) -> bytes:
     raise ImageInexploitable(f"plus de {poids_max // (1024 * 1024)} Mo meme compressee")
 
 
-def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
+def cadrer_carrousel(
+    octets: bytes,
+    format_: tuple[int, int] = FORMAT_CARROUSEL,
+    *,
+    upscale_max: float = UPSCALE_MAX,
+    perte_max: float = PERTE_MAX,
+) -> bytes:
+    """Une image du carrousel, exactement au format demande (1080x1350), ou
+    `ImageEcartee` si le recadrage l'abimerait trop.
+
+    On recadre AVANT de redimensionner : le resultat est le meme et Pillow ne
+    travaille jamais sur des pixels destines a partir."""
     image = _ouvrir_rgb(octets)
     largeur, hauteur = image.size
+    cible_l, cible_h = format_
+    ratio_cible = cible_l / cible_h
 
-    ratio = largeur / hauteur
-    if ratio < ratio_min:
-        # int() et pas round() : arrondir vers le haut donnerait une hauteur a
-        # peine trop grande, donc un ratio a peine sous le minimum.
-        nouvelle_hauteur = int(largeur / ratio_min)
-        haut = (hauteur - nouvelle_hauteur) // 2
-        image = image.crop((0, haut, largeur, haut + nouvelle_hauteur))
-    elif ratio > RATIO_MAX:
-        nouvelle_largeur = int(hauteur * RATIO_MAX)
-        gauche = (largeur - nouvelle_largeur) // 2
-        image = image.crop((gauche, 0, gauche + nouvelle_largeur, hauteur))
+    # La zone du source qui a exactement le ratio de la cible, au centre.
+    if largeur / hauteur > ratio_cible:
+        zone_l, zone_h = round(hauteur * ratio_cible), hauteur
+    else:
+        zone_l, zone_h = largeur, round(largeur / ratio_cible)
+    zone_l, zone_h = min(zone_l, largeur), min(zone_h, hauteur)
 
-    # Verifier la largeur minimale APRES le recadrage de ratio, qui peut
-    # l'avoir diminuee.
-    if image.width < LARGEUR_MIN:
-        raise ImageInexploitable(f"trop petite apres recadrage : {image.width} px de large, minimum {LARGEUR_MIN}")
+    perte = 1 - (zone_l * zone_h) / (largeur * hauteur)
+    if perte > perte_max:
+        raise ImageEcartee(
+            f"proportion trop eloignee du {cible_l}x{cible_h} : "
+            f"{perte:.0%} de l'image partirait au recadrage (maximum {perte_max:.0%})"
+        )
+    facteur = cible_l / zone_l
+    if facteur > upscale_max:
+        raise ImageEcartee(
+            f"trop petite pour le cadre {cible_l}x{cible_h} : il faudrait l'agrandir "
+            f"{facteur:.1f} fois (maximum {upscale_max:.1f})"
+        )
 
-    if image.width > LARGEUR_MAX:
-        nouvelle_hauteur = round(image.height * LARGEUR_MAX / image.width)
-        image = image.resize((LARGEUR_MAX, nouvelle_hauteur), Image.LANCZOS)
-
+    gauche, haut = (largeur - zone_l) // 2, (hauteur - zone_h) // 2
+    image = image.crop((gauche, haut, gauche + zone_l, haut + zone_h))
+    if image.size != format_:
+        image = image.resize(format_, Image.LANCZOS)
     return _jpeg_borne(image, POIDS_MAX)
 
 

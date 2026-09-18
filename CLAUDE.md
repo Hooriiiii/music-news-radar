@@ -709,8 +709,40 @@ lui prenait 45 px en haut et en bas — la moitié de la marge du logo (87 → 4
 celles du design, et cela se voyait. Les valeurs du dessin n'ont pas bougé (77
 latéral, 87 logo, 76 accroche, voiles 817/727) : elles se comptent depuis un bord
 ou depuis le bloc de texte, et seuls 90 px de PHOTO disparaissent du milieu du
-cadre. Les photos de l'actu, elles, sont toujours recadrées
-(`publication_ratio_min`).
+cadre.
+
+**Toutes les images du carrousel sortent en 1080×1350, cover comprise**
+(2026-09-18, « c'est mieux que le format corresponde, sinon les images rendent
+bizarre »). Instagram recadre chaque élément au ratio du PREMIER : une photo de
+presse 16:9 laissée en paysage — ce que faisait l'ancienne `normaliser`, qui ne
+recadrait que HORS des bornes Meta (4:5 … 1,91:1) — revenait donc coupée sans
+qu'on maîtrise ce qui partait. `app/publish/images.py::cadrer_carrousel` met
+chaque image à l'échelle pour REMPLIR le cadre puis recadre au CENTRE ; le
+recadrage se fait avant le redimensionnement (même résultat, sans travailler sur
+des pixels destinés à partir). Même convention que les vidéos, déjà sorties en
+1080×1350 par `video.py::transcoder_carrousel`.
+
+**Une image que ce cadrage abîmerait est ÉCARTÉE, pas publiée** (`ImageEcartee`,
+sous-classe d'`ImageInexploitable` pour que le gel la saute comme il saute déjà
+un média illisible) : jamais une erreur, jamais une exclusion d'article, la
+raison est journalisée et rappelée dans le message si le carrousel finit vide.
+Deux seuils, réglables (`publication_crop_upscale_max`,
+`publication_crop_perte_max`) :
+- **trop petite** — remplir 1080×1350 demanderait un agrandissement supérieur à
+  **2,2×**. Ce plafond est choisi pour laisser passer l'`og:image` standard de
+  1200×630 (2,14×), de loin l'illustration la plus fréquente du pipeline : un
+  seuil sévère (1,3×) écarterait toute photo paysage sous ~1750 px de large,
+  donc viderait la plupart des carrousels et finirait par exclure les articles
+  faute de second visuel. Au-delà de 2,2× on est sur des vignettes et des avatars
+  (300-400 px), où l'agrandissement Lanczos se voit ;
+- **trop éloignée du 4:5** — le recadrage jetterait plus de **60 %** de la
+  surface. 60 % garde le 16:9 (55 % de perte) et le 1,91:1 (58 %), les deux
+  formats de presse courants, et écarte les panoramiques (≥ 2,35:1) et les
+  bandeaux verticaux (≤ 1:3,3), dont il ne resterait qu'une tranche sans sujet.
+
+Conséquence assumée : si les images écartées ne laissent que la cover, la règle
+« jamais un post réduit à sa cover » s'applique telle quelle (article sauté avec
+sa raison, ou gel différé si c'est un échec de téléchargement passager).
 
 **Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
 post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel

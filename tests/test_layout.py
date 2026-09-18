@@ -22,9 +22,9 @@ from app.content.layout import (
     tient,
     variables_css,
 )
-# Le rapport minimal que Meta accepte dans le fil : c'est LUI qui dicte la
-# hauteur du gabarit post depuis le 2026-09-18, d'ou l'import ici.
-from app.publish.images import RATIO_MIN
+# Le format publie d'un element de carrousel : c'est LUI qui dicte les
+# dimensions du gabarit post depuis le 2026-09-18, d'ou l'import ici.
+from app.publish.images import FORMAT_CARROUSEL
 
 
 _LOGO_ESSAI = Logo(right=77, top=87, width=150)
@@ -188,14 +188,14 @@ def test_le_post_est_rendu_au_format_publie():
     publie : si le rapport du gabarit est deja celui que Meta accepte, plus rien
     n'est recadre et les marges de la maquette sont celles qu'on voit.
     """
-    assert GABARIT_POST.width / GABARIT_POST.height == pytest.approx(RATIO_MIN)
+    assert (GABARIT_POST.width, GABARIT_POST.height) == FORMAT_CARROUSEL
 
 
 def test_les_marges_de_la_maquette_sont_celles_qui_sont_publiees():
     """Le corollaire, verifie sur les deux marges dont l'utilisateur s'est
     plaint : plus aucun ecart entre ce qui est rendu et ce qui est publie."""
     _, zone = GABARIT_POST.roles["headline"]
-    rogne = (GABARIT_POST.height - GABARIT_POST.width / RATIO_MIN) / 2
+    rogne = (GABARIT_POST.height - FORMAT_CARROUSEL[1]) / 2
 
     assert rogne == pytest.approx(0)
     assert GABARIT_POST.logo.top - rogne == pytest.approx(87)

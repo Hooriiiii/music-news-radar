@@ -6,11 +6,13 @@ panne laisse le temps de reagir (remplacer l'article sur une cover qui deborde,
 retenter sur un Chromium absent), et l'heure de publication ne depend plus de la lenteur d'un telechargement.
 
 Ordre du carrousel : la cover d'abord, puis jusqu'a 9 medias de l'actu, dans
-l'ordre -- photos en JPEG normalises, VIDEOS en elements video 1080x1350 (meme
-cadrage sur fond floute que le reel). Premier post reel (Charlotte de Witte,
+l'ordre -- photos en JPEG cadrees a 1080x1350 comme la cover (Instagram impose le
+ratio du PREMIER element a tous les autres, une photo paysage revenait donc
+coupee n'importe comment), VIDEOS en elements video 1080x1350 (meme cadrage sur
+fond floute que le reel). Premier post reel (Charlotte de Witte,
 article 17839) : 5 videos, et un carrousel parti avec la cover seule.
 
-Cinq regles :
+Six regles :
 - JAMAIS un post reduit a sa COVER SEULE : un carrousel porte au moins deux
   elements, sinon le gel est impossible et l'article sort de la file (2026-09-18,
   article 17946 « Noisia » : une image, ecartee, et un post vide -- « la c'est
@@ -20,6 +22,9 @@ Cinq regles :
   c'est la vignette reste, sauf si elle retombe sur cette vignette) -- SAUF si
   c'est le seul visuel : elle fait alors le fond ET la slide (la cover la montre
   sous l'accroche, la slide la montre nette) ;
+- une image que le cadrage 4:5 abimerait (trop petite, ou trop eloignee du
+  format : `app.publish.images`) est simplement SAUTEE, jamais une erreur -- la
+  raison est journalisee, et rappelee dans le message si le carrousel finit vide ;
 - une video inutilisable (trop longue, telechargement ou sonde en echec, sortie
   hors specs) retombe sur sa vignette en photo : un media ne fait jamais echouer
   le gel ;
@@ -52,7 +57,7 @@ from app.content.visuels import (
     urls_interdites,
     visuels_autorises,
 )
-from app.publish.images import ImageInexploitable, normaliser
+from app.publish.images import ImageEcartee, ImageInexploitable, cadrer_carrousel
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +74,15 @@ class PreparationDifferee(RuntimeError):
     soient en defaut (pause de yt-dlp, un telechargement par passage deja fait).
     Le runner inscrit la raison sur le creneau, sans exclure ni notifier : le gel
     est retente au passage suivant. Message affichable."""
+
+
+def _cadrer(octets: bytes) -> bytes:
+    """Une image du carrousel au format publie, seuils lus dans la configuration."""
+    return cadrer_carrousel(
+        octets,
+        upscale_max=settings.publication_crop_upscale_max,
+        perte_max=settings.publication_crop_perte_max,
+    )
 
 
 def _media_d_actif(actif_: dict) -> dict:
@@ -204,12 +218,10 @@ def preparer_fichiers(
     *,
     rendre=render_post,
     telecharger=telecharger_media,
-    ratio_min: float | None = None,
     telecharger_video=None,
     sonder=None,
     transcoder=None,
 ) -> list[str]:
-    ratio = settings.publication_ratio_min if ratio_min is None else ratio_min
     if telecharger_video is None:
         # Import tardif : preparation_reel importe ce module.
         from app.publish.preparation_reel import telecharger_video
@@ -221,6 +233,9 @@ def preparer_fichiers(
 
     fond = verifier_fond(post, article)
     panne_transport = False
+    # Les raisons d'ecartement, gardees pour le message d'exclusion : sinon un
+    # article sortirait de la file sur un « aucun visuel publiable » muet.
+    ecartees: list[str] = []
 
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.
@@ -230,7 +245,7 @@ def preparer_fichiers(
     if rendus[0].overflow:
         raise PreparationImpossible("accroche trop longue : la cover deborde")
     try:
-        elements = [("jpg", normaliser(rendus[0].png, ratio))]
+        elements = [("jpg", _cadrer(rendus[0].png))]
     except ImageInexploitable as exc:
         raise PreparationImpossible(f"cover inexploitable : {exc}") from exc
 
@@ -254,8 +269,13 @@ def preparer_fichiers(
             panne_transport = panne_transport or echec_transitoire(raison)
             continue
         try:
-            elements.append(("jpg", normaliser(octets, ratio)))
-        except ImageInexploitable:
+            elements.append(("jpg", _cadrer(octets)))
+        except ImageEcartee as exc:
+            ecartees.append(str(exc))
+            logger.info("visuel ecarte du carrousel (%s) : %s", exc, url)
+            continue
+        except ImageInexploitable as exc:
+            logger.info("visuel inexploitable (%s) : %s", exc, url)
             continue
 
     if len(elements) == 1 and fond != FOND_KINDA:
@@ -268,9 +288,12 @@ def preparer_fichiers(
             panne_transport = panne_transport or echec_transitoire(raison)
         else:
             try:
-                elements.append(("jpg", normaliser(octets, ratio)))
-            except ImageInexploitable:
-                pass
+                elements.append(("jpg", _cadrer(octets)))
+            except ImageEcartee as exc:
+                ecartees.append(str(exc))
+                logger.info("fond de cover ecarte du carrousel (%s) : %s", exc, fond)
+            except ImageInexploitable as exc:
+                logger.info("fond de cover inexploitable (%s) : %s", exc, fond)
 
     if len(elements) < 2 and panne_transport:
         # Coupure, 429, 5xx : les visuels EXISTENT, seule leur recuperation a
@@ -285,8 +308,9 @@ def preparer_fichiers(
         # vide -- « la c'est n'importe quoi ! »). Une exclusion, donc : le
         # creneau passe a l'article suivant, ce qui vaut mieux qu'un carrousel
         # d'une slide.
+        detail = f" ({' ; '.join(dict.fromkeys(ecartees))})" if ecartees else ""
         raise PreparationImpossible(
-            "carrousel reduit a la cover seule : aucun visuel publiable apres elle"
+            f"carrousel reduit a la cover seule : aucun visuel publiable apres elle{detail}"
         )
 
     # Prefixe aleatoire : les fichiers seront publics quelques minutes, leurs noms
