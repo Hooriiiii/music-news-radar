@@ -198,3 +198,105 @@ def test_heberger_combine_serveur_tunnel_et_verification(tmp_path, monkeypatch):
         assert url == "https://t.trycloudflare.com"
     assert verifies == ["https://t.trycloudflare.com/a.jpg"]
     assert ports[0] > 0
+
+
+def _tunnel_compte(ouverts, fermes):
+    """Un tunnel factice qui numerote ses ouvertures : un tunnel rapide recoit un
+    NOUVEAU sous-domaine a chaque lancement."""
+
+    @contextlib.contextmanager
+    def faux_tunnel(port):
+        numero = len(ouverts) + 1
+        url = f"https://t{numero}.trycloudflare.com"
+        ouverts.append(url)
+        try:
+            yield url
+        finally:
+            fermes.append(url)
+
+    return faux_tunnel
+
+
+def test_heberger_reessaie_avec_un_nouveau_tunnel_quand_le_premier_est_injoignable(tmp_path, monkeypatch):
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes, verifies = [], [], []
+    monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
+
+    def verifier(url, **kwargs):
+        verifies.append(url)
+        if len(verifies) == 1:
+            raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres 90 s")
+
+    monkeypatch.setattr(mod, "attendre_joignable", verifier)
+
+    with mod.heberger(tmp_path, "a.jpg", essais=3) as url:
+        assert url == "https://t2.trycloudflare.com"
+        # Le premier tunnel est ferme AVANT d'en ouvrir un second.
+        assert fermes == ["https://t1.trycloudflare.com"]
+    assert ouverts == ["https://t1.trycloudflare.com", "https://t2.trycloudflare.com"]
+    assert fermes == ouverts
+    assert verifies == ["https://t1.trycloudflare.com/a.jpg", "https://t2.trycloudflare.com/a.jpg"]
+
+
+def test_heberger_abandonne_apres_le_nombre_d_essais_et_ferme_tout(tmp_path, monkeypatch):
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes = [], []
+    monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
+
+    def verifier(url, **kwargs):
+        raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres 90 s")
+
+    monkeypatch.setattr(mod, "attendre_joignable", verifier)
+    with pytest.raises(mod.TunnelInjoignable, match="3 essai"):
+        with mod.heberger(tmp_path, "a.jpg", essais=3):
+            raise AssertionError("aucun tunnel n'etait joignable")
+    assert len(ouverts) == 3
+    assert fermes == ouverts
+
+
+def test_heberger_prend_le_nombre_d_essais_dans_la_configuration(tmp_path, monkeypatch):
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes = [], []
+    monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
+    monkeypatch.setattr(mod, "attendre_joignable", _injoignable)
+    monkeypatch.setattr(mod.settings, "publication_tunnel_essais", 2)
+    with pytest.raises(mod.TunnelInjoignable):
+        with mod.heberger(tmp_path, "a.jpg"):
+            pass
+    assert len(ouverts) == 2
+
+
+def _injoignable(url, **kwargs):
+    raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable")
+
+
+def test_un_tunnel_injoignable_est_une_panne_d_hebergement():
+    """Le runner s'en sert pour NE PAS exclure l'article : un tunnel injoignable
+    est une panne machine, pas la faute de l'actu."""
+    assert issubclass(mod.TunnelInjoignable, HebergementIndisponible)
+    client = FauxClientDns(sequence_dns=[_reponse_dns([]) for _ in range(10)])
+    with pytest.raises(mod.TunnelInjoignable):
+        attendre_joignable(
+            "https://x.trycloudflare.com/a.jpg", client=client, dormir=lambda s: None, delai=3
+        )
+
+
+def test_le_tunnel_est_tue_par_groupe_de_processus(monkeypatch):
+    """cloudflared est lance dans sa propre session : le groupe entier est tue,
+    sinon un enfant survivrait et garderait le port."""
+    monkeypatch.setattr(mod, "chemin_cloudflared", lambda: "/bin/cloudflared")
+    processus = FauxProcessus(LIGNES_CLOUDFLARED)
+    processus.pid = 4242
+    options = {}
+    tues = []
+    monkeypatch.setattr(mod.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mod.os, "killpg", lambda groupe, signal_: tues.append((groupe, signal_)))
+
+    def lancer(commande, **kwargs):
+        options.update(kwargs)
+        return processus
+
+    with tunnel(8123, lancer=lancer):
+        pass
+    assert options["start_new_session"] is True
+    assert tues == [(4242, mod.signal.SIGTERM)]

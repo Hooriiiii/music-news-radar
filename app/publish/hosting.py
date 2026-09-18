@@ -15,9 +15,12 @@ n'expose PAS le dashboard (le port 8000 porte toute l'API, y compris
 import contextlib
 import functools
 import http.server
+import logging
+import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -25,6 +28,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # launchd ne fournit qu'un PATH minimal, sans /opt/homebrew/bin : `which` y
 # echoue alors que cloudflared est installe. Meme piege que ffmpeg dans
@@ -38,7 +45,24 @@ URL_DOH = "https://1.1.1.1/dns-query"
 
 
 class HebergementIndisponible(RuntimeError):
-    """cloudflared absent, tunnel non ouvert ou injoignable. Message affichable."""
+    """cloudflared absent, tunnel non ouvert ou injoignable. Message affichable.
+
+    C'est une panne de la MACHINE (binaire, reseau, infrastructure Cloudflare),
+    jamais un defaut de l'article : `app/schedule/runner.py` s'en sert pour ne
+    PAS exclure l'article de la file.
+    """
+
+
+class TunnelInjoignable(HebergementIndisponible):
+    """Le tunnel s'est ouvert mais son URL n'a pas repondu dans le budget.
+
+    Panne transitoire observee deux fois en 14 h : un tunnel rapide met parfois
+    plus que le budget a etre visible du DNS public, surtout quand plusieurs
+    sont ouverts a la suite (un essai isole, juste apres, repondait en 14,7 s).
+    D'ou les reessais de `heberger`, et surtout la garantie du runner : rien
+    n'est parti chez Meta (le conteneur n'est cree qu'une fois le tunnel
+    debout), donc retenter ne peut pas publier deux fois.
+    """
 
 
 def chemin_cloudflared() -> str:
@@ -110,6 +134,22 @@ def _lire_url(processus, delai: float = DELAI_URL_S) -> str:
     raise HebergementIndisponible(f"cloudflared n'a pas fourni d'URL en {delai:.0f} s")
 
 
+def _arreter(processus) -> None:
+    """Tue le GROUPE de processus : cloudflared est lance dans sa propre session
+    (`start_new_session`), et un essai suivant doit repartir sur une table rase --
+    un enfant survivant garderait le tunnel precedent ouvert."""
+    try:
+        os.killpg(os.getpgid(processus.pid), signal.SIGTERM)
+    except Exception:  # noqa: BLE001 -- pas de groupe (ou faux processus) : on se rabat
+        processus.terminate()
+    try:
+        processus.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(processus.pid), signal.SIGKILL)
+        processus.kill()
+
+
 @contextlib.contextmanager
 def tunnel(port: int, *, lancer=subprocess.Popen):
     processus = lancer(
@@ -117,15 +157,12 @@ def tunnel(port: int, *, lancer=subprocess.Popen):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     try:
         yield _lire_url(processus)
     finally:
-        processus.terminate()
-        try:
-            processus.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            processus.kill()
+        _arreter(processus)
 
 
 def resoudre_publiquement(hote: str, *, client) -> list[str]:
@@ -176,14 +213,36 @@ def attendre_joignable(
                     pass
             dormir(PAS_JOIGNABLE_S)
             ecoule += PAS_JOIGNABLE_S
-        raise HebergementIndisponible(f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s")
+        raise TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s")
     finally:
         if propre:
             client.close()
 
 
 @contextlib.contextmanager
-def heberger(dossier: Path, temoin: str):
-    with serveur_local(dossier) as port, tunnel(port) as url:
-        attendre_joignable(f"{url}/{temoin}")
-        yield url
+def heberger(dossier: Path, temoin: str, *, essais: int | None = None, delai: float = DELAI_JOIGNABLE_S):
+    """Le dossier expose derriere un tunnel JOIGNABLE, ou rien.
+
+    Un essai = un tunnel entier (un tunnel rapide recoit un nouveau sous-domaine
+    a chaque lancement, donc rien ne sert d'attendre plus longtemps sur celui qui
+    ne repond pas). L'essai perdu est ferme proprement avant d'en ouvrir un autre ;
+    le serveur local, lui, vit pour toute la duree du `with`. Duree bornee :
+    `essais` x `delai`.
+    """
+    essais = essais if essais is not None else settings.publication_tunnel_essais
+    with serveur_local(dossier) as port:
+        for essai in range(1, max(essais, 1) + 1):
+            with contextlib.ExitStack() as ouvert:
+                url = ouvert.enter_context(tunnel(port))
+                try:
+                    attendre_joignable(f"{url}/{temoin}", delai=delai)
+                except TunnelInjoignable as exc:
+                    # Sortie de l'ExitStack : le tunnel est tue avant le suivant.
+                    logger.warning("tunnel essai %d/%d : %s", essai, essais, exc)
+                    continue
+                logger.info("tunnel joignable a l'essai %d/%d : %s", essai, essais, url)
+                yield url
+                return
+    raise TunnelInjoignable(
+        f"aucun tunnel joignable apres {essais} essai(s) de {delai:.0f} s"
+    )

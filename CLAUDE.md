@@ -713,6 +713,27 @@ seulement, un mini-serveur local sert le dossier du post (sans listing) et un tu
 rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashboard
 n'est jamais exposé. `cloudflared` est cherché hors du PATH de launchd, comme ffmpeg.
 
+**Un tunnel rapide est parfois lent à être visible** (deux publications refusées en
+14 h le 2026-09-18, alors qu'un essai isolé juste après répondait en 14,7 s).
+`heberger` fait donc jusqu'à `publication_tunnel_essais` (3) essais : un essai = un
+tunnel ENTIER, budget `DELAI_JOIGNABLE_S` (90 s) chacun — un quick tunnel reçoit un
+nouveau sous-domaine à chaque lancement, attendre plus longtemps sur celui qui ne
+répond pas n'a aucun sens. L'essai perdu est tué par GROUPE de processus
+(`start_new_session`), le serveur local vit pour tout le `with`. Total borné à ~4,5 min.
+Épuisés, ils lèvent `TunnelInjoignable` (sous-classe de `HebergementIndisponible`).
+
+**Un tunnel injoignable n'exclut PAS l'article.** C'est une panne machine, la classe
+que la règle d'exclusion épargne. Rien n'est parti chez Meta : le conteneur n'est créé
+qu'À L'INTÉRIEUR du `with heberger(...)`, donc après que le tunnel répond — retenter
+ne peut pas publier deux fois. Le runner lève alors le `file_exclu_raison` posé à la
+réclamation, remet le créneau en GELE (fichiers figés toujours valides, dossier
+conservé), note la raison, notifie UNE fois et laisse le passage suivant retenter. Le
+créneau n'est pas repris par la seconde étape de publication du MÊME passage (rouvrir
+un tunnel tout de suite coûterait des minutes pour rien). Passé les 90 minutes de
+retard, il devient MANQUE comme n'importe quel créneau gelé. Vaut pour les carrousels
+comme pour les reels, et pour le chemin « publier à l'heure exacte » (la réclamation
+anticipée suit exactement le même traitement).
+
 **Exclusion.** Un article dont la composition ou le gel échoue, ou que l'utilisateur
 « saute », reçoit `articles.file_exclu_raison` et ne revient plus. C'est aussi le
 cas dès qu'un créneau est **réclamé** pour publication (GELE → ECHEC committé

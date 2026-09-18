@@ -11,6 +11,7 @@ from app.content.video import AssemblageIndisponible
 from app.models import (
     Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, Source, SourceCategorie, SourceType,
 )
+from app.publish.hosting import TunnelInjoignable
 from app.publish.preparation import PreparationDifferee
 from app.publish.ytdlp import MISE_A_JOUR, YtdlpEnAttente, YtdlpIndisponible
 import app.schedule.runner as runner
@@ -34,7 +35,7 @@ class Outils:
     def __init__(self):
         self.composes, self.prepares, self.prepares_reel = [], [], []
         self.publies, self.publies_reel, self.legendes, self.notifications = [], [], [], []
-        self.erreur_preparation_reel = None
+        self.erreur_preparation_reel = self.erreur_publication_reel = None
         # Erreurs consommees une par appel, avant `erreur_preparation_reel`.
         self.erreurs_preparation_reel = []
 
@@ -63,6 +64,8 @@ class Outils:
 
     def publier_reel(self, dossier, noms, legende, publier_vraiment, **_crochets):
         self.publies_reel.append((noms, publier_vraiment))
+        if self.erreur_publication_reel:
+            raise self.erreur_publication_reel
         self.legendes.append(legende)
         return "ig-reel"
 
@@ -526,3 +529,22 @@ def test_un_brouillon_de_reel_sans_fond_est_relache_et_recompose(db_session, vid
         db_session.delete(nouveau)
         db_session.delete(post)
         db_session.commit()
+
+
+def test_un_tunnel_injoignable_sur_un_reel_n_exclut_pas_l_article(db_session, video):
+    """Meme regle que pour un carrousel : la panne de tunnel rend le creneau GELE,
+    l'article reste en file et le passage suivant publie le reel deja fige."""
+    post = _post(db_session, video, "kinda_reel", "@saralandry")
+    creneau = _epingle(db_session, BASE - dt.timedelta(minutes=10), FormatCreneau.REEL, video, post,
+                       etat=EtatCreneau.GELE, fichiers=["r_reel.mp4", "r_cover.jpg"])
+    outils = Outils()
+    outils.erreur_publication_reel = TunnelInjoignable("tunnel ouvert mais injoignable apres 90 s")
+    outils.tourner(db_session, BASE)
+    assert creneau.etat == EtatCreneau.GELE
+    assert "injoignable" in creneau.erreur
+    assert db_session.get(Article, video.id).file_exclu_raison is None
+
+    outils.erreur_publication_reel = None
+    outils.tourner(db_session, BASE + dt.timedelta(minutes=10))
+    assert (creneau.etat, creneau.ig_media_id) == (EtatCreneau.PUBLIE, "ig-reel")
+    assert len(outils.publies_reel) == 2
