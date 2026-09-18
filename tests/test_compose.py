@@ -21,6 +21,7 @@ from app.content.media import entree
 from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
+    ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_KINDA,
     actif,
@@ -567,8 +568,66 @@ def test_une_affiche_cede_la_place_a_une_photo_du_compte_source(db_session):
 
     assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
     assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
-    # Les ACTIFS ne bougent pas : le secours est un fond de cover, pas une slide
-    # de carrousel -- le carrousel reste celui de l'actu.
+    # La photo de la reserve devient AUSSI un actif (2026-09-18, post Noisia) :
+    # un carrousel qui n'aurait que l'affiche ne montre jamais les artistes, et
+    # une reserve deja payee (lecture, telechargement, jetons) n'a aucune raison
+    # de ne servir qu'au fond.
+    assert [a.get("fichier") or a["url"] for a in post.assets] == [
+        "https://cdn/affiche.jpg", "file:///cache/live.jpg",
+    ]
+
+
+def test_les_autres_photos_de_la_reserve_deviennent_des_slides(db_session):
+    """« il n'y a pas de slide qui montre les artistes en question » (utilisateur,
+    2026-09-18, post Noisia). La meilleure photo fait le fond, les suivantes
+    remplissent le carrousel -- elles sont deja copiees en local et deja jugees."""
+    from app.content.illustration import Verdict
+
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")],
+        "@transmusicales",
+        secours=[Lot(ORIGINE_ARTISTE, lambda: ["file:///cache/a.jpg", "file:///cache/b.jpg"])],
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/affiche.jpg": Verdict(affiche=True, sujet="autre", note=10),
+            "file:///cache/a.jpg": Verdict(affiche=False, sujet="autre", note=60),
+            "file:///cache/b.jpg": Verdict(affiche=False, sujet="scene", note=80),
+        },
+    )
+
+    assert post.slides[0]["image_url"] == "file:///cache/b.jpg"
+    assert [a.get("fichier") or a["url"] for a in post.assets] == [
+        "https://cdn/affiche.jpg", "file:///cache/b.jpg", "file:///cache/a.jpg",
+    ]
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE}
+
+
+def test_une_affiche_de_reserve_ne_devient_jamais_une_slide(db_session):
+    """Une affiche de l'ACTU reste une slide honnete ; une affiche pechee dans
+    une reserve n'illustre rien -- on ne la publie ni en fond ni en slide."""
+    from app.content.illustration import Verdict
+
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")],
+        "@transmusicales",
+        secours=[Lot(ORIGINE_COMPTE, lambda: ["file:///cache/flyer.jpg"])],
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+        verdicts_fond=lambda urls: dict.fromkeys(
+            urls, Verdict(affiche=True, sujet="autre", note=10)
+        ),
+    )
+
+    assert post.slides[0]["image_url"] == FOND_KINDA
     assert [a["url"] for a in post.assets] == ["https://cdn/affiche.jpg"]
 
 

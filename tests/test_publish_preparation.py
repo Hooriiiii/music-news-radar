@@ -90,8 +90,74 @@ def test_dix_images_au_plus(tmp_path):
 
 def test_un_nouveau_gel_efface_le_precedent(tmp_path):
     (tmp_path / "ancien_01.jpg").write_bytes(b"x")
-    preparer_fichiers(_post(), None, tmp_path, rendre=_rendre(), telecharger=_telecharger())
+    preparer_fichiers(_post(), _article("https://img/1.jpg"), tmp_path,
+                      rendre=_rendre(), telecharger=_telecharger())
     assert not (tmp_path / "ancien_01.jpg").exists()
+
+
+def _post_kinda(*medias):
+    from app.content.visuels import FOND_KINDA
+
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": FOND_KINDA}
+    return SimpleNamespace(slides=[cover, *medias])
+
+
+def test_un_carrousel_reduit_a_la_cover_n_est_jamais_publie(tmp_path):
+    """Article 17946 (Noisia) : une seule image, ecartee, et un post parti avec
+    la cover seule -- « la c'est n'importe quoi ! ». Mieux vaut sauter l'article
+    (le creneau passe au suivant) que publier un post vide."""
+    with pytest.raises(PreparationImpossible, match="cover seule"):
+        preparer_fichiers(
+            _post_kinda(), _article("https://img/1.jpg"), tmp_path,
+            rendre=_rendre(), telecharger=_telecharger(echecs=("https://img/1.jpg",)),
+        )
+
+
+def test_une_panne_reseau_differe_le_gel_au_lieu_d_exclure(tmp_path):
+    """Un article exclu ne revient jamais dans la file : une coupure de deux
+    minutes ne doit pas lui couter sa publication. On retente au passage
+    suivant."""
+    from app.publish.preparation import PreparationDifferee
+
+    def telecharger(url):
+        return None, "reseau: ConnectError"
+
+    with pytest.raises(PreparationDifferee, match="reessaie|nouvelle tentative"):
+        preparer_fichiers(_post_kinda(), _article("https://img/1.jpg"), tmp_path,
+                          rendre=_rendre(), telecharger=telecharger)
+
+
+def test_un_post_sans_aucun_media_n_est_jamais_publie(tmp_path):
+    with pytest.raises(PreparationImpossible, match="cover seule"):
+        preparer_fichiers(_post_kinda(), _article(), tmp_path,
+                          rendre=_rendre(), telecharger=_telecharger())
+
+
+def test_l_unique_image_sert_a_la_fois_de_fond_et_de_slide(tmp_path):
+    """La regle « ne pas repeter l'image de la cover » vaut quand il existe un
+    AUTRE visuel. Seule, l'image de l'actu fait le fond ET la slide : la cover
+    la montre sous l'accroche, la slide la montre nette."""
+    noms = preparer_fichiers(
+        _post(), _article("https://img/fond.jpg"), tmp_path,
+        rendre=_rendre(), telecharger=_telecharger(),
+    )
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
+
+
+def test_l_image_de_la_cover_n_est_pas_repetee_quand_une_autre_existe(tmp_path):
+    telecharges = []
+
+    def telecharger(url):
+        telecharges.append(url)
+        return _png(1200, 800), ".png"
+
+    noms = preparer_fichiers(
+        _post(), _article("https://img/fond.jpg", "https://img/autre.jpg"), tmp_path,
+        rendre=_rendre(), telecharger=telecharger,
+    )
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
+    assert telecharges == ["https://img/autre.jpg"]
 
 
 def test_les_medias_viennent_des_slides_puis_de_l_article_sans_doublon():
@@ -193,7 +259,11 @@ def test_la_photo_du_fond_de_cover_n_est_pas_reprise_mais_la_video_oui():
     assert [m["url"] for m in medias_du_carrousel(_post(), article)] == ["https://cdn/v.mp4", "https://img/autre.jpg"]
 
 
-def test_une_video_qui_retomberait_sur_la_vignette_du_fond_est_ecartee(tmp_path):
+def test_une_video_qui_retomberait_sur_la_vignette_du_fond_ne_laisse_pas_la_cover_seule(tmp_path):
+    """La vignette de la video EST le fond de la cover : elle n'est pas reprise
+    comme slide... tant qu'un autre visuel existe. Ici il n'y en a aucun, et un
+    post d'une seule slide ne se publie pas -- la vignette revient donc en
+    slide 2 (cf. « une seule image sert a la fois de fond et de slide »)."""
     journal, outils = _outils_video(echec_telechargement=True)
     telecharges = []
 
@@ -205,8 +275,8 @@ def test_une_video_qui_retomberait_sur_la_vignette_du_fond_est_ecartee(tmp_path)
         _post(), _article_medias(_video(preview="https://img/fond.jpg")), tmp_path,
         rendre=_rendre(), telecharger=telecharger, **outils,
     )
-    assert len(noms) == 1
-    assert telecharges == []
+    assert len(noms) == 2
+    assert telecharges == ["https://img/fond.jpg"]
 
 
 @pytest.mark.parametrize("sortie", [
@@ -251,7 +321,7 @@ def test_neuf_medias_au_plus_apres_la_cover(tmp_path):
 
 def test_un_nouveau_gel_efface_aussi_les_anciennes_videos(tmp_path):
     (tmp_path / "ancien_02.mp4").write_bytes(b"x")
-    _preparer(tmp_path, _post(), None)
+    _preparer(tmp_path, _post(), _article("https://img/1.jpg"))
     assert not (tmp_path / "ancien_02.mp4").exists()
 
 

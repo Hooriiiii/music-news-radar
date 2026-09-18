@@ -25,8 +25,11 @@ from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.illustration import choisir_illustration, eviter_l_affiche
 from app.content.teinte import teinte_de_article
+from app.content.media import PHOTO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
+    actif,
+    image_de,
     image_de_fond,
     origine_du_fond,
     visuels_autorises,
@@ -358,6 +361,30 @@ def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     return image_de_fond(visuels_autorises(article), selecteur)
 
 
+def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
+    """Les photos de la reserve retenue, en ACTIFS -- donc en slides du carrousel.
+
+    Le defaut du post Noisia (article 17946, 2026-09-18) : l'unique image de
+    l'actu etait une affiche, donc ecartee du fond ; les photos des artistes
+    cites ne servaient qu'au fond ; et le post est parti avec la cover seule.
+    « Il n'y a pas de slide qui montre les artistes en question. »
+
+    Ces photos sont deja copiees en local et deja jugees (pas d'affiche parmi
+    elles) : les publier ne coute plus ni requete ni jeton. Elles gardent leur
+    origine (`compte` ou `artiste`), que le dashboard affiche, et sont bornees
+    par `visuels_max_photos` comme les visuels d'artistes d'un article sans
+    image propre.
+    """
+    connues = {image_de(a) for a in actifs}
+    nouveaux: list[dict] = []
+    for url in choisi.photos[: settings.visuels_max_photos]:
+        if url in connues:
+            continue
+        connues.add(url)
+        nouveaux.append(actif({"type": PHOTO, "url": None}, origine=choisi.origine, fichier=url))
+    return nouveaux
+
+
 def create_post(
     db: Session,
     article: Article,
@@ -414,6 +441,10 @@ def create_post(
             verdicts=verdicts_fond,
         )
         fond, origine_fond = choisi.url, choisi.origine
+        # Le fond retenu vient d'une reserve : ses photos deviennent aussi des
+        # SLIDES. Sans cela, un article dont l'unique image est une affiche part
+        # avec la cover seule -- le post Noisia (cf. `actifs_de_secours`).
+        actifs += actifs_de_secours(choisi, actifs)
         if actifs and fond is None:
             # Des actifs choisis mais aucun fond extractible : la cover partirait
             # sur l'image de secours du gabarit, et le gel refuserait le post a

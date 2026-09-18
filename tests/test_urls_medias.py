@@ -165,7 +165,9 @@ def test_le_gel_telecharge_la_photo_nettoyee():
         demandees.append(url)
         return b"jpg", ".jpg"
 
-    assert preparation._octets_image(SALE, faux_telecharger) == b"jpg"
+    # `_octets_image` rend aussi la RAISON d'un echec : un carrousel reduit a sa
+    # cover se retente si elle est passagere, s'exclut sinon.
+    assert preparation._octets_image(SALE, faux_telecharger) == (b"jpg", ".jpg")
     assert demandees == [PROPRE]
 
 
