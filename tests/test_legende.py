@@ -164,3 +164,29 @@ def test_credit_et_hashtags_trop_longs_retirent_des_hashtags_par_la_fin():
 
 def test_une_ligne_ordinaire_apres_une_liste_reprend_un_paragraphe():
     assert aerer_legende("📅 24.09\n📍 Paris\nOn y va ?") == "📅 24.09\n📍 Paris\n\nOn y va ?"
+
+
+def test_un_hashtag_rendu_sans_diese_en_recoit_un():
+    """Le vrai reel du 2026-09-18 (instagram.com/reel/Ddbuwecjr5A/) s'est termine
+    par « iheartradiofestival bts lesserafim cardib » en texte brut : aucune
+    portee. Le modele rend tantot `#techno`, tantot `techno` -- le texte publie
+    tranche."""
+    post = _post(hashtags=["iheartradiofestival", "bts", "#lesserafim", "cardib", "muse"])
+    assert texte_legende(post).endswith("#iheartradiofestival #bts #lesserafim #cardib #muse")
+
+
+def test_un_hashtag_est_un_seul_mot_sans_espace_ni_ponctuation():
+    """Instagram couperait « #vieilles charrues » au premier espace."""
+    post = _post(hashtags=["vieilles charrues", "hip-hop", "#k-pop !"])
+    assert texte_legende(post).endswith("#vieillescharrues #hiphop #kpop")
+
+
+def test_deux_hashtags_identiques_apres_normalisation_n_en_font_qu_un():
+    post = _post(hashtags=["#Techno", "techno", "#TECHNO", "#electro"])
+    assert texte_legende(post).endswith("#Techno #electro")
+
+
+def test_un_hashtag_sans_rien_d_utilisable_disparait():
+    """Publier un `#` seul serait pire que de ne rien publier."""
+    post = _post(hashtags=["#", "🎧", "electro"])
+    assert texte_legende(post).endswith("\n\n#electro")

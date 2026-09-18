@@ -241,8 +241,10 @@ fausse le calcul de largeur de ligne qui ajuste la taille du texte. Choisis \
 uniquement dans cette palette, accordee a la charte et aux axes du compte : \
 🩷 🎧 🪩 🎪 ✨ 🌱 🔊
 
-7. HASHTAGS : 5 a 12, en minuscules, pertinents et specifiques (nom d'artiste, nom \
-de festival, ville, genre). Evite les hashtags fourre-tout du type #music ou #love.
+7. HASHTAGS : 5 a 12, pertinents et specifiques (nom d'artiste, nom de festival, \
+ville, genre). Chacun COMMENCE PAR UN `#`, en minuscules, en un seul mot colle, \
+sans espace ni ponctuation : `#vieillescharrues`, jamais `vieilles charrues` ni \
+`#vieilles-charrues`. Evite les hashtags fourre-tout du type #music ou #love.
 
 N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom.\
 """

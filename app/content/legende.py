@@ -9,6 +9,11 @@ respecter les limites de Meta : 2200 caracteres (marge a 2150) et 30 hashtags.
 
 Plus de ligne « Source : <url> » (2026-09-17, demande de l'utilisateur apres le
 premier post publie) : le credit du compte reste, lui, obligatoire.
+
+Les HASHTAGS sont normalises ICI et pas a la composition : le texte publie est le
+seul goulot que TOUS les chemins traversent -- publication automatique, export zip
+et essai a la main --, alors qu'un brouillon peut arriver d'ailleurs (hashtags
+edites au dashboard, post compose avant cette regle et publie apres).
 """
 
 import re
@@ -86,8 +91,39 @@ def aerer_legende(caption: str) -> str:
     )
 
 
+def normaliser_hashtags(tags) -> list[str]:
+    """Des mots quelconques en vrais hashtags : un `#` en tete, et rien d'autre.
+
+    Le reel du 2026-09-18 (instagram.com/reel/Ddbuwecjr5A/) s'est termine par
+    « iheartradiofestival bts lesserafim ... » en texte brut : sans `#`, aucune
+    portee, et ca fait bacle. Le prompt demandait des minuscules sans jamais dire
+    que le `#` en faisait partie, et le modele rendait tantot l'un tantot l'autre
+    -- un prompt ne garantit rien, d'ou cette normalisation deterministe.
+
+    Tout ce qu'Instagram ne garde pas dans un tag est retire (espaces,
+    ponctuation, emojis) : « vieilles charrues » devient un seul `#vieillescharrues`
+    plutot qu'un tag coupe en deux a la publication. Un tag qui n'a plus rien
+    d'utilisable disparait -- publier un `#` seul serait pire que rien.
+    """
+    propres: list[str] = []
+    vus: set[str] = set()
+    for tag in tags or []:
+        mot = "".join(c for c in str(tag) if c.isalnum() or c == "_")
+        if not mot:
+            continue
+        # Dedup insensible a la casse et au `#` : le modele rend parfois la meme
+        # idee sous deux formes (« #Techno » et « techno ») dans la meme liste.
+        cle = mot.casefold()
+        if cle in vus:
+            continue
+        vus.add(cle)
+        propres.append(f"#{mot}")
+    return propres
+
+
 def texte_legende(post) -> str:
-    hashtags = (post.hashtags or [])[:HASHTAGS_MAX]
+    # Normalise AVANT de plafonner : sinon un doublon consommerait une des 30 places.
+    hashtags = normaliser_hashtags(post.hashtags)[:HASHTAGS_MAX]
     legende = aerer_legende(post.caption)
     credit = getattr(post, "credit", None)
     ligne_credit = None
