@@ -80,6 +80,8 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
   la génération est déclenchée à la main depuis le dashboard.
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
+- Passage de veille rapide (les seuls comptes de `VEILLE_COMPTES`) :
+  `uv run python -m scripts.run_veille` — voir « Veille rapide »
 - **Scheduler : UN SEUL ordonnanceur, launchd, TOUT EN LOCAL sur le Mac**
   (2026-08-15). Plus rien n'est planifié dans le cloud.
 
@@ -120,6 +122,11 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
     une seconde instance tant que la première tourne (`StartInterval` ne
     chevauche pas), le passage suivant part simplement en retard. D'où la
     relecture du mode avant chaque réclamation (voir « Publication automatique »).
+  - `com.musicnewsradar.veille` — `run_veille` toutes les **5 minutes** : la
+    veille rapide, c'est-à-dire les seuls comptes de `VEILLE_COMPTES` (voir
+    « Veille rapide »). Silencieux quand il n'y a rien ; une exception est
+    notifiée au plus une fois par heure (`veille_panne.json` à côté du jeton) et
+    le script sort en code 1.
 
   **Renommage de l'agent, et son piège.** L'agent s'appelait
   `com.musicnewsradar.ingest`. launchd identifie un agent par son LABEL, pas par
@@ -142,7 +149,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   posée précédemment est signalée « obsolète » et doit être re-posée. **Idem
   depuis l'ajout de `publication.log`** : une conf posée avant ne fait pas
   tourner ce log — `--status` la dit « obsolète », re-passer la commande `sudo`
-  qu'il affiche.
+  qu'il affiche. **Idem depuis l'ajout de `veille.log`** (2026-09-18) : la conf
+  posée avant ne le fait pas tourner, et il s'écrit 288 fois par jour —
+  `--status` redit « obsolète », re-passer la commande `sudo`.
 
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
   planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
@@ -306,6 +315,59 @@ jamais touchés.
   réellement dépensé est affiché par phase à la fin.
 - Lier une fiche artiste à son compte suivi quand le nom ne suffit pas :
   `PATCH /artists/{id}` avec `{"source_instagram_id": <id de la source>}`
+
+## Veille rapide (`app/pipeline/veille.py`, `scripts/run_veille.py`)
+
+**Pourquoi.** Mesure du 2026-09-18 (`docs/superpowers/specs/2026-09-18-etre-une-
+source-pas-un-intermediaire.md`) : Kinda ingérait la presse RSS en 48 min et les
+comptes Instagram d'artistes en 141 min (médiane), parce que ces comptes n'étaient
+lus que toutes les 3 h. Sur le cas Charlotte de Witte, il a donc **appris l'actu
+par DJ Mag 39 heures avant de la voir chez l'artiste** — la définition mécanique
+d'un intermédiaire. La propagation côté Meta est quasi immédiate : la latence
+était **entièrement la nôtre**.
+
+**L'arithmétique du quota, qui dicte tout.** Le quota Graph de l'app a rendu le
+code 4 au-delà de ~430 appels dans l'heure (2026-09-17). Lire les 123 comptes
+toutes les 5 min demanderait ~1 476 appels/h : impossible. D'où **deux cadences** :
+- **12 comptes surveillés toutes les 5 min** = 144 appels/h, latence ~5 min ;
+- **tous les autres toutes les heures** (`instagram_intervalle_heures` passé de 3
+  à **1**) = ~111 appels/h, latence ~50 min au lieu de 141 min.
+
+Soit **~255 appels/h en crête**, sous les ~430/h observés. (La note du 18/09
+annonçait 181/h en gardant les autres comptes à 3 h ; on a préféré payer 74
+appels/h de plus pour faire baisser aussi la latence des 111 autres. Revenir à
+`INSTAGRAM_INTERVALLE_HEURES=3` redonne 181/h sans rien casser.)
+
+**Les 12 comptes**, `VEILLE_COMPTES` dans `.env`, **modifiable** — des labels très
+actifs et les festivals FR plutôt qu'un seul artiste : `stmpdrcrds`,
+`defectedrecords`, `vladimircauchemar`, `fredagainagainagainagainagain`,
+`etjusticepourtous`, `edbanger`, `astropolis`, `nuits_sonores`, `transmusicales`,
+`positiveeducation`, `madeon`, `worakls.music`. **Chaque compte ajouté coûte
+12 appels/h** sur un quota partagé avec la publication.
+
+**Pas de migration** : la cadence est une liste de réglage, pas une colonne.
+`InstagramAdapter.intervalle()` compare le username (`compte_depuis_url`) à
+`comptes_surveilles()` ; `a_lire()` raisonne désormais en `timedelta` (marge d'un
+quart d'heure au-delà de l'heure, un dixième de l'intervalle en dessous — les
+cadences déjà mesurées sont inchangées).
+
+**L'espacement est PARTAGÉ**, et c'est ce qui empêche le doublon : `dernier_appel`
+est le même état pour les deux agents, donc un compte lu par la veille à T n'est
+pas relu par le passage horaire à T+1 min. La veille **redistribue** les appels,
+elle ne les double pas.
+
+**Ce que la veille ne fait PAS** : ni illustration (bornée à 40 requêtes réseau
+par run) ni purge — elles restent au passage horaire, conçues pour lui. Elle
+ingère, `link_duplicates`, score **au plus `veille_scoring_max` (20)** articles
+(jamais `score_pending` sans limite : l'arriéré peut se compter en centaines), et
+enregistre les mentions. Rien de neuf = pas une requête de plus.
+
+**Deux garde-fous, parce que le quota est partagé avec la PUBLICATION.** Un
+plafond dur `veille_appels_max_par_heure` (200) compté dans `veille.json` à côté
+du jeton (écriture atomique) ; et sur un code de quota Meta (4, 17, 32, 613) la
+veille s'arrête **au premier**, se met en pause 30 min et notifie une seule fois.
+Le pipeline horaire et la publication ne sont jamais suspendus par cette pause :
+leur cadence n'est pas en cause.
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 

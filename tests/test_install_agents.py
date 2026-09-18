@@ -13,9 +13,11 @@ import pytest
 from scripts.install_agents import (
     INTERVALLE_PIPELINE,
     INTERVALLE_PUBLICATION,
+    INTERVALLE_VEILLE,
     LABEL_DASHBOARD,
     LABEL_PIPELINE,
     LABEL_PUBLICATION,
+    LABEL_VEILLE,
     LABELS_OBSOLETES,
     PORT_DASHBOARD,
     THROTTLE_DASHBOARD,
@@ -28,6 +30,7 @@ from scripts.install_agents import (
     plist_dashboard,
     plist_pipeline,
     plist_publication,
+    plist_veille,
     plists,
     statut,
     tronquer_logs,
@@ -237,7 +240,7 @@ def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins)
     )
     premier_bootstrap = min(i for i, c in enumerate(executeur.commandes) if "bootstrap" in c)
     assert dernier_bootout < premier_bootstrap
-    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD, LABEL_PUBLICATION}
+    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD, LABEL_PUBLICATION, LABEL_VEILLE}
 
 
 def test_installer_ecrit_les_plists_et_cree_le_dossier_de_logs(chemins):
@@ -491,3 +494,47 @@ def test_installer_n_attend_pas_quand_le_service_est_deja_parti(chemins, monkeyp
     monkeypatch.setattr(mod, "_dormir", pauses.append)
     installer(chemins, executer=FauxExecuteur())
     assert pauses == []
+
+
+# --- L'agent de veille rapide (2026-09-18) ---
+
+
+def test_l_agent_de_veille_passe_toutes_les_cinq_minutes(chemins):
+    """La raison d'etre de l'agent : 5 min de latence sur une liste courte, la ou
+    l'espacement de 3 h en donnait 141 (mediane mesuree)."""
+    p = plist_veille(chemins)
+
+    assert p["Label"] == LABEL_VEILLE == "com.musicnewsradar.veille"
+    assert "scripts.run_veille" in p["ProgramArguments"]
+    assert "scripts.run_pipeline" not in p["ProgramArguments"]
+    assert p["StartInterval"] == INTERVALLE_VEILLE == 300
+    assert p["RunAtLoad"] is True
+    assert p["WorkingDirectory"] == str(chemins.depot)
+
+
+def test_l_agent_de_veille_est_installe_et_desinstalle_avec_les_autres(chemins):
+    assert LABEL_VEILLE in plists(chemins)
+    executeur = FauxExecuteur()
+    installer(chemins, executer=executeur)
+    assert (chemins.launch_agents / f"{LABEL_VEILLE}.plist").exists()
+
+    executeur.commandes.clear()
+    desinstaller(chemins, executer=executeur)
+
+    assert LABEL_VEILLE in set(_labels_de(executeur.commandes, "bootout"))
+    assert not (chemins.launch_agents / f"{LABEL_VEILLE}.plist").exists()
+
+
+def test_la_rotation_couvre_les_logs_de_veille(chemins):
+    """Ajouter un log SANS l'ajouter a la conf newsyslog, c'est 288 ecritures par
+    jour qui ne tournent jamais -- et newsyslog ne dit rien."""
+    conf = conf_rotation(chemins)
+
+    for suffixe in (".log", ".err.log"):
+        assert str(chemins.logs / f"veille{suffixe}") in conf
+
+
+def test_statut_signale_l_agent_de_veille(chemins, capsys):
+    statut(chemins, executer=FauxExecuteur(""))
+
+    assert LABEL_VEILLE in capsys.readouterr().out

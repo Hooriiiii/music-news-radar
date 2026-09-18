@@ -96,8 +96,20 @@ class LecteurComptes:
     def __call__(self, compte: CompteArtiste, maintenant: dt.datetime) -> list[PostArtiste]:
         if not settings.meta_fb_access_token or not settings.meta_ig_user_id:
             return []
-        intervalle = dt.timedelta(hours=max(1, settings.instagram_intervalle_heures))
-        if compte.dernier_appel is not None and maintenant - compte.dernier_appel < intervalle:
+        # Jamais plus souvent que le PROPRE cache de ce lecteur : depuis que le
+        # pipeline passe toutes les heures (et la veille rapide toutes les
+        # 5 minutes), se fier au seul espacement d'ingestion ferait relire a la
+        # composition un compte lu il y a une heure -- du quota Graph partage
+        # depense pour rien, alors que le lecteur aurait de toute facon servi son
+        # cache.
+        fraicheur = dt.timedelta(
+            hours=max(
+                1,
+                settings.instagram_intervalle_heures,
+                settings.visuels_cache_lectures_heures,
+            )
+        )
+        if compte.dernier_appel is not None and maintenant - compte.dernier_appel < fraicheur:
             # Le pipeline vient de lire ce compte : la base est a jour.
             return []
         etat = self._etat()

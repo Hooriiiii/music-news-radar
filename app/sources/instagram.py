@@ -88,6 +88,26 @@ def compte_depuis_url(url: str) -> str:
     return url.rsplit("/", 1)[-1].lstrip("@")
 
 
+def comptes_surveilles() -> frozenset[str]:
+    """Les comptes de la VEILLE RAPIDE, en minuscules.
+
+    Une liste de reglage plutot qu'une colonne : la cadence d'un compte est une
+    decision editoriale qui change a la main, pas une propriete de la source --
+    et cela evite une migration pour douze noms.
+    """
+    return frozenset(
+        compte
+        for brut in (settings.veille_comptes or "").split(",")
+        if (compte := brut.strip().lstrip("@").lower())
+    )
+
+
+def compte_surveille(compte: str | None) -> bool:
+    """La liste est saisie a la main dans `.env` : une majuscule ou un @ ne doit
+    pas faire retomber un compte a la cadence horaire sans rien dire."""
+    return bool(compte) and compte.strip().lstrip("@").lower() in comptes_surveilles()
+
+
 # Garde-fou « post quasi vide » (voir `scoring.appliquer_garde_fous`) : sous ce
 # nombre de mots significatifs, une caption ne porte pas d'information.
 MOTS_MIN_CAPTION = 6
@@ -313,20 +333,46 @@ class InstagramAdapter(SourceAdapter):
         with httpx.Client(timeout=self.timeout, headers=ENTETES) as client:
             return lire_compte(self.compte, settings.instagram_max_items, client=client)
 
+    def intervalle(self) -> dt.timedelta:
+        """L'espacement entre deux lectures de CE compte.
+
+        Deux cadences seulement : la veille rapide sur une liste courte, et le
+        rythme horaire pour tout le reste. Le choix se fait sur le username, pas
+        sur une colonne -- voir `comptes_surveilles`.
+        """
+        if compte_surveille(self.compte):
+            return dt.timedelta(minutes=max(1, settings.veille_intervalle_minutes))
+        return dt.timedelta(hours=max(1, settings.instagram_intervalle_heures))
+
     def a_lire(self, maintenant: dt.datetime) -> bool:
         """Le compte est-il du a ce passage ?
 
         Jamais lu : seulement sur son creneau (heure modulo N == id modulo N),
         pour qu'un lot de comptes ajoutes d'un coup ne parte pas dans la meme
-        heure. Deja lu : quand N heures (moins un quart d'heure de marge, les
-        passages launchd ne tombent pas pile) se sont ecoulees.
+        heure. La repartition ne vaut que pour les cadences en heures : douze
+        comptes surveilles n'ont rien a etaler, et attendre leur creneau
+        retarderait justement ce qu'on cherche a accelerer.
+
+        Deja lu : quand l'intervalle est ecoule, moins une marge (les passages
+        launchd ne tombent pas pile). Un quart d'heure au-dela de l'heure --
+        valeur d'origine, gardee telle quelle pour ne rien changer aux cadences
+        deja mesurees ; en dessous, un dixieme de l'intervalle, sinon la marge
+        serait plus grande que l'intervalle lui-meme.
+
+        `dernier_appel` est PARTAGE avec le pipeline horaire : un compte lu par
+        l'agent de veille n'est donc pas relu dans la foulee par le pipeline. La
+        veille redistribue les appels, elle ne les double pas.
         """
-        intervalle = max(1, settings.instagram_intervalle_heures)
+        ecart = self.intervalle()
         dernier = _date_iso((self.source.state or {}).get("dernier_appel"))
         if dernier is None:
+            if ecart < dt.timedelta(hours=1):
+                return True
+            heures = max(1, int(ecart.total_seconds() // 3600))
             heure = int(maintenant.timestamp() // 3600)
-            return heure % intervalle == (self.source.id or 0) % intervalle
-        return maintenant - dernier >= dt.timedelta(hours=intervalle, minutes=-15)
+            return heure % heures == (self.source.id or 0) % heures
+        marge = dt.timedelta(minutes=15) if ecart >= dt.timedelta(hours=1) else ecart / 10
+        return maintenant - dernier >= ecart - marge
 
     def fetch(self, maintenant: dt.datetime | None = None) -> list[RawItem]:
         # Sans jeton, la source est SAUTEE comme le sont les alertes sans

@@ -21,6 +21,11 @@ UN SEUL ordonnanceur depuis le passage au tout-local : launchd, sur le Mac.
         la file de publication Instagram. Sort immediatement en mode `arret`,
         le defaut (`PUBLICATION_MODE` dans .env).
 
+  com.musicnewsradar.veille     scripts.run_veille, toutes les 5 minutes
+        la VEILLE RAPIDE : les douze comptes de `VEILLE_COMPTES` seulement,
+        ingeres, regroupes et scores par petits lots. Le reste des ~123 comptes
+        continue de passer au rythme horaire du pipeline.
+
 Pourquoi Python et pas bash : `plistlib` produit des plists valides par
 construction et leur CONTENU devient testable sans appeler launchctl. Les
 anciens `.plist` versionnes codaient /Users/theoherve/... en dur et cassaient
@@ -46,6 +51,7 @@ from pathlib import Path
 LABEL_PIPELINE = "com.musicnewsradar.pipeline"
 LABEL_DASHBOARD = "com.musicnewsradar.dashboard"
 LABEL_PUBLICATION = "com.musicnewsradar.publication"
+LABEL_VEILLE = "com.musicnewsradar.veille"
 
 # Agents a decharger : `ingest` est l'agent d'ingestion seule du socle d'aout,
 # remplace par celui-ci ; `digest` date du 5 juillet et echouait chaque jour.
@@ -60,6 +66,12 @@ INTERVALLE_PIPELINE = 3600
 # Dix minutes : c'est la precision de l'heure de publication. L'agent ne coute
 # rien a ce rythme -- il ne score pas, et ne compose qu'a J-1.
 INTERVALLE_PUBLICATION = 600
+
+# Cinq minutes : la cadence de la VEILLE RAPIDE. Elle ne lit que les comptes de
+# `VEILLE_COMPTES` (douze), soit 144 appels Graph par heure -- loin des ~430/h qui
+# ont rendu le code 4 le 2026-09-17, et le seul moyen mesure de passer de 141 min
+# de latence a quelques minutes sur les comptes qui comptent.
+INTERVALLE_VEILLE = 300
 PORT_DASHBOARD = 8000
 # KeepAlive face a un port durablement occupe boucle : sans ce plancher, launchd
 # reessaie toutes les 10 s et remplit les logs.
@@ -71,7 +83,7 @@ PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 ROTATION_GENERATIONS = 5
 ROTATION_TAILLE_KO = 5000
-BASES_LOG = ("pipeline", "dashboard", "publication")
+BASES_LOG = ("pipeline", "dashboard", "publication", "veille")
 
 
 @dataclass(frozen=True)
@@ -249,11 +261,29 @@ def plist_publication(chemins: Chemins) -> dict:
     }
 
 
+def plist_veille(chemins: Chemins) -> dict:
+    """La veille rapide : `scripts.run_veille`, toutes les 5 minutes.
+
+    Il n'ingere QUE les comptes surveilles et ne score que ce qu'il vient de
+    ramener : ni illustration ni purge, qui restent au passage horaire. Sans
+    liste de veille configuree, il ne trouve aucune source et ne coute rien.
+    """
+    return {
+        **_commun(chemins, LABEL_VEILLE, "veille"),
+        "ProgramArguments": [
+            str(chemins.uv), "run", "python", "-m", "scripts.run_veille",
+        ],
+        "StartInterval": INTERVALLE_VEILLE,
+        "RunAtLoad": True,
+    }
+
+
 def plists(chemins: Chemins) -> dict[str, dict]:
     return {
         LABEL_PIPELINE: plist_pipeline(chemins),
         LABEL_DASHBOARD: plist_dashboard(chemins),
         LABEL_PUBLICATION: plist_publication(chemins),
+        LABEL_VEILLE: plist_veille(chemins),
     }
 
 
