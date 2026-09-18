@@ -339,7 +339,7 @@ async function load() {
     card.querySelector(".title").textContent = a.title;
     card.querySelector(".summary").textContent = a.summary || "";
     card.querySelector(".meta").textContent =
-      `${sourceName(a.source_id)} · publié ${fmtDate(a.published_at) || "?"}`;
+      `#${a.id} · ${sourceName(a.source_id)} · publié ${fmtDate(a.published_at) || "?"}`;
     for (const btn of card.querySelectorAll(".actions button[data-status]")) {
       btn.onclick = async () => {
         await fetch(`/articles/${a.id}`, {
@@ -611,7 +611,12 @@ async function loadSchedulePanel() {
       <span class="status-pill"></span>
       <span class="slot-actions"></span>`;
     row.querySelector(".hl").textContent = c.article_title || "(créneau libre)";
-    const details = [fmtDate(c.publier_a)];
+    // Les identifiants sont affiches parce qu'ils servent : `article_id` se
+    // recopie dans « remplacer », `ig_media_id` retrouve le post sur Instagram.
+    const details = [fmtDate(c.publier_a), `créneau ${c.id}`];
+    if (c.article_id != null) details.push(`article #${c.article_id}`);
+    if (c.post_id != null) details.push(`post ${c.post_id}`);
+    if (c.ig_media_id) details.push(`IG ${c.ig_media_id}`);
     if (c.relevance != null) details.push(`pertinence ${c.relevance}`);
     if (c.epingle) details.push("📌 épinglé");
     // Reclame par l'agent il y a peu : conteneur en creation ou attente de
@@ -709,7 +714,8 @@ async function loadPostsPanel() {
       </div>
       <span class="status-pill ${p.status}">${STATUS_LABELS[p.status] || p.status}</span>`;
     row.querySelector(".hl").textContent = headline.replace(/\*\*/g, "");
-    row.querySelector(".sub").textContent = `${p.source_name || "?"} · ${fmtDate(p.created_at)}`;
+    row.querySelector(".sub").textContent =
+      `post ${p.id}${p.article_id != null ? ` · article #${p.article_id}` : ""} · ${p.source_name || "?"} · ${fmtDate(p.created_at)}`;
     row.onclick = () => ouvrirPost(p.id);
     list.appendChild(row);
   }
