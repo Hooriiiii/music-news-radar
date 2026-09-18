@@ -1,6 +1,6 @@
 # Templates de rendu Kinda (`kinda_post`, `kinda_reel`)
 
-Deux gabarits partagent cette architecture : `kinda_post` (1080×1440, ce dossier)
+Deux gabarits partagent cette architecture : `kinda_post` (1080×1350, ce dossier)
 et `kinda_reel` (1080×1920, `../kinda_reel/`). Ce fichier documente les deux —
 seul `kinda_post` a une frame Figma extraite, voir plus bas.
 
@@ -102,7 +102,8 @@ pas la lisibilité du résultat.
 ## Gabarit `kinda_post`
 
 Extrait du fichier Figma `kAqCOUyZgvR025RuICJuPW` (« Kinda design »),
-frame `234:8` (« TEMPLATE »), le 2026-07-22. Format 1080x1440.
+frame `234:8` (« TEMPLATE »), le 2026-07-22. Frame Figma 1080x1440 ; **rendu en
+1080x1350**, voir « Hauteur de la toile » ci-dessous.
 
 ### Valeurs relevées dans Figma
 
@@ -123,6 +124,33 @@ accroche plus longue, ou une échelle plus petite (`--scale` réduite par
 `Ajustement`), doit pousser vers le haut sans jamais déborder sous la ligne de
 garde des 85 px. Ces valeurs vivent dans `GABARIT_POST` (`app/content/layout.py`),
 pas dans `style.css`.
+
+### Hauteur de la toile : 1350 et non les 1440 de la frame (2026-09-18)
+
+La frame Figma est en 3:4, **un rapport que Meta refuse dans le fil** (4:5 à
+1,91:1). La cover était donc rendue en 1080x1440 puis recadrée au centre en
+1080x1350 juste avant publication, par `app/publish/images.py`.
+
+Ce recadrage prenait 45 px en haut et 45 px en bas — c'est-à-dire, sur l'image
+que les gens voient : la moitié de la marge du logo (87 → 42) et 60 % de celle
+de l'accroche (76 → 31). Toutes les marges posées contre les bords, et elles
+seules, étaient fausses à la publication. C'est ce que l'utilisateur a vu en
+comparant aux premiers posts.
+
+La cover est donc **rendue nativement au format publié** et plus rien n'est
+recadré. Les valeurs du dessin ne bougent pas : 77 px de marge latérale, 87 px
+pour le logo, 76 px sous l'accroche, 817 px de voile bas, 727 px de voile haut —
+toutes se comptent depuis un bord ou depuis le bloc de texte, et la largeur n'a
+pas changé. Ce qui disparaît, ce sont 90 px de **photo** au milieu du cadre,
+exactement ce que la publication retirait déjà.
+
+Conséquence pour une ré-extraction Figma : les valeurs relevées dans la frame
+1440 restent valables telles quelles SAUF une position mesurée depuis le HAUT
+d'un élément ancré en bas (l'accroche est à `y=1088` dans la frame, ce qui
+correspond à `bottom: 76`, la seule forme à transcrire). Deux sentinelles
+gardent la règle : `test_le_post_est_rendu_au_format_publie`,
+`test_les_marges_publiees_sont_celles_de_la_maquette` (mesure au pixel dans
+Chromium).
 
 ### Plafond de lignes (`max_lines`, calibré tâche 8)
 
@@ -207,7 +235,8 @@ visuel : la taille, l'interlignage et l'interlettrage sont calibrés sur celle-c
 - `app/content/assets/logo.png` — export SVG du node `234:13` rasterisé à 4x
   (600 x 299, fond transparent). Le PNG rendu directement par Figma embarquait le
   fond blanc de la page : ne pas le reprendre tel quel.
-- `app/content/assets/fallback.jpg` — aplat sombre 1080x1440 aux couleurs de Kinda,
+- `app/content/assets/fallback.jpg` — aplat sombre 1080x1440 aux couleurs de Kinda
+  (un dégradé, recadré en `cover` sur la toile 1350 : rien à regénérer),
   utilisé quand la photo de l'article est introuvable. Volontairement pauvre : il ne
   doit jamais être joli au point qu'on oublie de le remplacer. Ne PAS l'utiliser
   pour juger un rendu à l'œil (surlignage, plafond de lignes) — il masque les

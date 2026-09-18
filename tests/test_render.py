@@ -179,7 +179,7 @@ def test_le_voile_garde_la_geometrie_de_la_maquette_sans_scrim_height():
 
     Rien ne le signale a la lecture du HTML : pas d'erreur, pas de warning, et
     aucune assertion de taille de PNG ne bronche (le viewport impose deja
-    1080x1440, quelle que soit la geometrie du voile a l'interieur). Seule la
+    1080x1350, quelle que soit la geometrie du voile a l'interieur). Seule la
     valeur CALCULEE (`getComputedStyle`) le revele -- avant le repli, Chromium
     rendait `background-size: auto, auto, auto` et le voile passait en plein
     cadre au lieu des bandes localisees de la maquette. Cette tache (2) ne
@@ -249,6 +249,46 @@ def test_render_one_cable_un_voile_plus_haut_que_la_maquette_pour_un_bloc_haut()
     premier_calque = taille.split(",")[0].strip()
     hauteur = int(re.search(r"(\d+)px$", premier_calque).group(1))
     assert hauteur > 817, f"le voile n'a pas grandi avec le bloc : {taille!r}"
+
+
+@chromium_absent
+def test_les_marges_publiees_sont_celles_de_la_maquette():
+    """Le defaut du 2026-09-18, mesure sur le PIXEL plutot que sur les constantes.
+
+    `tests/test_layout.py` verifie que le gabarit est au format publie ; ici on
+    verifie que le rendu le respecte vraiment -- une regle CSS pourrait deplacer
+    le logo ou l'accroche sans toucher a `layout.py`. Les trois nombres sont ceux
+    de la guideline Figma : logo a 87 px du haut, accroche a 76 px du bas, 77 px
+    de marge laterale. Avant la correction, l'image PUBLIEE (recadree) les
+    donnait a 42 et 31 px.
+    """
+    from playwright.sync_api import sync_playwright
+
+    document = build_document(
+        GABARIT_POST, {"headline": "Aux **Vieilles Charrues**"}, "data:image/jpeg;base64,AAA"
+    )
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page(
+                viewport={"width": GABARIT_POST.width, "height": GABARIT_POST.height}
+            )
+            page.set_content(document, wait_until="load")
+            page.evaluate("document.fonts.ready")
+            mesures = page.evaluate(
+                """() => {
+                  const r = (id) => document.getElementById(id).getBoundingClientRect();
+                  return {logo: r('logo'), titre: r('headline'),
+                          hauteur: document.getElementById('slide').clientHeight};
+                }"""
+            )
+        finally:
+            browser.close()
+
+    assert mesures["hauteur"] == 1350
+    assert mesures["logo"]["top"] == pytest.approx(87, abs=1)
+    assert mesures["titre"]["left"] == pytest.approx(77, abs=1)
+    assert 1350 - mesures["titre"]["bottom"] == pytest.approx(76, abs=1)
 
 
 @chromium_absent

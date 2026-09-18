@@ -20,8 +20,19 @@ def _dimensions(octets):
     return image.format, image.size, image.mode
 
 
-def test_la_cover_3_4_est_recadree_en_4_5():
-    """La cover kinda_post fait 1080x1440 (3:4), hors des proportions Meta."""
+def test_la_cover_du_post_traverse_la_normalisation_intacte():
+    """Depuis le 2026-09-18, `kinda_post` est rendu NATIVEMENT en 1080x1350.
+
+    C'est le test qui ferme le defaut signale par l'utilisateur : tant que la
+    cover etait dessinee en 3:4, la normalisation lui prenait 45 px en haut et
+    45 px en bas, donc un tiers de la marge du logo et de celle de l'accroche.
+    Un recadrage ici serait la reapparition du meme defaut."""
+    assert _dimensions(normaliser(_image(1080, 1350))) == ("JPEG", (1080, 1350), "RGB")
+
+
+def test_une_image_3_4_reste_recadree_en_4_5():
+    """La regle Meta, elle, n'a pas bouge : une PHOTO d'actu en 3:4 (les slides
+    du carrousel, qui ne passent pas par le gabarit) est toujours recadree."""
     assert _dimensions(normaliser(_image(1080, 1440))) == ("JPEG", (1080, 1350), "RGB")
 
 

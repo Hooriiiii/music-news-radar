@@ -22,6 +22,13 @@ SCRIM_MARGE = 465
 # Plancher : jamais un voile plus court que celui de la maquette, meme pour une
 # accroche d'une seule ligne -- le degrade fait partie du design, pas seulement de
 # la lisibilite.
+#
+# Ces deux longueurs restent celles de la maquette 1440 alors que la toile fait
+# desormais 1350 (cf. `GABARIT_POST`), et c'est voulu : elles se comptent DEPUIS LE
+# BAS et depuis le bloc de texte, pas en fraction de la hauteur. Le passage au
+# format publie retire 90 px de PHOTO au milieu du cadre, il ne change rien a la
+# distance entre le bas de l'image, l'accroche et la partie dense du degrade --
+# qui est exactement ce que le designer a regle.
 VOILE_MINIMUM = 817
 
 
@@ -119,10 +126,11 @@ class Logo:
     `right` et `width` se trouvent etre identiques sur les deux gabarits, mais
     `top` ne peut pas l'etre, et c'est la grille Instagram qui l'impose : la
     vignette d'une publication y est un crop 4:5 CENTRE, dont l'origine
-    verticale vaut (hauteur - largeur x 5/4) / 2. Sur le post (1080x1440) elle
-    tombe a 45 px, sur le reel (1080x1920) a 285 px. Un logo pose a 87 px du
-    haut passe donc dans la vignette du post, mais se fait COUPER dans celle du
-    reel, dont les 285 premiers pixels n'existent pas en grille.
+    verticale vaut (hauteur - largeur x 5/4) / 2. Sur le post (1080x1350, deja
+    en 4:5) elle tombe a 0, sur le reel (1080x1920) a 285 px. Un logo pose a
+    87 px du haut passe donc entier dans la vignette du post, mais se ferait
+    COUPER dans celle du reel, dont les 285 premiers pixels n'existent pas en
+    grille.
 
     D'ou 372 = 285 + 87 sur le reel : ce n'est pas un reglage a l'oeil, c'est le
     decalage qui redonne au logo la meme place percue une fois la grille rognee.
@@ -293,10 +301,27 @@ class Ajustement:
 # Valeurs relevees dans Figma (frame 234:8) -- voir
 # templates/kinda_post/REFERENCE.md pour la provenance et la procedure de
 # re-extraction. Ne JAMAIS les modifier a l'aveugle.
+#
+# HAUTEUR 1350 ET NON LES 1440 DE LA FRAME (2026-09-18). La frame Figma est en
+# 3:4, un rapport que Meta REFUSE dans le fil : la cover etait donc rendue en
+# 1440 puis recadree au centre en 1350 juste avant publication. Ce recadrage
+# prenait 45 px en haut et 45 px en bas, c'est-a-dire la moitie de la marge du
+# logo (87 -> 42) et 60 % de celle de l'accroche (76 -> 31) : toutes les marges
+# posees par le designer contre les bords etaient fausses a la publication, et
+# elles seules -- ce que l'utilisateur a vu tout de suite en comparant aux
+# premiers posts.
+#
+# On rend donc AU FORMAT PUBLIE, et les marges de la maquette sont conservees
+# TELLES QUELLES (87, 76, 77 lateral) : la largeur n'ayant pas bouge, une marge
+# laterale de 77 px et une marge haute de 87 px forment le meme anneau qu'avant.
+# Ce qui disparait, ce sont 90 px de PHOTO au milieu du cadre -- exactement ce
+# que la publication retirait deja, mais sans toucher au dessin.
+# Sentinelles : `test_le_post_est_rendu_au_format_publie` et
+# `test_les_marges_de_la_maquette_sont_celles_qui_sont_publiees`.
 GABARIT_POST = Gabarit(
     name="kinda_post",
     width=1080,
-    height=1440,
+    height=1350,
     roles={
         "headline": (
             Typo(
@@ -320,13 +345,17 @@ GABARIT_POST = Gabarit(
                 # 5 est donc le dernier palier ou elle survit. `HEADLINE_MAX = 110` dans
                 # compose.py plafonne deja les accroches normales a ~4 lignes : ce
                 # plafond est un filet de secours, pas le regime courant.
+                # Inchange au passage en 1350 : ces paliers ont ete juges sur ce
+                # qu'on VOYAIT de la photo dans l'image PUBLIEE, qui etait deja
+                # recadree a 1350. Le rendu natif ne retire rien de plus.
                 max_lines=5,
                 max_line_width=926,   # 1080 - 2 x 77
                 min_scale=0.7,
             ),
         ),
     },
-    # Crop 4:5 de la grille a y=45 : un logo a 87 px du haut y passe entier.
+    # La toile EST le crop 4:5 : la vignette de grille n'en retire plus rien, et
+    # les 87 px de la maquette sont ceux qu'on voit, en grille comme dans le fil.
     logo=Logo(right=77, top=87, width=150),
 )
 

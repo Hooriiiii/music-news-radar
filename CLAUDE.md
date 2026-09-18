@@ -399,7 +399,7 @@ slide 2+ = médias de l'actu, kind: "media" -> laissés passer tels quels
 
 La cover est proposée en **4 variantes** (`Post.variants`, quatre formulations
 de la même info, jamais quatre angles différents) sur le MÊME fond, et sur deux
-formats — `template` sur le post : `kinda_post` (1080×1440, POST, toujours
+formats — `template` sur le post : `kinda_post` (1080×1350, POST, toujours
 disponible) et `kinda_reel` (1080×1920, REELS, disponible seulement quand
 l'article a une vidéo exploitable). Chaque variante porte trois textes :
 `headline` (gabarit post) et le couple `title`/`subtitle` (gabarit reel, deux
@@ -620,8 +620,16 @@ Le sélecteur segmenté vit dans le panneau Programmation du dashboard, à côt�
 
 **Règles Meta vérifiées dans la documentation (2026-09-16)** : JPEG uniquement,
 8 Mo, 320 à 1440 px de large, proportions 4:5 à 1,91:1, carrousel de 10, légende de
-2200 caractères et 30 hashtags. La cover `kinda_post` (3:4) est donc recadrée au
-centre en 1080×1350 par `app/publish/images.py` (`publication_ratio_min`).
+2200 caractères et 30 hashtags. **La cover `kinda_post` est rendue NATIVEMENT en
+1080×1350** (4:5) : elle traverse `app/publish/images.py` intacte. Jusqu'au
+2026-09-18 elle était dessinée en 1080×1440 (3:4) puis recadrée au centre, ce qui
+lui prenait 45 px en haut et en bas — la moitié de la marge du logo (87 → 42) et
+60 % de celle de l'accroche (76 → 31). Les marges publiées n'étaient donc plus
+celles du design, et cela se voyait. Les valeurs du dessin n'ont pas bougé (77
+latéral, 87 logo, 76 accroche, voiles 817/727) : elles se comptent depuis un bord
+ou depuis le bloc de texte, et seuls 90 px de PHOTO disparaissent du milieu du
+cadre. Les photos de l'actu, elles, sont toujours recadrées
+(`publication_ratio_min`).
 
 **Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
 post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel
