@@ -245,10 +245,18 @@ class Settings(BaseSettings):
     # Fenetres de publication, heure de Paris. L'heure exacte est tiree au hasard
     # dans chaque fenetre, pour ne pas publier comme une horloge.
     publication_fuseau: str = "Europe/Paris"
-    publication_fenetre_matin: str = "08:30-11:00"
-    publication_fenetre_apres_midi: str = "17:00-19:30"
-    # 3 jours x 2 creneaux.
-    publication_creneaux: int = 6
+    # Une fenetre = un carrousel par jour, separees par des virgules -- exactement
+    # comme les fenetres reel. Le nombre de posts par jour est donc une ligne de
+    # `.env`, jamais une ligne de code. Aucune ne doit chevaucher une fenetre
+    # reel ni une autre (slots.FenetresInvalides) : publier_a est unique.
+    publication_fenetres: str = "08:30-10:30,14:30-16:30,19:00-20:15"
+    # REPLI pour un `.env` d'avant la generalisation, qui ne connait que ce
+    # couple : il ne sert que si publication_fenetres est VIDE, pour qu'un
+    # reglage existant ne soit pas ignore en silence (voir slots.fenetres).
+    publication_fenetre_matin: str | None = None
+    publication_fenetre_apres_midi: str | None = None
+    # 3 jours x 3 creneaux.
+    publication_creneaux: int = 9
     # Eligibilite a la file : la barre du digest, et une actu de moins de 3 jours.
     publication_min_relevance: int = 60
     publication_fraicheur_jours: int = 3
@@ -279,9 +287,9 @@ class Settings(BaseSettings):
     # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =
     # un reel par jour. Elles ne doivent chevaucher ni les fenetres carrousel ni
     # entre elles (slots.FenetresInvalides) : publier_a est unique.
-    publication_reel_fenetres: str = "12:00-14:00,20:30-22:30"
-    # 3 jours x 2 reels. 0 desactive les reels sans toucher aux carrousels.
-    publication_creneaux_reel: int = 6
+    publication_reel_fenetres: str = "11:00-12:30,17:00-18:30,21:00-22:30"
+    # 3 jours x 3 reels. 0 desactive les reels sans toucher aux carrousels.
+    publication_creneaux_reel: int = 9
     # Qui a le droit d'etre reposte en video : les comptes qui PRODUISENT l'actu.
     # Jamais un media par defaut -- ce serait une double reprise (voir « Qui parle »).
     publication_reel_categories: str = "artiste,festival,label,club"

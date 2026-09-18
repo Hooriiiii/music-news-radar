@@ -206,8 +206,8 @@ def test_on_ne_compose_que_les_creneaux_a_moins_de_24_heures(db_session, article
     outils = Outils()
     maintenant = H0 - dt.timedelta(hours=3)
     outils.tourner(db_session, maintenant)
-    attendus = [h for h in prochains_horaires(maintenant, 6) if h <= maintenant + dt.timedelta(hours=24)]
-    assert 0 < len(outils.composes) == len(attendus) < 6
+    attendus = [h for h in prochains_horaires(maintenant, 9) if h <= maintenant + dt.timedelta(hours=24)]
+    assert 0 < len(outils.composes) == len(attendus) < 9
 
 
 def test_une_publication_interrompue_n_est_jamais_retentee(db_session, article):

@@ -63,14 +63,14 @@ def _post(db, article, template):
 
 def test_les_creneaux_reel_suivent_leurs_propres_fenetres(db_session):
     creneaux = synchroniser_creneaux(db_session, MAINTENANT, FormatCreneau.REEL)
-    assert [utc(c.publier_a) for c in creneaux] == prochains_horaires(MAINTENANT, 6, "reel")
+    assert [utc(c.publier_a) for c in creneaux] == prochains_horaires(MAINTENANT, 9, "reel")
     assert {c.format for c in creneaux} == {FormatCreneau.REEL}
 
 
 def test_zero_creneau_reel_desactive_les_reels(db_session, monkeypatch):
     monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
     creneaux = appliquer_arbitrage(db_session, MAINTENANT)
-    assert len(creneaux) == 6
+    assert len(creneaux) == 9
     assert {c.format for c in creneaux} == {FormatCreneau.CARROUSEL}
 
 
@@ -119,7 +119,7 @@ def test_reels_coupes_au_dashboard_plus_aucun_creneau_reel(db_session):
     assert {c.format for c in creneaux} == {FormatCreneau.CARROUSEL}
     enregistrer_reels(True, MAINTENANT)
     creneaux = appliquer_arbitrage(db_session, MAINTENANT)
-    assert sum(c.format == FormatCreneau.REEL for c in creneaux) == 6
+    assert sum(c.format == FormatCreneau.REEL for c in creneaux) == 9
 
 
 def test_seuls_les_articles_eligibles_sont_candidats_reel(db_session):
@@ -158,7 +158,7 @@ def test_deux_passages_donnent_la_meme_file(db_session):
     premiere = [(c.format, c.article_id) for c in appliquer_arbitrage(db_session, MAINTENANT)]
     seconde = [(c.format, c.article_id) for c in appliquer_arbitrage(db_session, MAINTENANT)]
     assert premiere == seconde
-    assert db_session.query(Creneau).count() == 12
+    assert db_session.query(Creneau).count() == 18
 
 
 def test_post_a_reprendre_filtre_le_gabarit(db_session):
@@ -216,9 +216,9 @@ def test_un_carrousel_gele_garde_son_article_hors_des_reels(db_session):
 def test_des_fenetres_reel_fautives_n_empechent_pas_la_file_des_carrousels(db_session, monkeypatch):
     """M5 : l'erreur de fenetres reel remonte (elle doit se voir), mais les
     creneaux carrousel sont synchronises et arbitres quand meme."""
-    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:30-12:00")
+    monkeypatch.setattr(settings, "publication_reel_fenetres", "10:00-12:00")
     with pytest.raises(FenetresInvalides):
         appliquer_arbitrage(db_session, MAINTENANT)
     creneaux = db_session.query(Creneau).all()
-    assert len(creneaux) == 6
+    assert len(creneaux) == 9
     assert {c.format for c in creneaux} == {FormatCreneau.CARROUSEL}

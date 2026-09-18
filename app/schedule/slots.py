@@ -6,10 +6,11 @@ minutes) retirerait une heure a chaque passage et elle glisserait -- un creneau
 pourrait n'etre jamais atteint. Avec elle, recalculer a 9 h et a 10 h redonne le
 meme 14 h 37.
 
-Deux formats, deux jeux de fenetres. Les carrousels gardent la graine d'origine
-(`kinda-...`) : en changer deplacerait les heures deja programmees en base. Les
-fenetres ne doivent jamais se chevaucher : `creneaux.publier_a` est unique tous
-formats confondus.
+Deux formats, deux jeux de fenetres, decrits de la meme facon : une liste
+separee par des virgules, une fenetre = une publication par jour. Les carrousels
+gardent la graine d'origine (`kinda-...`) : en changer deplacerait les heures
+deja programmees en base. Les fenetres ne doivent jamais se chevaucher :
+`creneaux.publier_a` est unique tous formats confondus.
 
 Python pur : aucune base, aucun reseau. Tout sort en UTC.
 """
@@ -33,10 +34,24 @@ def _fenetre(texte: str) -> tuple[dt.time, dt.time]:
     return dt.time.fromisoformat(debut.strip()), dt.time.fromisoformat(fin.strip())
 
 
+def _liste(texte: str | None) -> list[str]:
+    return [f.strip() for f in (texte or "").split(",") if f.strip()]
+
+
 def fenetres(format_: str = CARROUSEL) -> list[str]:
+    """Les fenetres d'un format, dans l'ordre de la journee.
+
+    Les deux formats ont la meme forme : une liste separee par des virgules,
+    donc passer de deux a trois posts par jour ne touche pas ce module.
+    """
     if format_ == REEL:
-        return [f.strip() for f in settings.publication_reel_fenetres.split(",") if f.strip()]
-    return [settings.publication_fenetre_matin, settings.publication_fenetre_apres_midi]
+        return _liste(settings.publication_reel_fenetres)
+    carrousel = _liste(settings.publication_fenetres)
+    if carrousel:
+        return carrousel
+    # Repli : un `.env` anterieur a la generalisation ne connait que le couple
+    # matin / apres-midi. On ne l'ignore que si une liste a ete donnee.
+    return _liste(settings.publication_fenetre_matin) + _liste(settings.publication_fenetre_apres_midi)
 
 
 def _formats_verifies(format_: str | None) -> tuple[str, ...]:
