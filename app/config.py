@@ -104,7 +104,34 @@ class Settings(BaseSettings):
     # passage horaire depasserait le quota Graph de l'app, et un artiste ne poste
     # pas plusieurs fois par heure. Mesure du 2026-09-17 : ~310 appels + un
     # passage de 120 comptes dans la meme heure ont epuise le quota (code 4).
-    instagram_intervalle_heures: int = 3
+    # 1 heure depuis la veille rapide (2026-09-18) : la mesure a montre 141 min de
+    # latence mediane sur les comptes d'artistes contre 48 min sur la presse RSS
+    # -- Kinda apprenait l'actu par les medias. 123 comptes lus chaque heure font
+    # 123 appels/h, loin des ~430/h qui ont rendu le code 4 le 2026-09-17.
+    instagram_intervalle_heures: int = 1
+
+    # --- Veille rapide (agent `com.musicnewsradar.veille`, toutes les 5 min) ---
+    # Une LISTE COURTE de comptes relus a la minute plutot que tous les comptes :
+    # 123 comptes toutes les 5 min feraient 1 476 appels/h, 3,4x le plafond
+    # observe. Douze comptes en font 144. Des labels tres actifs (STMPD, Defected)
+    # et les festivals FR plutot qu'un seul artiste : on veut du flux, pas un pari.
+    veille_comptes: str = (
+        "stmpdrcrds,defectedrecords,vladimircauchemar,"
+        "fredagainagainagainagainagain,etjusticepourtous,edbanger,astropolis,"
+        "nuits_sonores,transmusicales,positiveeducation,madeon,worakls.music"
+    )
+    veille_intervalle_minutes: int = 5
+    # Plafond DUR d'appels Graph par heure pour la veille seule. Le quota est
+    # partage avec la publication (`business_discovery` des visuels d'artistes) :
+    # la veille ne doit jamais pouvoir le manger entierement, meme si la liste
+    # grossit par inadvertance.
+    veille_appels_max_par_heure: int = 200
+    # Sur un code de quota (4, 17, 32, 613), la veille s'arrete net pendant ce
+    # delai. Le pipeline horaire, lui, continue : sa cadence n'est pas en cause.
+    veille_pause_quota_minutes: int = 30
+    # Le scoring d'un passage est BORNE : l'arriere-plan peut porter des centaines
+    # d'articles non scores, et la veille tourne 288 fois par jour.
+    veille_scoring_max: int = 20
 
     # --- Supervision : notifications macOS ---
     # Le canal d'alerte du socle local. Discord est coupé et l'utilisateur ne
