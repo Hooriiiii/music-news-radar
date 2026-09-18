@@ -524,3 +524,58 @@ def test_une_image_deja_dans_l_article_n_est_pas_proposee(db_session):
     assert _secours(db_session, article) == []
 
 
+
+
+# --- Le post Noisia : un post d'une seule slide, et aucun artiste montre ------
+
+
+def _draft():
+    from app.content.compose import CoverVariante, PostDraft
+
+    variante = CoverVariante(headline="**Noisia** se reforme", title="**Noisia**",
+                             subtitle="de retour apres **sept ans**")
+    return PostDraft(variantes=[variante] * 4, caption="Ils reviennent 🎧 et ca fait plaisir ✨")
+
+
+def test_le_post_noisia_montre_une_vraie_photo_de_l_artiste(db_session):
+    """Le defaut du 2026-09-18, article 17946 (« Noisia Reunite After Seven-Year
+    Hiatus », Billboard, UNE image) : l'image a ete jugee affiche, donc ecartee du
+    fond ; ecartee du carrousel aussi comme « image de la cover » ; et les photos
+    des artistes cites n'alimentaient que le fond. Resultat publie : une cover
+    sans fond, et rien d'autre -- « la c'est n'importe quoi ! ».
+
+    Ce que le post doit contenir desormais : un fond qui est une VRAIE photo de
+    Noisia, et au moins une slide qui montre l'artiste."""
+    from app.content.compose import create_post
+    from app.publish.preparation import medias_du_carrousel
+
+    billboard = _source(db_session, "Billboard", "billboard", SourceCategorie.MEDIA,
+                        type_=SourceType.RSS)
+    noisia = _source(db_session, "Noisia (IG)", "noisia", SourceCategorie.ARTISTE)
+    affiche = "https://billboard.com/noisia.jpg"
+    article = _article(db_session, billboard, titre="Noisia Reunite After Seven-Year Hiatus",
+                       media=[entree("photo", affiche)])
+    article.mentioned_artists = ["Noisia"]
+    for n, url in enumerate(("https://cdn.ig/noisia-1.jpg", "https://cdn.ig/noisia-2.jpg")):
+        _article(db_session, noisia, f"Noisia en studio {n}", media=[entree("photo", url)],
+                 date=DATE_ACTU - dt.timedelta(days=n + 1))
+    db_session.commit()
+
+    choix = choisir_visuels(db_session, article, maintenant=MAINTENANT,
+                            telecharger=Telechargement())
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        verdicts_fond=lambda urls: {
+            url: (AFFICHE if url == affiche else PHOTO) for url in urls
+        },
+    )
+
+    fond = post.slides[0]["image_url"]
+    assert fond not in (FOND_KINDA, None) and fond.startswith("file://")
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE}
+
+    medias = medias_du_carrousel(post, article)
+    assert any(m["url"].startswith("file://") for m in medias), medias
+    # L'image de l'actu reste une slide honnete : une affiche n'est pas un bon
+    # FOND, elle reste le visuel de l'info.
+    assert affiche in [m["url"] for m in medias]

@@ -582,8 +582,36 @@ Coût : ce chemin **ne coûte rien** tant que le fond retenu n'est pas une affic
 avérée — ni lecture de compte, ni téléchargement, ni jeton. Les réserves voyagent
 depuis `choisir_visuels` (où vivent la session et le budget du passage) jusqu'à
 `create_post` sous forme de lots paresseux, dans `ChoixVisuels.secours`
-(`illustration.Lot`) ; elles alimentent le FOND seulement, jamais `assets` — le
-carrousel reste celui de l'actu, affiche comprise, qui y reste une slide honnête.
+(`illustration.Lot`) ; la réserve retenue alimente le FOND **et les slides** (voir
+ci-dessous). Le carrousel garde par ailleurs les visuels de l'actu, affiche
+comprise, qui y reste une slide honnête.
+
+**Jamais un post réduit à sa cover** (2026-09-18, article 17946 « Noisia Reunite
+After Seven-Year Hiatus », Billboard, UNE image). Cette image a été jugée
+`affiche` : écartée du fond (donc l'aplat Kinda), et absente des slides. Résultat
+publié : une cover sans photo, et rien derrière — « la c'est n'importe quoi ! Il
+n'y a pas de slide qui montre les artistes en question. » Trois règles en
+sortent, chacune posée là où l'information existe :
+1. **Les photos de la réserve retenue deviennent des slides**
+   (`compose.actifs_de_secours`, alimentée par `Fond.photos` — toutes les vraies
+   photos du lot, la meilleure en tête, au plus `visuels_max_photos`). Elles sont
+   déjà copiées en local et déjà jugées : les publier ne coûte plus ni requête ni
+   jeton, et sans elles un article dont l'unique image est une affiche ne montre
+   jamais l'artiste. Une affiche pêchée dans une réserve, elle, n'est ni fond ni
+   slide : elle n'illustre pas l'actu.
+2. **Une image seule sert à la fois de fond et de slide** (`preparation`). La
+   règle « ne pas répéter l'image de la cover » vaut quand il existe un AUTRE
+   visuel ; seule, elle vaut mieux que rien — la cover la montre sous l'accroche,
+   la slide la montre nette.
+3. **Un carrousel d'un seul élément ne se gèle pas** : `PreparationImpossible`,
+   donc exclusion et créneau suivant — mieux vaut un post manqué qu'un post vide.
+   Sauf si les visuels existent et que seule leur récupération a échoué pour une
+   raison passagère (`echec_transitoire`) : `PreparationDifferee`, on retente au
+   passage suivant, parce qu'un article exclu ne revient jamais.
+
+Ordre de préférence du fond, inchangé et désormais explicite : photo de l'actu
+(non-affiche) → photo du compte source → photo d'un artiste cité → fond Kinda.
+Une affiche n'est refusée qu'en FOND ; en slide, c'est le visuel de l'actu.
 
 **D'où vient le fond est enregistré** : `posts.variants["fond"]["origine"]`
 (`article` | `compte` | `artiste` | `kinda`), figé à la composition au même titre

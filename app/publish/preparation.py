@@ -10,15 +10,26 @@ l'ordre -- photos en JPEG normalises, VIDEOS en elements video 1080x1350 (meme
 cadrage sur fond floute que le reel). Premier post reel (Charlotte de Witte,
 article 17839) : 5 videos, et un carrousel parti avec la cover seule.
 
-Trois regles :
+Cinq regles :
+- JAMAIS un post reduit a sa COVER SEULE : un carrousel porte au moins deux
+  elements, sinon le gel est impossible et l'article sort de la file (2026-09-18,
+  article 17946 « Noisia » : une image, ecartee, et un post vide -- « la c'est
+  n'importe quoi ! »). Sauf si les visuels existent et que seule leur
+  RECUPERATION a echoue pour une raison passagere : on differe, on n'exclut pas ;
 - la photo qui sert de FOND a la cover n'est pas repetee ensuite (une video dont
-  c'est la vignette reste, sauf si elle retombe sur cette vignette) ;
+  c'est la vignette reste, sauf si elle retombe sur cette vignette) -- SAUF si
+  c'est le seul visuel : elle fait alors le fond ET la slide (la cover la montre
+  sous l'accroche, la slide la montre nette) ;
 - une video inutilisable (trop longue, telechargement ou sonde en echec, sortie
   hors specs) retombe sur sa vignette en photo : un media ne fait jamais echouer
   le gel ;
 - les visuels d'un compte Instagram de categorie `media` ne sont jamais repris
   (watermarks, politique dans `app.content.visuels`) : ni en slide, ni en fond de
   cover -- un tel fond rend le gel impossible.
+
+Une AFFICHE, elle, reste une slide honnete : elle n'est refusee qu'en FOND de
+cover (`app.content.illustration`), jamais dans le carrousel -- c'est le visuel
+de l'actu.
 """
 
 import logging
@@ -27,7 +38,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.content import video as video_mod
-from app.content.export import telecharger as telecharger_media
+from app.content.export import echec_transitoire, telecharger as telecharger_media
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.urls import url_propre
 from app.content.render import render_post
@@ -143,17 +154,21 @@ def verifier_fond(post, article) -> str:
     return fond
 
 
-def _octets_image(url: str, telecharger) -> bytes | None:
-    """Une copie locale est lue dans le cache, jamais telechargee ; un `file://`
+def _octets_image(url: str, telecharger) -> tuple[bytes | None, str | None]:
+    """Le contenu de l'image, et la raison de l'echec le cas echeant.
+
+    Une copie locale est lue dans le cache, jamais telechargee ; un `file://`
     hors du cache n'est jamais lu. L'URL est nettoyee de ses entites HTML : une
     ligne posee avant le nettoyage a l'ingestion porte encore `&amp;`, que le CDN
-    Instagram refuse."""
+    Instagram refuse.
+
+    La raison est rendue parce qu'un carrousel vide ne se traite pas pareil selon
+    qu'elle est PASSAGERE (on retente) ou definitive (on exclut)."""
     url = url_propre(url) or url
     octets = lire_fichier_cache(url)
     if octets is not None or url.startswith("file://"):
-        return octets
-    octets, _ = telecharger(url)
-    return octets
+        return octets, None if octets is not None else "copie locale absente"
+    return telecharger(url)
 
 
 def _video_de_carrousel(media: dict, telecharger_video, sonder, transcoder) -> bytes | None:
@@ -205,6 +220,7 @@ def preparer_fichiers(
         ancien.unlink()
 
     fond = verifier_fond(post, article)
+    panne_transport = False
 
     # RenduIndisponible (Chromium absent) remonte telle quelle : c'est une panne
     # systemique, pas un defaut de l'article -- le runner ne doit pas l'exclure.
@@ -233,13 +249,45 @@ def preparer_fichiers(
             url = media.get("url")
         if not url:
             continue
-        octets = _octets_image(url, telecharger)
+        octets, raison = _octets_image(url, telecharger)
         if octets is None:
+            panne_transport = panne_transport or echec_transitoire(raison)
             continue
         try:
             elements.append(("jpg", normaliser(octets, ratio)))
         except ImageInexploitable:
             continue
+
+    if len(elements) == 1 and fond != FOND_KINDA:
+        # UNE SEULE IMAGE, et c'est celle de la cover : la regle « ne pas repeter
+        # l'image du fond » vaut quand il existe un AUTRE visuel -- seule, elle
+        # vaut mieux que rien. La cover la montre sous l'accroche, la slide la
+        # montre nette. (2026-09-18, post Noisia : « il n'y a pas de slide ».)
+        octets, raison = _octets_image(fond, telecharger)
+        if octets is None:
+            panne_transport = panne_transport or echec_transitoire(raison)
+        else:
+            try:
+                elements.append(("jpg", normaliser(octets, ratio)))
+            except ImageInexploitable:
+                pass
+
+    if len(elements) < 2 and panne_transport:
+        # Coupure, 429, 5xx : les visuels EXISTENT, seule leur recuperation a
+        # echoue. Un article exclu ne revient jamais dans la file -- on retente
+        # au passage suivant, comme le choix des visuels le fait deja.
+        raise PreparationDifferee(
+            "visuels du carrousel inaccessibles (reseau) : nouvelle tentative au prochain passage"
+        )
+    if len(elements) < 2:
+        # JAMAIS un post reduit a sa cover (2026-09-18, article 17946 « Noisia
+        # Reunite After Seven-Year Hiatus » : une image, ecartee, et un post
+        # vide -- « la c'est n'importe quoi ! »). Une exclusion, donc : le
+        # creneau passe a l'article suivant, ce qui vaut mieux qu'un carrousel
+        # d'une slide.
+        raise PreparationImpossible(
+            "carrousel reduit a la cover seule : aucun visuel publiable apres elle"
+        )
 
     # Prefixe aleatoire : les fichiers seront publics quelques minutes, leurs noms
     # ne doivent pas se deviner.

@@ -44,7 +44,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -390,6 +390,13 @@ class Fond:
 
     url: str | None
     origine: str
+    # Les autres VRAIES photos du lot retenu, la meilleure en tete (`url` y
+    # figure en premier). Elles sont deja payees -- lecture du compte,
+    # telechargement, jetons du juge -- et servent de SLIDES au carrousel : un
+    # post qui n'aurait que l'affiche de l'actu ne montre jamais l'artiste
+    # (post Noisia, 2026-09-18). Hors comparaison : deux fonds sont le meme
+    # choix s'ils ont la meme URL et la meme origine, le reste est du bagage.
+    photos: tuple[str, ...] = field(default=(), compare=False)
 
 
 def eviter_l_affiche(
@@ -440,42 +447,48 @@ def eviter_l_affiche(
         # C'est aussi le comportement quand la vision est coupee.
         return Fond(fond, origine)
     for lot in lots:
-        retenu = _meilleure_photo(lot, rendre)
-        if retenu is not None:
-            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, retenu)
-            return Fond(retenu, lot.origine)
+        photos = _photos_du_lot(lot, rendre)
+        if photos:
+            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, photos[0])
+            return Fond(photos[0], lot.origine, photos)
     logger.info("aucune photo trouvee, tout est une affiche : cover sur le fond Kinda")
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
 
-def _meilleure_photo(lot: Lot | None, rendre) -> str | None:
-    """La meilleure VRAIE photo d'un lot, ou None -- lot absent, vide, tout en
-    affiches, ou en panne (un lot qui casse prive d'une alternative ; il ne rend
-    pas l'affiche publiable pour autant).
+def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
+    """Les VRAIES photos d'un lot, la meilleure en tete -- vide si le lot est
+    absent, vide, tout en affiches, ou en panne (un lot qui casse prive d'une
+    alternative ; il ne rend pas l'affiche publiable pour autant).
+
+    Toutes et pas seulement la meilleure : la premiere fait le fond, les
+    suivantes font des slides (cf. `Fond.photos`). Elles sont deja rapatriees et
+    deja jugees -- les rendre ne coute plus rien.
 
     Un candidat qu'on n'a pas su juger n'est JAMAIS retenu : c'est la difference
     avec le classement de `choisir_illustration`, ou l'inconnu passe devant une
     affiche averee. Ici l'alternative est le fond Kinda, qui est sur -- on ne lui
     prefere qu'une image dont le juge a dit qu'elle n'est pas une affiche."""
     if lot is None:
-        return None
+        return ()
     try:
         candidats = [url for url in (lot.photos() or []) if url][
             : max(1, settings.fond_secours_max_photos)
         ]
         if not candidats:
-            return None
+            return ()
         connus = rendre(candidats)
         photos = [url for url in candidats if url in connus and not connus[url].affiche]
         if not photos:
             logger.info("la reserve « %s » n'offre que des affiches", lot.origine)
-            return None
-        meilleure = max(range(len(photos)), key=lambda i: _rang(i, connus[photos[i]]))
-        return photos[meilleure]
+            return ()
+        classees = sorted(
+            enumerate(photos), key=lambda paire: _rang(paire[0], connus[paire[1]]), reverse=True
+        )
+        return tuple(url for _, url in classees)
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning(
             "reserve « %s » abandonnee (%s)",
             getattr(lot, "origine", "?"),
             type(exc).__name__,
         )
-        return None
+        return ()
