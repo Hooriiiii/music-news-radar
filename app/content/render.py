@@ -23,7 +23,7 @@ from playwright.sync_api import Browser, sync_playwright
 
 from app.content.highlight import to_html
 from app.content.urls import url_propre, url_telechargeable
-from app.content.visuels import lire_fichier_cache
+from app.content.visuels import FOND_KINDA, lire_fichier_cache
 from app.content.layout import (
     PALETTE_ROSE,
     Ajustement,
@@ -112,12 +112,20 @@ def fetch_image_data_uri(url: str | None) -> str:
     Une copie locale (`file://`) est lue dans le cache des visuels seulement ;
     hors du cache ou disparue, elle n'est jamais lue et le secours la remplace.
 
+    `FOND_KINDA` rend directement ce meme aplat : c'est un choix assume (mieux
+    vaut le fond Kinda qu'une affiche), pas un echec de recuperation.
+
     Ceinture sur l'URL : les entites HTML sont retirees (une ligne posee en base
     avant le nettoyage a l'ingestion porte encore `&amp;`, et le CDN Instagram
     refuse une URL signee ainsi deformee -- c'est le bug du fond de secours du
     2026-09-17), et seul du http(s) part sur le reseau.
     """
     url = url_propre(url)
+    if url == FOND_KINDA:
+        # Pas une URL : le CHOIX de l'aplat Kinda plutot qu'une affiche de
+        # line-up (cf. `app/content/visuels.py`). Traite ici explicitement pour
+        # qu'il ne soit ni telecharge, ni journalise comme une anomalie.
+        return _data_uri((ASSETS_DIR / "fallback.jpg").read_bytes(), "image/jpeg")
     locale = lire_fichier_cache(url)
     if locale is not None:
         return _data_uri(locale, mimetypes.guess_type(url)[0] or "image/jpeg")

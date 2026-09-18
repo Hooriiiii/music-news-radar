@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from app.content import render
 from app.content.layout import GABARIT_POST, GABARIT_REEL, PALETTE_VERTE
 from app.content.render import (
     RenduIndisponible,
@@ -49,6 +50,19 @@ def test_fetch_image_data_uri_retombe_sur_le_fallback_si_url_cassee():
     """Une photo introuvable ne doit jamais faire echouer un post."""
     uri = fetch_image_data_uri("https://exemple.invalid/introuvable.jpg")
     assert uri.startswith("data:image/")
+
+
+def test_le_fond_kinda_est_l_aplat_du_gabarit_sans_requete(monkeypatch):
+    """`FOND_KINDA` n'est pas une URL : c'est le CHOIX de ne pas mettre d'image.
+    Il doit rendre exactement l'aplat de secours, sans sortir sur le reseau."""
+    from app.content.visuels import FOND_KINDA
+
+    def jamais(*args, **kwargs):
+        raise AssertionError("aucune requete pour le fond Kinda")
+
+    monkeypatch.setattr(render.httpx, "get", jamais)
+
+    assert fetch_image_data_uri(FOND_KINDA) == fetch_image_data_uri(None)
 
 
 def test_le_document_porte_les_variables_du_gabarit():

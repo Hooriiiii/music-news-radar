@@ -93,7 +93,17 @@ class LecteurComptes:
             json.dump(etat, fichier)
         os.replace(temporaire, self.chemin)
 
-    def __call__(self, compte: CompteArtiste, maintenant: dt.datetime) -> list[PostArtiste]:
+    def __call__(
+        self,
+        compte: CompteArtiste,
+        maintenant: dt.datetime,
+        *,
+        ignorer_fraicheur: bool = False,
+    ) -> list[PostArtiste]:
+        """Les derniers posts du compte. `ignorer_fraicheur` leve la SEULE garde
+        qui soit une economie et non un plafond (voir plus bas) ; les plafonds
+        durs -- cache de 6 h, budget du passage, budget du jour, pause quota --
+        s'appliquent toujours."""
         if not settings.meta_fb_access_token or not settings.meta_ig_user_id:
             return []
         # Jamais plus souvent que le PROPRE cache de ce lecteur : depuis que le
@@ -102,6 +112,11 @@ class LecteurComptes:
         # composition un compte lu il y a une heure -- du quota Graph partage
         # depense pour rien, alors que le lecteur aurait de toute facon servi son
         # cache.
+        #
+        # Cette garde-la est une ECONOMIE, pas un plafond : elle dit « la base
+        # suffit ». Le fond de secours la leve (`ignorer_fraicheur`) parce que
+        # justement la base ne suffit PAS -- elle ne contient que des affiches,
+        # et le choix est entre une lecture et une cover ratee (2026-09-18).
         fraicheur = dt.timedelta(
             hours=max(
                 1,
@@ -109,7 +124,11 @@ class LecteurComptes:
                 settings.visuels_cache_lectures_heures,
             )
         )
-        if compte.dernier_appel is not None and maintenant - compte.dernier_appel < fraicheur:
+        if (
+            not ignorer_fraicheur
+            and compte.dernier_appel is not None
+            and maintenant - compte.dernier_appel < fraicheur
+        ):
             # Le pipeline vient de lire ce compte : la base est a jour.
             return []
         etat = self._etat()

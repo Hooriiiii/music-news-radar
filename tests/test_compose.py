@@ -16,8 +16,15 @@ from app.content.compose import (
     probleme_emojis,
 )
 from app.content.choix_visuels import ChoixVisuels
+from app.content.illustration import Lot
 from app.content.media import entree
-from app.content.visuels import actif
+from app.content.visuels import (
+    FOND_KINDA,
+    ORIGINE_ARTICLE,
+    ORIGINE_COMPTE,
+    ORIGINE_KINDA,
+    actif,
+)
 from app.models import Article, Source, SourceType
 
 
@@ -547,7 +554,7 @@ def test_une_affiche_cede_la_place_a_une_photo_du_compte_source(db_session):
     choix = ChoixVisuels(
         [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")],
         "@transmusicales",
-        secours=lambda: ["file:///cache/live.jpg"],
+        secours=[Lot(ORIGINE_COMPTE, lambda: ["file:///cache/live.jpg"])],
     )
 
     post = create_post(
@@ -559,14 +566,17 @@ def test_une_affiche_cede_la_place_a_une_photo_du_compte_source(db_session):
     )
 
     assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
     # Les ACTIFS ne bougent pas : le secours est un fond de cover, pas une slide
     # de carrousel -- le carrousel reste celui de l'actu.
     assert [a["url"] for a in post.assets] == ["https://cdn/affiche.jpg"]
 
 
-def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
-    """Une composition a la main, ou un article dont la source n'offre rien :
-    aucun appel supplementaire, aucun changement."""
+def test_une_affiche_sans_remplacante_part_sur_le_fond_kinda(db_session):
+    """« ya toujours l'affiche en fond !! » : plutot l'aplat sombre du gabarit,
+    sur lequel l'accroche reste lisible, qu'une affiche de line-up."""
+    from app.content.illustration import Verdict
+
     article = _article(db_session)
     choix = ChoixVisuels(
         [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")], "@x"
@@ -575,6 +585,28 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
     post = create_post(
         db_session, article, _draft(), visuels=choix,
         selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+        verdicts_fond=lambda urls: dict.fromkeys(
+            urls, Verdict(affiche=True, sujet="autre", note=10)
+        ),
+    )
+
+    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert post.variants["fond"] == {"origine": ORIGINE_KINDA}
+
+
+def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
+    """Un juge muet (vision coupee, pas de cle) ne coute rien et ne change rien :
+    le fond retenu reste celui de l'actu."""
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")], "@x"
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+        verdicts_fond=lambda urls: {},
     )
 
     assert post.slides[0]["image_url"] == "https://cdn/affiche.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}

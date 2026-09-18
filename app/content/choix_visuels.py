@@ -10,10 +10,13 @@ Les images d'artistes sont COPIEES en local : les URL du CDN Instagram sont
 signees et expirent, et le gel vient ~22 h apres la composition. Une video de
 reel ne l'est pas : le gel la telecharge (API) ou la recupere (yt-dlp).
 
-Et, pour le seul FOND de la cover, un dernier recours (2026-09-18) : des photos
-du compte qui a publie l'actu, attachees au resultat sous forme de fonction
-(`ChoixVisuels.secours`, cf. `photos_du_compte`). La composition ne l'appelle que
-si le fond retenu est encore une affiche.
+Et, pour le seul FOND de la cover, deux RESERVES (2026-09-18) attachees au
+resultat sous forme de lots paresseux (`ChoixVisuels.secours`) : les photos du
+compte qui a publie l'actu (`photos_du_compte`), puis celles des artistes suivis
+cites (`photos_des_artistes_cites`). La composition ne les ouvre que si le fond
+retenu est encore une affiche, et s'arrete au premier lot qui donne une vraie
+photo. Si aucun ne donne, la cover part sur le fond Kinda -- jamais sur une
+affiche.
 
 Deux issues sans visuel : `AucunVisuel` (l'article n'en a pas, il sort de la
 file) et `VisuelsDifferes` (la lecture en direct attend son budget ou le quota :
@@ -22,7 +25,6 @@ on reessaie au passage suivant, rien n'est exclu).
 
 import datetime as dt
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -33,11 +35,13 @@ from app.config import settings
 from app.content.actifs_artistes import Retenu, classer, medias_utilisables, posts_en_base
 from app.content.credit import credit_video
 from app.content.export import echec_transitoire, telecharger as telecharger_media
+from app.content.illustration import Lot
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import VIDEO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
+    ORIGINE_COMPTE,
     a_une_image_autorisee,
     actif,
     chemin_cache,
@@ -82,14 +86,15 @@ class VisuelsDifferes(RuntimeError):
 class ChoixVisuels:
     actifs: list[dict] = field(default_factory=list)
     credit: str | None = None
-    # De quoi aller chercher un FOND de secours si le fond retenu se revele etre
-    # une affiche (2026-09-18, le post des Transmusicales). Une fonction, et pas
-    # une liste : elle ne doit rien couter tant qu'on n'en a pas besoin. Elle vit
-    # ici parce que c'est ici que vivent la session, l'article et le lecteur
-    # Graph du passage -- avec son budget --, et que la composition, qui en a
-    # besoin, ne les a pas tous. Cf. `photos_du_compte` et
+    # Ou aller chercher un FOND de secours si le fond retenu se revele etre une
+    # affiche (2026-09-18, le post des Transmusicales). Des LOTS ordonnes, chacun
+    # portant une fonction qui ne coute rien tant qu'on ne l'appelle pas : le
+    # compte qui a publie l'actu, puis les artistes suivis cites. Ils vivent ici
+    # parce que c'est ici que vivent la session, l'article et le lecteur Graph du
+    # passage -- avec son budget --, et que la composition, qui en a besoin, ne
+    # les a pas tous. Cf. `photos_du_compte`, `photos_des_artistes_cites` et
     # `illustration.eviter_l_affiche`.
-    secours: Callable[[], list[str]] | None = None
+    secours: list[Lot] = field(default_factory=list)
 
 
 def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
@@ -260,6 +265,14 @@ def _reel(
     return ChoixVisuels(actifs, credit or (propres.credit if propres is not None else None))
 
 
+def _fenetre_secours() -> dict:
+    """Les fenetres du fond de secours : bien plus larges que celles d'un visuel
+    de carrousel. Un visuel de carrousel doit ILLUSTRER l'actu ; un fond n'a
+    qu'a etre une belle photo du bon compte."""
+    jours = settings.fond_secours_fenetre_jours
+    return {"fenetre_jours": jours, "generique_jours": jours}
+
+
 def photos_du_compte(
     db: Session,
     article: Article,
@@ -269,27 +282,28 @@ def photos_du_compte(
     telecharger=telecharger_media,
     maximum: int | None = None,
 ) -> list[str]:
-    """Des photos RECENTES du compte qui a publie l'actu, copiees en local.
+    """Des photos du compte qui a publie l'actu, copiees en local.
 
-    Le dernier recours du fond de cover : « si tu trouves pas, va trouver une
+    La premiere reserve du fond de cover : « si tu trouves pas, va trouver une
     belle photo sur le compte Instagram de l'info en question » (utilisateur,
     2026-09-18, sur le post des Transmusicales, dont le carrousel n'etait fait
     que d'affiches de line-up).
 
-    Ce n'est pas la meme chose que les visuels d'artistes CITES (`classer` sur
-    l'index des comptes) : ici on lit le compte de l'article lui-meme, celui qui
-    porte l'actu -- un festival, un label, un club, un artiste. Jamais un compte
-    MEDIA : la regle du 2026-09-17 vaut aussi pour un fond de cover.
+    Ce n'est pas la meme chose que les visuels d'artistes CITES
+    (`photos_des_artistes_cites`) : ici on lit le compte de l'article lui-meme,
+    celui qui porte l'actu -- un festival, un label, un club, un artiste. Jamais
+    un compte MEDIA : la regle du 2026-09-17 vaut aussi pour un fond de cover.
 
-    La base d'abord : les autres posts du compte y sont deja, avec leurs medias,
-    et ne coutent rien. La lecture en direct n'intervient que si la base ne donne
-    rien -- et le `LecteurComptes` refusera d'ailleurs de relire un compte que le
-    pipeline vient d'ingerer, ce qui est le cas normal ici.
+    La base d'abord, gratuite. Si elle ne donne pas de quoi choisir, on LIT le
+    compte en direct -- et on leve pour cela la garde de fraicheur du lecteur
+    (`ignorer_fraicheur`), qui existe pour epargner du quota quand la base
+    suffit : ici elle ne suffit justement pas. Les plafonds durs du lecteur
+    (2 lectures par passage, 24 par jour, cache 6 h, pause quota) restent.
 
     Les photos sont COPIEES dans le cache local, comme celles des artistes : les
     URL signees du CDN Instagram expirent avant le gel, qui suit la composition
     de ~22 h. Rendre l'URL distante donnerait un 404 silencieux, donc une cover
-    sur l'image de secours.
+    sur le fond de secours du gabarit.
     """
     source = getattr(article, "source", None)
     if source is None or getattr(source, "type", None) != SourceType.INSTAGRAM:
@@ -297,35 +311,79 @@ def photos_du_compte(
     if origine_interdite(source):
         logger.info("Fond de secours ecarte : le compte source est un media")
         return []
+    plafond = settings.fond_secours_max_photos if maximum is None else maximum
     compte = compte_de_source(source)
-    retenus = classer(
-        article,
-        posts_en_base(db, [compte], maintenant),
-        format_=FormatCreneau.CARROUSEL,
-        maintenant=maintenant,
-    )
-    if not retenus and lecteur is not None:
+    fenetres = _fenetre_secours()
+    posts = posts_en_base(db, [compte], maintenant, fenetres["fenetre_jours"])
+    retenus = classer(article, posts, format_=FormatCreneau.CARROUSEL, maintenant=maintenant,
+                      **fenetres)
+    if len(retenus) < plafond and lecteur is not None:
         try:
-            lus = lecteur(compte, maintenant)
+            lus = lecteur(compte, maintenant, ignorer_fraicheur=True)
         except LectureDifferee as exc:
             # Budget, quota Graph, reseau : le fond de secours est un CONFORT.
             # Il n'a pas le droit de faire echouer ni de differer une
-            # composition -- l'appelant gardera l'affiche.
+            # composition -- l'appelant partira sur le fond Kinda.
             logger.info("Lecture du compte source differee : %s", exc)
             lus = []
-        retenus = classer(
-            article, lus, format_=FormatCreneau.CARROUSEL, maintenant=maintenant
-        )
+        connus = {post.permalink for post in posts}
+        nouveaux = [post for post in lus if post.permalink not in connus]
+        if nouveaux:
+            retenus = classer(article, [*posts, *nouveaux], format_=FormatCreneau.CARROUSEL,
+                              maintenant=maintenant, **fenetres)
     # Les images de l'ARTICLE sont exclues nommement : `classer` ecarte deja le
     # post de l'article, mais un compte qui republie la meme affiche dans deux
     # posts la reproposerait comme remplacante d'elle-meme.
     deja = urls_interdites(article) | {
         url for m in (article.media or []) for url in (m.get("url"), m.get("preview_url")) if url
     }
+    copies, _ = _copier_images(retenus, telecharger, deja, maximum=plafond)
+    return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+
+
+def photos_des_artistes_cites(
+    db: Session,
+    article: Article,
+    *,
+    maintenant: dt.datetime,
+    telecharger=telecharger_media,
+    index: IndexComptes | None = None,
+    maximum: int | None = None,
+) -> list[str]:
+    """Des photos des artistes SUIVIS que l'actu cite, copiees en local.
+
+    La seconde reserve du fond de cover, et elle tombe sous le sens pour le cas
+    qui a tout declenche : un line-up des Transmusicales cite des artistes que
+    Kinda suit deja, et le portrait de l'un d'eux fait un bien meilleur fond que
+    l'affiche ou tous les noms sont ecrits en petit.
+
+    C'est le meme chemin que les visuels de carrousel d'un article sans image
+    propre (`_choisir_visuels`), reduit a ce qu'un fond demande : aucune lecture
+    en direct ici -- la reserve precedente a deja pu consommer le budget du
+    passage, et un seul fond ne vaut pas d'epuiser le quota Graph sur N comptes.
+    """
+    comptes = _comptes_autorises(
+        db,
+        (index if index is not None else construire_index(db)).cites(
+            textes=[article.title, article.summary],
+            noms=article.mentioned_artists or [],
+            exclure_source_id=article.source_id,
+        ),
+    )
+    if not comptes:
+        return []
+    fenetres = _fenetre_secours()
+    retenus = classer(
+        article,
+        posts_en_base(db, comptes, maintenant, fenetres["fenetre_jours"]),
+        format_=FormatCreneau.CARROUSEL,
+        maintenant=maintenant,
+        **fenetres,
+    )
     copies, _ = _copier_images(
         retenus,
         telecharger,
-        deja,
+        urls_interdites(article),
         maximum=settings.fond_secours_max_photos if maximum is None else maximum,
     )
     return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
@@ -351,14 +409,18 @@ def choisir_visuels(
         db, article, format_=format_, maintenant=maintenant, lecteur=lecteur,
         index=index, telecharger=telecharger,
     )
-    choix.secours = partial(
-        photos_du_compte,
-        db,
-        article,
-        maintenant=maintenant,
-        lecteur=lecteur,
-        telecharger=telecharger,
-    )
+    choix.secours = [
+        Lot(
+            ORIGINE_COMPTE,
+            partial(photos_du_compte, db, article, maintenant=maintenant, lecteur=lecteur,
+                    telecharger=telecharger),
+        ),
+        Lot(
+            ORIGINE_ARTISTE,
+            partial(photos_des_artistes_cites, db, article, maintenant=maintenant,
+                    telecharger=telecharger, index=index),
+        ),
+    ]
     return choix
 
 

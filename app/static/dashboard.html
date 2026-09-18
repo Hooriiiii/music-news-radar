@@ -899,6 +899,21 @@ function renderPostDetail(post, article, covers) {
       <div class="section-title">Visuels retenus</div>
       <div class="media-list">${actifsHtml || '<div class="media-empty">Aucun visuel autorisé retenu : fond à poser à la main.</div>'}</div>`;
 
+  // D'où vient le FOND de la cover. Posé à la composition (`variants.fond`),
+  // jamais déduit : une fois l'URL dans la slide, plus rien ne dirait si elle
+  // vient de l'actu, du compte qui l'a publiée, d'un artiste cité — ou si tout
+  // était une affiche et que la cover est partie sur l'aplat Kinda.
+  const ORIGINES_FOND = {
+    article: "📰 photo de l'actu",
+    compte: "📸 photo du compte qui a publié l'actu (l'actu n'offrait qu'une affiche)",
+    artiste: "🎤 photo d'un artiste suivi cité (l'actu n'offrait qu'une affiche)",
+    kinda: "🎨 fond Kinda — tout était une affiche, mieux vaut l'aplat sombre",
+  };
+  const origineFond = ((post.variants || {}).fond || {}).origine;
+  const fondSection = origineFond
+    ? `<div class="reel-reason">${escapeHtml(ORIGINES_FOND[origineFond] || origineFond)}</div>`
+    : "";
+
   detailEl.innerHTML = `
     <div class="sheet">
       <div class="sheet-head">
@@ -921,6 +936,7 @@ function renderPostDetail(post, article, covers) {
       ${reasonHtml}
 
       <div class="section-title">Image de fond</div>
+      ${fondSection}
       <div class="bg-field">
         <input type="text" id="bg-url" value="${escapeHtml(cover.image_url || "")}" placeholder="https://…">
         <button id="bg-valider">Valider</button>

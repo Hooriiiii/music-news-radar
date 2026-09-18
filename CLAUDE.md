@@ -534,23 +534,61 @@ derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
 affiche. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel
 suit la même règle sans code en double.
 
-**Et si tout est une affiche, on va chercher une photo sur le compte qui a publié
-l'actu** (2026-09-18, `choix_visuels.photos_du_compte` +
-`illustration.eviter_l_affiche`). Post 40 (Transmusicales) : cinq visuels, cinq
-affiches de line-up — le juge ne pouvait que rendre la moins mauvaise. Demande de
-l'utilisateur : « si tu trouves pas, va trouver une belle photo sur le compte
-Instagram de l'info en question ». Le compte est donc relu par le chemin existant
-(base d'abord, `LecteurComptes`/`business_discovery` ensuite, avec ses budgets :
-2 lectures/passage, 24/jour, cache 6 h, pause sur le quota), **jamais** un compte
-`categorie=media`, et les photos sont COPIÉES en local (les URL signées du CDN
-expirent avant le gel). Elles passent devant le même juge ; si elles sont elles
-aussi des affiches, on garde le fond d'origine — une affiche d'ailleurs ne vaut
-pas mieux que l'affiche de l'actu, et mieux vaut une cover sur une affiche qu'un
-créneau perdu. Ce chemin **ne coûte rien** tant que le fond retenu n'est pas une
-affiche avérée : ni lecture de compte, ni téléchargement, ni jeton. Le secours
-voyage depuis `choisir_visuels` (où vivent la session et le budget du passage)
-jusqu'à `create_post` sous forme de fonction, dans `ChoixVisuels.secours` ; il
-alimente le FOND seulement, jamais `assets` — le carrousel reste celui de l'actu.
+**Et si tout est une affiche, on cherche ailleurs — et à défaut, mieux vaut le
+fond Kinda qu'une affiche** (2026-09-18, `illustration.eviter_l_affiche` +
+`choix_visuels.{photos_du_compte,photos_des_artistes_cites}`). Post 40 puis 41
+(Transmusicales) : cinq visuels, cinq affiches de line-up, et le compte ne
+publiait que des programmes. La première version gardait « la moins mauvaise des
+affiches » quand rien de mieux ne se trouvait, ce qui a donné trois
+republications du même défaut (« ya toujours l'affiche en fond !! »). La règle
+est donc **absolue** : une affiche avérée n'est jamais publiée en fond. À défaut
+de photo, la cover part sur `FOND_KINDA` — l'aplat sombre du gabarit
+(`assets/fallback.jpg`), celui pour lequel la typo a été dessinée, donc lisible.
+
+`FOND_KINDA` (`kinda:fond`, dans `app/content/visuels.py`) est une **sentinelle,
+pas une URL** : un fond `None` veut dire « ce post n'a pas de visuel » et le gel
+le refuse, `FOND_KINDA` veut dire « on a cherché, tout était une affiche ». Sans
+cette distinction, écarter une affiche aurait laissé le fond vide et la file
+aurait refusé le post à chaque passage jusqu'à MANQUE. Le schéma `kinda:` n'est
+ni http(s) ni `file://` : aucune requête, aucun fichier lu.
+
+Deux **réserves**, ouvertes dans l'ordre et seulement tant qu'aucune n'a donné :
+1. le compte qui a publié l'actu (jamais un `categorie=media`) ;
+2. les artistes suivis **cités** par l'actu — un line-up cite des artistes qu'on
+   suit, et le portrait de l'un d'eux vaut mieux qu'une grille de noms.
+
+« Chercher plus loin » s'est traduit par trois réglages : `fond_secours_max_photos`
+passé de 2 à **6** par réserve (deux posts d'un compte de festival en saison, ce
+sont deux affiches de plus) ; une fenêtre propre au fond,
+`fond_secours_fenetre_jours` = **30 j** au lieu des 10 j des visuels de carrousel
+(un visuel de carrousel doit ILLUSTRER l'actu, un fond n'a qu'à être une belle
+photo du bon compte) ; et une lecture `business_discovery` en direct **même si le
+pipeline vient d'ingérer le compte** (`LecteurComptes(..., ignorer_fraicheur=True)`).
+Cette garde-là est une économie — « la base suffit » — et ici la base ne suffit
+justement pas. Les **plafonds durs** du lecteur, eux, tiennent toujours :
+2 lectures/passage, 24/jour, cache 6 h, pause sur le quota Graph.
+
+Les photos sont COPIÉES en local (les URL signées du CDN expirent avant le gel) et
+passent devant le **même juge, avec le même cache par URL**. Un candidat qu'on n'a
+pas su juger n'est jamais retenu : contrairement au classement de
+`choisir_illustration`, où l'inconnu passe devant une affiche avérée, ici
+l'alternative (le fond Kinda) est sûre — on ne lui préfère qu'une image dont le
+juge a dit qu'elle n'est PAS une affiche. Une réserve en panne ne fait pas
+publier l'affiche pour autant ; seul un juge muet **sur le fond lui-même** rend le
+comportement d'avant (on ne sait rien, donc on ne touche à rien) — c'est aussi ce
+qui se passe avec `ILLUSTRATION_VISION_ENABLED=false`.
+
+Coût : ce chemin **ne coûte rien** tant que le fond retenu n'est pas une affiche
+avérée — ni lecture de compte, ni téléchargement, ni jeton. Les réserves voyagent
+depuis `choisir_visuels` (où vivent la session et le budget du passage) jusqu'à
+`create_post` sous forme de lots paresseux, dans `ChoixVisuels.secours`
+(`illustration.Lot`) ; elles alimentent le FOND seulement, jamais `assets` — le
+carrousel reste celui de l'actu, affiche comprise, qui y reste une slide honnête.
+
+**D'où vient le fond est enregistré** : `posts.variants["fond"]["origine"]`
+(`article` | `compte` | `artiste` | `kinda`), figé à la composition au même titre
+que la palette, et affiché sous « Image de fond » au dashboard. Une fois l'URL
+écrite dans la slide, rien d'autre ne le dirait.
 
 Les posts ne sont **jamais purgés** (archive éditoriale, même motif que
 `artist_mentions`) et publier un post bascule son article en `USED`, ce qui le

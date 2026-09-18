@@ -1,15 +1,16 @@
-"""Le fond de secours : une photo du compte QUI A PUBLIE l'actu.
+"""Le fond de secours : chercher ailleurs plutot que publier une affiche.
 
 Demande de l'utilisateur, 2026-09-18, sur le post des Transmusicales : « pour le
 post des Trans c'est toujours une affiche en background sur la premiere slide. Si
 tu trouves pas, va trouver une belle photo sur le compte Instagram de l'info en
-question. »
+question. » Puis, apres une troisieme republication du meme post : « ya toujours
+l'affiche en fond !! »
 
-Le juge visuel (2026-09-18, `illustration.py`) sait deja ECARTER une affiche
-quand il existe une photo a lui preferer. Le cas des Trans est celui ou il n'y en
-a pas : le compte du festival a publie un carrousel d'affiches de line-up, donc
-les cinq candidats sont des affiches et le juge rend la moins mauvaise. Ce module
-va alors chercher ailleurs -- sur le compte lui-meme.
+La regle est donc absolue : JAMAIS une affiche en fond de cover. Quand tout ce
+qu'on trouve en est une, la cover part sur le fond Kinda (`FOND_KINDA`, l'aplat
+sombre du gabarit) -- mieux vaut le fond Kinda qu'une affiche. Et avant d'en
+arriver la, on cherche dans deux reserves : le compte qui a publie l'actu, puis
+les artistes suivis cites.
 """
 
 import datetime as dt
@@ -20,10 +21,21 @@ from PIL import Image
 
 from app.config import settings
 from app.content.actifs_artistes import PostArtiste
-from app.content.choix_visuels import choisir_visuels, photos_du_compte
-from app.content.illustration import Verdict, eviter_l_affiche
+from app.content.choix_visuels import (
+    choisir_visuels,
+    photos_des_artistes_cites,
+    photos_du_compte,
+)
+from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.lecture_artistes import LectureDifferee
 from app.content.media import entree
+from app.content.visuels import (
+    FOND_KINDA,
+    ORIGINE_ARTICLE,
+    ORIGINE_ARTISTE,
+    ORIGINE_COMPTE,
+    ORIGINE_KINDA,
+)
 from app.models import Article, Source, SourceCategorie, SourceType
 from app.pipeline.comptes_artistes import CompteArtiste
 
@@ -77,9 +89,11 @@ class Lecteur:
 
     def __init__(self, posts=(), erreur=None):
         self.posts, self.erreur, self.appels = list(posts), erreur, []
+        self.fraicheur_ignoree = []
 
-    def __call__(self, compte, maintenant):
+    def __call__(self, compte, maintenant, *, ignorer_fraicheur=False):
         self.appels.append(compte.handle)
+        self.fraicheur_ignoree.append(ignorer_fraicheur)
         if self.erreur is not None:
             raise self.erreur
         return list(self.posts)
@@ -93,22 +107,69 @@ def _secours(db, article, **options):
 # --- Ce que le compte fournit ---------------------------------------------
 
 
-def test_les_photos_du_compte_source_viennent_de_la_base_sans_reseau(db_session):
+def test_les_photos_du_compte_source_viennent_de_la_base(db_session):
     """Le cas des Trans : le compte a publie l'affiche ET, la veille, une photo
-    de concert. La photo est en base -- aucun appel Graph n'est necessaire."""
+    de concert. La base la donne sans reseau."""
     trans = _source(db_session)
     article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
     _article(db_session, trans, "Retour en images sur les Transmusicales",
              media=[entree("photo", "https://cdn.ig/live.jpg")],
              date=DATE_ACTU - dt.timedelta(days=1))
-    lecteur = Lecteur()
 
-    urls = _secours(db_session, article, lecteur=lecteur)
+    urls = _secours(db_session, article)
 
     assert len(urls) == 1
     assert urls[0].startswith("file://")
     assert str(settings.visuels_cache_dir.resolve()) in urls[0]
+
+
+def test_la_base_pleine_se_passe_du_reseau(db_session):
+    """Assez de candidats en base : aucun appel Graph. Le quota partage n'est
+    depense que quand la reserve locale ne suffit pas."""
+    trans = _source(db_session)
+    article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    for n in range(settings.fond_secours_max_photos):
+        _article(db_session, trans, f"Transmusicales, image {n}",
+                 media=[entree("photo", f"https://cdn.ig/live{n}.jpg")],
+                 date=DATE_ACTU - dt.timedelta(days=1, minutes=n))
+    lecteur = Lecteur()
+
+    urls = _secours(db_session, article, lecteur=lecteur)
+
+    assert len(urls) == settings.fond_secours_max_photos
     assert lecteur.appels == []
+
+
+def test_la_fenetre_du_secours_remonte_bien_plus_loin(db_session):
+    """« cherche plus loin » : les visuels d'artistes s'arretent a
+    `visuels_artiste_fenetre_jours` (10 j) parce qu'un post doit ILLUSTRER
+    l'actu. Un fond de cover n'a pas cette exigence : une photo de concert d'il y
+    a trois semaines fait un fond parfait, et c'est souvent tout ce qu'un compte
+    de festival a hors saison."""
+    vieux = settings.visuels_artiste_fenetre_jours + 12
+    assert vieux < settings.fond_secours_fenetre_jours
+    trans = _source(db_session)
+    article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    _article(db_session, trans, "Retour en images sur l'edition precedente",
+             media=[entree("photo", "https://cdn.ig/live.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=vieux))
+
+    assert len(_secours(db_session, article)) == 1
+
+
+def test_le_compte_est_relu_meme_s_il_vient_d_etre_ingere(db_session):
+    """La garde de fraicheur du `LecteurComptes` existe pour EPARGNER le quota a
+    l'ingestion, pas pour interdire cette lecture-ci : quand le fond serait une
+    affiche, une lecture vaut la peine. Les plafonds durs (2 par passage, 24 par
+    jour, cache 6 h, pause quota) restent, eux, dans le lecteur."""
+    trans = _source(db_session)
+    article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    lecteur = Lecteur()
+
+    _secours(db_session, article, lecteur=lecteur)
+
+    assert lecteur.appels == ["transmusicales"]
+    assert lecteur.fraicheur_ignoree == [True]
 
 
 def test_les_photos_de_l_article_lui_meme_ne_sont_pas_du_secours(db_session):
@@ -176,7 +237,7 @@ def test_le_secours_est_borne_en_nombre_de_photos(db_session):
     rapatrie qu'une poignee."""
     trans = _source(db_session)
     article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
-    for n in range(5):
+    for n in range(settings.fond_secours_max_photos + 3):
         _article(db_session, trans, f"Transmusicales, image {n}",
                  media=[entree("photo", f"https://cdn.ig/live{n}.jpg")],
                  date=DATE_ACTU - dt.timedelta(days=1, minutes=n))
@@ -186,9 +247,10 @@ def test_le_secours_est_borne_en_nombre_de_photos(db_session):
     assert len(urls) == settings.fond_secours_max_photos
 
 
-def test_le_choix_des_visuels_attache_le_secours(db_session):
+def test_le_choix_des_visuels_attache_les_deux_reserves(db_session):
     """Le secours porte le budget de lecture DU PASSAGE : il est fabrique la ou
-    ce budget vit, et voyage avec les visuels jusqu'a la composition."""
+    ce budget vit, et voyage avec les visuels jusqu'a la composition. Deux lots,
+    dans l'ordre : le compte de l'actu, puis les artistes suivis cites."""
     trans = _source(db_session)
     article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
     _article(db_session, trans, "Retour en images sur les Transmusicales",
@@ -198,12 +260,51 @@ def test_le_choix_des_visuels_attache_le_secours(db_session):
     choix = choisir_visuels(db_session, article, maintenant=MAINTENANT,
                             telecharger=Telechargement(), lecteur=Lecteur())
 
-    assert choix.secours is not None
-    urls = choix.secours()
+    assert [lot.origine for lot in choix.secours] == [ORIGINE_COMPTE, ORIGINE_ARTISTE]
+    urls = choix.secours[0].photos()
     assert len(urls) == 1 and urls[0].startswith("file://")
 
 
-# --- L'arbitrage : ne remplacer qu'une affiche, et seulement par mieux ------
+# --- La deuxieme reserve : les artistes suivis cites -----------------------
+
+
+def test_un_artiste_suivi_cite_fournit_un_fond(db_session):
+    """« un line-up des Trans cite des artistes qu'on suit ; un portrait de l'un
+    d'eux vaut mieux qu'une affiche » (utilisateur, 2026-09-18)."""
+    trans = _source(db_session)
+    fred = _source(db_session, "Fred again.. (IG)", "fredagain", SourceCategorie.ARTISTE)
+    article = _article(db_session, trans, titre="Les Transmusicales annoncent Fred again..",
+                       media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    _article(db_session, fred, "Fred again.. en studio",
+             media=[entree("photo", "https://cdn.ig/fred.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+    article.mentioned_artists = ["Fred again.."]
+    db_session.commit()
+
+    urls = photos_des_artistes_cites(
+        db_session, article, maintenant=MAINTENANT, telecharger=Telechargement()
+    )
+
+    assert len(urls) == 1 and urls[0].startswith("file://")
+
+
+def test_les_artistes_cites_n_incluent_jamais_un_compte_media(db_session):
+    guettapen = _source(db_session, "Guettapen (IG)", "guettapen", SourceCategorie.MEDIA)
+    trans = _source(db_session)
+    article = _article(db_session, trans, titre="Guettapen relaie les Transmusicales",
+                       media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    _article(db_session, guettapen, "Guettapen en images",
+             media=[entree("photo", "https://cdn.ig/g.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+    article.mentioned_artists = ["Guettapen"]
+    db_session.commit()
+
+    assert photos_des_artistes_cites(
+        db_session, article, maintenant=MAINTENANT, telecharger=Telechargement()
+    ) == []
+
+
+# --- L'arbitrage : jamais une affiche, quitte a partir sur le fond Kinda ----
 #
 # Le juge visuel est injecte par sa sortie : `verdicts` rend, pour une liste
 # d'URL, ce qu'on sait de chacune (cache des verdicts, puis appel de vision pour
@@ -219,30 +320,40 @@ def _verdicts(table, appels=None):
     return rendre
 
 
+def _lot(origine, urls, compteur=None):
+    def photos():
+        if compteur is not None:
+            compteur.append(origine)
+        return list(urls)
+
+    return Lot(origine, photos)
+
+
 def test_un_fond_qui_n_est_pas_une_affiche_ne_coute_rien():
     """La regle de cout qui prime : quand la premiere image est deja une bonne
-    photo, le compte n'est jamais lu, et on ne juge que ce qu'on a deja."""
+    photo, aucune reserve n'est ouverte, et on ne juge que ce qu'on a deja."""
     lectures, juges = [], []
 
     fond = eviter_l_affiche(
         "https://cdn.ig/photo.jpg",
-        lambda: lectures.append(1) or ["file:///cache/live.jpg"],
+        _lot(ORIGINE_COMPTE, ["file:///cache/live.jpg"], lectures),
         verdicts=_verdicts({"https://cdn.ig/photo.jpg": PHOTO}, juges),
     )
 
-    assert fond == "https://cdn.ig/photo.jpg"
+    assert fond == Fond("https://cdn.ig/photo.jpg", ORIGINE_ARTICLE)
     assert lectures == []
     assert juges == [["https://cdn.ig/photo.jpg"]]
 
 
 def test_une_affiche_cede_la_place_a_la_photo_du_compte():
     fond = eviter_l_affiche(
-        "https://cdn.ig/affiche.jpg", lambda: ["file:///cache/live.jpg"],
+        "https://cdn.ig/affiche.jpg",
+        _lot(ORIGINE_COMPTE, ["file:///cache/live.jpg"]),
         verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE,
                             "file:///cache/live.jpg": PHOTO}),
     )
 
-    assert fond == "file:///cache/live.jpg"
+    assert fond == Fond("file:///cache/live.jpg", ORIGINE_COMPTE)
 
 
 def test_la_meilleure_photo_du_compte_est_retenue():
@@ -250,7 +361,7 @@ def test_la_meilleure_photo_du_compte_est_retenue():
     la note ensuite."""
     fond = eviter_l_affiche(
         "https://cdn.ig/affiche.jpg",
-        lambda: ["file:///cache/objet.jpg", "file:///cache/live.jpg"],
+        _lot(ORIGINE_COMPTE, ["file:///cache/objet.jpg", "file:///cache/live.jpg"]),
         verdicts=_verdicts({
             "https://cdn.ig/affiche.jpg": AFFICHE,
             "file:///cache/objet.jpg": Verdict(affiche=False, sujet="autre", note=95),
@@ -258,67 +369,147 @@ def test_la_meilleure_photo_du_compte_est_retenue():
         }),
     )
 
-    assert fond == "file:///cache/live.jpg"
+    assert fond == Fond("file:///cache/live.jpg", ORIGINE_COMPTE)
 
 
-def test_une_affiche_reste_si_le_compte_ne_donne_que_des_affiches():
-    """Le dernier repli assume : mieux vaut une cover sur une affiche qu'un
-    creneau perdu -- et l'affiche de l'actu vaut mieux qu'une affiche d'ailleurs."""
+def test_le_lot_des_artistes_ne_s_ouvre_qu_apres_celui_du_compte():
+    """Le compte de l'actu d'abord (c'est SON actu) ; les artistes cites ensuite,
+    et seulement si le compte n'a rien donne -- chaque lot coute des
+    telechargements et des jetons."""
+    ouverts = []
+
     fond = eviter_l_affiche(
-        "https://cdn.ig/affiche.jpg", lambda: ["file:///cache/vieille-affiche.jpg"],
+        "https://cdn.ig/affiche.jpg",
+        _lot(ORIGINE_COMPTE, ["file:///cache/vieille-affiche.jpg"], ouverts),
+        _lot(ORIGINE_ARTISTE, ["file:///cache/fred.jpg"], ouverts),
         verdicts=_verdicts({
             "https://cdn.ig/affiche.jpg": AFFICHE,
-            "file:///cache/vieille-affiche.jpg": Verdict(affiche=True, sujet="autre", note=90),
+            "file:///cache/vieille-affiche.jpg": AFFICHE,
+            "file:///cache/fred.jpg": Verdict(affiche=False, sujet="portrait", note=70),
         }),
     )
 
-    assert fond == "https://cdn.ig/affiche.jpg"
+    assert fond == Fond("file:///cache/fred.jpg", ORIGINE_ARTISTE)
+    assert ouverts == [ORIGINE_COMPTE, ORIGINE_ARTISTE]
 
 
-def test_une_affiche_reste_si_le_compte_ne_donne_rien():
+def test_le_lot_des_artistes_reste_ferme_si_le_compte_a_donne():
+    ouverts = []
+
     fond = eviter_l_affiche(
-        "https://cdn.ig/affiche.jpg", list,
-        verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE}),
+        "https://cdn.ig/affiche.jpg",
+        _lot(ORIGINE_COMPTE, ["file:///cache/live.jpg"], ouverts),
+        _lot(ORIGINE_ARTISTE, ["file:///cache/fred.jpg"], ouverts),
+        verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE,
+                            "file:///cache/live.jpg": PHOTO}),
     )
 
-    assert fond == "https://cdn.ig/affiche.jpg"
+    assert fond == Fond("file:///cache/live.jpg", ORIGINE_COMPTE)
+    assert ouverts == [ORIGINE_COMPTE]
 
 
-def test_le_secours_ne_leve_jamais():
-    """Meme regle que le juge visuel : une panne ici ne doit pas couter un post."""
-    def secours():
+def test_tout_affiche_part_sur_le_fond_kinda():
+    """« ya toujours l'affiche en fond !! » (utilisateur, 2026-09-18, apres trois
+    republications). La moins mauvaise des affiches reste une affiche : mieux
+    vaut le fond Kinda."""
+    fond = eviter_l_affiche(
+        "https://cdn.ig/affiche.jpg",
+        _lot(ORIGINE_COMPTE, ["file:///cache/vieille-affiche.jpg"]),
+        _lot(ORIGINE_ARTISTE, ["file:///cache/flyer.jpg"]),
+        verdicts=_verdicts({
+            "https://cdn.ig/affiche.jpg": AFFICHE,
+            "file:///cache/vieille-affiche.jpg": Verdict(affiche=True, sujet="autre", note=90),
+            "file:///cache/flyer.jpg": AFFICHE,
+        }),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_une_affiche_sans_aucune_reserve_part_aussi_sur_le_fond_kinda():
+    """Une composition a la main, ou un article dont la source n'offre rien : la
+    regle ne se negocie pas pour autant."""
+    assert eviter_l_affiche(
+        "https://cdn.ig/affiche.jpg",
+        verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE}),
+    ) == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_une_reserve_vide_part_sur_le_fond_kinda():
+    assert eviter_l_affiche(
+        "https://cdn.ig/affiche.jpg",
+        Lot(ORIGINE_COMPTE, list),
+        verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE}),
+    ) == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_un_candidat_non_juge_ne_remplace_pas_une_affiche():
+    """Ne pas savoir n'est pas savoir que c'est une photo : on ne pose en fond
+    qu'un candidat dont le juge a dit qu'il n'est PAS une affiche. Sinon une
+    image illisible ou un juge muet remettraient une affiche par la fenetre."""
+    assert eviter_l_affiche(
+        "https://cdn.ig/affiche.jpg",
+        _lot(ORIGINE_COMPTE, ["file:///cache/mystere.jpg"]),
+        verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE}),
+    ) == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_une_reserve_en_panne_ne_leve_pas_et_ne_publie_pas_l_affiche():
+    """Meme regle que le juge visuel : une panne ici ne doit pas couter un post.
+    Mais on SAIT que le fond est une affiche -- la panne ne la rend pas
+    publiable, elle prive seulement d'une alternative."""
+    def photos():
         raise RuntimeError("le CDN a explose")
 
     fond = eviter_l_affiche(
-        "https://cdn.ig/affiche.jpg", secours,
+        "https://cdn.ig/affiche.jpg", Lot(ORIGINE_COMPTE, photos),
         verdicts=_verdicts({"https://cdn.ig/affiche.jpg": AFFICHE}),
     )
 
-    assert fond == "https://cdn.ig/affiche.jpg"
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
 
 
-def test_sans_fond_ou_sans_secours_rien_ne_se_passe():
+def test_un_juge_en_panne_garde_le_fond_d_origine():
+    """L'autre moitie : si l'on n'a meme pas pu juger le fond, on ne sait rien --
+    et le comportement d'avant (le fond d'origine) reste."""
+    def rendre(urls):
+        raise RuntimeError("Claude est muet")
+
+    assert eviter_l_affiche(
+        "https://cdn.ig/x.jpg", _lot(ORIGINE_COMPTE, ["file:///cache/live.jpg"]),
+        verdicts=rendre,
+    ) == Fond("https://cdn.ig/x.jpg", ORIGINE_ARTICLE)
+
+
+def test_sans_fond_rien_ne_se_passe():
     juges = []
-    assert eviter_l_affiche(None, lambda: ["x"], verdicts=_verdicts({}, juges)) is None
-    assert eviter_l_affiche("https://cdn.ig/a.jpg", None, verdicts=_verdicts({}, juges)) == (
-        "https://cdn.ig/a.jpg"
-    )
+    assert eviter_l_affiche(None, _lot(ORIGINE_COMPTE, ["x"]),
+                            verdicts=_verdicts({}, juges)) == Fond(None, ORIGINE_ARTICLE)
     assert juges == []
 
 
-def test_un_verdict_absent_ne_declenche_rien():
+def test_un_verdict_absent_sur_le_fond_ne_declenche_rien():
     """Vision coupee, image illisible, juge muet : on ne sait pas, donc on ne
-    depense pas -- le fond d'origine reste. Ne pas savoir n'est pas savoir que
-    c'est une affiche."""
+    depense pas -- le fond d'origine reste. C'est le coupe-circuit qui rend le
+    comportement d'avant quand la vision est eteinte."""
     lectures = []
 
     fond = eviter_l_affiche(
-        "https://cdn.ig/x.jpg", lambda: lectures.append(1) or ["file:///cache/live.jpg"],
+        "https://cdn.ig/x.jpg", _lot(ORIGINE_COMPTE, ["file:///cache/live.jpg"], lectures),
         verdicts=_verdicts({}),
     )
 
-    assert fond == "https://cdn.ig/x.jpg"
+    assert fond == Fond("https://cdn.ig/x.jpg", ORIGINE_ARTICLE)
     assert lectures == []
+
+
+def test_l_origine_du_fond_d_origine_est_celle_qu_on_lui_donne():
+    """Un reel sans photo propre part deja sur une photo d'artiste : l'origine
+    posee en entree est celle qui ressort si ce fond convient."""
+    assert eviter_l_affiche(
+        "file:///cache/fred.jpg", origine=ORIGINE_ARTISTE,
+        verdicts=_verdicts({"file:///cache/fred.jpg": PHOTO}),
+    ) == Fond("file:///cache/fred.jpg", ORIGINE_ARTISTE)
 
 
 def test_une_image_deja_dans_l_article_n_est_pas_proposee(db_session):
@@ -331,3 +522,5 @@ def test_une_image_deja_dans_l_article_n_est_pas_proposee(db_session):
              date=DATE_ACTU - dt.timedelta(days=1))
 
     assert _secours(db_session, article) == []
+
+
