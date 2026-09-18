@@ -14,6 +14,7 @@ si aucune tentative n'aboutit.
 
 import datetime as dt
 import logging
+import unicodedata
 
 import anthropic
 import pydantic
@@ -139,6 +140,15 @@ class PostDraft(BaseModel):
 # elle n'est la que pour arreter l'exces.
 CAPTION_EMOJIS_DEMANDES = (2, 4)
 
+# En dessous de cette longueur, une legende francaise peut legitimement n'avoir
+# aucun accent (« Le line-up tombe ce week-end » n'en porte pas un seul). Au-dela,
+# c'est le volume qui rend l'absence invraisemblable : une legende de 2 a 4
+# paragraphes, ce que demande la regle 4, depasse largement 200 caracteres, et
+# deux des quatre posts du 2026-09-18 sont partis en ASCII force (« un titre
+# pense pour la bande son », « intitule », « depasse ») -- ca fait traduction
+# automatique. Seuil bas expres : le controle ne bloque rien, il relance.
+CAPTION_ACCENTS_MIN = 200
+
 
 def probleme_emojis(caption: str) -> str | None:
     """Decrit, pour la relance, une legende hors bornes d'emojis ; None sinon.
@@ -159,6 +169,39 @@ def probleme_emojis(caption: str) -> str | None:
         f"(tolere de {CAPTION_EMOJIS_MIN} a {CAPTION_EMOJIS_MAX}). Corrige UNIQUEMENT la "
         "legende `caption` ; jamais d'emoji dans `headline`, `title` ou `subtitle`."
     )
+
+
+def contient_un_accent(texte: str) -> bool:
+    """Vrai si `texte` porte au moins une lettre accentuee.
+
+    Decomposition NFD plutot qu'une liste de caracteres : le signe diacritique
+    devient un caractere combinant, quelle que soit la lettre qui le porte (e, a,
+    u, c cedille...) et quelle que soit la forme normalisee d'origine.
+    """
+    return any(unicodedata.combining(c) for c in unicodedata.normalize("NFD", texte))
+
+
+def probleme_accents(caption: str) -> str | None:
+    """Decrit, pour la relance, une legende francaise visiblement desaccentuee.
+
+    Meme mecanique que `probleme_emojis`, et pour la meme raison : ce n'est PAS un
+    validateur de `PostDraft` -- jeter le brouillon entier ferait perdre la
+    composition d'un creneau. Le compositeur relance, puis accepte avec un
+    avertissement. Une legende sans accents vaut mieux que pas de post.
+    """
+    if len(caption) < CAPTION_ACCENTS_MIN or contient_un_accent(caption):
+        return None
+    return (
+        f"La legende (`caption`) fait {len(caption)} caracteres et ne contient PAS UN SEUL "
+        "accent : elle a ete ecrite en ASCII, ce qui fait traduction automatique. Reecris-la "
+        "en francais correctement accentue (e accent aigu, e accent grave, a accent grave, "
+        "c cedille...), dans `caption` comme dans `headline`, `title` et `subtitle`."
+    )
+
+
+def probleme_de_legende(caption: str) -> str | None:
+    """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
+    return probleme_emojis(caption) or probleme_accents(caption)
 
 
 SYSTEM_PROMPT = """\
@@ -246,6 +289,12 @@ ville, genre). Chacun COMMENCE PAR UN `#`, en minuscules, en un seul mot colle, 
 sans espace ni ponctuation : `#vieillescharrues`, jamais `vieilles charrues` ni \
 `#vieilles-charrues`. Evite les hashtags fourre-tout du type #music ou #love.
 
+8. FRANCAIS ACCENTUE : tu ecris en francais, donc AVEC LES ACCENTS -- dans la \
+legende (`caption`) comme dans `headline`, `title` et `subtitle`. « pense pour la \
+bande-son », « intitule », « depasse » sans accent font traduction automatique : \
+ecris « pensé », « intitulé », « dépassé », « à », « ça », « où ». Jamais d'ASCII \
+approximatif.
+
 N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom.\
 """
 
@@ -328,13 +377,13 @@ def make_claude_composer(
                     article.id, tentative, max_attempts, raison,
                 )
                 continue
-            probleme = probleme_emojis(draft.caption)
+            probleme = probleme_de_legende(draft.caption)
             if probleme is None:
                 return draft
             repli = draft
             consigne = probleme
             logger.warning(
-                "legende hors bornes d'emojis pour l'article %s (tentative %s/%s) : %s",
+                "legende imparfaite pour l'article %s (tentative %s/%s) : %s",
                 article.id,
                 tentative,
                 max_attempts,
@@ -342,9 +391,9 @@ def make_claude_composer(
             )
         if repli is not None:
             logger.warning(
-                "legende acceptee malgre les emojis pour l'article %s : %s",
+                "legende acceptee malgre son defaut de forme pour l'article %s : %s",
                 article.id,
-                probleme_emojis(repli.caption),
+                probleme_de_legende(repli.caption),
             )
             return repli
         raise CompositionError(

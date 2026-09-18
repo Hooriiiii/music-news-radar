@@ -13,6 +13,7 @@ from app.content.compose import (
     contient_emoji,
     create_post,
     make_claude_composer,
+    probleme_accents,
     probleme_emojis,
 )
 from app.content.choix_visuels import ChoixVisuels
@@ -669,3 +670,62 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
 
     assert post.slides[0]["image_url"] == "https://cdn/affiche.jpg"
     assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+
+
+_SANS_ACCENT = (
+    "Le festival devoile un line-up pense pour la bande son du week-end, avec un "
+    "plateau electro intitule Nuit Blanche et une jauge qui depasse celle de l'an "
+    "dernier. On y retrouvera les habitues du lieu comme les nouvelles tetes de la "
+    "scene francaise, entre deux sets tardifs. Le programme complet arrive lundi."
+)
+_AVEC_ACCENT = _SANS_ACCENT.replace("devoile", "dévoile").replace("pense", "pensé")
+
+
+def test_probleme_accents_repere_une_longue_legende_en_ascii():
+    """Deux des quatre posts du 2026-09-18 sont partis sans le moindre accent :
+    « un titre pense pour la bande son », « intitule », « depasse »."""
+    probleme = probleme_accents(_SANS_ACCENT)
+    assert probleme is not None
+    assert "accent" in probleme and "caption" in probleme
+
+
+def test_probleme_accents_laisse_passer_une_legende_courte():
+    """Une accroche de quelques mots peut legitimement n'avoir aucun accent."""
+    assert probleme_accents("Le line-up tombe ce week-end 🎧 on y va ? ✨") is None
+
+
+def test_probleme_accents_accepte_un_seul_accent():
+    assert probleme_accents(_AVEC_ACCENT) is None
+
+
+def test_composer_relance_une_legende_sans_accents(db_session):
+    """Le modele rend parfois de l'ASCII force : on le lui dit et on relance."""
+    article = _article(db_session)
+    sans = _draft_legende(_SANS_ACCENT + " 🎧 ✨")
+    avec = _draft_legende(_AVEC_ACCENT + " 🎧 ✨")
+    client = _FakeClient([_FakeParsedResponse(sans), _FakeParsedResponse(avec)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is avec
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "accent" in relance
+
+
+def test_composer_accepte_une_legende_sans_accents_apres_les_tentatives(db_session, caplog):
+    """Jamais une composition perdue pour un defaut de forme : le brouillon part
+    avec un avertissement, comme pour les emojis."""
+    article = _article(db_session)
+    drafts = [_draft_legende(f"{_SANS_ACCENT} 🎧 ✨ ({i})") for i in range(3)]
+    client = _FakeClient([_FakeParsedResponse(d) for d in drafts])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    with caplog.at_level("WARNING"):
+        resultat = composer(article)
+
+    assert resultat is drafts[-1]
+    assert len(client.messages.appels) == 3
+    assert "acceptee malgre" in caplog.text
+
+
+def test_le_prompt_exige_le_francais_accentue():
+    assert "ACCENTUE" in SYSTEM_PROMPT and "intitulé" in SYSTEM_PROMPT
