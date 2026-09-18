@@ -195,6 +195,12 @@ class Settings(BaseSettings):
         Path.home() / "Library/Application Support/Kinda/illustrations.json"
     )
     illustration_cache_jours: int = 7
+    # Fond de SECOURS : quand le fond retenu est encore une affiche, on va
+    # chercher des photos sur le compte qui a publie l'actu (2026-09-18, le post
+    # des Transmusicales, dont le carrousel n'etait fait que d'affiches). Deux
+    # suffisent : chacune coute un telechargement et des jetons de vision, et il
+    # s'agit de trouver une photo correcte, pas la meilleure du compte.
+    fond_secours_max_photos: int = 2
 
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton

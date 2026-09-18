@@ -23,6 +23,12 @@ Trois regles de cout, dans cet ordre :
   3. le verdict est memorise par URL (`illustration_cache_path`) : une
      recomposition, ou un second creneau sur le meme article, ne repaie rien.
 
+Et quand il n'y a rien a choisir parce que TOUT est une affiche (le carrousel de
+line-up d'un festival), `eviter_l_affiche` va chercher une photo sur le compte
+qui a publie l'actu -- demande de l'utilisateur du 2026-09-18 sur le post des
+Transmusicales. Ce chemin ne coute rien tant que le fond retenu n'est pas une
+affiche averee : ni lecture de compte, ni telechargement, ni jeton.
+
 Et une regle de robustesse qui prime sur tout : ce module ne LEVE JAMAIS. Pas de
 cle API, modele en panne, reseau coupe, JSON hors schema, image illisible -> il
 rend None et l'appelant garde le comportement d'avant (la premiere image). Une
@@ -276,43 +282,68 @@ def choisir_illustration(
         return None
 
 
+def verdicts_de(
+    urls: list[str],
+    *,
+    juge=None,
+    maintenant: dt.datetime | None = None,
+    chemin_cache: Path | None = None,
+) -> dict[str, Verdict]:
+    """Ce qu'on sait de chaque URL : le cache d'abord, un appel de vision pour
+    les inconnues. Les URL qu'on n'a pas pu juger sont simplement ABSENTES du
+    dictionnaire -- « je ne sais pas » ne se confond jamais avec un verdict.
+
+    Extrait de `_choisir` pour servir aussi le fond de secours
+    (`eviter_l_affiche`), qui a besoin du verdict lui-meme et pas seulement du
+    classement. Un verdict deja memorise ne repaie donc rien, quel que soit
+    l'appelant."""
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+    connus = dict(lire_cache(maintenant, chemin_cache).verdicts)
+    inconnus = [url for url in urls if url not in connus]
+    if not inconnus:
+        return {url: connus[url] for url in urls if url in connus}
+
+    if juge is None:
+        if not settings.illustration_vision_enabled or not settings.anthropic_api_key:
+            logger.info("juge visuel indisponible : verdicts inconnus")
+            return {url: connus[url] for url in urls if url in connus}
+        juge = make_claude_juge()
+    images, juges = [], []
+    for url in inconnus:
+        octets = _octets(url)
+        if octets is None:
+            logger.info("candidat de fond inaccessible : %s", url)
+            continue
+        try:
+            images.append(reduire(octets))
+        except Exception as exc:  # noqa: BLE001 -- une image illisible est sautee
+            logger.info("candidat de fond illisible (%s) : %s", type(exc).__name__, url)
+            continue
+        juges.append(url)
+    if images:
+        for url, verdict in zip(juges, juge(images), strict=True):
+            connus[url] = verdict
+        ecrire_cache(Cache(connus), maintenant, chemin_cache)
+    return {url: connus[url] for url in urls if url in connus}
+
+
 def _choisir(candidats, juge, maintenant, chemin_cache) -> str | None:
     retenus = [url for url in (url_propre(u) for u in candidats or []) if url][
         : settings.illustration_max_candidats
     ]
     if len(retenus) < 2:
         # Aucun choix a faire : ne jamais payer un appel pour confirmer l'unique
-        # image dont on dispose, qu'elle soit une affiche ou non.
+        # image dont on dispose, qu'elle soit une affiche ou non. Le fond de
+        # secours (`eviter_l_affiche`) juge cette image-la separement, mais
+        # seulement quand il a vraiment une photo a lui proposer.
         return None
 
-    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
-    cache = lire_cache(maintenant, chemin_cache)
-    connus = dict(cache.verdicts)
-    inconnus = [url for url in retenus if url not in connus]
-
-    if inconnus:
-        if juge is None:
-            if not settings.illustration_vision_enabled or not settings.anthropic_api_key:
-                logger.info("juge visuel indisponible : premier candidat conserve")
-                return None
-            juge = make_claude_juge()
-        images, juges = [], []
-        for url in inconnus:
-            octets = _octets(url)
-            if octets is None:
-                logger.info("candidat de fond inaccessible : %s", url)
-                continue
-            try:
-                images.append(reduire(octets))
-            except Exception as exc:  # noqa: BLE001 -- une image illisible est sautee
-                logger.info("candidat de fond illisible (%s) : %s", type(exc).__name__, url)
-                continue
-            juges.append(url)
-        if images:
-            for url, verdict in zip(juges, juge(images), strict=True):
-                connus[url] = verdict
-            ecrire_cache(Cache(connus), maintenant, chemin_cache)
-
+    connus = verdicts_de(retenus, juge=juge, maintenant=maintenant, chemin_cache=chemin_cache)
+    if not connus:
+        # Aucun verdict du tout : vision coupee, images inaccessibles, juge muet.
+        # « Je n'ai rien a dire », et l'appelant garde le premier candidat -- ce
+        # n'est pas la meme chose que de les declarer tous equivalents.
+        return None
     verdicts = [connus.get(url, VERDICT_INCONNU) for url in retenus]
     meilleur = max(range(len(retenus)), key=lambda i: _rang(i, verdicts[i]))
     if all(v.affiche for v in verdicts):
@@ -321,3 +352,64 @@ def _choisir(candidats, juge, maintenant, chemin_cache) -> str | None:
             retenus[meilleur],
         )
     return retenus[meilleur]
+
+
+# --- Le dernier recours : une photo du compte qui a publie l'actu ----------
+
+
+def eviter_l_affiche(fond: str | None, secours=None, *, verdicts=None, **options) -> str | None:
+    """Remplacer un fond qui est encore une AFFICHE par une photo du compte.
+
+    Demande de l'utilisateur, 2026-09-18, sur le post des Transmusicales : « pour
+    le post des Trans c'est toujours une affiche en background sur la premiere
+    slide. Si tu trouves pas, va trouver une belle photo sur le compte Instagram
+    de l'info en question. »
+
+    `choisir_illustration` ECARTE une affiche quand il existe une photo a lui
+    preferer. Le cas des Trans est celui ou il n'y en a pas : le compte du
+    festival a publie un carrousel d'affiches de line-up, les cinq candidats sont
+    donc des affiches, et le juge rend la moins mauvaise. C'est ici qu'on va
+    chercher ailleurs.
+
+    `secours` est une fonction sans argument qui rend des URL de photos
+    RAPATRIEES EN LOCAL (cf. `choix_visuels.photos_du_compte`). Elle n'est
+    appelee QUE si le fond est une affiche averee : quand la premiere image est
+    deja une bonne photo, rien n'est lu, rien n'est telecharge, rien n'est paye.
+
+    Trois issues, dans l'ordre de preference : la meilleure photo du compte ; a
+    defaut le fond d'origine (une affiche d'ailleurs ne vaut pas mieux que
+    l'affiche de l'actu) ; et jamais d'exception -- la file continue avec ce
+    qu'elle avait.
+    """
+    if not fond or secours is None:
+        return fond
+    rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
+    try:
+        verdict = rendre([fond]).get(fond)
+        if verdict is None or not verdict.affiche:
+            # Une photo, ou un verdict qu'on n'a pas pu rendre. Ne pas savoir
+            # n'est pas savoir que c'est une affiche : on ne depense rien.
+            return fond
+        # Une place est laissee au fond d'origine dans le lot juge, pour que la
+        # comparaison porte sur les memes criteres que le choix initial.
+        candidats = [url for url in (secours() or []) if url][
+            : max(1, settings.illustration_max_candidats - 1)
+        ]
+        if not candidats:
+            return fond
+        connus = rendre([*candidats, fond])
+        meilleur = max(
+            range(len(candidats)),
+            key=lambda i: _rang(i, connus.get(candidats[i], VERDICT_INCONNU)),
+        )
+        retenu = candidats[meilleur]
+        if connus.get(retenu, VERDICT_INCONNU).affiche:
+            logger.info("le compte source n'offre que des affiches : fond d'origine conserve")
+            return fond
+        logger.info("fond de cover remplace par une photo du compte source : %s", retenu)
+        return retenu
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning(
+            "fond de secours abandonne (%s) : fond d'origine conserve", type(exc).__name__
+        )
+        return fond

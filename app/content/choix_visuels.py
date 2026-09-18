@@ -10,6 +10,11 @@ Les images d'artistes sont COPIEES en local : les URL du CDN Instagram sont
 signees et expirent, et le gel vient ~22 h apres la composition. Une video de
 reel ne l'est pas : le gel la telecharge (API) ou la recupere (yt-dlp).
 
+Et, pour le seul FOND de la cover, un dernier recours (2026-09-18) : des photos
+du compte qui a publie l'actu, attachees au resultat sous forme de fonction
+(`ChoixVisuels.secours`, cf. `photos_du_compte`). La composition ne l'appelle que
+si le fond retenu est encore une affiche.
+
 Deux issues sans visuel : `AucunVisuel` (l'article n'en a pas, il sort de la
 file) et `VisuelsDifferes` (la lecture en direct attend son budget ou le quota :
 on reessaie au passage suivant, rien n'est exclu).
@@ -17,7 +22,9 @@ on reessaie au passage suivant, rien n'est exclu).
 
 import datetime as dt
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,8 +49,13 @@ from app.content.visuels import (
     urls_interdites,
     visuels_autorises,
 )
-from app.models import Article, FormatCreneau, Source
-from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, construire_index
+from app.models import Article, FormatCreneau, Source, SourceType
+from app.pipeline.comptes_artistes import (
+    CompteArtiste,
+    IndexComptes,
+    compte_de_source,
+    construire_index,
+)
 from app.schedule.store import raison_reel_propre
 
 logger = logging.getLogger(__name__)
@@ -70,6 +82,14 @@ class VisuelsDifferes(RuntimeError):
 class ChoixVisuels:
     actifs: list[dict] = field(default_factory=list)
     credit: str | None = None
+    # De quoi aller chercher un FOND de secours si le fond retenu se revele etre
+    # une affiche (2026-09-18, le post des Transmusicales). Une fonction, et pas
+    # une liste : elle ne doit rien couter tant qu'on n'en a pas besoin. Elle vit
+    # ici parce que c'est ici que vivent la session, l'article et le lecteur
+    # Graph du passage -- avec son budget --, et que la composition, qui en a
+    # besoin, ne les a pas tous. Cf. `photos_du_compte` et
+    # `illustration.eviter_l_affiche`.
+    secours: Callable[[], list[str]] | None = None
 
 
 def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
@@ -240,6 +260,77 @@ def _reel(
     return ChoixVisuels(actifs, credit or (propres.credit if propres is not None else None))
 
 
+def photos_du_compte(
+    db: Session,
+    article: Article,
+    *,
+    maintenant: dt.datetime,
+    lecteur=None,
+    telecharger=telecharger_media,
+    maximum: int | None = None,
+) -> list[str]:
+    """Des photos RECENTES du compte qui a publie l'actu, copiees en local.
+
+    Le dernier recours du fond de cover : « si tu trouves pas, va trouver une
+    belle photo sur le compte Instagram de l'info en question » (utilisateur,
+    2026-09-18, sur le post des Transmusicales, dont le carrousel n'etait fait
+    que d'affiches de line-up).
+
+    Ce n'est pas la meme chose que les visuels d'artistes CITES (`classer` sur
+    l'index des comptes) : ici on lit le compte de l'article lui-meme, celui qui
+    porte l'actu -- un festival, un label, un club, un artiste. Jamais un compte
+    MEDIA : la regle du 2026-09-17 vaut aussi pour un fond de cover.
+
+    La base d'abord : les autres posts du compte y sont deja, avec leurs medias,
+    et ne coutent rien. La lecture en direct n'intervient que si la base ne donne
+    rien -- et le `LecteurComptes` refusera d'ailleurs de relire un compte que le
+    pipeline vient d'ingerer, ce qui est le cas normal ici.
+
+    Les photos sont COPIEES dans le cache local, comme celles des artistes : les
+    URL signees du CDN Instagram expirent avant le gel, qui suit la composition
+    de ~22 h. Rendre l'URL distante donnerait un 404 silencieux, donc une cover
+    sur l'image de secours.
+    """
+    source = getattr(article, "source", None)
+    if source is None or getattr(source, "type", None) != SourceType.INSTAGRAM:
+        return []
+    if origine_interdite(source):
+        logger.info("Fond de secours ecarte : le compte source est un media")
+        return []
+    compte = compte_de_source(source)
+    retenus = classer(
+        article,
+        posts_en_base(db, [compte], maintenant),
+        format_=FormatCreneau.CARROUSEL,
+        maintenant=maintenant,
+    )
+    if not retenus and lecteur is not None:
+        try:
+            lus = lecteur(compte, maintenant)
+        except LectureDifferee as exc:
+            # Budget, quota Graph, reseau : le fond de secours est un CONFORT.
+            # Il n'a pas le droit de faire echouer ni de differer une
+            # composition -- l'appelant gardera l'affiche.
+            logger.info("Lecture du compte source differee : %s", exc)
+            lus = []
+        retenus = classer(
+            article, lus, format_=FormatCreneau.CARROUSEL, maintenant=maintenant
+        )
+    # Les images de l'ARTICLE sont exclues nommement : `classer` ecarte deja le
+    # post de l'article, mais un compte qui republie la meme affiche dans deux
+    # posts la reproposerait comme remplacante d'elle-meme.
+    deja = urls_interdites(article) | {
+        url for m in (article.media or []) for url in (m.get("url"), m.get("preview_url")) if url
+    }
+    copies, _ = _copier_images(
+        retenus,
+        telecharger,
+        deja,
+        maximum=settings.fond_secours_max_photos if maximum is None else maximum,
+    )
+    return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+
+
 def choisir_visuels(
     db: Session,
     article: Article,
@@ -249,6 +340,37 @@ def choisir_visuels(
     lecteur=None,
     index: IndexComptes | None = None,
     telecharger=telecharger_media,
+) -> ChoixVisuels:
+    """Les visuels du post, ET de quoi rattraper un fond qui serait une affiche.
+
+    Le `secours` attache au resultat n'est jamais appele ici : il porte le
+    budget de lecture du passage jusqu'a la composition, qui seule sait si le
+    fond retenu est une affiche (cf. `illustration.eviter_l_affiche`).
+    """
+    choix = _choisir_visuels(
+        db, article, format_=format_, maintenant=maintenant, lecteur=lecteur,
+        index=index, telecharger=telecharger,
+    )
+    choix.secours = partial(
+        photos_du_compte,
+        db,
+        article,
+        maintenant=maintenant,
+        lecteur=lecteur,
+        telecharger=telecharger,
+    )
+    return choix
+
+
+def _choisir_visuels(
+    db: Session,
+    article: Article,
+    *,
+    format_: FormatCreneau,
+    maintenant: dt.datetime,
+    lecteur,
+    index: IndexComptes | None,
+    telecharger,
 ) -> ChoixVisuels:
     propres = _propres(article, format_)
     if propres is not None and (

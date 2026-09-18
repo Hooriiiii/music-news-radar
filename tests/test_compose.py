@@ -535,3 +535,46 @@ def test_un_juge_muet_garde_le_premier_candidat(db_session):
     post = create_post(db_session, article, _draft(), selecteur_fond=lambda candidats: None)
 
     assert post.slides[0]["image_url"] == "https://tsugi.fr/photo.jpg"
+
+
+def test_une_affiche_cede_la_place_a_une_photo_du_compte_source(db_session):
+    """Le post des Transmusicales (2026-09-18) : les CINQ candidats etaient des
+    affiches de line-up, le juge rendait donc la moins mauvaise. La composition
+    va alors chercher une photo sur le compte qui a publie l'actu."""
+    from app.content.illustration import Verdict
+
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")],
+        "@transmusicales",
+        secours=lambda: ["file:///cache/live.jpg"],
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+        verdicts_fond=lambda urls: dict.fromkeys(
+            urls, Verdict(affiche=True, sujet="autre", note=10)
+        ) | {"file:///cache/live.jpg": Verdict(affiche=False, sujet="scene", note=80)},
+    )
+
+    assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
+    # Les ACTIFS ne bougent pas : le secours est un fond de cover, pas une slide
+    # de carrousel -- le carrousel reste celui de l'actu.
+    assert [a["url"] for a in post.assets] == ["https://cdn/affiche.jpg"]
+
+
+def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
+    """Une composition a la main, ou un article dont la source n'offre rien :
+    aucun appel supplementaire, aucun changement."""
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")], "@x"
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+    )
+
+    assert post.slides[0]["image_url"] == "https://cdn/affiche.jpg"

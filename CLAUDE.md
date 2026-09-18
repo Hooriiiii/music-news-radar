@@ -531,11 +531,26 @@ API, vision coupée (`ILLUSTRATION_VISION_ENABLED=false`), réseau mort, JSON ho
 schéma, image illisible → il rend `None` et l'appelant garde la première image.
 Un verdict manquant vaut « neutre », qui passe devant une affiche avérée et
 derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
-affiche. Si TOUS les candidats sont des affiches, on garde la moins mauvaise —
-le repli vers une photo d'artiste suivi vit en amont, dans `choix_visuels`, et se
-décide avant la composition ; mieux vaut une cover sur une affiche qu'un créneau
-perdu. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel suit
-la même règle sans code en double.
+affiche. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel
+suit la même règle sans code en double.
+
+**Et si tout est une affiche, on va chercher une photo sur le compte qui a publié
+l'actu** (2026-09-18, `choix_visuels.photos_du_compte` +
+`illustration.eviter_l_affiche`). Post 40 (Transmusicales) : cinq visuels, cinq
+affiches de line-up — le juge ne pouvait que rendre la moins mauvaise. Demande de
+l'utilisateur : « si tu trouves pas, va trouver une belle photo sur le compte
+Instagram de l'info en question ». Le compte est donc relu par le chemin existant
+(base d'abord, `LecteurComptes`/`business_discovery` ensuite, avec ses budgets :
+2 lectures/passage, 24/jour, cache 6 h, pause sur le quota), **jamais** un compte
+`categorie=media`, et les photos sont COPIÉES en local (les URL signées du CDN
+expirent avant le gel). Elles passent devant le même juge ; si elles sont elles
+aussi des affiches, on garde le fond d'origine — une affiche d'ailleurs ne vaut
+pas mieux que l'affiche de l'actu, et mieux vaut une cover sur une affiche qu'un
+créneau perdu. Ce chemin **ne coûte rien** tant que le fond retenu n'est pas une
+affiche avérée : ni lecture de compte, ni téléchargement, ni jeton. Le secours
+voyage depuis `choisir_visuels` (où vivent la session et le budget du passage)
+jusqu'à `create_post` sous forme de fonction, dans `ChoixVisuels.secours` ; il
+alimente le FOND seulement, jamais `assets` — le carrousel reste celui de l'actu.
 
 Les posts ne sont **jamais purgés** (archive éditoriale, même motif que
 `artist_mentions`) et publier un post bascule son article en `USED`, ce qui le

@@ -84,6 +84,21 @@ class IndexComptes:
         return [trouves[source_id] for source_id in sorted(trouves)]
 
 
+def compte_de_source(source: Source) -> CompteArtiste:
+    """Le compte Instagram que represente une source, tel que le lecteur Graph
+    l'attend. Une seule definition : l'index des artistes cites la partage avec
+    le fond de secours (`choix_visuels.photos_du_compte`), qui lit le compte de
+    l'article lui-meme et non ceux qu'il cite -- deux lectures voisines du meme
+    `sources.state` finiraient par diverger sur `dernier_appel`, et le lecteur
+    redemanderait a Graph ce que le pipeline vient d'ingerer."""
+    return CompteArtiste(
+        source_id=source.id,
+        handle=compte_depuis_url(source.url),
+        nom=_PARENTHESES.sub("", source.name or "").strip(),
+        dernier_appel=_date((source.state or {}).get("dernier_appel")),
+    )
+
+
 def construire_index(db: Session, avec_liens: bool = True) -> IndexComptes:
     sources = db.scalars(
         select(Source)
@@ -97,13 +112,8 @@ def construire_index(db: Session, avec_liens: bool = True) -> IndexComptes:
     comptes: dict[int, CompteArtiste] = {}
     par_cle: dict[str, CompteArtiste] = {}
     for source in sources:
-        handle = compte_depuis_url(source.url)
-        compte = CompteArtiste(
-            source_id=source.id,
-            handle=handle,
-            nom=_PARENTHESES.sub("", source.name).strip(),
-            dernier_appel=_date((source.state or {}).get("dernier_appel")),
-        )
+        compte = compte_de_source(source)
+        handle = compte.handle
         comptes[source.id] = compte
         for cle in (cle_artiste(source.name), cle_artiste(handle)):
             if len(cle) >= CLE_MIN:
