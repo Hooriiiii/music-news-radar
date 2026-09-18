@@ -349,7 +349,9 @@ def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
     # comme voulu (effet autocollant), et mesure a 0,6 deg antihoraire.
     assert titre.tilt == 0.0
     assert sous_titre.tilt == -0.6
-    # Bloc centre : 42,9 % de 1920.
+    # Chaque bande reste centree horizontalement sur elle-meme ; la position
+    # verticale du bloc entier (title + subtitle) est portee par
+    # `GABARIT_REEL.block_bottom`, pas par ce champ.
     assert zone_titre.anchor == "center"
     assert zone_titre.align == "center"
     assert zone_sous_titre.align == "center"
@@ -358,11 +360,39 @@ def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
     assert zone_sous_titre.max_lines == 2
 
 
-def test_variables_css_expose_le_centre_du_bloc_quand_il_existe():
+def test_variables_css_expose_le_bas_du_bloc_quand_il_existe():
     from app.content.layout import GABARIT_REEL
 
-    assert "--block-center: 42.9%;" in variables_css(GABARIT_REEL, scale=1.0)
-    assert "--block-center" not in variables_css(GABARIT_POST, scale=1.0)
+    assert "--block-bottom: 420px;" in variables_css(GABARIT_REEL, scale=1.0)
+    assert "--block-bottom" not in variables_css(GABARIT_POST, scale=1.0)
+
+
+def test_la_limite_basse_du_bloc_reste_dans_le_crop_de_la_grille():
+    """Sentinelle du retour de defaut (2026-09-18, cf. le commentaire sur
+    `REEL_LIMITE_BASSE_UI` dans layout.py) : le bloc de texte du reel doit
+    rester au-dessus de la zone d'interface Instagram (y=1500 sur 1920) sans
+    remonter vers le milieu du cadre comme le faisait l'ancien `block_center`
+    (42,9 % x 1920 ~= 823 px), et sans sortir du crop 4:5 de la grille (qui va
+    de 285 a 1635 sur cette meme toile).
+
+    Formule sur la valeur CALCULEE (`GABARIT_REEL.block_bottom`), pas sur une
+    constante recopiee : si quelqu'un deplace `REEL_LIMITE_BASSE_UI` sans
+    revoir cette limite, c'est ce test qui doit le dire.
+    """
+    from app.content.layout import GABARIT_REEL, REEL_LIMITE_BASSE_UI
+
+    bas_du_bloc = GABARIT_REEL.height - GABARIT_REEL.block_bottom
+
+    assert bas_du_bloc == REEL_LIMITE_BASSE_UI
+    # Ne descend jamais sous la limite d'interface.
+    assert bas_du_bloc <= 1500
+    # Ne remonte pas vers le milieu du cadre (l'ancien defaut).
+    milieu_du_cadre = GABARIT_REEL.height / 2
+    assert bas_du_bloc > milieu_du_cadre + 300
+    # Reste dans le crop 4:5 de la grille (285 a 1635 sur cette toile).
+    origine_crop = (GABARIT_REEL.height - GABARIT_REEL.width * 5 / 4) / 2
+    fin_crop = origine_crop + GABARIT_REEL.width * 5 / 4
+    assert origine_crop <= bas_du_bloc <= fin_crop
 
 
 def test_la_palette_teinte_le_voile_et_le_mark_du_post():
