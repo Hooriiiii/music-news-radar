@@ -13,15 +13,19 @@ fond floute que le reel). Premier post reel (Charlotte de Witte,
 article 17839) : 5 videos, et un carrousel parti avec la cover seule.
 
 Six regles :
-- JAMAIS un post reduit a sa COVER SEULE : un carrousel porte au moins deux
-  elements, sinon le gel est impossible et l'article sort de la file (2026-09-18,
-  article 17946 « Noisia » : une image, ecartee, et un post vide -- « la c'est
-  n'importe quoi ! »). Sauf si les visuels existent et que seule leur
-  RECUPERATION a echoue pour une raison passagere : on differe, on n'exclut pas ;
-- la photo qui sert de FOND a la cover n'est pas repetee ensuite (une video dont
-  c'est la vignette reste, sauf si elle retombe sur cette vignette) -- SAUF si
-  c'est le seul visuel : elle fait alors le fond ET la slide (la cover la montre
-  sous l'accroche, la slide la montre nette) ;
+- JAMAIS un post qui ne MONTRE RIEN de l'actu. Ce qui etait interdit n'est pas
+  « un seul element », c'est une cover sur l'aplat Kinda sans rien derriere
+  (2026-09-18, article 17946 « Noisia » : l'unique image jugee affiche, ecartee
+  du fond, absente des slides -- « la c'est n'importe quoi ! »). Une cover qui
+  porte une VRAIE photo se suffit a elle-meme : le dossier part alors avec un
+  seul fichier, et Meta publie un post IMAGE simple (`instagram.preparer_carrousel`).
+  Sauf si les visuels existent et que seule leur RECUPERATION a echoue pour une
+  raison passagere : on differe, on n'exclut pas ;
+- la photo qui sert de FOND a la cover n'est JAMAIS republiee ensuite, meme si
+  c'est le seul visuel (2026-09-19, post « Fred again.. au Palacio » : slide 2
+  etait la photo de la cover en version nette -- « si c'est pour remettre la meme
+  image en deuxieme slide, ca vaut pas le coup »). Une video dont c'est la
+  vignette reste, elle : un clip n'est pas le meme asset que son image fixe ;
 - une image que le cadrage 4:5 abimerait (trop petite, ou trop eloignee du
   format : `app.publish.images`) est simplement SAUTEE, jamais une erreur -- la
   raison est journalisee, et rappelee dans le message si le carrousel finit vide ;
@@ -278,23 +282,6 @@ def preparer_fichiers(
             logger.info("visuel inexploitable (%s) : %s", exc, url)
             continue
 
-    if len(elements) == 1 and fond != FOND_KINDA:
-        # UNE SEULE IMAGE, et c'est celle de la cover : la regle « ne pas repeter
-        # l'image du fond » vaut quand il existe un AUTRE visuel -- seule, elle
-        # vaut mieux que rien. La cover la montre sous l'accroche, la slide la
-        # montre nette. (2026-09-18, post Noisia : « il n'y a pas de slide ».)
-        octets, raison = _octets_image(fond, telecharger)
-        if octets is None:
-            panne_transport = panne_transport or echec_transitoire(raison)
-        else:
-            try:
-                elements.append(("jpg", _cadrer(octets)))
-            except ImageEcartee as exc:
-                ecartees.append(str(exc))
-                logger.info("fond de cover ecarte du carrousel (%s) : %s", exc, fond)
-            except ImageInexploitable as exc:
-                logger.info("fond de cover inexploitable (%s) : %s", exc, fond)
-
     if len(elements) < 2 and panne_transport:
         # Coupure, 429, 5xx : les visuels EXISTENT, seule leur recuperation a
         # echoue. Un article exclu ne revient jamais dans la file -- on retente
@@ -302,15 +289,20 @@ def preparer_fichiers(
         raise PreparationDifferee(
             "visuels du carrousel inaccessibles (reseau) : nouvelle tentative au prochain passage"
         )
-    if len(elements) < 2:
-        # JAMAIS un post reduit a sa cover (2026-09-18, article 17946 « Noisia
-        # Reunite After Seven-Year Hiatus » : une image, ecartee, et un post
-        # vide -- « la c'est n'importe quoi ! »). Une exclusion, donc : le
-        # creneau passe a l'article suivant, ce qui vaut mieux qu'un carrousel
-        # d'une slide.
+    if len(elements) < 2 and fond == FOND_KINDA:
+        # La lecon du post Noisia (2026-09-18, article 17946), et elle seule :
+        # l'aplat Kinda et rien derriere, c'est un post qui ne montre AUCUNE
+        # image de l'actu -- « la c'est n'importe quoi ! ». Exclusion, le
+        # creneau passe a l'article suivant.
+        #
+        # Le cas symetrique -- une cover qui porte une vraie photo, et rien
+        # derriere -- est desormais publiable tel quel (2026-09-19) : « on peut
+        # se contenter juste de la cover normale et c'est tout ». Ce qui coute
+        # un post, ce n'est pas d'en avoir un seul element, c'est de n'y rien
+        # montrer.
         detail = f" ({' ; '.join(dict.fromkeys(ecartees))})" if ecartees else ""
         raise PreparationImpossible(
-            f"carrousel reduit a la cover seule : aucun visuel publiable apres elle{detail}"
+            f"cover seule sur l'aplat Kinda : aucun visuel de l'actu a montrer{detail}"
         )
 
     # Prefixe aleatoire : les fichiers seront publics quelques minutes, leurs noms

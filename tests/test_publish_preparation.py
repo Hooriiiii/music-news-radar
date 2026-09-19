@@ -103,10 +103,10 @@ def _post_kinda(*medias):
     return SimpleNamespace(slides=[cover, *medias])
 
 
-def test_un_carrousel_reduit_a_la_cover_n_est_jamais_publie(tmp_path):
+def test_une_cover_sur_l_aplat_kinda_sans_rien_derriere_n_est_jamais_publiee(tmp_path):
     """Article 17946 (Noisia) : une seule image, ecartee, et un post parti avec
-    la cover seule -- « la c'est n'importe quoi ! ». Mieux vaut sauter l'article
-    (le creneau passe au suivant) que publier un post vide."""
+    la cover seule SUR L'APLAT -- « la c'est n'importe quoi ! ». Ce post ne
+    montre aucune image de l'actu : mieux vaut sauter l'article."""
     with pytest.raises(PreparationImpossible, match="cover seule"):
         preparer_fichiers(
             _post_kinda(), _article("https://img/1.jpg"), tmp_path,
@@ -146,15 +146,33 @@ def test_un_post_sans_aucun_media_n_est_jamais_publie(tmp_path):
                           rendre=_rendre(), telecharger=_telecharger())
 
 
-def test_l_unique_image_sert_a_la_fois_de_fond_et_de_slide(tmp_path):
-    """La regle « ne pas repeter l'image de la cover » vaut quand il existe un
-    AUTRE visuel. Seule, l'image de l'actu fait le fond ET la slide : la cover
-    la montre sous l'accroche, la slide la montre nette."""
+def test_l_unique_image_reste_le_fond_et_le_post_part_avec_la_cover_seule(tmp_path):
+    """2026-09-19, post « Fred again.. au Palacio » : la slide 2 etait la photo
+    de la cover en version nette -- « ca vaut pas le coup, on la voit bien assez
+    sur la premiere slide ». Un seul fichier fige, donc un post IMAGE simple
+    chez Meta (`instagram.preparer_carrousel`), et rien de repete."""
+    telecharges = []
+
+    def telecharger(url):
+        telecharges.append(url)
+        return _png(1200, 800), ".png"
+
     noms = preparer_fichiers(
         _post(), _article("https://img/fond.jpg"), tmp_path,
-        rendre=_rendre(), telecharger=_telecharger(),
+        rendre=_rendre(), telecharger=telecharger,
     )
-    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
+    assert [nom[-6:] for nom in noms] == ["01.jpg"]
+    assert telecharges == []
+    assert Image.open(tmp_path / noms[0]).size == (1080, 1350)
+
+
+def test_un_article_sans_aucun_media_mais_une_cover_illustree_est_publiable(tmp_path):
+    """Le fond vient d'une reserve (compte source, artiste cite, web) et l'actu
+    n'a rien d'autre : le post montre quand meme une image, il part."""
+    noms = preparer_fichiers(
+        _post(), _article(), tmp_path, rendre=_rendre(), telecharger=_telecharger(),
+    )
+    assert len(noms) == 1
 
 
 def test_l_image_de_la_cover_n_est_pas_repetee_quand_une_autre_existe(tmp_path):
@@ -170,6 +188,26 @@ def test_l_image_de_la_cover_n_est_pas_repetee_quand_une_autre_existe(tmp_path):
     )
     assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
     assert telecharges == ["https://img/autre.jpg"]
+
+
+def test_tous_les_autres_visuels_restent_des_slides(tmp_path):
+    """Retirer l'image du fond ne doit appauvrir que LUI : les autres visuels de
+    l'actu partent tous, dans l'ordre et au format publie."""
+    telecharges = []
+
+    def telecharger(url):
+        telecharges.append(url)
+        return _png(1200, 800), ".png"
+
+    noms = preparer_fichiers(
+        _post(),
+        _article("https://img/a.jpg", "https://img/fond.jpg", "https://img/b.jpg", "https://img/c.jpg"),
+        tmp_path, rendre=_rendre(), telecharger=telecharger,
+    )
+    assert len(noms) == 4
+    assert telecharges == ["https://img/a.jpg", "https://img/b.jpg", "https://img/c.jpg"]
+    for nom in noms:
+        assert Image.open(tmp_path / nom).size == (1080, 1350)
 
 
 def test_les_medias_viennent_des_slides_puis_de_l_article_sans_doublon():
@@ -271,11 +309,11 @@ def test_la_photo_du_fond_de_cover_n_est_pas_reprise_mais_la_video_oui():
     assert [m["url"] for m in medias_du_carrousel(_post(), article)] == ["https://cdn/v.mp4", "https://img/autre.jpg"]
 
 
-def test_une_video_qui_retomberait_sur_la_vignette_du_fond_ne_laisse_pas_la_cover_seule(tmp_path):
-    """La vignette de la video EST le fond de la cover : elle n'est pas reprise
-    comme slide... tant qu'un autre visuel existe. Ici il n'y en a aucun, et un
-    post d'une seule slide ne se publie pas -- la vignette revient donc en
-    slide 2 (cf. « une seule image sert a la fois de fond et de slide »)."""
+def test_une_video_qui_retomberait_sur_la_vignette_du_fond_laisse_la_cover_seule(tmp_path):
+    """La vignette de la video EST le fond de la cover : la video ne se
+    telecharge pas, sa vignette ne sera donc pas republiee derriere l'image
+    qu'elle a deja servie a faire. Le post part avec la cover seule, qui porte
+    bien une photo."""
     journal, outils = _outils_video(echec_telechargement=True)
     telecharges = []
 
@@ -287,8 +325,19 @@ def test_une_video_qui_retomberait_sur_la_vignette_du_fond_ne_laisse_pas_la_cove
         _post(), _article_medias(_video(preview="https://img/fond.jpg")), tmp_path,
         rendre=_rendre(), telecharger=telecharger, **outils,
     )
-    assert len(noms) == 2
-    assert telecharges == ["https://img/fond.jpg"]
+    assert len(noms) == 1
+    assert telecharges == []
+
+
+def test_une_video_dont_la_vignette_est_le_fond_reste_une_slide(tmp_path):
+    """Un clip n'est pas le meme asset que son image fixe : la video part en
+    slide 2 meme si le fond de la cover est sa vignette."""
+    _, outils = _outils_video()
+    noms = preparer_fichiers(
+        _post(), _article_medias(_video(preview="https://img/fond.jpg")), tmp_path,
+        rendre=_rendre(), telecharger=_telecharger(), **outils,
+    )
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.mp4"]
 
 
 @pytest.mark.parametrize("sortie", [
