@@ -743,11 +743,42 @@ def test_un_visuel_sans_verdict_n_est_jamais_jete(db_session):
         db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
         selecteur_fond=lambda candidats: cartes[0],
         # Seule la premiere a ete jugee : les deux autres restent, faute de
-        # verdict -- c'est exactement ce que fait un juge borne a trois images.
+        # verdict -- c'est ce qui arrive a ce qui tombe hors de la borne du lot.
         verdicts_fond=lambda urls: _juge(set(cartes))([cartes[0]]),
     )
 
     assert _urls(post) == cartes
+
+
+def test_les_sept_cartes_des_trans_ne_laissent_qu_une_slide(db_session, monkeypatch, tmp_path):
+    """LE cas de production, joue de bout en bout avec le vrai chemin du juge :
+    sept cartes d'annonce, aucune photo. Les sept partent dans UN SEUL appel --
+    c'est le lot qui s'elargit, pas un second juge --, et une seule survit.
+
+    C'est ce test qui separe « defaut eteint » de « defaut attenue » : avec un
+    lot borne a trois, quatre cartes restaient inconnues, donc gardees."""
+    from app.config import settings
+    from app.content import illustration
+
+    monkeypatch.setattr(settings, "illustration_cache_path", tmp_path / "verdicts.json")
+    monkeypatch.setattr(settings, "illustration_vision_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    monkeypatch.setattr(illustration, "_octets", lambda url: b"jpeg")
+    monkeypatch.setattr(illustration, "reduire", lambda octets, taille=None: octets)
+    lots = []
+
+    def juge(images):
+        lots.append(len(images))
+        return [illustration.Verdict(affiche=True, sujet="autre", note=10)] * len(images)
+
+    monkeypatch.setattr(illustration, "make_claude_juge", lambda: juge)
+    cartes = [f"https://cdn/trans-{n}.jpg" for n in range(7)]
+
+    post = create_post(db_session, _article(db_session), _draft(), visuels=_affiches(*cartes))
+
+    assert lots == [7], "un seul appel, et il porte sur les sept cartes"
+    assert _urls(post) == [cartes[0]]
+    assert post.slides[0]["image_url"] == FOND_KINDA
 
 
 def test_l_unique_visuel_meme_affiche_garde_son_post_publiable(db_session):

@@ -185,9 +185,17 @@ class Settings(BaseSettings):
     # exploitable, c'est-a-dire le comportement d'avant le 2026-09-18.
     illustration_vision_enabled: bool = True
     # Haiku suffit : la question posee est « affiche ou photo ? », pas une analyse
-    # fine. Trois images reduites a 512 px coutent ~1 400 jetons d'entree.
+    # fine. Une image reduite a 512 px coute ~230 jetons d'entree.
     visuels_model: str = "claude-haiku-4-5"
-    illustration_max_candidats: int = 3
+    # La borne du LOT juge en UN appel. Dix et non trois depuis le 2026-09-19 :
+    # ce lot ne sert plus seulement a choisir le fond, il sert aussi a plafonner
+    # les cartes d'annonce du carrousel (`illustration.plafonner_affiches`), et
+    # une image non jugee est une slide GARDEE -- juger trois images sur sept en
+    # laissait passer cinq. Dix parce qu'un carrousel Meta ne porte pas plus de
+    # dix elements (`publish.preparation.CARROUSEL_MAX`) : au-dela on paierait
+    # pour juger des images que le post ne pourra jamais publier. Cout :
+    # ~2 300 jetons d'entree, ~0,002 $ par composition.
+    illustration_max_candidats: int = 10
     illustration_taille_px: int = 512
     # Verdicts memorises par URL : une recomposition (ou un second creneau sur le
     # meme article) ne repaie pas le juge.

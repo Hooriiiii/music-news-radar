@@ -19,7 +19,10 @@ celui qui regarde l'image.
 Trois regles de cout, dans cet ordre :
   1. on ne juge QUE s'il y a un choix a faire (au moins deux candidats) ;
   2. au plus `illustration_max_candidats` images, reduites a
-     `illustration_taille_px`, dans UN SEUL appel -- ~1 400 jetons d'entree ;
+     `illustration_taille_px`, dans UN SEUL appel -- ~2 300 jetons d'entree. Ce
+     lot est juge d'avance par `prejuger` et sert DEUX decisions : quelle image
+     fait le fond, et quelles cartes d'annonce le carrousel garde
+     (`plafonner_affiches`). Un lot elargi, jamais un second appel ;
   3. le verdict est memorise par URL (`illustration_cache_path`) : une
      recomposition, ou un second creneau sur le meme article, ne repaie rien.
 
@@ -59,6 +62,7 @@ from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_KINDA,
+    candidats_de_fond,
     image_de,
     lire_fichier_cache,
 )
@@ -302,13 +306,13 @@ def verdicts_memorises(
 
     `verdicts_de` paie pour ce qu'il ne connait pas ; ici on ne paie rien, et une
     URL jamais jugee est simplement absente. C'est ce qu'il faut a
-    `plafonner_affiches`, qui s'ajoute APRES un juge deja paye une fois par
-    composition : lui donner `verdicts_de` ferait juger les images que le budget
-    du fond avait volontairement laissees de cote -- un second juge deguise.
+    `plafonner_affiches`, qui s'ajoute APRES le juge paye une fois par
+    composition (`prejuger`) : lui donner `verdicts_de` ajouterait un second
+    appel pour des images que la borne du lot avait ecartees.
 
-    Ce que ca coute : la couverture est partielle. Le fond ne fait juger qu'au
-    plus `illustration_max_candidats` images, et seulement s'il y a un choix a
-    faire ; au-dela, on ne sait pas, et `plafonner_affiches` garde la slide.
+    Ce que ca coute : ce qui tombe hors du lot (au-dela de
+    `illustration_max_candidats`, ou juge lors d'une composition d'il y a plus de
+    `illustration_cache_jours`) reste inconnu -- et une slide inconnue est gardee.
     """
     maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
     connus = lire_cache(maintenant, chemin_cache).verdicts
@@ -565,6 +569,55 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
 # L'alternative etait de les refuser toutes ; l'utilisateur a tranche pour une :
 # un visuel d'annonce officielle a sa place dans le post, sept n'en ont pas.
 AFFICHES_MAX = 1
+
+
+def prejuger(actifs: list[dict] | None, *, verdicts=None, **options) -> dict[str, Verdict]:
+    """Juge D'UN COUP tout ce que le post peut montrer, et memorise les verdicts.
+
+    C'est l'appel paye de la composition, et il porte desormais sur TOUS les
+    visuels du post -- pas seulement sur les candidats du fond. La premiere
+    version du plafond ne s'appuyait que sur le lot du fond : sur les sept cartes
+    d'annonce des Trans Musicales, trois etaient jugees, quatre inconnues donc
+    gardees -- cinq cartes publiees la ou l'utilisateur en voulait une.
+
+    Un appel de plus n'est pas paye pour autant : les verdicts sont ecrits dans
+    le cache par URL, et `choisir_illustration` comme `eviter_l_affiche` les y
+    retrouvent gratuitement juste apres. On elargit le LOT juge, on n'ajoute
+    jamais un second appel -- c'est la regle de cout du module.
+
+    Borne : `illustration_max_candidats` (10, la taille d'un carrousel Meta).
+    Au-dela, on paierait pour juger des images que le post ne publiera jamais ;
+    ce qui tombe hors du lot reste inconnu, donc garde en slide.
+
+    Ne leve jamais : sans verdict, tout garde le comportement d'avant.
+    """
+    candidats = candidats_de_fond(actifs)[: settings.illustration_max_candidats]
+    if not candidats:
+        return {}
+    rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
+    try:
+        return rendre(candidats)
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning(
+            "visuels non juges (%s) : aucun verdict pour cette composition",
+            type(exc).__name__,
+        )
+        return {}
+
+
+def lecture_memorisee(connus: dict[str, Verdict], **options):
+    """Une source de verdicts qui ne paie RIEN : ce qui vient d'etre juge, puis le
+    cache. Le frais prime -- il reste disponible meme quand le cache n'a pas pu
+    s'ecrire, et c'est ce qui rend le plafond independant d'un disque en panne."""
+
+    def rendre(urls: list[str]) -> dict[str, Verdict]:
+        urls = list(urls)
+        return {
+            **verdicts_memorises(urls, **options),
+            **{url: connus[url] for url in urls if url in connus},
+        }
+
+    return rendre
 
 
 def plafonner_affiches(actifs: list[dict] | None, *, verdicts=None, **options) -> list[dict]:

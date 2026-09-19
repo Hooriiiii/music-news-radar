@@ -27,7 +27,13 @@ from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
-from app.content.illustration import choisir_illustration, eviter_l_affiche, plafonner_affiches
+from app.content.illustration import (
+    choisir_illustration,
+    eviter_l_affiche,
+    lecture_memorisee,
+    plafonner_affiches,
+    prejuger,
+)
 from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
@@ -540,6 +546,11 @@ def create_post(
     premiere = draft.variantes[0]
     if visuels is not None:
         actifs, credit = list(visuels.actifs), visuels.credit
+        # L'APPEL PAYE de la composition, et il porte sur tout ce que le post
+        # peut montrer -- fond ET slides. Le choix du fond, juste apres, et le
+        # plafond des cartes d'annonce, plus bas, ne font que relire ces
+        # verdicts (cache par URL) : un lot elargi, jamais un second appel.
+        connus = prejuger(actifs, verdicts=verdicts_fond)
         # Le fond retenu peut etre une affiche malgre le juge, quand TOUS les
         # candidats en sont (un carrousel de line-up). On va alors chercher une
         # photo sur le compte qui a publie l'actu -- et seulement alors.
@@ -563,8 +574,11 @@ def create_post(
         # aussi le seul endroit ou les verdicts du juge viennent d'etre payes.
         # Le fond, lui, n'est jamais une affiche AVEREE (`eviter_l_affiche` l'a
         # deja remplace) : le plafond ne peut donc pas retirer l'actif qui le
-        # porte.
-        actifs = plafonner_affiches(actifs, verdicts=verdicts_fond)
+        # porte. Lecture SANS appel : `prejuger` a deja tout juge, et les photos
+        # des reserves l'ont ete par le lot -- personne ne repaie ici.
+        actifs = plafonner_affiches(
+            actifs, verdicts=verdicts_fond or lecture_memorisee(connus)
+        )
         # Le credit est RELU sur les actifs finaux : une image venue du web
         # arrive apres coup (reserve ouverte par `eviter_l_affiche`) et doit
         # etre citee. `or credit` garde le credit d'origine quand aucun actif ne
