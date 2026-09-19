@@ -673,6 +673,102 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
     assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
 
 
+# --- Une carte d'annonce par carrousel, jamais sept -----------------------
+#
+# Post du 2026-09-18 13h10 (programme des Trans Musicales) : les slides 2 a 8
+# etaient la carte d'annonce du festival, declinee sept fois dans SA charte.
+# Le post devenait leur carrousel avec une cover Kinda posee devant.
+
+
+def _affiches(*urls, autres=()):
+    """Un `ChoixVisuels` dont les `urls` sont des affiches, `autres` des photos."""
+    return ChoixVisuels(
+        [actif(entree("photo", url), origine="article") for url in (*urls, *autres)],
+        "@transmusicales",
+    )
+
+
+def _juge(affiches):
+    def verdicts(urls):
+        from app.content.illustration import Verdict
+
+        return {
+            url: Verdict(affiche=url in affiches, sujet="autre" if url in affiches else "scene",
+                         note=10 if url in affiches else 80)
+            for url in urls
+        }
+
+    return verdicts
+
+
+def _urls(post):
+    return [a.get("fichier") or a["url"] for a in post.assets]
+
+
+def test_sept_cartes_d_annonce_n_en_laissent_qu_une(db_session):
+    cartes = [f"https://cdn/prog-{n}.jpg" for n in range(7)]
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
+        selecteur_fond=lambda candidats: cartes[0],
+        verdicts_fond=_juge(set(cartes)),
+    )
+
+    # La premiere dans l'ordre des candidats : sur un carrousel d'annonce, la
+    # carte de tete porte le message principal (« TOUTE LA PROG REVELEE »).
+    assert _urls(post) == [cartes[0]]
+    # Le fond, lui, n'est jamais une affiche : tout etait une carte, donc l'aplat.
+    assert post.slides[0]["image_url"] == FOND_KINDA
+
+
+def test_les_photos_restent_toutes_seule_l_affiche_est_plafonnee(db_session):
+    """Le plafond ne vise que les cartes de texte : une photo n'est jamais jetee."""
+    cartes = ["https://cdn/prog-1.jpg", "https://cdn/prog-2.jpg"]
+    photos = ["https://cdn/scene.jpg", "https://cdn/foule.jpg"]
+    post = create_post(
+        db_session, _article(db_session), _draft(),
+        visuels=_affiches(*cartes, autres=photos),
+        selecteur_fond=lambda candidats: photos[0],
+        verdicts_fond=_juge(set(cartes)),
+    )
+
+    assert _urls(post) == [cartes[0], *photos]
+
+
+def test_un_visuel_sans_verdict_n_est_jamais_jete(db_session):
+    """Dans le doute on garde : une photo jetee par erreur appauvrit le post,
+    une carte de trop ne fait que l'alourdir. Et la couverture des verdicts est
+    partielle -- le juge du fond n'en note qu'un nombre borne."""
+    cartes = [f"https://cdn/prog-{n}.jpg" for n in range(3)]
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
+        selecteur_fond=lambda candidats: cartes[0],
+        # Seule la premiere a ete jugee : les deux autres restent, faute de
+        # verdict -- c'est exactement ce que fait un juge borne a trois images.
+        verdicts_fond=lambda urls: _juge(set(cartes))([cartes[0]]),
+    )
+
+    assert _urls(post) == cartes
+
+
+def test_l_unique_visuel_meme_affiche_garde_son_post_publiable(db_session):
+    """« Jamais un post reduit a sa cover » : le plafond ne doit pas vider un
+    carrousel qui n'avait qu'une carte -- elle reste, le post part a deux
+    elements (cf. `app/publish/preparation.py`)."""
+    from app.publish.preparation import medias_du_carrousel
+
+    article = _article(db_session)
+    carte = "https://cdn/prog.jpg"
+    post = create_post(
+        db_session, article, _draft(), visuels=_affiches(carte),
+        selecteur_fond=lambda candidats: carte,
+        verdicts_fond=_juge({carte}),
+    )
+
+    assert _urls(post) == [carte]
+    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert [m["url"] for m in medias_du_carrousel(post, article)] == [carte]
+
+
 _SANS_ACCENT = (
     "Le festival devoile un line-up pense pour la bande son du week-end, avec un "
     "plateau electro intitule Nuit Blanche et une jauge qui depasse celle de l'an "

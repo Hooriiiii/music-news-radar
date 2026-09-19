@@ -27,7 +27,7 @@ from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
-from app.content.illustration import choisir_illustration, eviter_l_affiche
+from app.content.illustration import choisir_illustration, eviter_l_affiche, plafonner_affiches
 from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
@@ -525,6 +525,11 @@ def create_post(
     affiche (cf. `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que
     pour injecter un juge dans les tests.
 
+    Et le carrousel ne porte qu'UNE carte d'annonce (`plafonner_affiches`) : sept
+    slides de la charte d'un festival font de notre post le sien. Le choix est
+    PERSISTE ici, dans `assets`, pour que le dashboard le montre et que le gel ne
+    le rejoue pas.
+
     L'origine du fond retenu est gardee dans `variants["fond"]` : une fois l'URL
     ecrite dans la slide, plus rien ne dirait si elle vient de l'actu, du compte,
     d'un artiste ou de l'aplat Kinda -- et c'est ce que le dashboard montre.
@@ -551,6 +556,15 @@ def create_post(
         # SLIDES. Sans cela, un article dont l'unique image est une affiche part
         # avec la cover seule -- le post Noisia (cf. `actifs_de_secours`).
         actifs += actifs_de_secours(choisi, actifs)
+        # Au plus UNE carte d'annonce dans le carrousel (cf. `AFFICHES_MAX`).
+        # ICI et pas au gel : le brouillon est ce que le dashboard montre et
+        # edite, et le gel ne doit pas defaire ce qu'on y a valide -- rejouee a
+        # chaque passage, la regle retirerait une slide remise a la main. C'est
+        # aussi le seul endroit ou les verdicts du juge viennent d'etre payes.
+        # Le fond, lui, n'est jamais une affiche AVEREE (`eviter_l_affiche` l'a
+        # deja remplace) : le plafond ne peut donc pas retirer l'actif qui le
+        # porte.
+        actifs = plafonner_affiches(actifs, verdicts=verdicts_fond)
         # Le credit est RELU sur les actifs finaux : une image venue du web
         # arrive apres coup (reserve ouverte par `eviter_l_affiche`) et doit
         # etre citee. `or credit` garde le credit d'origine quand aucun actif ne

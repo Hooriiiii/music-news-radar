@@ -53,11 +53,13 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.content.export import telecharger as telecharger_media
+from app.content.media import PHOTO
 from app.content.urls import url_propre
 from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_KINDA,
+    image_de,
     lire_fichier_cache,
 )
 
@@ -288,6 +290,29 @@ def choisir_illustration(
             type(exc).__name__,
         )
         return None
+
+
+def verdicts_memorises(
+    urls: list[str],
+    *,
+    maintenant: dt.datetime | None = None,
+    chemin_cache: Path | None = None,
+) -> dict[str, Verdict]:
+    """Ce que le juge a DEJA dit, lu dans le cache seul -- jamais un appel de plus.
+
+    `verdicts_de` paie pour ce qu'il ne connait pas ; ici on ne paie rien, et une
+    URL jamais jugee est simplement absente. C'est ce qu'il faut a
+    `plafonner_affiches`, qui s'ajoute APRES un juge deja paye une fois par
+    composition : lui donner `verdicts_de` ferait juger les images que le budget
+    du fond avait volontairement laissees de cote -- un second juge deguise.
+
+    Ce que ca coute : la couverture est partielle. Le fond ne fait juger qu'au
+    plus `illustration_max_candidats` images, et seulement s'il y a un choix a
+    faire ; au-dela, on ne sait pas, et `plafonner_affiches` garde la slide.
+    """
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+    connus = lire_cache(maintenant, chemin_cache).verdicts
+    return {url: connus[url] for url in urls if url in connus}
 
 
 def verdicts_de(
@@ -527,3 +552,61 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
             type(exc).__name__,
         )
         return ()
+
+
+# --- Une carte d'annonce dans le carrousel, jamais sept --------------------
+
+# Combien d'affiches un carrousel a le droit de porter. Un (utilisateur,
+# 2026-09-19, post du 18/09 13h10 sur le programme des Trans Musicales) : les
+# slides 2 a 8 etaient la carte d'annonce du festival, declinee sept fois dans SA
+# charte graphique. Deux defauts en un : le post devient le carrousel du
+# festival avec une cover Kinda posee devant -- l'intermediaire dont le projet
+# veut sortir --, et sept slides d'affilee ne ressemblent plus a Kinda.
+# L'alternative etait de les refuser toutes ; l'utilisateur a tranche pour une :
+# un visuel d'annonce officielle a sa place dans le post, sept n'en ont pas.
+AFFICHES_MAX = 1
+
+
+def plafonner_affiches(actifs: list[dict] | None, *, verdicts=None, **options) -> list[dict]:
+    """Les actifs, avec au plus `AFFICHES_MAX` affiche averee parmi eux.
+
+    On garde la PREMIERE dans l'ordre des candidats. C'est une heuristique
+    D'ORDRE et non un jugement sur le contenu : sur un carrousel d'annonce, la
+    carte de tete porte le message principal (ici « TOUTE LA PROG REVELEE »),
+    les suivantes le detaillent. Quand elle se trompe, le post garde une carte
+    secondaire (un chiffre, une date) au lieu de l'annonce elle-meme -- on perd
+    la meilleure des sept, jamais la seule slide du post.
+
+    Ce qui n'est PAS une affiche ne bouge pas : les photos, les videos (une
+    video n'est jamais une carte de texte, seule sa vignette en aurait l'air), et
+    tout ce dont on n'a pas de verdict. Dans le doute on garde : une photo jetee
+    par erreur appauvrit le post, une carte de trop ne fait que l'alourdir.
+
+    Les verdicts sont ceux DEJA obtenus (`verdicts_memorises` par defaut, qui ne
+    lit que le cache) : ce plafond ne paie aucun juge. `verdicts` n'existe que
+    pour en injecter un dans les tests, comme pour `eviter_l_affiche`.
+
+    Jamais d'exception -- une panne rend les actifs tels quels, donc le
+    comportement d'avant.
+    """
+    actifs = list(actifs or [])
+    if not actifs:
+        return actifs
+    rendre = verdicts or (lambda urls: verdicts_memorises(urls, **options))
+    try:
+        connus = rendre([url for url in (image_de(a) for a in actifs) if url])
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning("plafond des affiches abandonne (%s) : actifs conserves", type(exc).__name__)
+        return actifs
+    gardes: list[dict] = []
+    affiches = 0
+    for actif_ in actifs:
+        image = image_de(actif_) if actif_.get("type") == PHOTO else None
+        verdict = connus.get(image) if image else None
+        if verdict is not None and verdict.affiche:
+            affiches += 1
+            if affiches > AFFICHES_MAX:
+                logger.info("affiche en trop retiree du carrousel : %s", image)
+                continue
+        gardes.append(actif_)
+    return gardes
