@@ -586,28 +586,50 @@ depuis `choisir_visuels` (où vivent la session et le budget du passage) jusqu'�
 ci-dessous). Le carrousel garde par ailleurs les visuels de l'actu, affiche
 comprise, qui y reste une slide honnête.
 
-**Jamais un post réduit à sa cover** (2026-09-18, article 17946 « Noisia Reunite
-After Seven-Year Hiatus », Billboard, UNE image). Cette image a été jugée
-`affiche` : écartée du fond (donc l'aplat Kinda), et absente des slides. Résultat
-publié : une cover sans photo, et rien derrière — « la c'est n'importe quoi ! Il
-n'y a pas de slide qui montre les artistes en question. » Trois règles en
-sortent, chacune posée là où l'information existe :
+**Jamais un post qui ne MONTRE RIEN de l'actu** (titre corrigé le 2026-09-19 ; il
+disait « jamais un post réduit à sa cover », et c'était la mauvaise cible).
+
+*L'origine* (2026-09-18, article 17946 « Noisia Reunite After Seven-Year
+Hiatus », Billboard, UNE image). Cette image a été jugée `affiche` : écartée du
+fond (donc l'aplat Kinda), et absente des slides. Résultat publié : une cover
+sans photo, et rien derrière — « la c'est n'importe quoi ! Il n'y a pas de slide
+qui montre les artistes en question. » Trois règles en étaient sorties, chacune
+posée là où l'information existe.
+
 1. **Les photos de la réserve retenue deviennent des slides**
    (`compose.actifs_de_secours`, alimentée par `Fond.photos` — toutes les vraies
    photos du lot, la meilleure en tête, au plus `visuels_max_photos`). Elles sont
    déjà copiées en local et déjà jugées : les publier ne coûte plus ni requête ni
    jeton, et sans elles un article dont l'unique image est une affiche ne montre
    jamais l'artiste. Une affiche pêchée dans une réserve, elle, n'est ni fond ni
-   slide : elle n'illustre pas l'actu.
-2. **Une image seule sert à la fois de fond et de slide** (`preparation`). La
-   règle « ne pas répéter l'image de la cover » vaut quand il existe un AUTRE
-   visuel ; seule, elle vaut mieux que rien — la cover la montre sous l'accroche,
-   la slide la montre nette.
-3. **Un carrousel d'un seul élément ne se gèle pas** : `PreparationImpossible`,
-   donc exclusion et créneau suivant — mieux vaut un post manqué qu'un post vide.
-   Sauf si les visuels existent et que seule leur récupération a échoué pour une
-   raison passagère (`echec_transitoire`) : `PreparationDifferee`, on retente au
-   passage suivant, parce qu'un article exclu ne revient jamais.
+   slide : elle n'illustre pas l'actu. **Inchangée.**
+2. ~~Une image seule sert à la fois de fond et de slide~~ — **RETIRÉE le
+   2026-09-19**, post « Fred again.. joue sa mixtape à tout le monde au Palacio,
+   trois heures après l'avoir finie » : slide 1 la cover avec sa photo recadrée,
+   slide 2 **exactement la même image** en version nette. « Ça fait un peu bizarre
+   d'avoir la même image en image normale juste après […] si c'est pour remettre
+   la même image en deuxième slide, ça vaut pas le coup, parce qu'on la voit bien
+   assez sur la première slide. » Le remède de Noisia dépassait sa cible : quand
+   la cover porte déjà la photo, la répéter n'ajoute rien. **La photo qui sert de
+   fond n'est donc JAMAIS republiée en slide, sans exception.** (Une vidéo dont
+   c'est la *vignette* reste une slide : un clip n'est pas le même asset que son
+   image fixe.)
+3. **Un post d'un seul élément est acceptable quand sa cover porte une vraie
+   photo** — « on peut se contenter juste de la cover normale et c'est tout ». La
+   chaîne savait déjà le faire : sous deux éléments,
+   `instagram.preparer_carrousel` crée un conteneur IMAGE simple au lieu d'un
+   `CAROUSEL`. Rien de neuf à écrire, un seul fichier figé suffit.
+   **Mais la leçon de Noisia tient** : si la cover est sur l'aplat Kinda
+   (`FOND_KINDA`, aucune photo trouvée nulle part) ET qu'il n'y a aucune autre
+   slide, le post ne montrerait rien — `PreparationImpossible`, exclusion et
+   créneau suivant. C'est la distinction à garder en tête : ce qui est interdit,
+   ce n'est pas « un seul élément », c'est « aucune image de l'actu ».
+   Inchangé : si les visuels existent et que seule leur récupération a échoué
+   pour une raison passagère (`echec_transitoire`), c'est `PreparationDifferee`
+   — on retente au passage suivant, parce qu'un article exclu ne revient jamais.
+   Conséquence assumée : une panne de transport persistante fait un créneau
+   `MANQUE` là où on aurait pu publier la cover seule ; le gel court 2 h avant
+   l'heure, il a le temps de retenter.
 
 Ordre de préférence du fond, inchangé et désormais explicite : photo de l'actu
 (non-affiche) → photo du compte source → photo d'un artiste cité → fond Kinda.
@@ -781,8 +803,10 @@ Deux seuils, réglables (`publication_crop_upscale_max`,
   bandeaux verticaux (≤ 1:3,3), dont il ne resterait qu'une tranche sans sujet.
 
 Conséquence assumée : si les images écartées ne laissent que la cover, la règle
-« jamais un post réduit à sa cover » s'applique telle quelle (article sauté avec
-sa raison, ou gel différé si c'est un échec de téléchargement passager).
+« jamais un post qui ne montre rien de l'actu » s'applique telle quelle — le post
+part en image simple quand la cover porte une photo, et l'article n'est sauté
+(avec sa raison) que si elle est sur l'aplat Kinda ; gel différé si c'est un
+échec de téléchargement passager.
 
 **Le carrousel porte les médias de l'actu, vidéos comprises** (2026-09-17). Premier
 post réel (Charlotte de Witte, article 17839) : 5 vidéos en base, et un carrousel
