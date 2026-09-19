@@ -17,6 +17,8 @@ import pytest
 from app.config import settings
 from app.models import Article, Source, SourceCategorie, SourceType
 from app.pipeline.ingest import IngestStats
+from app.pipeline.quota_graph import chemin_etat as chemin_quota
+from app.pipeline.quota_graph import declarer_quota, pause_en_cours
 from app.pipeline.veille import (
     EtatVeille,
     RapportVeille,
@@ -349,8 +351,8 @@ def test_une_erreur_de_quota_met_la_veille_en_pause_et_notifie_une_fois(db_sessi
     # On s'arrete AU PREMIER code 4 : insister ne ferait qu'aggraver le depassement.
     assert adapters[b.id].appels == 0
     assert len(notifications) == 1
-    etat = lire_etat(chemin_etat())
-    assert etat.pause_jusqu_a == T0 + dt.timedelta(minutes=30)
+    pause = pause_en_cours(T0, chemin_quota())
+    assert pause is not None and pause.jusqu_a == T0 + dt.timedelta(minutes=30)
 
     # Deuxieme passage pendant la pause : rien, et pas de seconde notification.
     rapport2 = run_veille(
@@ -365,7 +367,7 @@ def test_une_erreur_de_quota_met_la_veille_en_pause_et_notifie_une_fois(db_sessi
 
 def test_la_pause_est_levee_a_son_terme(db_session):
     source = _source(db_session, "stmpdrcrds")
-    enregistrer_etat(chemin_etat(), EtatVeille(pause_jusqu_a=T0 - dt.timedelta(minutes=1)))
+    declarer_quota(T0 - dt.timedelta(minutes=31), "code 4", "veille rapide", notify=lambda *_: True)
     adapter = FauxAdapter([_item()])
 
     rapport = _run(db_session, {source.id: adapter})
@@ -374,13 +376,18 @@ def test_la_pause_est_levee_a_son_terme(db_session):
     assert adapter.appels == 1
 
 
-def test_la_pause_de_la_veille_ne_touche_pas_le_pipeline_horaire(db_session, monkeypatch):
-    """La pause vit dans le fichier d'etat de la veille, que `run_ingest` ne lit
-    jamais : un code 4 sur la liste courte ne doit pas eteindre l'ingestion des
-    123 autres sources, ni la publication."""
+def test_la_pause_ne_vit_pas_dans_l_adapter(db_session, monkeypatch):
+    """La pause est une decision de RUNNER, jamais de l'adapter.
+
+    Depuis le 2026-09-19 elle est partagee avec le pipeline horaire (le quota
+    est celui de l'app, pas celui d'un agent) -- mais c'est `run_ingest` qui
+    cesse d'appeler Meta, pas `fetch` qui irait lire un fichier d'etat. Sans
+    quoi la publication, qui n'a rien a voir avec cette cadence, se retrouverait
+    suspendue par le meme detour.
+    """
     monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
     monkeypatch.setattr(settings, "meta_ig_user_id", "1")
-    enregistrer_etat(chemin_etat(), EtatVeille(pause_jusqu_a=T0 + dt.timedelta(minutes=30)))
+    declarer_quota(T0, "code 4", "veille rapide", notify=lambda *_: True)
     adapter = _adapter()
     appels = []
     monkeypatch.setattr(adapter, "_appeler", lambda: appels.append(1) or {})
@@ -388,6 +395,20 @@ def test_la_pause_de_la_veille_ne_touche_pas_le_pipeline_horaire(db_session, mon
     adapter.fetch(T0)
 
     assert appels == [1]
+
+
+def test_une_pause_posee_par_le_pipeline_horaire_arrete_la_veille(db_session):
+    """Le quota est celui de l'APP : un code 4 encaisse par le passage horaire
+    dit quelque chose de vrai pour la veille, qui ne doit pas aller taper dans
+    le mur que l'autre vient de trouver."""
+    source = _source(db_session, "stmpdrcrds")
+    declarer_quota(T0, "code 4", "ingestion horaire", notify=lambda *_: True)
+    adapter = FauxAdapter([_item()])
+
+    rapport = _run(db_session, {source.id: adapter})
+
+    assert rapport.en_pause is True
+    assert adapter.appels == 0
 
 
 def test_un_etat_illisible_ne_fait_pas_planter_la_veille(db_session):
