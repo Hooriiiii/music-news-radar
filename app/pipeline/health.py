@@ -47,7 +47,14 @@ def marquer_sante(source: Source, stats: "IngestStats") -> None:
     une mutation en place d'un JSONB). Et on FUSIONNE au lieu d'écraser : cet
     état porte aussi le `since_id` de l'adapter X, dont la perte ferait re-payer
     tous les tweets déjà lus.
+
+    Une source NON APPELÉE (pause de quota Graph) ne dit rien de sa santé : ni
+    succès à consigner, ni panne à signaler. On ne touche pas à son état --
+    écrire un `last_ok_at` mentirait, écrire une erreur l'accuserait à tort, et
+    effacer l'ancienne trace ferait oublier une source réellement morte.
     """
+    if getattr(stats, "reportee", None):
+        return
     etat = dict(source.state or {})
     maintenant = dt.datetime.now(dt.timezone.utc).isoformat()
     if stats.error:
@@ -89,7 +96,12 @@ def diagnostiquer(
         else:
             problemes.append(f"scoring en échec sur {scoring.errors} article(s)")
 
-    en_erreur = [s.source_name for s in ingest if s.error]
+    # Une source NON APPELÉE n'est pas une source en erreur. Le 18/09, la pause
+    # de quota manquante a fait compter 115 refus Meta comme autant de pannes :
+    # « 116 source(s) en erreur » à chaque run horaire, sous lesquelles la vraie
+    # panne était invisible. La pause, elle, est notifiée une fois par
+    # `quota_graph.declarer_quota` -- inutile de la répéter à chaque run.
+    en_erreur = [s.source_name for s in ingest if s.error and not getattr(s, "reportee", None)]
     if en_erreur:
         problemes.append(f"{len(en_erreur)} source(s) en erreur : {', '.join(en_erreur[:3])}")
 

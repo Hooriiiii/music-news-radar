@@ -17,11 +17,17 @@ run) ni retention : ces deux etapes sont concues pour tourner une fois par heure
 et restent dans `run_pipeline`. Un passage de veille ingere, regroupe, score un
 petit lot et enregistre les mentions -- rien d'autre.
 
-LE QUOTA EST PARTAGE avec la PUBLICATION (`business_discovery` des visuels
-d'artistes). D'ou deux garde-fous qui vivent ici et nulle part ailleurs : un
-plafond dur d'appels par heure, et une pause de 30 min des que Meta rend un code
-de quota. Le pipeline horaire, lui, n'est jamais suspendu : sa cadence n'est pas
-en cause.
+LE QUOTA EST PARTAGE avec le PIPELINE HORAIRE et avec la PUBLICATION
+(`business_discovery` des visuels d'artistes). D'ou un plafond dur d'appels par
+heure, propre a la veille, et une PAUSE PARTAGEE des que Meta rend un code de
+quota (`app/pipeline/quota_graph.py`).
+
+Ce module a longtemps porte que « le pipeline horaire n'est jamais suspendu :
+sa cadence n'est pas en cause ». La production l'a dementi le 2026-09-19 : un
+appel refuse pour quota consomme du quota, donc le passage horaire qui insistait
+sur 123 comptes entretenait tout seul le depassement (751 refus dans le log,
+jusqu'a 116 sources « en erreur » par run). La pause vaut desormais pour les
+deux agents -- la publication, elle, n'est toujours pas suspendue.
 """
 
 import datetime as dt
@@ -41,6 +47,7 @@ from app.pipeline.artists import record_mentions
 from app.pipeline.cluster import link_duplicates
 from app.pipeline.health import marquer_sante
 from app.pipeline.ingest import IngestStats, ingest_source
+from app.pipeline.quota_graph import declarer_quota, pause_en_cours
 from app.pipeline.scoring import score_pending
 from app.sources import get_adapter as get_adapter_par_defaut
 from app.sources.instagram import QuotaGraphAtteint, compte_depuis_url, compte_surveille
@@ -58,17 +65,16 @@ def chemin_etat() -> Path:
 
 @dataclass
 class EtatVeille:
-    """Le compteur d'appels de l'heure en cours, et la pause de quota.
+    """Le compteur d'appels de l'heure en cours.
 
     `heure` est le debut de l'heure comptee : un passage d'une autre heure
-    remet `appels` a zero. `pause_notifiee` evite six notifications par heure
-    pour la meme panne (meme motif que `publication_panne.json`).
+    remet `appels` a zero. La PAUSE de quota, elle, ne vit plus ici : elle est
+    partagee avec le pipeline horaire (`app/pipeline/quota_graph.py`), parce
+    que le quota qu'elle protege est celui de l'app et non celui d'un agent.
     """
 
     heure: dt.datetime | None = None
     appels: int = 0
-    pause_jusqu_a: dt.datetime | None = None
-    pause_notifiee: bool = False
 
 
 def _iso(valeur: dt.datetime | None) -> str | None:
@@ -96,8 +102,6 @@ def lire_etat(chemin: Path) -> EtatVeille:
     return EtatVeille(
         heure=_datetime(donnees.get("heure")),
         appels=appels if isinstance(appels, int) and appels >= 0 else 0,
-        pause_jusqu_a=_datetime(donnees.get("pause_jusqu_a")),
-        pause_notifiee=bool(donnees.get("pause_notifiee")),
     )
 
 
@@ -107,16 +111,7 @@ def enregistrer_etat(chemin: Path, etat: EtatVeille) -> None:
     le budget en plein depassement."""
     chemin.parent.mkdir(parents=True, exist_ok=True)
     temporaire = chemin.with_suffix(".tmp")
-    temporaire.write_text(
-        json.dumps(
-            {
-                "heure": _iso(etat.heure),
-                "appels": etat.appels,
-                "pause_jusqu_a": _iso(etat.pause_jusqu_a),
-                "pause_notifiee": etat.pause_notifiee,
-            }
-        )
-    )
+    temporaire.write_text(json.dumps({"heure": _iso(etat.heure), "appels": etat.appels}))
     os.replace(temporaire, chemin)
 
 
@@ -186,17 +181,14 @@ def run_veille(
     if not settings.meta_fb_access_token or not settings.meta_ig_user_id:
         logger.info("Veille rapide sautee : META_FB_ACCESS_TOKEN ou META_IG_USER_ID absent")
         return rapport
-    chemin = chemin_etat()
-    etat = lire_etat(chemin)
-
-    if etat.pause_jusqu_a and maintenant < etat.pause_jusqu_a:
+    # La pause est PARTAGEE : un code de quota encaisse par le passage horaire
+    # vaut aussi pour la veille, et reciproquement. C'est le meme seau.
+    if pause_en_cours(maintenant) is not None:
         rapport.en_pause = True
         return rapport
-    if etat.pause_jusqu_a:
-        # Pause echue : on repart, et la prochaine notifiera de nouveau.
-        etat.pause_jusqu_a = None
-        etat.pause_notifiee = False
 
+    chemin = chemin_etat()
+    etat = lire_etat(chemin)
     budget = _budget(etat, maintenant)
     for source in sources_surveillees(db):
         if budget <= 0:
@@ -217,19 +209,7 @@ def run_veille(
             # depassement, et le quota est partage avec la publication.
             db.rollback()
             rapport.en_pause = True
-            etat.pause_jusqu_a = maintenant + dt.timedelta(
-                minutes=settings.veille_pause_quota_minutes
-            )
-            if not etat.pause_notifiee:
-                etat.pause_notifiee = True
-                try:
-                    notify(
-                        "Kinda",
-                        f"Veille rapide en pause {settings.veille_pause_quota_minutes} min "
-                        f"(quota Graph atteint) : {exc}",
-                    )
-                except Exception:  # noqa: BLE001 -- le canal d'alerte ne casse rien
-                    logger.exception("Notification de pause de veille impossible")
+            declarer_quota(maintenant, str(exc), "veille rapide", notify=notify)
             break
         except Exception as exc:  # noqa: BLE001 -- une source cassee n'arrete pas le passage
             logger.exception("Veille : ingestion echouee pour %s", source.name)

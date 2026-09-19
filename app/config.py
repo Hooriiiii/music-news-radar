@@ -126,8 +126,13 @@ class Settings(BaseSettings):
     # la veille ne doit jamais pouvoir le manger entierement, meme si la liste
     # grossit par inadvertance.
     veille_appels_max_par_heure: int = 200
-    # Sur un code de quota (4, 17, 32, 613), la veille s'arrete net pendant ce
-    # delai. Le pipeline horaire, lui, continue : sa cadence n'est pas en cause.
+    # Sur un code de quota (4, 17, 32, 613), les LECTURES Meta s'arretent net
+    # pendant ce delai -- veille rapide ET passage horaire, qui partagent la
+    # meme pause depuis le 2026-09-19 (`app/pipeline/quota_graph.py`) : un appel
+    # refuse consomme quand meme du quota, donc insister entretient la panne.
+    # Le nom garde son prefixe `veille_` pour ne pas invalider les `.env`
+    # existants ; la valeur, elle, gouverne desormais les deux agents. La
+    # PUBLICATION n'est jamais suspendue par cette pause.
     veille_pause_quota_minutes: int = 30
     # Le scoring d'un passage est BORNE : l'arriere-plan peut porter des centaines
     # d'articles non scores, et la veille tourne 288 fois par jour.
