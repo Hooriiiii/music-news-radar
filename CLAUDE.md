@@ -362,12 +362,30 @@ ingère, `link_duplicates`, score **au plus `veille_scoring_max` (20)** articles
 (jamais `score_pending` sans limite : l'arriéré peut se compter en centaines), et
 enregistre les mentions. Rien de neuf = pas une requête de plus.
 
-**Deux garde-fous, parce que le quota est partagé avec la PUBLICATION.** Un
-plafond dur `veille_appels_max_par_heure` (200) compté dans `veille.json` à côté
-du jeton (écriture atomique) ; et sur un code de quota Meta (4, 17, 32, 613) la
-veille s'arrête **au premier**, se met en pause 30 min et notifie une seule fois.
-Le pipeline horaire et la publication ne sont jamais suspendus par cette pause :
-leur cadence n'est pas en cause.
+**Deux garde-fous, parce que le quota est partagé.** Un plafond dur
+`veille_appels_max_par_heure` (200) compté dans `veille.json` à côté du jeton
+(écriture atomique) ; et sur un code de quota Meta (4, 17, 32, 613) la veille
+s'arrête **au premier**, se met en pause 30 min et notifie une seule fois.
+
+**Cette pause est PARTAGÉE avec le passage horaire depuis le 2026-09-19**
+(`app/pipeline/quota_graph.py`, fichier `quota_graph.json` à côté du jeton).
+Ce document affirmait l'inverse — « le pipeline horaire n'est jamais suspendu :
+sa cadence n'est pas en cause » — et la production l'a démenti : un appel refusé
+pour quota **consomme quand même du quota**, donc le passage horaire qui
+insistait sur 123 comptes entretenait tout seul le dépassement (voir la puce
+« Le quota Graph de l'app est partagé » dans les contraintes). Le quota est
+celui de l'APP, pas celui d'un agent : ce qu'un agent vient d'apprendre vaut
+pour l'autre. Deux processus écrivent donc ce fichier — d'où un temporaire
+nommé par processus, aucune écriture en LECTURE (une pause échue se reconnaît à
+sa date, rien à effacer, donc rien qui puisse effacer la pause que l'autre vient
+de poser), et la fin la plus tardive qui gagne quand deux pauses se croisent.
+
+**La PUBLICATION, elle, n'est jamais suspendue par cette pause** : un post gelé
+qui attend son heure part même si l'ingestion est à l'arrêt — rater un créneau
+programmé coûte plus cher que de sauter une heure d'ingestion. La lecture de
+visuels à la composition (`lecture_artistes.py`) garde sa propre pause. Un test
+sentinelle (`tests/test_quota_graph.py`) échoue si un module de `app/publish` ou
+`app/schedule` se met à lire cette pause.
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
@@ -1368,11 +1386,35 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
 - **Le quota Graph de l'app est partagé et vite atteint** : le 2026-09-17, ~310
   appels de vérification plus un passage sur 120 comptes dans la même heure ont
   rendu l'erreur code 4 (« Application request limit reached ») pendant une heure.
-  D'où `instagram_intervalle_heures` (3) : chaque compte n'est lu qu'une fois
-  toutes les 3 h, et les comptes jamais lus attendent leur créneau (heure modulo
-  3 == id modulo 3) pour qu'un lot ajouté d'un coup ne parte pas dans la même
-  heure. Vérifier des comptes en masse (`x-app-usage` à surveiller) consomme le
-  même quota que le pipeline.
+  D'où `instagram_intervalle_heures` : chaque compte n'est lu qu'une fois
+  toutes les N heures, et les comptes jamais lus attendent leur créneau (heure
+  modulo N == id modulo N) pour qu'un lot ajouté d'un coup ne parte pas dans la
+  même heure. Vérifier des comptes en masse (`x-app-usage` à surveiller) consomme
+  le même quota que le pipeline.
+- **UN APPEL REFUSÉ POUR QUOTA CONSOMME QUAND MÊME DU QUOTA — donc insister
+  entretient la panne** (mesuré le 2026-09-19 dans `pipeline.log`). Le passage
+  horaire attaquait les 123 comptes, encaissait ~115 refus, et ces refus
+  alimentaient le dépassement de l'heure suivante : le système se maintenait
+  lui-même en panne. Nombre de sources en erreur par run horaire, presque toutes
+  en « Meta HTTP 403 (code 4) » :
+
+      18/09 09:05    36 sur 145        18/09 17:14    94
+      18/09 10:14     0                18/09 19:42    99
+      18/09 11:21    70                18/09 22:03   112
+      18/09 15:08   129                18/09 23:10   116
+
+  751 erreurs de quota dans le log, et environ 80 % des comptes Instagram plus
+  lus du tout depuis le 18/09 vers 11 h. Deux leçons câblées. (1) Le
+  **coupe-circuit** : au premier code de quota, `run_ingest` cesse d'appeler Meta
+  et pose la pause partagée (`app/pipeline/quota_graph.py`) ; le run continue sur
+  les RSS et Reddit, qui ne partagent pas ce quota. (2) Une **source non appelée
+  n'est pas une source en erreur** : `IngestStats.reportee` la distingue,
+  `marquer_sante` ne touche plus à son état (un succès mentirait, une erreur
+  l'accuserait à tort, et effacer l'ancienne trace ferait oublier une source
+  réellement morte) et `diagnostiquer` ne la compte plus. Les « 116 source(s) en
+  erreur » étaient un mensonge de supervision sous lequel la vraie panne était
+  invisible. Palliatif appliqué par l'utilisateur en attendant :
+  `INSTAGRAM_INTERVALLE_HEURES` passé de 2 à 3.
 - **Source Instagram** (`app/sources/instagram.py`) : jeton `meta_fb_access_token`
   UNIQUEMENT (voir « Deux jetons Meta »). Absent (ou `META_IG_USER_ID` absent), la
   source est SAUTÉE en silence et rend zéro item — comme les alertes sans webhook ;
