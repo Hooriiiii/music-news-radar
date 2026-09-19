@@ -13,7 +13,9 @@ si aucune tentative n'aboutit.
 """
 
 import datetime as dt
+import inspect
 import logging
+import unicodedata
 
 import anthropic
 import pydantic
@@ -25,7 +27,13 @@ from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
-from app.content.illustration import choisir_illustration, eviter_l_affiche
+from app.content.illustration import (
+    choisir_illustration,
+    eviter_l_affiche,
+    lecture_memorisee,
+    plafonner_affiches,
+    prejuger,
+)
 from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
@@ -139,6 +147,15 @@ class PostDraft(BaseModel):
 # elle n'est la que pour arreter l'exces.
 CAPTION_EMOJIS_DEMANDES = (2, 4)
 
+# En dessous de cette longueur, une legende francaise peut legitimement n'avoir
+# aucun accent (« Le line-up tombe ce week-end » n'en porte pas un seul). Au-dela,
+# c'est le volume qui rend l'absence invraisemblable : une legende de 2 a 4
+# paragraphes, ce que demande la regle 4, depasse largement 200 caracteres, et
+# deux des quatre posts du 2026-09-18 sont partis en ASCII force (« un titre
+# pense pour la bande son », « intitule », « depasse ») -- ca fait traduction
+# automatique. Seuil bas expres : le controle ne bloque rien, il relance.
+CAPTION_ACCENTS_MIN = 200
+
 
 def probleme_emojis(caption: str) -> str | None:
     """Decrit, pour la relance, une legende hors bornes d'emojis ; None sinon.
@@ -159,6 +176,39 @@ def probleme_emojis(caption: str) -> str | None:
         f"(tolere de {CAPTION_EMOJIS_MIN} a {CAPTION_EMOJIS_MAX}). Corrige UNIQUEMENT la "
         "legende `caption` ; jamais d'emoji dans `headline`, `title` ou `subtitle`."
     )
+
+
+def contient_un_accent(texte: str) -> bool:
+    """Vrai si `texte` porte au moins une lettre accentuee.
+
+    Decomposition NFD plutot qu'une liste de caracteres : le signe diacritique
+    devient un caractere combinant, quelle que soit la lettre qui le porte (e, a,
+    u, c cedille...) et quelle que soit la forme normalisee d'origine.
+    """
+    return any(unicodedata.combining(c) for c in unicodedata.normalize("NFD", texte))
+
+
+def probleme_accents(caption: str) -> str | None:
+    """Decrit, pour la relance, une legende francaise visiblement desaccentuee.
+
+    Meme mecanique que `probleme_emojis`, et pour la meme raison : ce n'est PAS un
+    validateur de `PostDraft` -- jeter le brouillon entier ferait perdre la
+    composition d'un creneau. Le compositeur relance, puis accepte avec un
+    avertissement. Une legende sans accents vaut mieux que pas de post.
+    """
+    if len(caption) < CAPTION_ACCENTS_MIN or contient_un_accent(caption):
+        return None
+    return (
+        f"La legende (`caption`) fait {len(caption)} caracteres et ne contient PAS UN SEUL "
+        "accent : elle a ete ecrite en ASCII, ce qui fait traduction automatique. Reecris-la "
+        "en francais correctement accentue (e accent aigu, e accent grave, a accent grave, "
+        "c cedille...), dans `caption` comme dans `headline`, `title` et `subtitle`."
+    )
+
+
+def probleme_de_legende(caption: str) -> str | None:
+    """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
+    return probleme_emojis(caption) or probleme_accents(caption)
 
 
 SYSTEM_PROMPT = """\
@@ -241,14 +291,31 @@ fausse le calcul de largeur de ligne qui ajuste la taille du texte. Choisis \
 uniquement dans cette palette, accordee a la charte et aux axes du compte : \
 🩷 🎧 🪩 🎪 ✨ 🌱 🔊
 
-7. HASHTAGS : 5 a 12, en minuscules, pertinents et specifiques (nom d'artiste, nom \
-de festival, ville, genre). Evite les hashtags fourre-tout du type #music ou #love.
+7. HASHTAGS : 5 a 12, pertinents et specifiques (nom d'artiste, nom de festival, \
+ville, genre). Chacun COMMENCE PAR UN `#`, en minuscules, en un seul mot colle, \
+sans espace ni ponctuation : `#vieillescharrues`, jamais `vieilles charrues` ni \
+`#vieilles-charrues`. Evite les hashtags fourre-tout du type #music ou #love.
+
+8. FRANCAIS ACCENTUE : tu ecris en francais, donc AVEC LES ACCENTS -- dans la \
+legende (`caption`) comme dans `headline`, `title` et `subtitle`. « pense pour la \
+bande-son », « intitule », « depasse » sans accent font traduction automatique : \
+ecris « pensé », « intitulé », « dépassé », « à », « ça », « où ». Jamais d'ASCII \
+approximatif.
+
+9. LE VISUEL COMMANDE LE NOM : quand la ligne « Compte du visuel publie » est \
+donnee, elle dit de QUI est la video ou la photo que le post affichera. Dans \
+`title` / `subtitle` -- les textes du REEL, qui sont poses sur cette video --, \
+l'artiste nomme doit etre CELUI-LA. Si l'actu cite plusieurs artistes (un \
+line-up, un plateau, un festival), nomme celui du visuel, ou n'en nomme AUCUN et \
+prends l'evenement comme sujet. Ne prends jamais le premier nom de la liste par \
+defaut : un titre qui annonce un artiste pendant qu'un autre est a l'ecran est \
+un contresens visible.
 
 N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom.\
 """
 
 
-def build_user_prompt(article: Article) -> str:
+def build_user_prompt(article: Article, compte_visuel: str | None = None) -> str:
     parts = [f"Titre : {article.title}"]
     if article.summary:
         parts.append(f"Resume : {article.summary[:2000]}")
@@ -260,6 +327,10 @@ def build_user_prompt(article: Article) -> str:
         parts.append(f"Categorie : {article.category}")
     if article.mentioned_artists:
         parts.append(f"Artistes cites : {', '.join(article.mentioned_artists)}")
+    if compte_visuel:
+        # Seulement quand elle est connue : une composition a la main, ou un
+        # appelant anterieur a cette regle, n'a pas cette information.
+        parts.append(f"Compte du visuel publie : {compte_visuel}")
     parts.append(f"URL : {article.url}")
     return "\n".join(parts)
 
@@ -277,14 +348,14 @@ def make_claude_composer(
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    def composer(article: Article) -> PostDraft:
+    def composer(article: Article, *, compte_visuel: str | None = None) -> PostDraft:
         derniere_erreur: Exception | None = None
         # Brouillon valide mais aux emojis hors bornes : rendu si aucune
         # tentative ne fait mieux, plutot que de perdre la composition.
         repli: PostDraft | None = None
         consigne: str | None = None
         for tentative in range(1, max_attempts + 1):
-            contenu = build_user_prompt(article)
+            contenu = build_user_prompt(article, compte_visuel)
             if consigne:
                 # Le SDK ne renvoie rien au modele : sans ce retour, la relance
                 # repart a l'aveugle et refait souvent la meme erreur.
@@ -326,13 +397,13 @@ def make_claude_composer(
                     article.id, tentative, max_attempts, raison,
                 )
                 continue
-            probleme = probleme_emojis(draft.caption)
+            probleme = probleme_de_legende(draft.caption)
             if probleme is None:
                 return draft
             repli = draft
             consigne = probleme
             logger.warning(
-                "legende hors bornes d'emojis pour l'article %s (tentative %s/%s) : %s",
+                "legende imparfaite pour l'article %s (tentative %s/%s) : %s",
                 article.id,
                 tentative,
                 max_attempts,
@@ -340,9 +411,9 @@ def make_claude_composer(
             )
         if repli is not None:
             logger.warning(
-                "legende acceptee malgre les emojis pour l'article %s : %s",
+                "legende acceptee malgre son defaut de forme pour l'article %s : %s",
                 article.id,
-                probleme_emojis(repli.caption),
+                probleme_de_legende(repli.caption),
             )
             return repli
         raise CompositionError(
@@ -351,6 +422,37 @@ def make_claude_composer(
         ) from derniere_erreur
 
     return composer
+
+
+def _accepte_le_compte(composer) -> bool:
+    try:
+        parametres = inspect.signature(composer).parameters
+    except (TypeError, ValueError):
+        # Un callable dont la signature n'est pas lisible (builtin, objet C) :
+        # on s'en tient a l'appel historique.
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parametres.values()):
+        return True
+    parametre = parametres.get("compte_visuel")
+    return parametre is not None and parametre.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+
+
+def appeler_compositeur(composer, article: Article, compte_visuel: str | None = None) -> PostDraft:
+    """Appelle le crochet de composition, avec le compte du visuel s'il sait le recevoir.
+
+    Le compositeur est INJECTE (`scripts/run_publication.py`, `app/api/posts.py`,
+    des doubles dans les tests) : passer un argument de plus a un crochet ecrit
+    avant cette regle le ferait planter, et une exception ici passe pour une
+    panne systemique qui pose une erreur sur le creneau. L'introspection coute une
+    lecture de signature par composition -- quelques fois par jour --, et laisse
+    un crochet ancien fonctionner a l'identique.
+    """
+    if compte_visuel and _accepte_le_compte(composer):
+        return composer(article, compte_visuel=compte_visuel)
+    return composer(article)
 
 
 def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
@@ -429,6 +531,11 @@ def create_post(
     affiche (cf. `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que
     pour injecter un juge dans les tests.
 
+    Et le carrousel ne porte qu'UNE carte d'annonce (`plafonner_affiches`) : sept
+    slides de la charte d'un festival font de notre post le sien. Le choix est
+    PERSISTE ici, dans `assets`, pour que le dashboard le montre et que le gel ne
+    le rejoue pas.
+
     L'origine du fond retenu est gardee dans `variants["fond"]` : une fois l'URL
     ecrite dans la slide, plus rien ne dirait si elle vient de l'actu, du compte,
     d'un artiste ou de l'aplat Kinda -- et c'est ce que le dashboard montre.
@@ -439,6 +546,11 @@ def create_post(
     premiere = draft.variantes[0]
     if visuels is not None:
         actifs, credit = list(visuels.actifs), visuels.credit
+        # L'APPEL PAYE de la composition, et il porte sur tout ce que le post
+        # peut montrer -- fond ET slides. Le choix du fond, juste apres, et le
+        # plafond des cartes d'annonce, plus bas, ne font que relire ces
+        # verdicts (cache par URL) : un lot elargi, jamais un second appel.
+        connus = prejuger(actifs, verdicts=verdicts_fond)
         # Le fond retenu peut etre une affiche malgre le juge, quand TOUS les
         # candidats en sont (un carrousel de line-up). On va alors chercher une
         # photo sur le compte qui a publie l'actu -- et seulement alors.
@@ -455,6 +567,18 @@ def create_post(
         # SLIDES. Sans cela, un article dont l'unique image est une affiche part
         # avec la cover seule -- le post Noisia (cf. `actifs_de_secours`).
         actifs += actifs_de_secours(choisi, actifs)
+        # Au plus UNE carte d'annonce dans le carrousel (cf. `AFFICHES_MAX`).
+        # ICI et pas au gel : le brouillon est ce que le dashboard montre et
+        # edite, et le gel ne doit pas defaire ce qu'on y a valide -- rejouee a
+        # chaque passage, la regle retirerait une slide remise a la main. C'est
+        # aussi le seul endroit ou les verdicts du juge viennent d'etre payes.
+        # Le fond, lui, n'est jamais une affiche AVEREE (`eviter_l_affiche` l'a
+        # deja remplace) : le plafond ne peut donc pas retirer l'actif qui le
+        # porte. Lecture SANS appel : `prejuger` a deja tout juge, et les photos
+        # des reserves l'ont ete par le lot -- personne ne repaie ici.
+        actifs = plafonner_affiches(
+            actifs, verdicts=verdicts_fond or lecture_memorisee(connus)
+        )
         # Le credit est RELU sur les actifs finaux : une image venue du web
         # arrive apres coup (reserve ouverte par `eviter_l_affiche`) et doit
         # etre citee. `or credit` garde le credit d'origine quand aucun actif ne

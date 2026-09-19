@@ -9,10 +9,12 @@ from app.content.compose import (
     CompositionError,
     CoverVariante,
     PostDraft,
+    appeler_compositeur,
     build_user_prompt,
     contient_emoji,
     create_post,
     make_claude_composer,
+    probleme_accents,
     probleme_emojis,
 )
 from app.content.choix_visuels import ChoixVisuels
@@ -669,3 +671,250 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
 
     assert post.slides[0]["image_url"] == "https://cdn/affiche.jpg"
     assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+
+
+# --- Une carte d'annonce par carrousel, jamais sept -----------------------
+#
+# Post du 2026-09-18 13h10 (programme des Trans Musicales) : les slides 2 a 8
+# etaient la carte d'annonce du festival, declinee sept fois dans SA charte.
+# Le post devenait leur carrousel avec une cover Kinda posee devant.
+
+
+def _affiches(*urls, autres=()):
+    """Un `ChoixVisuels` dont les `urls` sont des affiches, `autres` des photos."""
+    return ChoixVisuels(
+        [actif(entree("photo", url), origine="article") for url in (*urls, *autres)],
+        "@transmusicales",
+    )
+
+
+def _juge(affiches):
+    def verdicts(urls):
+        from app.content.illustration import Verdict
+
+        return {
+            url: Verdict(affiche=url in affiches, sujet="autre" if url in affiches else "scene",
+                         note=10 if url in affiches else 80)
+            for url in urls
+        }
+
+    return verdicts
+
+
+def _urls(post):
+    return [a.get("fichier") or a["url"] for a in post.assets]
+
+
+def test_sept_cartes_d_annonce_n_en_laissent_qu_une(db_session):
+    cartes = [f"https://cdn/prog-{n}.jpg" for n in range(7)]
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
+        selecteur_fond=lambda candidats: cartes[0],
+        verdicts_fond=_juge(set(cartes)),
+    )
+
+    # La premiere dans l'ordre des candidats : sur un carrousel d'annonce, la
+    # carte de tete porte le message principal (« TOUTE LA PROG REVELEE »).
+    assert _urls(post) == [cartes[0]]
+    # Le fond, lui, n'est jamais une affiche : tout etait une carte, donc l'aplat.
+    assert post.slides[0]["image_url"] == FOND_KINDA
+
+
+def test_les_photos_restent_toutes_seule_l_affiche_est_plafonnee(db_session):
+    """Le plafond ne vise que les cartes de texte : une photo n'est jamais jetee."""
+    cartes = ["https://cdn/prog-1.jpg", "https://cdn/prog-2.jpg"]
+    photos = ["https://cdn/scene.jpg", "https://cdn/foule.jpg"]
+    post = create_post(
+        db_session, _article(db_session), _draft(),
+        visuels=_affiches(*cartes, autres=photos),
+        selecteur_fond=lambda candidats: photos[0],
+        verdicts_fond=_juge(set(cartes)),
+    )
+
+    assert _urls(post) == [cartes[0], *photos]
+
+
+def test_un_visuel_sans_verdict_n_est_jamais_jete(db_session):
+    """Dans le doute on garde : une photo jetee par erreur appauvrit le post,
+    une carte de trop ne fait que l'alourdir. Et la couverture des verdicts est
+    partielle -- le juge du fond n'en note qu'un nombre borne."""
+    cartes = [f"https://cdn/prog-{n}.jpg" for n in range(3)]
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
+        selecteur_fond=lambda candidats: cartes[0],
+        # Seule la premiere a ete jugee : les deux autres restent, faute de
+        # verdict -- c'est ce qui arrive a ce qui tombe hors de la borne du lot.
+        verdicts_fond=lambda urls: _juge(set(cartes))([cartes[0]]),
+    )
+
+    assert _urls(post) == cartes
+
+
+def test_les_sept_cartes_des_trans_ne_laissent_qu_une_slide(db_session, monkeypatch, tmp_path):
+    """LE cas de production, joue de bout en bout avec le vrai chemin du juge :
+    sept cartes d'annonce, aucune photo. Les sept partent dans UN SEUL appel --
+    c'est le lot qui s'elargit, pas un second juge --, et une seule survit.
+
+    C'est ce test qui separe « defaut eteint » de « defaut attenue » : avec un
+    lot borne a trois, quatre cartes restaient inconnues, donc gardees."""
+    from app.config import settings
+    from app.content import illustration
+
+    monkeypatch.setattr(settings, "illustration_cache_path", tmp_path / "verdicts.json")
+    monkeypatch.setattr(settings, "illustration_vision_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    monkeypatch.setattr(illustration, "_octets", lambda url: b"jpeg")
+    monkeypatch.setattr(illustration, "reduire", lambda octets, taille=None: octets)
+    lots = []
+
+    def juge(images):
+        lots.append(len(images))
+        return [illustration.Verdict(affiche=True, sujet="autre", note=10)] * len(images)
+
+    monkeypatch.setattr(illustration, "make_claude_juge", lambda: juge)
+    cartes = [f"https://cdn/trans-{n}.jpg" for n in range(7)]
+
+    post = create_post(db_session, _article(db_session), _draft(), visuels=_affiches(*cartes))
+
+    assert lots == [7], "un seul appel, et il porte sur les sept cartes"
+    assert _urls(post) == [cartes[0]]
+    assert post.slides[0]["image_url"] == FOND_KINDA
+
+
+def test_l_unique_visuel_meme_affiche_garde_son_post_publiable(db_session):
+    """« Jamais un post reduit a sa cover » : le plafond ne doit pas vider un
+    carrousel qui n'avait qu'une carte -- elle reste, le post part a deux
+    elements (cf. `app/publish/preparation.py`)."""
+    from app.publish.preparation import medias_du_carrousel
+
+    article = _article(db_session)
+    carte = "https://cdn/prog.jpg"
+    post = create_post(
+        db_session, article, _draft(), visuels=_affiches(carte),
+        selecteur_fond=lambda candidats: carte,
+        verdicts_fond=_juge({carte}),
+    )
+
+    assert _urls(post) == [carte]
+    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert [m["url"] for m in medias_du_carrousel(post, article)] == [carte]
+
+
+_SANS_ACCENT = (
+    "Le festival devoile un line-up pense pour la bande son du week-end, avec un "
+    "plateau electro intitule Nuit Blanche et une jauge qui depasse celle de l'an "
+    "dernier. On y retrouvera les habitues du lieu comme les nouvelles tetes de la "
+    "scene francaise, entre deux sets tardifs. Le programme complet arrive lundi."
+)
+_AVEC_ACCENT = _SANS_ACCENT.replace("devoile", "dévoile").replace("pense", "pensé")
+
+
+def test_probleme_accents_repere_une_longue_legende_en_ascii():
+    """Deux des quatre posts du 2026-09-18 sont partis sans le moindre accent :
+    « un titre pense pour la bande son », « intitule », « depasse »."""
+    probleme = probleme_accents(_SANS_ACCENT)
+    assert probleme is not None
+    assert "accent" in probleme and "caption" in probleme
+
+
+def test_probleme_accents_laisse_passer_une_legende_courte():
+    """Une accroche de quelques mots peut legitimement n'avoir aucun accent."""
+    assert probleme_accents("Le line-up tombe ce week-end 🎧 on y va ? ✨") is None
+
+
+def test_probleme_accents_accepte_un_seul_accent():
+    assert probleme_accents(_AVEC_ACCENT) is None
+
+
+def test_composer_relance_une_legende_sans_accents(db_session):
+    """Le modele rend parfois de l'ASCII force : on le lui dit et on relance."""
+    article = _article(db_session)
+    sans = _draft_legende(_SANS_ACCENT + " 🎧 ✨")
+    avec = _draft_legende(_AVEC_ACCENT + " 🎧 ✨")
+    client = _FakeClient([_FakeParsedResponse(sans), _FakeParsedResponse(avec)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is avec
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "accent" in relance
+
+
+def test_composer_accepte_une_legende_sans_accents_apres_les_tentatives(db_session, caplog):
+    """Jamais une composition perdue pour un defaut de forme : le brouillon part
+    avec un avertissement, comme pour les emojis."""
+    article = _article(db_session)
+    drafts = [_draft_legende(f"{_SANS_ACCENT} 🎧 ✨ ({i})") for i in range(3)]
+    client = _FakeClient([_FakeParsedResponse(d) for d in drafts])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    with caplog.at_level("WARNING"):
+        resultat = composer(article)
+
+    assert resultat is drafts[-1]
+    assert len(client.messages.appels) == 3
+    assert "acceptee malgre" in caplog.text
+
+
+def test_le_prompt_exige_le_francais_accentue():
+    assert "ACCENTUE" in SYSTEM_PROMPT and "intitulé" in SYSTEM_PROMPT
+
+
+def test_le_prompt_dit_de_quel_compte_vient_le_visuel(db_session):
+    """Le compositeur ne recoit que l'article : sans cette ligne, il ne sait pas
+    que la video vient de LE SSERAFIM et titre le premier nom du line-up (le reel
+    « BTS » du 2026-09-18)."""
+    article = _article(db_session)
+
+    assert "Compte du visuel publie : @le_sserafim" in build_user_prompt(article, "@le_sserafim")
+
+
+def test_le_prompt_tait_le_compte_du_visuel_quand_il_est_inconnu(db_session):
+    """Une composition a la main n'a pas cette information : pas de ligne vide."""
+    article = _article(db_session)
+
+    assert "Compte du visuel" not in build_user_prompt(article)
+
+
+def test_le_prompt_exige_de_nommer_l_artiste_de_la_video():
+    assert "Compte du visuel publie" in SYSTEM_PROMPT
+    assert "title" in SYSTEM_PROMPT and "AUCUN" in SYSTEM_PROMPT
+
+
+def test_le_compositeur_par_defaut_transmet_le_compte_du_visuel(db_session):
+    article = _article(db_session)
+    client = _FakeClient([_FakeParsedResponse(_draft())])
+
+    make_claude_composer(client=client, max_attempts=3)(article, compte_visuel="@le_sserafim")
+
+    assert "@le_sserafim" in _contenu_utilisateur(client.messages.appels[0])
+
+
+def test_un_compositeur_qui_ignore_le_compte_du_visuel_marche_toujours(db_session):
+    """Le crochet est injecte (run_publication, api/posts, des doubles de test) :
+    un compositeur ecrit avant cette regle ne doit pas planter -- une exception
+    ici passerait pour une panne systemique et poserait une erreur sur le creneau."""
+    article = _article(db_session)
+    bon = _draft()
+    recus = []
+
+    def ancien_compositeur(art):
+        recus.append(art)
+        return bon
+
+    assert appeler_compositeur(ancien_compositeur, article, "@le_sserafim") is bon
+    assert recus == [article]
+
+
+def test_un_compositeur_qui_accepte_le_compte_du_visuel_le_recoit(db_session):
+    article = _article(db_session)
+    bon = _draft()
+    recus = []
+
+    def compositeur(art, *, compte_visuel=None):
+        recus.append(compte_visuel)
+        return bon
+
+    assert appeler_compositeur(compositeur, article, "@le_sserafim") is bon
+    # Et sans compte connu, l'appel reste celui d'avant.
+    appeler_compositeur(compositeur, article)
+    assert recus == ["@le_sserafim", None]

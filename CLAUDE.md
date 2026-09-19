@@ -613,6 +613,30 @@ Ordre de préférence du fond, inchangé et désormais explicite : photo de l'ac
 (non-affiche) → photo du compte source → photo d'un artiste cité → fond Kinda.
 Une affiche n'est refusée qu'en FOND ; en slide, c'est le visuel de l'actu.
 
+**Mais UNE SEULE affiche en slide, jamais sept** (2026-09-19, post du 18/09 13h10
+sur les Trans Musicales : les slides 2 à 8 étaient la carte d'annonce entière du
+festival — « TOUTE LA PROG RÉVÉLÉE », « 74 groupes », « 42 pays » — dans SA charte
+graphique). Deux dégâts : notre post devenait leur carrousel avec une cover Kinda
+posée devant, c'est-à-dire le rôle d'intermédiaire dont le projet veut sortir ; et
+sept slides d'affilée ne ressemblaient plus à Kinda. Le plafond
+(`illustration.plafonner_affiches`, `AFFICHES_MAX = 1`) est appliqué dans
+`create_post` et donc PERSISTÉ dans `posts.assets` : le dashboard édite ce
+brouillon, une règle rejouée au gel retirerait une slide remise à la main. On
+garde la PREMIÈRE — sur un carrousel d'annonce la carte de tête porte le message
+principal ; c'est une heuristique d'ORDRE, pas un jugement de contenu.
+
+Corollaire de coût, et c'est ce qui a failli vider la règle de sa substance :
+le juge ne notait que `illustration_max_candidats` images, soit 3, donc les sept
+cartes des Trans seraient descendues à cinq et non à une. `prejuger(actifs)` juge
+désormais d'un coup TOUT ce que le post peut montrer, en UN SEUL appel payé (le
+lot s'élargit, il ne se dédouble pas), et `choisir_illustration` puis
+`eviter_l_affiche` relisent ces verdicts gratuitement. La borne passe à **10**,
+la taille d'un carrousel Meta : au-delà on paierait pour juger des images que le
+post ne publiera jamais. ~0,002 $ par composition. La règle du doute est
+intacte : une image non jugée (borne, décodage en échec, vision coupée) est
+GARDÉE — une photo jetée par erreur appauvrit le post, une carte de trop ne fait
+que l'alourdir.
+
 **D'où vient le fond est enregistré** : `posts.variants["fond"]["origine"]`
 (`article` | `compte` | `artiste` | `kinda`), figé à la composition au même titre
 que la palette, et affiché sous « Image de fond » au dashboard. Une fois l'URL
@@ -724,10 +748,19 @@ bizarre »). Instagram recadre chaque élément au ratio du PREMIER : une photo 
 presse 16:9 laissée en paysage — ce que faisait l'ancienne `normaliser`, qui ne
 recadrait que HORS des bornes Meta (4:5 … 1,91:1) — revenait donc coupée sans
 qu'on maîtrise ce qui partait. `app/publish/images.py::cadrer_carrousel` met
-chaque image à l'échelle pour REMPLIR le cadre puis recadre au CENTRE ; le
+chaque image à l'échelle pour REMPLIR le cadre puis recadre ; le
 recadrage se fait avant le redimensionnement (même résultat, sans travailler sur
 des pixels destinés à partir). Même convention que les vidéos, déjà sorties en
 1080×1350 par `video.py::transcoder_carrousel`.
+
+**Le recadrage VERTICAL est ancré en HAUT, jamais au centre** (2026-09-19, après
+le post du 18/09 17h33 où Travis Scott a été publié sans sa tête). Une photo plus
+haute que le 4:5 perd de la hauteur ; la retirer pour moitié en haut et pour
+moitié en bas décapite, parce que sur une photo de scène le sujet est presque
+toujours dans le tiers haut et que la marge perdable (sol, pieds, scène) est en
+bas. Un portrait 2:3 ne perd ainsi que ~17 % de hauteur, tous pris au bas. Le
+recadrage HORIZONTAL, lui, reste CENTRÉ : couper autant à gauche qu'à droite est
+le bon geste, et cette branche ne touche pas à la hauteur.
 
 **Une image que ce cadrage abîmerait est ÉCARTÉE, pas publiée** (`ImageEcartee`,
 sous-classe d'`ImageInexploitable` pour que le gel la saute comme il saute déjà
@@ -903,6 +936,44 @@ documentée) ; si crédit + hashtags débordent à eux seuls, des hashtags parte
 la fin (500 caractères gardés à la légende), puis la légende est coupée — le
 crédit jamais. ffmpeg absent = panne systémique qui
 ne suspend que les reels. `GET /schedule/offre-reels` mesure la matière.
+
+**Trois défauts du texte publié, corrigés le 2026-09-19** après revue des posts
+réellement en ligne — chacun corrigé là où l'information existe, le prompt ne
+garantissant jamais rien à lui seul :
+- **Des hashtags qui portent vraiment un dièse.** Le reel du 18/09 15h13 s'est
+  terminé sur `iheartradiofestival bts lesserafim …` en texte brut : la règle 7
+  demandait des hashtags « en minuscules » sans dire qu'ils portent un `#`, et
+  rien ne rattrapait. `legende.py::normaliser_hashtags` (dièse en tête, alphanum
+  et `_` seuls, dédup insensible à la casse, tag vide supprimé, avant le plafond
+  de 30) est appelée par `texte_legende` — le SEUL goulot que traversent la
+  publication automatique, l'export zip et `tester_publication`, et qui couvre
+  donc aussi les hashtags tapés à la main via `PATCH /posts/{id}`.
+- **Le français s'écrit avec ses accents.** Deux posts du 18/09 sur quatre ont
+  une légende en ASCII (« un titre pense pour la bande son »). Règle de prompt,
+  plus un contrôle qui RELANCE l'appel quand une légende d'une longueur
+  significative n'a aucun caractère accentué — non bloquant, sur le modèle des
+  emojis : on accepte avec un warning plutôt que de perdre la composition.
+  Racine probable NON traitée : le `SYSTEM_PROMPT` est lui-même écrit sans
+  accents et le modèle imite le registre de son prompt.
+- **Le titre d'un reel nomme l'artiste de la VIDÉO.** Le même reel affichait
+  « BTS » sur une vidéo de LE SSERAFIM (son propre crédit le disait). Le
+  compositeur ne recevait que l'article, donc ignorait d'où venait la vidéo ;
+  or `visuels = choisir(...)` est résolu AVANT l'appel payé dans
+  `runner.py::_composer`. `compte_du_visuel` voyage désormais jusqu'au prompt
+  (« Compte du visuel publié : @… »). Le crochet reste RÉTROCOMPATIBLE
+  (`appeler_compositeur` n'ajoute le mot-clé que si la signature sait le
+  recevoir) : un `TypeError` sur un crochet ancien passerait pour une panne
+  systémique et coûterait un post.
+
+**Le bloc de texte du reel est ancré PAR LE BAS** (`GABARIT_REEL.block_bottom`,
+420 px du bas, soit un bas de bloc à y=1500 ; 2026-09-19). Deux contraintes le
+fixent : l'interface d'Instagram couvre le bas du reel, et le crop 4:5 de la
+grille s'arrête à y=1635 — la première est la plus stricte. L'ancien
+`block_center` (fraction de hauteur) gardait le CENTRE fixe : dès que la machine
+d'ajustement réduisait la police, le bloc raccourcissait en remontant vers le
+milieu du cadre, et les reels ressortaient dans la grille comme des corps
+étrangers au milieu des posts, dont le texte est en bas. Un ancrage par le bas
+est stable par construction, quelle que soit la hauteur mesurée.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
 Meta omet `media_url` des reels à musique protégée ; la vidéo vient alors de

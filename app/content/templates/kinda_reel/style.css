@@ -55,9 +55,15 @@ body {
   height: auto;
 }
 
-/* Le bloc de texte : centre verticalement sur --block-center, chaque bande
+/* Le bloc de texte : ancre par le BAS sur --block-bottom, chaque bande
    centree horizontalement sur SA propre largeur (mesure : centres a 529 et 537
    pour une toile centree a 540).
+
+   Ancrage par le bas et non par un centre (2026-09-18, cf. le commentaire sur
+   `REEL_LIMITE_BASSE_UI` dans layout.py) : `bottom` fixe la position du bas du
+   bloc quelle que soit sa hauteur rendue, donc quelle que soit l'echelle
+   choisie par la machine d'ajustement -- une accroche reduite raccourcit le
+   bloc vers le HAUT, jamais vers le bas ni vers le milieu du cadre.
 
    Marges prises sur le role `title` : le conteneur porte les DEUX bandes, et
    cela ne tient que parce que les deux zones declarent les memes 77 px. Si un
@@ -66,13 +72,12 @@ body {
   position: absolute;
   left: var(--title-left);
   right: var(--title-right);
-  /* Repli a 42.9% (la valeur mesuree sur la maquette, cf. layout.py) : un
+  /* Repli a 420px (= 1920 - 1500, la valeur calculee dans layout.py) : un
      `var()` sans repli invalide la propriete ENTIERE au calcul, pas seulement
-     ce calque -- `top` retomberait alors sur `auto` et le bloc entier
+     ce calque -- `bottom` retomberait alors sur `auto` et le bloc entier
      migrerait, sans erreur ni test rouge (les tests pixel reperent les bandes
      par couleur, pas par position). */
-  top: var(--block-center, 42.9%);
-  transform: translateY(-50%);
+  bottom: var(--block-bottom, 420px);
 }
 
 .ligne { text-align: center; }

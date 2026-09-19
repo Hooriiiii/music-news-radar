@@ -82,14 +82,16 @@ def test_le_document_porte_les_variables_du_gabarit():
 # dans la feuille, que le filtre de ligne (`--`) laissait passer) ; le reel --
 # le plus manipule en iteration de design -- en avait besoin tout autant.
 #
-# Absente ici volontairement : "42.9%" pour le reel. Elle apparait UNE fois,
-# dans `var(--block-center, 42.9%)` -- le repli ajoute par la tache M5, exact
-# pendant du repli `var(--scrim-height, 817px)` du post (lui non plus jamais
-# entre dans la liste interdite du post, pour la meme raison) : la valeur qui
-# fait foi reste celle ecrite par `variables_css()` depuis `layout.py`
-# (`GABARIT_REEL.block_center = 0.429`), ce repli n'existe QUE pour degrader
-# proprement vers la geometrie de la maquette si la variable manquait -- il ne
-# cree pas de seconde source de verite.
+# Absente ici volontairement : "420px" pour le reel. Elle apparait UNE fois,
+# dans `var(--block-bottom, 420px)` -- le repli ajoute par la tache M5 (devenu
+# un ancrage par le bas a la tache du 2026-09-18, pour que le bloc reste colle
+# a sa limite basse quelle que soit sa hauteur mesuree), exact pendant du repli
+# `var(--scrim-height, 817px)` du post (lui non plus jamais entre dans la liste
+# interdite du post, pour la meme raison) : la valeur qui fait foi reste celle
+# ecrite par `variables_css()` depuis `layout.py`
+# (`GABARIT_REEL.block_bottom = 1920 - REEL_LIMITE_BASSE_UI = 420`), ce repli
+# n'existe QUE pour degrader proprement vers la geometrie de la maquette si la
+# variable manquait -- il ne cree pas de seconde source de verite.
 _VALEURS_INTERDITES = {
     # Les deux teintes y figurent : une couleur de palette en dur dans la feuille
     # rendrait le vert des actus ecologie inoperant, sans erreur ni test rouge.
@@ -530,13 +532,14 @@ def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
 
 
 @chromium_absent
-def test_le_bloc_du_reel_reste_centre_sans_scrim_height_ni_repli_casse():
-    """M5 : `#bandes { top: var(--block-center, 42.9%); }` a desormais un repli,
-    comme `--scrim-height` sur le post. Sans lui, un `--block-center` absent
-    ferait retomber `top` sur `auto` et deplacerait tout le bloc de texte --
-    aucun test de couleur/largeur de bande ne le verrait, ces tests reperent les
+def test_le_bloc_du_reel_reste_ancre_en_bas_sans_repli_casse():
+    """`#bandes { bottom: var(--block-bottom, 420px); }` a un repli, comme
+    `--scrim-height` sur le post. Sans lui, un `--block-bottom` absent ferait
+    retomber `bottom` sur `auto` et deplacerait tout le bloc de texte -- aucun
+    test de couleur/largeur de bande ne le verrait, ces tests reperent les
     bandes par teinte, pas par position. On verifie ici la position reelle : le
-    centre vertical de la bande rose doit tomber pres de 42.9% x 1920 ~= 823px.
+    bas de la bande creme (la derniere du bloc, cf. `_hauteurs_de_bande`) doit
+    tomber pres de la limite calculee dans layout.py.
     """
     from app.content.layout import GABARIT_REEL
 
@@ -550,11 +553,19 @@ def test_le_bloc_du_reel_reste_centre_sans_scrim_height_ni_repli_casse():
     r, g, b = image[:, :, 0], image[:, :, 1], image[:, :, 2]
     rose = (abs(r - 253) < 22) & (abs(g - 139) < 34) & (abs(b - 195) < 28)
     ys_rose, _ = np.where(rose)
-    centre_rose = (float(ys_rose.min()) + float(ys_rose.max())) / 2
+    creme = (r > 245) & (g > 240) & (b > 240)
+    creme_sous_le_titre = creme.copy()
+    creme_sous_le_titre[: int(ys_rose.max()) + 1, :] = False
+    ys_creme, _ = np.where(creme_sous_le_titre)
+    bas_creme = float(ys_creme.max())
+
+    limite_basse = GABARIT_REEL.height - GABARIT_REEL.block_bottom
 
     # Tolerance genereuse : ce test verifie une POSITION (le repli n'est pas
     # casse), pas une calibration au pixel pres -- deja couverte ailleurs.
-    assert centre_rose == pytest.approx(GABARIT_REEL.block_center * GABARIT_REEL.height, abs=60)
+    assert bas_creme == pytest.approx(limite_basse, abs=60)
+    # Et surtout : loin du milieu du cadre, la position de l'ancien defaut.
+    assert bas_creme > GABARIT_REEL.height / 2 + 300
 
 
 def test_chromium_absent_donne_une_erreur_lisible(monkeypatch):

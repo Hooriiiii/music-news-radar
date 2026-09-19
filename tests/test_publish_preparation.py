@@ -114,6 +114,18 @@ def test_un_carrousel_reduit_a_la_cover_n_est_jamais_publie(tmp_path):
         )
 
 
+def test_la_seule_carte_d_annonce_restante_fait_toujours_un_post(tmp_path):
+    """Le plafond d'une affiche par carrousel (cf. `illustration.AFFICHES_MAX`)
+    ne doit jamais faire tomber un post sous deux elements : quand l'unique
+    visuel de l'actu est une carte d'annonce, elle reste et la cover part sur
+    l'aplat Kinda -- cover + carte, le post est publiable."""
+    noms = preparer_fichiers(
+        _post_kinda(), _article("https://img/prog.jpg"), tmp_path,
+        rendre=_rendre(), telecharger=_telecharger(),
+    )
+    assert [nom[-6:] for nom in noms] == ["01.jpg", "02.jpg"]
+
+
 def test_une_panne_reseau_differe_le_gel_au_lieu_d_exclure(tmp_path):
     """Un article exclu ne revient jamais dans la file : une coupure de deux
     minutes ne doit pas lui couter sa publication. On retente au passage

@@ -249,8 +249,13 @@ visuel : la taille, l'interlignage et l'interlettrage sont calibrés sur celle-c
 
 Format 1080×1920, deux rôles (`title`, `subtitle`), chacun porté par une bande de
 couleur pleine plutôt qu'un dégradé sur photo — le contraste vient des bandes, pas
-d'un voile (`GABARIT_REEL.voile = False`). Bloc centré verticalement à 42,9 % de
-la hauteur (`block_center`), et non ancré en bas comme le post.
+d'un voile (`GABARIT_REEL.voile = False`). Bloc ancré par le BAS, à 420 px du bord
+(`block_bottom`, soit y=1500 sur la toile 1920) — comme le post, mais pas collé au
+bord : la zone d'interface Instagram (légende, nom de compte, colonne de boutons)
+se superpose au bas d'un reel. Avant le 2026-09-18 le bloc était centré à 42,9 %
+de la hauteur (`block_center`), ce qui le faisait ressortir au milieu du cadre
+dans la grille du profil, en corps étranger au milieu des posts dont le bloc est
+en bas — voir le commentaire sur `REEL_LIMITE_BASSE_UI` dans `layout.py`.
 
 **Sa source est `exemples/[PREVIEW] - Cover Reels.png`, PAS une frame Figma
 extraite.** Aucun node Figma n'existe encore pour ce gabarit — contrairement au

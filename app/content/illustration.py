@@ -19,7 +19,10 @@ celui qui regarde l'image.
 Trois regles de cout, dans cet ordre :
   1. on ne juge QUE s'il y a un choix a faire (au moins deux candidats) ;
   2. au plus `illustration_max_candidats` images, reduites a
-     `illustration_taille_px`, dans UN SEUL appel -- ~1 400 jetons d'entree ;
+     `illustration_taille_px`, dans UN SEUL appel -- ~2 300 jetons d'entree. Ce
+     lot est juge d'avance par `prejuger` et sert DEUX decisions : quelle image
+     fait le fond, et quelles cartes d'annonce le carrousel garde
+     (`plafonner_affiches`). Un lot elargi, jamais un second appel ;
   3. le verdict est memorise par URL (`illustration_cache_path`) : une
      recomposition, ou un second creneau sur le meme article, ne repaie rien.
 
@@ -53,11 +56,14 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.content.export import telecharger as telecharger_media
+from app.content.media import PHOTO
 from app.content.urls import url_propre
 from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_KINDA,
+    candidats_de_fond,
+    image_de,
     lire_fichier_cache,
 )
 
@@ -288,6 +294,29 @@ def choisir_illustration(
             type(exc).__name__,
         )
         return None
+
+
+def verdicts_memorises(
+    urls: list[str],
+    *,
+    maintenant: dt.datetime | None = None,
+    chemin_cache: Path | None = None,
+) -> dict[str, Verdict]:
+    """Ce que le juge a DEJA dit, lu dans le cache seul -- jamais un appel de plus.
+
+    `verdicts_de` paie pour ce qu'il ne connait pas ; ici on ne paie rien, et une
+    URL jamais jugee est simplement absente. C'est ce qu'il faut a
+    `plafonner_affiches`, qui s'ajoute APRES le juge paye une fois par
+    composition (`prejuger`) : lui donner `verdicts_de` ajouterait un second
+    appel pour des images que la borne du lot avait ecartees.
+
+    Ce que ca coute : ce qui tombe hors du lot (au-dela de
+    `illustration_max_candidats`, ou juge lors d'une composition d'il y a plus de
+    `illustration_cache_jours`) reste inconnu -- et une slide inconnue est gardee.
+    """
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+    connus = lire_cache(maintenant, chemin_cache).verdicts
+    return {url: connus[url] for url in urls if url in connus}
 
 
 def verdicts_de(
@@ -527,3 +556,110 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
             type(exc).__name__,
         )
         return ()
+
+
+# --- Une carte d'annonce dans le carrousel, jamais sept --------------------
+
+# Combien d'affiches un carrousel a le droit de porter. Un (utilisateur,
+# 2026-09-19, post du 18/09 13h10 sur le programme des Trans Musicales) : les
+# slides 2 a 8 etaient la carte d'annonce du festival, declinee sept fois dans SA
+# charte graphique. Deux defauts en un : le post devient le carrousel du
+# festival avec une cover Kinda posee devant -- l'intermediaire dont le projet
+# veut sortir --, et sept slides d'affilee ne ressemblent plus a Kinda.
+# L'alternative etait de les refuser toutes ; l'utilisateur a tranche pour une :
+# un visuel d'annonce officielle a sa place dans le post, sept n'en ont pas.
+AFFICHES_MAX = 1
+
+
+def prejuger(actifs: list[dict] | None, *, verdicts=None, **options) -> dict[str, Verdict]:
+    """Juge D'UN COUP tout ce que le post peut montrer, et memorise les verdicts.
+
+    C'est l'appel paye de la composition, et il porte desormais sur TOUS les
+    visuels du post -- pas seulement sur les candidats du fond. La premiere
+    version du plafond ne s'appuyait que sur le lot du fond : sur les sept cartes
+    d'annonce des Trans Musicales, trois etaient jugees, quatre inconnues donc
+    gardees -- cinq cartes publiees la ou l'utilisateur en voulait une.
+
+    Un appel de plus n'est pas paye pour autant : les verdicts sont ecrits dans
+    le cache par URL, et `choisir_illustration` comme `eviter_l_affiche` les y
+    retrouvent gratuitement juste apres. On elargit le LOT juge, on n'ajoute
+    jamais un second appel -- c'est la regle de cout du module.
+
+    Borne : `illustration_max_candidats` (10, la taille d'un carrousel Meta).
+    Au-dela, on paierait pour juger des images que le post ne publiera jamais ;
+    ce qui tombe hors du lot reste inconnu, donc garde en slide.
+
+    Ne leve jamais : sans verdict, tout garde le comportement d'avant.
+    """
+    candidats = candidats_de_fond(actifs)[: settings.illustration_max_candidats]
+    if not candidats:
+        return {}
+    rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
+    try:
+        return rendre(candidats)
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning(
+            "visuels non juges (%s) : aucun verdict pour cette composition",
+            type(exc).__name__,
+        )
+        return {}
+
+
+def lecture_memorisee(connus: dict[str, Verdict], **options):
+    """Une source de verdicts qui ne paie RIEN : ce qui vient d'etre juge, puis le
+    cache. Le frais prime -- il reste disponible meme quand le cache n'a pas pu
+    s'ecrire, et c'est ce qui rend le plafond independant d'un disque en panne."""
+
+    def rendre(urls: list[str]) -> dict[str, Verdict]:
+        urls = list(urls)
+        return {
+            **verdicts_memorises(urls, **options),
+            **{url: connus[url] for url in urls if url in connus},
+        }
+
+    return rendre
+
+
+def plafonner_affiches(actifs: list[dict] | None, *, verdicts=None, **options) -> list[dict]:
+    """Les actifs, avec au plus `AFFICHES_MAX` affiche averee parmi eux.
+
+    On garde la PREMIERE dans l'ordre des candidats. C'est une heuristique
+    D'ORDRE et non un jugement sur le contenu : sur un carrousel d'annonce, la
+    carte de tete porte le message principal (ici « TOUTE LA PROG REVELEE »),
+    les suivantes le detaillent. Quand elle se trompe, le post garde une carte
+    secondaire (un chiffre, une date) au lieu de l'annonce elle-meme -- on perd
+    la meilleure des sept, jamais la seule slide du post.
+
+    Ce qui n'est PAS une affiche ne bouge pas : les photos, les videos (une
+    video n'est jamais une carte de texte, seule sa vignette en aurait l'air), et
+    tout ce dont on n'a pas de verdict. Dans le doute on garde : une photo jetee
+    par erreur appauvrit le post, une carte de trop ne fait que l'alourdir.
+
+    Les verdicts sont ceux DEJA obtenus (`verdicts_memorises` par defaut, qui ne
+    lit que le cache) : ce plafond ne paie aucun juge. `verdicts` n'existe que
+    pour en injecter un dans les tests, comme pour `eviter_l_affiche`.
+
+    Jamais d'exception -- une panne rend les actifs tels quels, donc le
+    comportement d'avant.
+    """
+    actifs = list(actifs or [])
+    if not actifs:
+        return actifs
+    rendre = verdicts or (lambda urls: verdicts_memorises(urls, **options))
+    try:
+        connus = rendre([url for url in (image_de(a) for a in actifs) if url])
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning("plafond des affiches abandonne (%s) : actifs conserves", type(exc).__name__)
+        return actifs
+    gardes: list[dict] = []
+    affiches = 0
+    for actif_ in actifs:
+        image = image_de(actif_) if actif_.get("type") == PHOTO else None
+        verdict = connus.get(image) if image else None
+        if verdict is not None and verdict.affiche:
+            affiches += 1
+            if affiches > AFFICHES_MAX:
+                logger.info("affiche en trop retiree du carrousel : %s", image)
+                continue
+        gardes.append(actif_)
+    return gardes

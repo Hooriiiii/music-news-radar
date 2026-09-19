@@ -152,9 +152,16 @@ class Gabarit:
     height: int
     roles: dict[str, tuple[Typo, Zone]]
     logo: Logo
-    # Position verticale du bloc de texte, en fraction de la hauteur. Mesuree a
-    # 42,9 % sur la cover reel ; inutilisee quand les zones sont ancrees en bas.
-    block_center: float | None = None
+    # Distance (px) entre le BAS de la toile et le bas du bloc de texte (title +
+    # subtitle empiles) sur le reel. Ancrage par le bas, et non plus une fraction
+    # de hauteur (l'ancien `block_center` centrait le bloc a 42,9 % de la toile) :
+    # la machine d'ajustement d'echelle peut reduire la police, donc la hauteur
+    # du bloc, et un centre fixe ecarte alors le BAS du bloc de sa limite -- un
+    # bloc plus court y remonte vers le milieu du cadre au lieu de rester colle
+    # a la meme limite basse. Un ancrage par le bas est stable par construction :
+    # quelle que soit la hauteur mesuree, seul le bas compte, et il ne bouge pas.
+    # None sur le post : ses zones sont deja ancrees en bas role par role.
+    block_bottom: int | None = None
     # Le post a trois degrades pour rendre le texte lisible ; la cover reel n'en a
     # pas, son contraste vient des bandes.
     voile: bool = True
@@ -379,6 +386,28 @@ GABARIT_POST = Gabarit(
 # Piege a l'oeil documente parce qu'il a deja failli etre code de travers : la
 # bande rose est droite, la creme est inclinee de 0,6 deg antihoraire. Confirme
 # comme voulu par le proprietaire du design.
+
+# Le bloc de texte du reel remonte en bas, comme celui du post (2026-09-18).
+# Constate sur la grille publiee (instagram.com/kindanewsfrance) : `block_center`
+# plaçait le bloc a 42,9 % de la hauteur, soit au MILIEU du cadre -- les deux
+# reels y ressortaient comme des corps etrangers au milieu des posts, dont le
+# bloc est en bas sur un voile. L'utilisateur veut le meme repere visuel partout.
+#
+# On ne peut pas coller le bloc au bord comme sur le post : Instagram superpose
+# sa legende, le nom du compte et sa colonne de boutons sur le bas du reel.
+# REEL_LIMITE_BASSE_UI = 1500 est la limite basse retenue pour rester au-dessus
+# de cette interface (~22 % de la hauteur laisses libres en bas, 1920 - 1500 =
+# 420) -- un reglage de securite fourni par l'utilisateur, pas une mesure au
+# pixel comme le reste du gabarit (aucune capture de l'interface Instagram
+# n'est disponible ici pour la mesurer).
+#
+# Cette limite doit aussi rester DANS le crop 4:5 de la grille : il commence a
+# y=285 (cf. `Logo` ci-dessus) et se termine donc a 285 + 1080 x 5/4 = 1635.
+# 1500 < 1635 avec 135 px de marge : la contrainte d'interface est la plus
+# stricte des deux, et c'est donc elle qui dimensionne le bloc. Verifie par
+# `tests/test_layout.py::test_la_limite_basse_du_bloc_reste_dans_le_crop_de_la_grille`.
+REEL_LIMITE_BASSE_UI = 1500
+
 GABARIT_REEL = Gabarit(
     name="kinda_reel",
     width=1080,
@@ -416,7 +445,13 @@ GABARIT_REEL = Gabarit(
     # 285 + 87 : le crop 4:5 de la grille commence a y=285 sur une toile 1920,
     # donc un logo a 87 px du haut y serait coupe. Voir `Logo`.
     logo=Logo(right=77, top=372, width=150),
-    block_center=0.429,
+    # Ancre par le bas plutot que par une fraction de hauteur -- voir le
+    # commentaire au-dessus de `REEL_LIMITE_BASSE_UI`. Dans le cas nominal (les
+    # deux bandes a leur taille de police pleine) le bas du bloc tombe donc
+    # exactement sur cette limite ; si la police est reduite par la machine
+    # d'ajustement d'echelle, le bloc raccourcit vers LE HAUT et son bas ne
+    # bouge pas -- il ne peut donc jamais remonter vers le milieu du cadre.
+    block_bottom=1920 - REEL_LIMITE_BASSE_UI,  # 1920 = height, ci-dessus
     voile=False,
 )
 
@@ -482,8 +517,8 @@ def variables_css(
         f"--voile-teinte-debut: {palette_.rgba(0)};",
     ]
 
-    if gabarit_.block_center is not None:
-        lignes.append(f"--block-center: {gabarit_.block_center * 100:.1f}%;")
+    if gabarit_.block_bottom is not None:
+        lignes.append(f"--block-bottom: {gabarit_.block_bottom}px;")
 
     for role, (typo, zone) in gabarit_.roles.items():
         lignes += [

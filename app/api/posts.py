@@ -5,8 +5,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.content.choix_visuels import AucunVisuel, ChoixVisuels, VisuelsDifferes, choisir_visuels
-from app.content.compose import CompositionError, create_post, make_claude_composer
+from app.content.choix_visuels import (
+    AucunVisuel,
+    ChoixVisuels,
+    VisuelsDifferes,
+    choisir_visuels,
+    compte_du_visuel,
+)
+from app.content.compose import (
+    CompositionError,
+    appeler_compositeur,
+    create_post,
+    make_claude_composer,
+)
 from app.content.export import construire_zip
 from app.content.lecture_artistes import LecteurComptes
 from app.content.legende import texte_legende
@@ -44,7 +55,7 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
         ) from exc
     composer = make_claude_composer()
     try:
-        draft = composer(article)
+        draft = appeler_compositeur(composer, article, compte_du_visuel(visuels))
     except CompositionError as exc:
         # Erreur amont (Claude) : une reponse HTTP lisible, pas un 500 avec trace.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
