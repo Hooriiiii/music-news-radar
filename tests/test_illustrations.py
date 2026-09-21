@@ -8,6 +8,7 @@ from PIL import Image
 from app.config import settings
 from app.models import Article, Source, SourceType
 from app.pipeline.illustrations import (
+    TAILLE_MAX,
     enrichir_articles,
     image_de_partage,
 )
@@ -276,3 +277,76 @@ def test_la_variante_retenue_est_memorisee(tmp_path, monkeypatch):
     assert demandes == ["https://t.fr/a", URL_PLEINE, "https://t.fr/a"], (
         "la page est relue (og:image peut avoir change), mais pas la variante"
     )
+
+
+# --- Variante : telechargement borne, jamais d'exception (revue I-7, M-5) ---
+
+
+def test_la_variante_est_demandee_par_une_plage_bornee(tmp_path, monkeypatch):
+    """Un master d'editeur de plusieurs Mo, telecharge en entier juste pour lire
+    des dimensions, bloquait un run (40 illustrations par passage, plus les
+    appels depuis `recherche_web`). La requete porte une plage bornee au
+    plafond deja en vigueur dans le module (`TAILLE_MAX`)."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    entetes = {}
+
+    def get(url, **kwargs):
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        entetes.update(kwargs.get("headers") or {})
+        return _reponse_image(_jpeg(2156, 1320))
+
+    image_de_partage("https://t.fr/a", get=get)
+
+    assert entetes["Range"] == f"bytes=0-{TAILLE_MAX - 1}"
+
+
+def test_une_variante_plus_lourde_que_le_plafond_garde_l_url_d_origine(tmp_path, monkeypatch):
+    """Serveur qui ignore la plage (200, corps entier) : au-dela du plafond, la
+    variante n'est pas retenue -- elle serait sinon retelechargee a chaque
+    composition et a chaque gel."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+
+    def get(url, **kwargs):
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        # Le corps annonce plus que le plafond : c'est l'en-tete qui fait foi,
+        # sans avoir a fabriquer un JPEG de 2 Mo dans le test.
+        return httpx.Response(
+            200, content=_jpeg(2156, 1320),
+            headers={"content-type": "image/jpeg", "content-length": str(TAILLE_MAX + 1)},
+            request=httpx.Request("GET", "https://x"),
+        )
+
+    assert image_de_partage("https://t.fr/a", get=get)["url"] == URL_PETITE
+
+
+def test_une_reponse_partielle_suffit_a_lire_les_dimensions(tmp_path, monkeypatch):
+    """Serveur qui honore la plage (206) : l'en-tete de l'image porte ses
+    dimensions, le reste n'est jamais transfere."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    complete = _jpeg(2156, 1320)
+
+    def get(url, **kwargs):
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        return httpx.Response(
+            206, content=complete[:1000],
+            headers={"content-type": "image/jpeg",
+                     "content-range": f"bytes 0-999/{len(complete)}"},
+            request=httpx.Request("GET", "https://x"),
+        )
+
+    assert image_de_partage("https://t.fr/a", get=get)["url"] == URL_PLEINE
+
+
+def test_une_url_pathologique_ne_fait_jamais_lever_image_de_partage(tmp_path, monkeypatch):
+    """`_sans_parametres_taille` decoupait l'URL HORS du `try` : une URL que
+    `urlsplit` refuse (port invalide) levait depuis `image_de_partage`, un
+    module qui ne doit jamais lever."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    page = '<meta property="og:image" content="http://[::1/img.jpg?w=564">'
+
+    entree = image_de_partage("https://t.fr/a", get=lambda u, **k: _reponse(page))
+
+    assert entree is None or entree["url"].endswith("?w=564")

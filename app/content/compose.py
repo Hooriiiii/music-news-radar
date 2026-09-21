@@ -616,8 +616,8 @@ def create_post(
     ecrite dans la slide, plus rien ne dirait si elle vient de l'actu, du compte,
     d'un artiste ou de l'aplat Kinda -- et c'est ce que le dashboard montre.
 
-    Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
-    doit rester lisible sans lui.
+    Les champs sont DENORMALISES expres : l'article sera purge a `retention_days`
+    (2 jours depuis le 2026-09-21), le post doit rester lisible sans lui.
     """
     premiere = draft.variantes[0]
     if visuels is not None:
@@ -712,7 +712,7 @@ def create_post(
         variants={
             "variantes": [v.model_dump() for v in draft.variantes],
             "retenue": None,
-            # La teinte est FIGEE ici : l'article sera purge a 14 jours, le post
+            # La teinte est FIGEE ici : l'article sera purge a 2 jours, le post
             # doit rester rendable sans lui (meme motif que les champs
             # denormalises ci-dessus). Editable ensuite sans re-scorer.
             "palette": teinte_de_article(article),

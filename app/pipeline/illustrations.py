@@ -100,8 +100,14 @@ def image_de_partage(url: str, get=httpx.get) -> dict | None:
         trouve = motif.search(reponse.text[:TAILLE_MAX])
         if trouve:
             # Résolue sur la page : beaucoup de sites servent une og:image
-            # relative, inexploitable telle quelle.
-            resolue = urljoin(url, trouve.group(1).strip())
+            # relative, inexploitable telle quelle. Dans le `try` : `urljoin`
+            # LÈVE sur une URL que `urlsplit` refuse (« http://[::1/... »,
+            # ValueError), et ce module ne doit jamais lever.
+            try:
+                resolue = urljoin(url, trouve.group(1).strip())
+            except ValueError:
+                logger.debug("Illustration : og:image illisible sur %s", url)
+                return None
             return entree(PHOTO, _plus_grande_variante(resolue, get=get))
     return None
 
@@ -223,7 +229,13 @@ def _plus_grande_variante(
     plan : au plus UNE requete de plus, et seulement quand l'URL porte un
     parametre connu.
     """
-    sans_params = _sans_parametres_taille(url)
+    try:
+        # Dans le `try` : `urlsplit` / `parse_qsl` LEVENT sur une URL
+        # pathologique (ValueError « Invalid IPv6 URL »), et `image_de_partage`
+        # ne doit jamais lever -- l'URL d'origine reste le repli de tout echec.
+        sans_params = _sans_parametres_taille(url)
+    except ValueError:
+        return url
     if sans_params is None:
         return url
     maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
@@ -242,13 +254,24 @@ def _tenter_variante(url: str, sans_params: str, get) -> str:
     try:
         reponse = get(
             sans_params, timeout=settings.illustration_timeout,
-            follow_redirects=True, headers=ENTETES,
+            follow_redirects=True,
+            # Plage BORNEE : on ne veut que des dimensions, qui vivent dans
+            # l'en-tete de l'image. Sans elle, un master d'editeur de plusieurs
+            # Mo etait telecharge en entier a chaque verification -- 40 par
+            # passage, plus les appels venus de `recherche_web` (revue du
+            # 2026-09-21). Le plafond est celui du module, `TAILLE_MAX`.
+            headers={**ENTETES, "Range": f"bytes=0-{TAILLE_MAX - 1}"},
         )
         if reponse.status_code >= 400:
             return url
+        if _poids_total(reponse) > TAILLE_MAX:
+            # Serveur qui ignore la plage, ou fichier au-dela du plafond : la
+            # variante serait retelechargee a chaque composition et a chaque
+            # gel. L'image mesuree (386 Ko pour le post 71) en est tres loin.
+            return url
         from PIL import Image
 
-        with Image.open(io.BytesIO(reponse.content)) as image:
+        with Image.open(io.BytesIO(reponse.content[:TAILLE_MAX])) as image:
             largeur, hauteur = image.size
     except Exception as exc:  # noqa: BLE001 -- confort, jamais une exception qui remonte
         logger.debug(
@@ -265,6 +288,20 @@ def _tenter_variante(url: str, sans_params: str, get) -> str:
     if declaree_hauteur is not None and hauteur <= declaree_hauteur:
         return url
     return sans_params
+
+
+def _poids_total(reponse) -> int:
+    """Le poids COMPLET du fichier : le total de `Content-Range` pour une
+    reponse partielle (206), sinon `Content-Length`, sinon ce qui a ete recu.
+    Ne leve jamais : un en-tete illisible vaut « ce qui a ete recu »."""
+    plage = reponse.headers.get("content-range", "")
+    total = plage.rpartition("/")[2]
+    if reponse.status_code == 206 and total.isdigit():
+        return int(total)
+    annonce = reponse.headers.get("content-length", "")
+    if reponse.status_code != 206 and annonce.isdigit():
+        return int(annonce)
+    return len(reponse.content)
 
 
 def enrichir_articles(
