@@ -399,3 +399,61 @@ def test_un_fond_efface_au_dashboard_relache_le_brouillon_sans_exclure(db_sessio
     db_session.refresh(creneau)
     assert outils.composes == [article.id]
     assert creneau.post_id is not None
+
+
+def test_un_doublon_reclasse_media_apres_la_composition_ne_prete_plus_son_visuel(
+    db_session, fred
+):
+    """Revue du 2026-09-21 (I-2) : les visuels d'un carrousel viennent de TOUT le
+    groupe de doublons, et chaque actif porte l'`article_id` du MEMBRE dont il
+    vient. Si la source de ce membre passe `media` entre la composition (J-1)
+    et le gel (T-2h), la ceinture du gel doit le voir -- elle ne relisait que
+    la source du representant, et celle des seuls actifs d'artistes."""
+    presse = Source(name="Tsugi (RSS)", type=SourceType.RSS, url="https://tsugi.fr/feed",
+                    categorie=SourceCategorie.MEDIA)
+    compte = _source(db_session, "Nuits Sonores (IG)", "nuits_sonores", SourceCategorie.FESTIVAL)
+    db_session.add(presse)
+    db_session.commit()
+    representant = _article(db_session, presse, media=[entree("photo", "https://tsugi.fr/a.jpg")],
+                            url="https://tsugi.fr/a")
+    membre = _article(db_session, compte, media=[entree("photo", "https://cdn.ig/ns.jpg")])
+    membre.duplicate_of_id = representant.id
+    db_session.commit()
+    post = Post(
+        article_id=representant.id, article_title="t", article_url=representant.url,
+        caption="L", template="kinda_post",
+        slides=[{"kind": "cover", "image_url": "https://tsugi.fr/a.jpg"}],
+        assets=[
+            actif(entree("photo", "https://tsugi.fr/a.jpg"), origine="article",
+                  article_id=representant.id),
+            actif(entree("photo", "https://cdn.ig/ns.jpg"), origine="article",
+                  compte="@nuits_sonores", article_id=membre.id),
+        ],
+    )
+    db_session.add(post)
+    db_session.commit()
+    assert actifs_interdits(db_session, post) == []
+
+    compte.categorie = SourceCategorie.MEDIA
+    db_session.commit()
+
+    interdits = actifs_interdits(db_session, post)
+    assert [a["article_id"] for a in interdits] == [membre.id]
+
+
+def test_un_membre_purge_est_retrouve_par_son_compte(db_session):
+    """La retention est de 2 jours : le membre peut avoir ete purge entre la
+    composition et le gel. Son compte (`@handle`) suffit alors a relire la
+    source, comme pour un actif d'artiste."""
+    source = _source(db_session, "Nuits Sonores (IG)", "nuits_sonores", SourceCategorie.MEDIA)
+    post = Post(
+        article_title="t", article_url="https://x/1", caption="L", template="kinda_post",
+        slides=[{"kind": "cover", "image_url": "https://tsugi.fr/a.jpg"}],
+        assets=[actif(entree("photo", "https://cdn.ig/ns.jpg"), origine="article",
+                      compte="@nuits_sonores", article_id=999_999)],
+    )
+    db_session.add(post)
+    db_session.commit()
+
+    assert len(actifs_interdits(db_session, post)) == 1
+    assert source.categorie == SourceCategorie.MEDIA
