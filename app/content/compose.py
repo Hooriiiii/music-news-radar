@@ -27,6 +27,7 @@ from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
+from app.content.legende import sans_mentions_de_source
 from app.content.illustration import (
     choisir_illustration,
     eviter_l_affiche,
@@ -206,9 +207,38 @@ def probleme_accents(caption: str) -> str | None:
     )
 
 
+def probleme_cloture_question(caption: str) -> str | None:
+    """Decrit, pour la relance, une legende qui se termine par une question ;
+    None sinon.
+
+    Releve le 2026-09-21 en ouvrant le compte : les SIX derniers posts publies
+    finissaient tous par une question rhetorique (« Qu'en pensez-vous ? »,
+    « Vous suivez CORTIS depuis leurs debuts ? », « Qui tente le deplacement
+    pour cette derniere session estivale ? »...). Six sur six, ca s'entend comme
+    un tic de machine sur un feed. Meme mecanique que `probleme_emojis` et
+    `probleme_accents`, et pour la meme raison (CLAUDE.md, « Emojis de legende :
+    relances, jamais bloquants ») : ce n'est PAS un validateur de `PostDraft` --
+    jeter le brouillon entier pour un defaut de forme ferait perdre la
+    composition d'un creneau. Le compositeur relance, puis accepte avec un
+    avertissement : une legende qui finit par une question de plus vaut mieux
+    que pas de post.
+    """
+    fin = _EMOJI_RE.sub("", caption).rstrip()
+    if not fin.endswith("?"):
+        return None
+    return (
+        "La legende (`caption`) se termine par une question, comme les six "
+        "derniers posts publies sur le compte -- cette repetition s'entend comme "
+        "un tic de machine. Termine autrement : un fait qui reste pour la fin, "
+        "une date ou un lieu a retenir, une projection sur la suite, une phrase "
+        "qui referme l'actu. Une question reste possible de temps en temps, mais "
+        "pas a chaque legende."
+    )
+
+
 def probleme_de_legende(caption: str) -> str | None:
     """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
-    return probleme_emojis(caption) or probleme_accents(caption)
+    return probleme_emojis(caption) or probleme_accents(caption) or probleme_cloture_question(caption)
 
 
 SYSTEM_PROMPT = """\
@@ -258,12 +288,20 @@ subtitle : le line-up electro tombe **ce week-end**
 formulations de cover, pas des angles editoriaux distincts, une seule legende \
 suffit. Le texte sous le post, en francais, en 2 a 4 paragraphes courts (1 a 2 \
 phrases chacun), SEPARES PAR UNE ligne vide -- jamais un bloc compact, illisible \
-sur mobile. Elle developpe ce que la cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
-AUCUN balisage ** : le surlignage n'existe que sur la cover, qui est une image ; \
-dans la legende les asterisques s'afficheraient telles quelles.
-La CLOTURE depend de la nature de l'actu :
+sur mobile. Elle developpe ce que la cover annonce, SANS JAMAIS NOMMER LE MEDIA \
+d'ou vient l'info -- ni "via X", ni "selon X", ni "d'apres X", ni "info a \
+retrouver sur X" : Kinda est une source, pas un intermediaire qui renvoie vers \
+un concurrent. Les noms d'ARTISTES, de labels, de festivals, de salles, de \
+villes restent evidemment permis : ce sont le sujet de l'actu, pas sa source. \
+Pas de hashtags dans la legende, et AUCUN balisage ** : le surlignage n'existe \
+que sur la cover, qui est une image ; dans la legende les asterisques \
+s'afficheraient telles quelles.
+La CLOTURE depend de la nature de l'actu, et NE PREND PAS TOUJOURS LA MEME \
+FORME -- alterne, ne finis pas systematiquement par une question :
 - actu ordinaire (annonce, sortie, line-up, date, record) : termine par une \
-question ou une invitation a reagir.
+question, une invitation a reagir, un fait marquant garde pour la fin, une \
+date ou un lieu a retenir, ou une projection sur la suite. Varie reellement \
+d'une composition a l'autre plutot que de retomber toujours sur la question.
 - ACTU TERMINALE -- annulation, liquidation judiciaire, faillite, deces, \
 separation d'un groupe, derniere edition, arret definitif -- : termine par une \
 projection (ce qui reste, ce qui vient apres) ou par un hommage. JAMAIS par une \
@@ -607,7 +645,11 @@ def create_post(
         credit=credit,
         assets=actifs,
         template=template,
-        caption=draft.caption,
+        # Filet deterministe derriere la regle 4 du prompt : le brouillon rendu
+        # par Claude peut encore nommer sa source (« Info via Stereogum. »,
+        # posts 71/63/65 reellement publies) -- retire ici, a la composition,
+        # pour que la legende persistee soit deja celle qui part en ligne.
+        caption=sans_mentions_de_source(draft.caption, article),
         hashtags=draft.hashtags or None,
         # La cover affiche la variante 1 en attendant un choix, pour que le rendu
         # soit possible immediatement ; `variants.retenue` reste null.

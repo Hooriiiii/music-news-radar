@@ -2,11 +2,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.content.legende import HASHTAGS_MAX, LEGENDE_MARGE, LEGENDE_MAX, aerer_legende, texte_legende
+from app.content.legende import (
+    HASHTAGS_MAX,
+    LEGENDE_MARGE,
+    LEGENDE_MAX,
+    aerer_legende,
+    credit_de_compte,
+    sans_mentions_de_source,
+    texte_legende,
+)
 
 
 def _post(caption="Une legende 🎧 ✨", hashtags=("#electro",), url="https://tsugi.fr/a"):
     return SimpleNamespace(caption=caption, hashtags=list(hashtags), article_url=url)
+
+
+def _article(url="https://www.stereogum.com/sheeran-gaza", source_name="Stereogum (RSS)"):
+    return SimpleNamespace(source=SimpleNamespace(name=source_name), url=url)
 
 
 def test_legende_puis_hashtags_sans_ligne_source():
@@ -190,3 +202,84 @@ def test_un_hashtag_sans_rien_d_utilisable_disparait():
     """Publier un `#` seul serait pire que de ne rien publier."""
     post = _post(hashtags=["#", "🎧", "electro"])
     assert texte_legende(post).endswith("\n\n#electro")
+
+
+# --- Les legendes ne nomment plus aucun media (2026-09-21) ------------------
+#
+# Mesure sur les posts REELLEMENT publies sur @kindanewsfrance : post 71
+# « Qu'en pensez-vous ? Info a retrouver via Stereogum. », post 63
+# « Info via Stereogum. », post 65 « ... selon Soompi ... ». « supprime les
+# sources des descriptions [...] parle de l'actu en elle-meme. »
+
+
+def test_une_phrase_via_la_source_est_retiree():
+    article = _article()
+    caption = "Ed Sheeran evoque Gaza dans un discours poignant. Info via Stereogum."
+    assert sans_mentions_de_source(caption, article) == (
+        "Ed Sheeran evoque Gaza dans un discours poignant."
+    )
+
+
+def test_la_phrase_reellement_publiee_du_post_71_ne_survit_pas():
+    article = _article()
+    caption = "Qu'en pensez-vous ? Info a retrouver via Stereogum."
+    assert sans_mentions_de_source(caption, article) == "Qu'en pensez-vous ?"
+
+
+def test_selon_la_source_est_aussi_retiree():
+    article = _article(url="https://www.soompi.com/article/1", source_name="Soompi (RSS)")
+    caption = "LE SSERAFIM revient sur le devant de la scene. C'est confirme selon Soompi."
+    assert sans_mentions_de_source(caption, article) == (
+        "LE SSERAFIM revient sur le devant de la scene."
+    )
+
+
+def test_le_domaine_sans_tld_attrape_le_nom_ecrit_en_toutes_lettres():
+    """`stereogum.com` doit attraper « Stereogum » (exigence du plan)."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.stereogum.com/x")
+    caption = "Grosse annonce du jour. Stereogum a sorti l'info en premier."
+    assert "Stereogum" not in sans_mentions_de_source(caption, article)
+
+
+def test_un_artiste_homonyme_d_un_media_sans_rapport_n_est_pas_mutile():
+    """Le nom banni est celui de LA source de CET article, jamais devine : un
+    artiste qui porte par coincidence le nom d'un media SANS RAPPORT reste."""
+    article = _article(source_name="Tsugi (RSS)", url="https://www.tsugi.fr/x")
+    caption = "Stereogum, jeune artiste rennais, sort son premier titre. Il tourne en Bretagne."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_une_legende_entierement_faite_de_mentions_de_source_reste_intacte():
+    """Une legende vide serait pire qu'une legende qui cite un media --
+    `PostDraft` la validerait mal."""
+    article = _article()
+    caption = "Info via Stereogum. Selon Stereogum, c'est confirme."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_un_paragraphe_garde_ses_autres_phrases():
+    article = _article()
+    caption = "Ed Sheeran evoque Gaza.\n\nInfo via Stereogum. La sortie est prevue vendredi."
+    assert sans_mentions_de_source(caption, article) == (
+        "Ed Sheeran evoque Gaza.\n\nLa sortie est prevue vendredi."
+    )
+
+
+def test_credit_de_domaine_ne_s_affiche_plus():
+    """Post 59 reellement publie : credit `djmag.com beatportal.com`."""
+    post = _post(hashtags=())
+    post.credit, post.template = "djmag.com", "kinda_post"
+    assert texte_legende(post) == "Une legende 🎧 ✨"
+
+
+def test_credit_de_compte_reste_affiche():
+    post = _post(hashtags=())
+    post.credit, post.template = "@defectedrecords", "kinda_post"
+    assert texte_legende(post).endswith("📸 @defectedrecords")
+
+
+def test_credit_de_compte_est_pur():
+    assert credit_de_compte("djmag.com") is None
+    assert credit_de_compte("@defectedrecords") == "@defectedrecords"
+    assert credit_de_compte("@fredagain @pinkpantheress") == "@fredagain @pinkpantheress"
+    assert credit_de_compte(None) is None

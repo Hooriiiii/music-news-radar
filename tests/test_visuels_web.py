@@ -138,20 +138,23 @@ def test_le_web_reste_ferme_quand_l_article_a_sa_propre_image(db_session):
 # --- Le credit -------------------------------------------------------------
 
 
-def test_une_image_du_web_est_creditee_par_son_domaine(db_session, monkeypatch):
+def test_une_image_du_web_n_est_plus_creditee_par_son_domaine(db_session, monkeypatch):
+    """`actif_du_web` garde encore le domaine sur l'actif (`compte`, permalink) --
+    c'est `credit_des_actifs` qui ne le fait plus remonter en credit de legende,
+    decision de l'utilisateur le 2026-09-21 (« retirer aussi le credit web »)."""
     monkeypatch.setattr("app.content.recherche_web.image_de_partage",
                         _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"}))
     article = _article(db_session, _source(db_session))
 
     choix = _visuels(db_session, article, chercheur_web=Chercheur())
 
-    assert choix.credit == "ra.co"
+    assert choix.credit is None
     assert choix.actifs[0]["permalink"] == "https://ra.co/news/1"
 
 
-def test_le_credit_du_web_apparait_dans_la_legende(db_session, monkeypatch):
-    """« 📸 ra.co », sans « via » et sans ligne « Source : » -- les regles de
-    credit du 2026-09-17 valent aussi pour une image du web."""
+def test_le_domaine_du_web_n_apparait_plus_dans_la_legende(db_session, monkeypatch):
+    """Plus de « via » ni de ligne « Source : » (regles du 2026-09-17), et
+    desormais plus de credit de domaine du tout (2026-09-21)."""
     monkeypatch.setattr("app.content.recherche_web.image_de_partage",
                         _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"}))
     article = _article(db_session, _source(db_session))
@@ -163,7 +166,7 @@ def test_le_credit_du_web_apparait_dans_la_legende(db_session, monkeypatch):
 
     texte = texte_legende(Faux())
 
-    assert "📸 ra.co" in texte
+    assert "ra.co" not in texte
     assert "via" not in texte and "Source :" not in texte
 
 

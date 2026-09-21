@@ -707,6 +707,25 @@ traitée comme un échec de validation : relance, puis `CompositionError`.
 L'interdiction d'emoji dans `headline`/`title`/`subtitle` reste stricte (textes
 rendus dans une police).
 
+**Légendes : plus de média nommé, plus de clôture systématique en question**
+(2026-09-21, retour de l'utilisateur en ouvrant le compte réellement publié :
+« supprime les sources des descriptions [...] parle de l'actu en elle-même » —
+posts 71, 63, 65 : « Info via Stereogum. », « ... selon Soompi ... » — puis,
+sur les six derniers posts en ligne, une clôture identique à chaque fois,
+« Qu'en pensez-vous ? »). Deux défauts, même mécanique de correction : une
+règle de prompt (`SYSTEM_PROMPT`, règle 4) plus un filet, parce qu'un prompt ne
+garantit jamais rien à lui seul. Le nom du média n'est PAS un défaut de forme
+tolérable comme les emojis ou les accents — le retirer après coup est
+nécessaire, `app/content/legende.sans_mentions_de_source` retire les phrases
+qui nomment la source de l'article (nom de la source nettoyé de son canal,
+domaine de l'URL avec et sans TLD — construits depuis l'article, jamais
+devinés), appliqué à la composition (`create_post`) pour que la légende
+persistée soit déjà celle qui part en ligne ; une légende qui deviendrait vide
+part telle quelle. La clôture en question, elle, est un défaut de FORME :
+`probleme_cloture_question()` suit exactement `probleme_emojis()` /
+`probleme_accents()`, relance une fois puis accepte avec un warning plutôt que
+de perdre un créneau.
+
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul **trois carrousels et trois reels par jour** (2026-09-18 ; deux
@@ -1238,14 +1257,20 @@ cas même pour lequel il a été écrit. La requête produite est désormais
 qu'APRÈS une recherche web restée bredouille.
 
 **Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
-c'est un projet perso donc c'est ok »). En contrepartie le site est TOUJOURS
-cité : le domaine part dans le crédit de la légende (« 📸 ra.co »), jamais
-coupé, sans « via » ni ligne « Source : » — mêmes règles que le crédit d'un
-compte. Il est reconstitué depuis le seul `file://` publié
-(`recherche_web.attribution_de` : le nom du fichier de cache EST le SHA-256 de
-l'URL d'origine), donc il survit à un redémarrage ; et `create_post` relit le
-crédit sur les actifs FINAUX, sinon une image arrivée par une réserve serait
-publiée sans dire d'où elle vient.
+c'est un projet perso donc c'est ok »). **Le site n'est en revanche plus cité**
+(revirement du 2026-09-21, en réponse à la question posée après le retour sur
+les posts publiés : « retirer aussi le crédit web ») : un `compte` d'actif qui
+n'est pas un `@handle` est un domaine du web, et `credit_des_actifs`
+(`app/content/visuels.py`) ne l'émet plus dans le crédit de la légende — seul
+un crédit de COMPTE (`@artiste`) y reste. `recherche_web.attribution_de` et
+`credit_de` continuent d'exister et de reconstituer l'attribution depuis le
+seul `file://` publié (le nom du fichier de cache EST le SHA-256 de l'URL
+d'origine) : cette reconstitution reste vraie et sert encore le permalien
+gardé sur l'actif, elle n'alimente simplement plus l'affichage. Un crédit de
+domaine posé avant ce revirement (`djmag.com`, `ra.co`, sur un brouillon déjà
+en base) ne s'affiche plus non plus : le filtre vaut aussi à la lecture
+(`app/content/legende.credit_de_compte`), seul endroit que publication, export
+et essai à la main traversent tous.
 
 Coût : une recherche par requête, mémorisée `visuels_web_cache_jours` (3) dans
 `visuels_web_cache_path` ; au plus `visuels_web_max_candidats` (3) pages ; image

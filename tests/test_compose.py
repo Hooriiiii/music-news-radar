@@ -15,6 +15,7 @@ from app.content.compose import (
     create_post,
     make_claude_composer,
     probleme_accents,
+    probleme_cloture_question,
     probleme_emojis,
 )
 from app.content.choix_visuels import ChoixVisuels
@@ -177,6 +178,22 @@ def test_le_prompt_porte_la_regle_emojis():
         assert emoji in SYSTEM_PROMPT
 
 
+def test_le_prompt_interdit_de_nommer_le_media_source():
+    """Retour de l'utilisateur le 2026-09-21 : « supprime les sources des
+    descriptions [...] parle de l'actu en elle-meme. »"""
+    assert "SANS JAMAIS NOMMER LE MEDIA" in SYSTEM_PROMPT
+    assert '"via X"' in SYSTEM_PROMPT
+    assert '"selon X"' in SYSTEM_PROMPT
+    assert "pas sa source" in SYSTEM_PROMPT
+
+
+def test_le_prompt_demande_de_varier_la_cloture():
+    """Les six derniers posts publies finissaient TOUS par une question : le
+    prompt doit donner d'autres formes et demander d'alterner."""
+    assert "NE PREND PAS TOUJOURS LA MEME" in SYSTEM_PROMPT
+    assert "alterne" in SYSTEM_PROMPT
+
+
 def test_le_brouillon_exige_exactement_quatre_variantes():
     for nombre in (3, 5):
         with pytest.raises(ValidationError):
@@ -235,6 +252,23 @@ def test_create_post_prend_la_vignette_dune_video_comme_fond(db_session):
     post = create_post(db_session, article, _draft())
 
     assert post.slides[0]["image_url"] == "https://thumb.jpg"
+
+
+def test_create_post_retire_les_mentions_de_source_de_la_legende_persistee(db_session):
+    """La legende persistee doit deja etre propre : le dashboard affiche
+    `post.caption`, elle ne doit pas montrer autre chose que ce qui partira
+    reellement (2026-09-21)."""
+    article = _article(db_session)
+    draft = PostDraft(
+        variantes=[_variante(i) for i in range(4)],
+        caption="Nico Moreno annonce une date. 🎧 Info via Tsugi. ✨",
+        hashtags=["#festival"],
+    )
+
+    post = create_post(db_session, article, draft)
+
+    assert "Tsugi" not in post.caption
+    assert post.caption == "Nico Moreno annonce une date. 🎧"
 
 
 def _validation_error() -> ValidationError:
@@ -857,6 +891,58 @@ def test_composer_accepte_une_legende_sans_accents_apres_les_tentatives(db_sessi
 
 def test_le_prompt_exige_le_francais_accentue():
     assert "ACCENTUE" in SYSTEM_PROMPT and "intitulé" in SYSTEM_PROMPT
+
+
+# --- La cloture n'est plus systematiquement une question (2026-09-21) -------
+#
+# Les SIX derniers posts publies finissaient tous par une question rhetorique
+# (« Qu'en pensez-vous ? », « Vous suivez CORTIS depuis leurs debuts ? »...).
+
+
+def test_probleme_cloture_question_repere_une_legende_qui_finit_par_l_interrogation():
+    probleme = probleme_cloture_question("Le festival revient en octobre. Qu'en pensez-vous ?")
+    assert probleme is not None
+    assert "question" in probleme
+
+
+def test_probleme_cloture_question_ignore_les_emojis_de_fin():
+    """« Qui tente le deplacement ? ✨ » (post 62) finit bien par une question,
+    l'emoji de ponctuation ne doit pas le masquer."""
+    assert probleme_cloture_question("Qui tente le deplacement ? ✨") is not None
+
+
+def test_probleme_cloture_question_laisse_passer_une_cloture_variee():
+    assert probleme_cloture_question("La billetterie ouvre vendredi a midi.") is None
+
+
+def test_composer_relance_une_legende_qui_finit_par_une_question(db_session):
+    article = _article(db_session)
+    question = _draft_legende("Le festival revient en octobre 🎧. Qu'en pensez-vous ✨?")
+    variee = _draft_legende("Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨")
+    client = _FakeClient([_FakeParsedResponse(question), _FakeParsedResponse(variee)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is variee
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "question" in relance and "caption" in relance
+
+
+def test_composer_accepte_une_cloture_en_question_apres_les_tentatives(db_session, caplog):
+    """Jamais une composition perdue pour un defaut de forme : une legende qui
+    finit encore par une question part avec un avertissement."""
+    article = _article(db_session)
+    drafts = [
+        _draft_legende(f"Le festival revient en octobre ({i}) 🎧. On y va ✨?") for i in range(3)
+    ]
+    client = _FakeClient([_FakeParsedResponse(d) for d in drafts])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    with caplog.at_level("WARNING"):
+        resultat = composer(article)
+
+    assert resultat is drafts[-1]
+    assert len(client.messages.appels) == 3
+    assert "acceptee malgre" in caplog.text
 
 
 def test_le_prompt_dit_de_quel_compte_vient_le_visuel(db_session):

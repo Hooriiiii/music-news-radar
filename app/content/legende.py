@@ -14,11 +14,26 @@ Les HASHTAGS sont normalises ICI et pas a la composition : le texte publie est l
 seul goulot que TOUS les chemins traversent -- publication automatique, export zip
 et essai a la main --, alors qu'un brouillon peut arriver d'ailleurs (hashtags
 edites au dashboard, post compose avant cette regle et publie apres).
+
+Retour de l'utilisateur le 2026-09-21 en ouvrant le compte reellement publie :
+« supprime les sources des descriptions [...] parle de l'actu en elle-meme ».
+Mesure sur les posts en ligne : « Info via Stereogum. », « Qu'en pensez-vous ?
+Info a retrouver via Stereogum. », « ... selon Soompi ... ». Kinda veut etre
+une SOURCE, pas un intermediaire (CLAUDE.md, « Veille rapide ») : nommer le
+media d'ou vient l'info fait exactement l'inverse, ca renvoie vers un
+concurrent. `sans_mentions_de_source` est le filet DETERMINISTE derriere la
+regle de prompt posee dans `app/content/compose.py` (SYSTEM_PROMPT) -- un
+prompt ne garantit jamais rien a lui seul, lecon deja ecrite trois fois plus
+haut dans ce module et dans CLAUDE.md. Meme jour, meme demande : le credit
+d'un simple nom de DOMAINE (« 📸 djmag.com », post 59) disparait aussi -- seul
+un credit de COMPTE (`@artiste`) reste affiche (`credit_de_compte` ici,
+`app/content/visuels.credit_des_actifs` a la creation).
 """
 
 import re
 
 from app.content.emojis import EMOJI_CLASSE
+from app.content.recherche_web import domaine_de, nom_de_source
 
 LEGENDE_MAX = 2200
 # Marge sous la limite de Meta, en points de code sur TOUT le texte publie :
@@ -61,6 +76,24 @@ def _lignes(texte: str) -> str:
     return sortie
 
 
+def _phrases_de(texte: str) -> list[str]:
+    """Les phrases de `texte`, coupees sur `_FIN_DE_PHRASE` (abreviations et
+    emojis de fin respectes -- cf. `_abreviation`).
+
+    Extrait d'`aerer_legende`, qui pave ces phrases par paires, pour que
+    `sans_mentions_de_source` les reutilise SANS reecrire une seconde machine de
+    decoupage : les deux fonctions doivent voir exactement les memes phrases.
+    """
+    phrases, debut = [], 0
+    for fin in _FIN_DE_PHRASE.finditer(texte):
+        if _abreviation(texte, fin):
+            continue
+        phrases.append(texte[debut : fin.end()].strip())
+        debut = fin.end()
+    phrases.append(texte[debut:].strip())
+    return [phrase for phrase in phrases if phrase]
+
+
 def aerer_legende(caption: str) -> str:
     """Filet de lisibilite : un bloc compact devient des paragraphes courts.
 
@@ -75,20 +108,85 @@ def aerer_legende(caption: str) -> str:
         return texte
     if "\n" in texte:
         return _lignes(texte)
-    phrases, debut = [], 0
-    for fin in _FIN_DE_PHRASE.finditer(texte):
-        if _abreviation(texte, fin):
-            continue
-        phrases.append(texte[debut : fin.end()].strip())
-        debut = fin.end()
-    phrases.append(texte[debut:].strip())
-    phrases = [phrase for phrase in phrases if phrase]
+    phrases = _phrases_de(texte)
     if len(phrases) <= PHRASES_PAR_PARAGRAPHE:
         return texte
     return "\n\n".join(
         " ".join(phrases[i : i + PHRASES_PAR_PARAGRAPHE])
         for i in range(0, len(phrases), PHRASES_PAR_PARAGRAPHE)
     )
+
+
+def noms_a_bannir(article) -> list[str]:
+    """Les noms qui identifient LA SOURCE de cet article -- jamais devines,
+    toujours CONSTRUITS depuis lui : le nom de sa source debarrasse de son
+    canal (« Transmusicales (IG) » -> « Transmusicales », le nettoyage existe
+    deja dans `recherche_web.nom_de_source`, reutilise plutot que reecrit), et
+    le domaine de `article.url` -- avec son TLD (« stereogum.com ») et sans
+    (« stereogum », pour attraper « Stereogum » ecrit en toutes lettres dans la
+    legende, exactement le cas du post 71 reellement publie).
+    """
+    noms: list[str] = []
+    source = getattr(article, "source", None)
+    nom_source = nom_de_source(getattr(source, "name", None))
+    if nom_source:
+        noms.append(nom_source)
+    domaine = domaine_de(getattr(article, "url", None) or "")
+    if domaine:
+        noms.append(domaine)
+        racine = domaine.split(".")[0]
+        if racine and racine not in noms:
+            noms.append(racine)
+    return noms
+
+
+def sans_mentions_de_source(caption: str, article) -> str:
+    """Retire les phrases qui NOMMENT la source de l'article -- « Info via
+    Stereogum. », « ... selon Soompi ... », « Info a retrouver via Stereogum. »,
+    les trois formulations reellement publiees le 2026-09-21. Kinda veut etre
+    une SOURCE, pas un intermediaire (CLAUDE.md, « Veille rapide ») : nommer le
+    media d'ou vient l'info revient a renvoyer vers un concurrent.
+
+    Elle ne DEVINE aucun nom a bannir : ils viennent de `noms_a_bannir`, donc
+    un ARTISTE homonyme d'un media SANS RAPPORT avec cet article n'est jamais
+    touche -- seule la source de CET article est bannie.
+
+    Deux garde-fous : une phrase n'est retiree que si elle nomme la source, le
+    reste ne bouge pas ; et si tout serait retire, la legende part TELLE
+    QUELLE -- une legende vide est pire qu'une legende qui cite un media, et
+    `PostDraft` la validerait mal.
+    """
+    noms = [nom for nom in noms_a_bannir(article) if nom]
+    if not noms:
+        return caption
+    motifs = [re.compile(rf"\b{re.escape(nom)}\b", re.IGNORECASE) for nom in noms]
+
+    def nomme_la_source(phrase: str) -> bool:
+        return any(motif.search(phrase) for motif in motifs)
+
+    paragraphes: list[str] = []
+    for paragraphe in caption.split("\n\n"):
+        phrases = [phrase for phrase in _phrases_de(paragraphe) if not nomme_la_source(phrase)]
+        if phrases:
+            paragraphes.append(" ".join(phrases))
+    resultat = "\n\n".join(paragraphes).strip()
+    return resultat if resultat else caption
+
+
+def credit_de_compte(credit: str | None) -> str | None:
+    """Le credit affiche sous le post, seulement s'il nomme un COMPTE (`@handle`).
+
+    `credit_des_actifs` (`app/content/visuels.py`) n'emet plus de credit de
+    DOMAINE pour un post NOUVEAU (decision de l'utilisateur, 2026-09-21), mais
+    des brouillons deja en base en portent un (« djmag.com », article 59, pose
+    avant cette regle) -- ce filet vaut aussi a l'AFFICHAGE, seul endroit que
+    TOUS les chemins traversent (publication, export, essai a la main). Un
+    credit de compte porte toujours au moins un `@` (`credit_video`,
+    `compte_du_visuel`) ; un domaine, jamais.
+    """
+    if not credit or not all(mot.startswith("@") for mot in credit.split()):
+        return None
+    return credit
 
 
 def normaliser_hashtags(tags) -> list[str]:
@@ -125,7 +223,7 @@ def texte_legende(post) -> str:
     # Normalise AVANT de plafonner : sinon un doublon consommerait une des 30 places.
     hashtags = normaliser_hashtags(post.hashtags)[:HASHTAGS_MAX]
     legende = aerer_legende(post.caption)
-    credit = getattr(post, "credit", None)
+    credit = credit_de_compte(getattr(post, "credit", None))
     ligne_credit = None
     if credit:
         pictogramme = "🎥" if getattr(post, "template", None) == "kinda_reel" else "📸"
