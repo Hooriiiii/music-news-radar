@@ -283,3 +283,35 @@ def test_credit_de_compte_est_pur():
     assert credit_de_compte("@defectedrecords") == "@defectedrecords"
     assert credit_de_compte("@fredagain @pinkpantheress") == "@fredagain @pinkpantheress"
     assert credit_de_compte(None) is None
+
+
+def test_credit_de_compte_retire_seulement_le_domaine_d_un_credit_mixte():
+    """Un fond d'origine `artiste` qui s'avere etre une affiche peut ouvrir une
+    reserve `web` sur le MEME `actifs` (ordre compte -> artiste -> web dans
+    `choix_visuels.py`) : un brouillon compose par l'ancienne version peut donc
+    porter un credit MIXTE (« @fredagain ra.co »). Seul le domaine doit partir,
+    jamais le credit d'artiste legitime -- pas de tout-ou-rien."""
+    assert credit_de_compte("@fredagain ra.co") == "@fredagain"
+    assert credit_de_compte("ra.co @fredagain") == "@fredagain"
+    assert credit_de_compte("@fredagain djmag.com @pinkpantheress") == "@fredagain @pinkpantheress"
+
+
+# --- Une racine de domaine courte ne mutile pas un mot ordinaire ------------
+#
+# « vice.com » -> « vice », « ra.co » -> « ra » : deux domaines REELLEMENT
+# presents dans ce depot (CLAUDE.md cite Vice, RA), et deux mots ordinaires.
+
+
+def test_une_racine_de_domaine_courte_ne_mutile_pas_un_mot_ordinaire():
+    # Le nom de la SOURCE est generique (pas "Vice") pour isoler le risque
+    # -- ici seule la racine du DOMAINE ("vice") pourrait, a tort, bannir le
+    # mot ordinaire "vice".
+    article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
+    caption = "Le clip assume un vice certain pour la nuit electro. On adore ce parti pris."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_le_domaine_complet_reste_banni_meme_avec_une_racine_courte():
+    article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
+    caption = "Gros dossier electro. A lire sur vice.com des ce soir."
+    assert "vice.com" not in sans_mentions_de_source(caption, article)

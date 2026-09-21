@@ -117,14 +117,25 @@ def aerer_legende(caption: str) -> str:
     )
 
 
+# En dessous de cette longueur, la racine d'un domaine (sans son TLD) coincide
+# avec un mot ordinaire du francais ou de l'anglais : « vice.com » -> « vice »,
+# « ra.co » -> « ra » (les deux sont des domaines REELEMENT presents dans ce
+# depot -- CLAUDE.md cite Vice, RA). Bannie seule, une telle racine mutilerait
+# une phrase qui n'a rien a voir avec le media ("un vice certain", "un sacre
+# ra-le-bol"). En dessous du seuil on ne bannit donc que le domaine COMPLET
+# (avec son TLD, ex. « vice.com »), jamais la racine isolee.
+RACINE_DOMAINE_MIN = 5
+
+
 def noms_a_bannir(article) -> list[str]:
     """Les noms qui identifient LA SOURCE de cet article -- jamais devines,
     toujours CONSTRUITS depuis lui : le nom de sa source debarrasse de son
     canal (« Transmusicales (IG) » -> « Transmusicales », le nettoyage existe
     deja dans `recherche_web.nom_de_source`, reutilise plutot que reecrit), et
-    le domaine de `article.url` -- avec son TLD (« stereogum.com ») et sans
-    (« stereogum », pour attraper « Stereogum » ecrit en toutes lettres dans la
-    legende, exactement le cas du post 71 reellement publie).
+    le domaine de `article.url` -- avec son TLD (« stereogum.com ») et, si elle
+    est assez longue pour ne pas etre un mot ordinaire (`RACINE_DOMAINE_MIN`),
+    sans (« stereogum », pour attraper « Stereogum » ecrit en toutes lettres
+    dans la legende, exactement le cas du post 71 reellement publie).
     """
     noms: list[str] = []
     source = getattr(article, "source", None)
@@ -135,7 +146,7 @@ def noms_a_bannir(article) -> list[str]:
     if domaine:
         noms.append(domaine)
         racine = domaine.split(".")[0]
-        if racine and racine not in noms:
+        if racine and len(racine) >= RACINE_DOMAINE_MIN and racine not in noms:
             noms.append(racine)
     return noms
 
@@ -174,19 +185,24 @@ def sans_mentions_de_source(caption: str, article) -> str:
 
 
 def credit_de_compte(credit: str | None) -> str | None:
-    """Le credit affiche sous le post, seulement s'il nomme un COMPTE (`@handle`).
+    """Le credit affiche sous le post, ne gardant que les tokens qui nomment un
+    COMPTE (`@handle`) -- jamais tout-ou-rien.
 
     `credit_des_actifs` (`app/content/visuels.py`) n'emet plus de credit de
     DOMAINE pour un post NOUVEAU (decision de l'utilisateur, 2026-09-21), mais
-    des brouillons deja en base en portent un (« djmag.com », article 59, pose
-    avant cette regle) -- ce filet vaut aussi a l'AFFICHAGE, seul endroit que
-    TOUS les chemins traversent (publication, export, essai a la main). Un
-    credit de compte porte toujours au moins un `@` (`credit_video`,
-    `compte_du_visuel`) ; un domaine, jamais.
+    un brouillon DEJA EN BASE, compose par l'ancienne version, peut porter un
+    credit MIXTE : un fond d'origine `artiste` (« @fredagain ») qui s'avere
+    etre une affiche ouvre une reserve qui peut ajouter un actif `web`
+    (« ra.co ») au MEME `actifs` (ordre compte -> artiste -> web dans
+    `choix_visuels.py`), et l'ancien `credit_des_actifs` les concatenait tous.
+    Jeter le credit ENTIER des qu'un seul token n'est pas un `@handle`
+    effacerait alors un credit d'artiste pourtant legitime -- le plan est
+    clair : « les credits de COMPTE restent strictement inchanges ». On ne
+    retire donc que les tokens qui ne sont pas des comptes ; un domaine, lui,
+    ne porte jamais de `@` (`credit_video`, `compte_du_visuel`).
     """
-    if not credit or not all(mot.startswith("@") for mot in credit.split()):
-        return None
-    return credit
+    comptes = [mot for mot in (credit or "").split() if mot.startswith("@")]
+    return " ".join(comptes) or None
 
 
 def normaliser_hashtags(tags) -> list[str]:
