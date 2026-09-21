@@ -770,9 +770,12 @@ tolérable comme les emojis ou les accents — le retirer après coup est
 nécessaire, `app/content/legende.sans_mentions_de_source` retire les phrases
 qui nomment la source de l'article (nom de la source nettoyé de son canal,
 domaine de l'URL avec et sans TLD — construits depuis l'article, jamais
-devinés), appliqué à la composition (`create_post`) pour que la légende
-persistée soit déjà celle qui part en ligne ; une légende qui deviendrait vide
-part telle quelle.
+devinés), appliqué à la composition — dans la boucle du compositeur, AVANT
+le contrôle de forme, et encore dans `create_post` (idempotent) — pour que la
+légende persistée soit déjà celle qui part en ligne ; une légende qui
+deviendrait vide part telle quelle. Avant le contrôle et pas après : retirer
+une dernière phrase « Info via Tsugi. » pouvait sinon laisser en fin de légende
+la question que le contrôle de clôture venait d'écarter.
 
 **Le filet ne bannit le NOM de la source que si c'est un MÉDIA** (catégorie
 `media`, ou `None` : dans le doute on protège du plagiat). Ne pas simplifier
@@ -784,10 +787,20 @@ perdait sa première phrase — celle qui porte l'actu —, c'est-à-dire la
 mutilation des posts mêmes que le feed priorise. La racine sans TLD suit la
 même règle (elle n'est bannissable que parce qu'elle se confond avec le nom de
 la source) ; le domaine COMPLET (`astropolis.org`) nomme un site, jamais le
-sujet, et reste banni dans tous les cas. La clôture en question, elle, est un défaut de FORME :
+sujet, et reste banni dans tous les cas.
+
+La clôture en question, elle, est un défaut de FORME :
 `probleme_cloture_question()` suit exactement `probleme_emojis()` /
-`probleme_accents()`, relance une fois puis accepte avec un warning plutôt que
-de perdre un créneau.
+`probleme_accents()`, relance puis accepte avec un warning plutôt que de perdre
+un créneau. **La dernière phrase ne se termine JAMAIS par une question**, et le
+prompt dit la même chose que le contrôle (revue du 2026-09-21) : il proposait
+encore « une question » parmi les clôtures possibles alors que le contrôle les
+refuse toutes — sur un modèle qui en mettait six sur six, une relance quasi
+systématique, jusqu'à trois appels `composer_model` par composition. Un
+contrôle sans mémoire ne sait pas faire « de temps en temps », seulement
+« jamais » : c'est la question qui est sortie des clôtures proposées, pas le
+contrôle qui s'est assoupli. Une question reste permise au milieu de la
+légende.
 
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 

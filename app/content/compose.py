@@ -224,6 +224,14 @@ def probleme_cloture_question(caption: str) -> str | None:
     composition d'un creneau. Le compositeur relance, puis accepte avec un
     avertissement : une legende qui finit par une question de plus vaut mieux
     que pas de post.
+
+    Et le prompt dit la MEME chose (revue du 2026-09-21) : il proposait encore
+    « une question » parmi les clotures, alors que ce controle les refuse
+    toutes -- sur un modele qui en mettait six sur six, c'etait une relance
+    quasi systematique, jusqu'a trois appels `composer_model` par composition.
+    Un controle sans memoire ne sait pas faire « de temps en temps », seulement
+    « jamais » : c'est donc la question qui sort des clotures du prompt, pas le
+    controle qui s'assouplit. Une question reste permise AU MILIEU de la legende.
     """
     fin = _EMOJI_RE.sub("", caption).rstrip()
     if not fin.endswith("?"):
@@ -233,8 +241,8 @@ def probleme_cloture_question(caption: str) -> str | None:
         "derniers posts publies sur le compte -- cette repetition s'entend comme "
         "un tic de machine. Termine autrement : un fait qui reste pour la fin, "
         "une date ou un lieu a retenir, une projection sur la suite, une phrase "
-        "qui referme l'actu. Une question reste possible de temps en temps, mais "
-        "pas a chaque legende."
+        "qui referme l'actu. La derniere phrase ne se termine jamais par un "
+        "point d'interrogation."
     )
 
 
@@ -299,11 +307,12 @@ Pas de hashtags dans la legende, et AUCUN balisage ** : le surlignage n'existe \
 que sur la cover, qui est une image ; dans la legende les asterisques \
 s'afficheraient telles quelles.
 La CLOTURE depend de la nature de l'actu, et NE PREND PAS TOUJOURS LA MEME \
-FORME -- alterne, ne finis pas systematiquement par une question :
-- actu ordinaire (annonce, sortie, line-up, date, record) : termine par une \
-question, une invitation a reagir, un fait marquant garde pour la fin, une \
-date ou un lieu a retenir, ou une projection sur la suite. Varie reellement \
-d'une composition a l'autre plutot que de retomber toujours sur la question.
+FORME -- alterne. La derniere phrase ne se termine JAMAIS par une question : \
+une question peut vivre au milieu de la legende, jamais a la fin.
+- actu ordinaire (annonce, sortie, line-up, date, record) : termine par un \
+fait marquant garde pour la fin, une date ou un lieu a retenir, une \
+projection sur la suite, ou une invitation a reagir formulee sans point \
+d'interrogation. Varie reellement d'une composition a l'autre.
 - ACTU TERMINALE -- annulation, liquidation judiciaire, faillite, deces, \
 separation d'un groupe, derniere edition, arret definitif -- : termine par une \
 projection (ce qui reste, ce qui vient apres) ou par un hommage. JAMAIS par une \
@@ -437,6 +446,13 @@ def make_claude_composer(
                     article.id, tentative, max_attempts, raison,
                 )
                 continue
+            # Le filet des sources AVANT le controle de forme. Applique apres
+            # (dans `create_post`), il pouvait retirer la derniere phrase
+            # (« Info via Tsugi. ») et remettre en fin de legende la question
+            # que le controle venait d'ecarter : la garantie n'en etait pas une.
+            nettoyee = sans_mentions_de_source(draft.caption, article)
+            if nettoyee != draft.caption:
+                draft = draft.model_copy(update={"caption": nettoyee})
             probleme = probleme_de_legende(draft.caption)
             if probleme is None:
                 return draft

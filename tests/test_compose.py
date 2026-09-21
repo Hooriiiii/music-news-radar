@@ -1128,3 +1128,52 @@ def test_la_grande_photo_d_un_doublon_devient_le_fond_quand_celle_de_l_actu_est_
     assert post.slides[0]["image_url"] == grande
     assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
     assert ouverts == []
+
+
+# --- Prompt et controle de cloture coherents (revue du 2026-09-21, I-5) ----
+#
+# Le prompt proposait encore « une question » parmi les clotures possibles, et
+# le controle refusait TOUTE cloture en `?` : sur un historique ou 6 posts sur 6
+# finissaient par une question, une relance quasi systematique -- jusqu'a trois
+# appels `composer_model` par composition. Tranche : la question sort des
+# clotures proposees. Un controle sans memoire ne sait pas faire « de temps en
+# temps », il ne sait faire que « jamais » ; c'est donc le prompt qui s'aligne.
+
+
+def test_le_prompt_ne_propose_plus_la_question_comme_cloture():
+    assert "termine par une \\\nquestion" not in SYSTEM_PROMPT
+    assert "termine par une question" not in SYSTEM_PROMPT.replace("\n", " ")
+    assert "JAMAIS par une question" in SYSTEM_PROMPT
+
+
+def test_la_relance_ne_dit_plus_qu_une_question_reste_possible():
+    probleme = probleme_cloture_question("Le festival revient. On y va ?")
+    assert "reste possible" not in probleme
+
+
+def test_le_filtre_des_sources_passe_avant_le_controle_de_cloture(db_session):
+    """Applique APRES la validation, `sans_mentions_de_source` pouvait retirer la
+    derniere phrase et laisser en fin de legende la question que le controle
+    venait d'ecarter : « ... Vous y serez ? Info via Tsugi. » passait le
+    controle, puis partait en ligne sur « Vous y serez ? »."""
+    article = _article(db_session)
+    cachee = _draft_legende("Le festival revient en octobre 🎧. Vous y serez ✨? Info via Tsugi.")
+    variee = _draft_legende("Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨")
+    client = _FakeClient([_FakeParsedResponse(cachee), _FakeParsedResponse(variee)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is variee
+    assert len(client.messages.appels) == 2
+
+
+def test_le_brouillon_rendu_porte_deja_la_legende_filtree(db_session):
+    article = _article(db_session)
+    draft = _draft_legende(
+        "Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨. Info via Tsugi."
+    )
+    client = _FakeClient([_FakeParsedResponse(draft)])
+
+    resultat = make_claude_composer(client=client, max_attempts=3)(article)
+
+    assert "Tsugi" not in resultat.caption
+    assert resultat.caption.endswith("vendredi ✨.")
