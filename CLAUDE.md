@@ -159,6 +159,11 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Nettoyage des URL de médias déjà en base (entités HTML) :
   `uv run python -m scripts.nettoyer_urls_medias [--apply]` (sans `--apply` :
   le plan ; idempotent — voir « URL de médias » dans les contraintes)
+- Remplissage des durées de vidéos déjà en base :
+  `uv run python -m scripts.remplir_durees_medias [--apply]` (sans `--apply` :
+  le plan ; idempotent — voir « La durée d'une vidéo Instagram » dans les
+  contraintes). Passé en production le 2026-09-21 : 655 vidéos datées dans 273
+  articles et 12 posts, dont 25 au-delà de la limite du reel.
 - Tests : `uv run pytest`
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
@@ -389,7 +394,7 @@ sentinelle (`tests/test_quota_graph.py`) échoue si un module de `app/publish` o
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
-Les articles sont purgés à 14 jours ; **les artistes et leurs citations, jamais**.
+Les articles sont purgés à 2 jours ; **les artistes et leurs citations, jamais**.
 Ce qui intéresse un label n'est pas « qui est cité aujourd'hui » mais « depuis quand,
 à quelle fréquence, est-ce que ça accélère » — cette courbe est l'actif de Kinda.
 `app/pipeline/artists.py` : `record_mentions()` (idempotent, tourne après le scoring
@@ -887,6 +892,28 @@ systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'u
 post qui ne porte plus l'article de son créneau (gel ou publication refusés,
 erreur posée).
 
+**Une VIDÉO inadaptée n'est pas une faute de l'ARTICLE** (2026-09-21,
+`preparation_reel.ReelInadapte`). L'article 18951 (Billboard, « The Weeknd
+Debuts New Song Sampling "Neon Genesis Evangelion" Theme ») a été exclu à vie
+parce qu'une vidéo de 190 s dépassait la limite du reel — or cet article n'avait
+qu'**une photo** : la vidéo était EMPRUNTÉE à un compte d'artiste suivi
+(`choix_visuels` / `_porteur_video`). On brûlait une actu à cause d'un visuel
+prêté. `verifier_source` lève donc une exception distincte, sous-classe de
+`PreparationImpossible` pour que tout ce qui l'attrape déjà continue de la
+traiter comme un refus de gel (même motif qu'`ImageEcartee` sous
+`ImageInexploitable`) ; le gel la reconnaît et **libère le créneau sans
+exclure**, comme pour une inéligibilité relue.
+
+Mais libérer ne suffit pas : sans mémoire, la même vidéo serait rechoisie au
+créneau suivant et **recomposée à chaque fois** (Claude payé) — c'est
+l'exclusion qui tenait ce rôle. L'exception porte donc la durée MESURÉE par
+ffprobe, sa vidéo et l'article qui la détient, et `runner._memoriser_duree`
+l'écrit dans `articles.media` : `videos_exploitables` l'écarte alors des reels
+pour toujours, sans fermer les carrousels à l'article. **Si la leçon ne peut pas
+être écrite** — article introuvable, ou URL qui ne correspond à aucun média, le
+cas d'un repli yt-dlp qui porte un permalink —, on retombe sur l'exclusion : la
+protection d'avant, là où l'information manque.
+
 **Le dashboard édite pendant un passage.** L'agent relit chaque créneau avant de
 le modifier et n'écrit le résultat d'une composition, d'un gel ou d'une
 réclamation que par un UPDATE conditionnel (état, article, post attendus) ; si le
@@ -1296,7 +1323,8 @@ cover part sur l'image de secours du gabarit.
 éditoriale (savoir ce qui a été publié, ne pas le reposter). `REVIEWED` n'est que du
 tri et ne protège pas.
 
-On ne garde en base que les articles publiés dans les `retention_days` (14) derniers
+On ne garde en base que les articles publiés dans les `retention_days` (**2** depuis le
+2026-09-21 ; 14 auparavant) derniers
 jours, par DATE DE POST (`published_at`), pas date d'ajout — `app/pipeline/retention.py`.
 Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hors fenêtre).
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
@@ -1407,6 +1435,21 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   le post reste illustré et identifiable comme reel, et `video_recuperable` dit
   si yt-dlp pourra le chercher au gel (permalink `/reel/`, ou vidéo seule).
   L'offre (`directes` contre le reste) est à surveiller au dashboard.
+- **La durée d'une vidéo Instagram n'est pas dans Graph, elle est dans son
+  URL.** Le champ demandé est `media_url,thumbnail_url` et rien d'autre : les
+  642 vidéos Instagram de la base avaient `duration_ms` à NULL le 2026-09-21.
+  Or `videos_exploitables` laisse passer une durée INCONNUE — choix assumé
+  (« mieux vaut proposer le reel que griser un bouton sur une donnée absente »).
+  Conséquence mesurée ce jour-là : une vidéo de **190 s** est restée éligible,
+  a fait composer un post (Sonnet payé) et n'a échoué qu'au gel, APRÈS
+  téléchargement. L'URL signée du CDN portait pourtant la réponse depuis le
+  début, dans le paramètre `efg` (base64 → JSON → `duration_s`) : **642 sur
+  642** le portaient. D'où `media.duree_depuis_url()`, appelée dans `entree()`
+  — le point de passage de toutes les sources — en DERNIER recours seulement :
+  une durée donnée par la source (sonde ffprobe, API X) est mesurée, celle de
+  l'URL n'est que déclarative, et elle n'est jamais écrasée. Le module ne lève
+  jamais : paramètre absent, base64 ou JSON invalide, valeur absurde → `None`,
+  donc exactement le comportement d'avant.
 - **Le quota Graph de l'app est partagé et vite atteint** : le 2026-09-17, ~310
   appels de vérification plus un passage sur 120 comptes dans la même heure ont
   rendu l'erreur code 4 (« Application request limit reached ») pendant une heure.

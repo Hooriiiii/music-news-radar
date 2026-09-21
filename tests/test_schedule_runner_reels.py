@@ -569,3 +569,50 @@ def test_le_compositeur_apprend_de_quel_compte_vient_la_video(db_session, video)
 
     assert (outils.composes, outils.comptes_visuels) == ([video.id], ["@saralandry"])
     assert db_session.get(Post, reel.post_id).template == "kinda_reel"
+
+
+# --- Une video empruntee trop longue ne brule plus l'actu (2026-09-21) --------
+
+def _reel_inadapte(url, article_id):
+    from app.publish.preparation_reel import ReelInadapte
+
+    return ReelInadapte(
+        "video trop longue : 190 s, maximum 90 s",
+        url=url, duree_ms=190_000, article_id=article_id,
+    )
+
+
+def test_une_video_trop_longue_libere_le_creneau_et_retient_la_duree(db_session, video):
+    """Cas reel du 21/09 : l'article 18951 (Billboard, une seule photo) a ete
+    exclu a vie a cause d'une video de 190 s empruntee a un compte d'artiste.
+    On libere sans exclure -- mais on ECRIT la duree mesuree, sinon la meme
+    video serait rechoisie et recomposee (Claude paye) a chaque creneau."""
+    post = _post(db_session, video, "kinda_reel", "@saralandry")
+    creneau = _epingle(db_session, BASE + dt.timedelta(hours=1), FormatCreneau.REEL, video, post)
+    url = video.media[0]["url"]
+    outils = Outils()
+    outils.erreurs_preparation_reel = [_reel_inadapte(url, video.id)]
+
+    outils.tourner(db_session, BASE)
+
+    assert (creneau.etat, creneau.article_id, creneau.post_id) == (EtatCreneau.LIBRE, None, None)
+    assert "trop longue" in creneau.erreur
+    db_session.refresh(video)
+    assert video.file_exclu_raison is None
+    assert video.media[0]["duration_ms"] == 190_000
+
+
+def test_une_video_dont_on_ne_sait_pas_ecrire_la_duree_exclut_comme_avant(db_session, video):
+    """Un repli yt-dlp porte un PERMALINK, qui ne correspond a aucune entree de
+    `media` : impossible de retenir la lecon. Sans exclusion, le meme article
+    serait recompose a chaque creneau -- on garde donc le comportement d'avant."""
+    post = _post(db_session, video, "kinda_reel", "@saralandry")
+    creneau = _epingle(db_session, BASE + dt.timedelta(hours=1), FormatCreneau.REEL, video, post)
+    outils = Outils()
+    outils.erreurs_preparation_reel = [_reel_inadapte("https://www.instagram.com/reel/XXX/", video.id)]
+
+    outils.tourner(db_session, BASE)
+
+    assert creneau.etat == EtatCreneau.LIBRE
+    db_session.refresh(video)
+    assert "trop longue" in video.file_exclu_raison

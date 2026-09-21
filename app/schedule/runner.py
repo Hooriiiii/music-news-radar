@@ -74,6 +74,7 @@ from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite,
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
+from app.publish.preparation_reel import ReelInadapte
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -206,6 +207,38 @@ def _liberer(db, creneau: Creneau, attendu: tuple, raison: str) -> bool:
         db, creneau, attendu,
         article_id=None, post_id=None, etat=EtatCreneau.LIBRE, epingle=False, erreur=raison[:1000],
     )
+
+
+def _memoriser_duree(db, exc: ReelInadapte) -> bool:
+    """Ecrit dans `articles.media` la duree que ffprobe vient de mesurer.
+
+    Graph ne donne aucune duree pour une video : le champ reste a None et
+    `videos_exploitables` laisse passer l'inconnu. La sonde du gel est la
+    premiere mesure fiable -- la perdre, c'est refaire le meme telechargement
+    (et la meme composition payee) au creneau suivant.
+
+    Rend False quand la lecon n'a pas pu etre ecrite (article introuvable, ou
+    URL qui ne correspond a aucun media -- le cas d'un permalink yt-dlp) :
+    l'appelant retombe alors sur l'exclusion, la protection d'avant.
+    """
+    if exc.article_id is None or exc.url is None or exc.duree_ms is None:
+        return False
+    article = db.get(Article, exc.article_id, populate_existing=True)
+    if article is None:
+        return False
+    # Liste NEUVE : une colonne JSON ne persiste pas une mutation en place.
+    media, touche = [], False
+    for entree_media in article.media or []:
+        if not touche and isinstance(entree_media, dict) and entree_media.get("url") == exc.url:
+            media.append({**entree_media, "duration_ms": exc.duree_ms})
+            touche = True
+        else:
+            media.append(entree_media)
+    if not touche:
+        return False
+    article.media = media
+    db.commit()
+    return True
 
 
 def _deja_publie(article: Article | None, post: Post | None) -> bool:
@@ -480,6 +513,19 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             erreur = f"gel differe : {exc}"[:1000]
             if creneau.erreur != erreur:
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
+            continue
+        except ReelInadapte as exc:
+            # La VIDEO ne convient pas, l'article si -- elle est souvent empruntee
+            # a un compte d'artiste (article 18951, 2026-09-21). On libere sans
+            # exclure, mais SEULEMENT si on a su ecrire la duree mesuree : sans
+            # cette trace, la meme video serait rechoisie et recomposee a chaque
+            # creneau, et c'est l'exclusion qui tenait ce role.
+            if not _memoriser_duree(db, exc):
+                _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)
+                exclusions = True
+                continue
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : reel impossible : {exc}")
+            _liberer(db, creneau, attendu, f"reel impossible : {exc}")
             continue
         except PreparationImpossible as exc:
             _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)
