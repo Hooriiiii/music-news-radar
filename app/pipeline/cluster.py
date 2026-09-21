@@ -207,6 +207,23 @@ def link_duplicates(
     autant). Et le budget d'un passage sert d'abord les paires JAMAIS tentées
     (passe 1) avant de rejouer celles déjà en échec, sous le plafond (passe 2)
     -- un article n'est promu nouveau représentant qu'après ces deux passes.
+    Un article DIFFÉRÉ en passe 1 reste néanmoins un représentant POSSIBLE
+    dès cette passe (tour de correction 2/5) : sinon un article frais plus
+    RÉCENT qui le reprend usurpe sa place, et le plus ancien finit par se lier
+    au plus récent -- l'inverse de la règle ci-dessus. S'il résout finalement
+    vers l'archive en passe 2, tout article qui l'avait pris pour
+    représentant entre-temps est REPOINTÉ directement vers la vraie cible :
+    jamais de chaîne à deux sauts.
+
+    **Le manuel converge, il ne parie pas sur l'ordre des écritures** (tour de
+    correction 2/5, LE défaut le plus important trouvé en re-revue) : un
+    lien tranché par Claude n'est posé qu'après avoir RELU le disque -- si un
+    verdict manuel "différent" y est apparu entre l'appel à l'arbitre et cet
+    instant (l'utilisateur qui corrige PENDANT que Claude répond le
+    contraire), le lien n'est pas posé. Et en tête de CHAQUE passage, une
+    auto-réparation défait tout lien déjà présent en base dont la paire porte
+    un verdict manuel "différent", quelle que soit la façon dont il est
+    apparu (course, crash entre deux écritures, version antérieure du code).
     """
     archive_days = settings.cluster_archive_jours if archive_days is None else archive_days
     archive_threshold = (
@@ -221,11 +238,42 @@ def link_duplicates(
     seen_at = func.coalesce(Article.published_at, Article.fetched_at)
     now = dt.datetime.now(dt.timezone.utc)
     cutoff = now - dt.timedelta(hours=window_hours)
+    archive_cutoff = now - dt.timedelta(days=archive_days)
+
+    stats = ClusterStats()
+    # Le cache est TOUJOURS lu (lecture de fichier, jamais d'appel réseau) :
+    # un verdict manuel ou déjà arbitré doit valoir même quand `arbitre` est
+    # absent (c'est le cas de `run_veille`), sans jamais coûter un appel.
+    cache = lire_cache(cache_chemin)
+
+    # AUTO-RÉPARATION, à CHAQUE passage, AVANT toute lecture des candidats
+    # (tour de correction 2/5) : un lien déjà posé EN BASE dont la paire porte
+    # un verdict manuel "différent" est défait ici, quelle que soit la façon
+    # dont il est apparu -- une course non prévue entre l'arbitre et
+    # `scripts.marquer_doublon_manuel` (l'utilisateur corrige PENDANT que
+    # Claude répond "même actu" dans le même passage), un crash entre deux
+    # écritures, ou un lien posé par une version antérieure du code. Posé
+    # AVANT les requêtes ci-dessous : un article tout juste délié doit pouvoir
+    # redevenir un candidat de CE passage, pas seulement du suivant. Le
+    # verdict manuel devient ainsi une propriété qui CONVERGE, plutôt qu'un
+    # pari sur l'ordre relatif de deux écritures.
+    for cle, entree in cache.entrees.items():
+        if not entree.manuel or entree.meme_actu:
+            continue
+        try:
+            id_gauche, id_droite = (int(part) for part in cle.split(":"))
+        except ValueError:
+            continue
+        for id_article, id_representant in ((id_gauche, id_droite), (id_droite, id_gauche)):
+            article_lie = db.get(Article, id_article)
+            if article_lie is not None and article_lie.duplicate_of_id == id_representant:
+                article_lie.duplicate_of_id = None
+                article_lie.file_exclu_raison = None
+    db.commit()
+
     articles = db.scalars(
         select(Article).where(seen_at >= cutoff).order_by(seen_at, Article.id)
     ).all()
-
-    archive_cutoff = now - dt.timedelta(days=archive_days)
     archived = db.scalars(
         select(Article).where(
             Article.status == ArticleStatus.USED,
@@ -242,11 +290,7 @@ def link_duplicates(
     representatives: list[tuple[Article, set[str], bool]] = [
         (article, significant_tokens(article.title), True) for article in archived
     ]
-    stats = ClusterStats()
-    # Le cache est TOUJOURS lu (lecture de fichier, jamais d'appel réseau) :
-    # un verdict manuel ou déjà arbitré doit valoir même quand `arbitre` est
-    # absent (c'est le cas de `run_veille`), sans jamais coûter un appel.
-    cache = lire_cache(cache_chemin)
+
     # Etat de travail pour ce passage SEULEMENT : jamais écrit tel quel, fusionné
     # avec une relecture du disque juste avant l'écriture (voir `fusionner_et_
     # ecrire`) pour ne jamais effacer un verdict manuel posé pendant ce passage.
@@ -262,6 +306,13 @@ def link_duplicates(
         nonlocal appels_restants
         differe = False
         for rep_article, rep_tokens, rep_archive in representatives:
+            if rep_article is article:
+                # Un article différé (tour de correction 2/5) est ajouté à
+                # `representatives` en passe 1 pour rester un représentant
+                # POSSIBLE pour d'autres articles frais -- jamais pour
+                # lui-même : sans ce garde-fou, sa propre entrée matcherait à
+                # coup sûr (mêmes jetons) et le lierait à... lui-même.
+                continue
             cle = cle_paire(article.id, rep_article.id)
             entree = cache.entrees.get(cle)
             if entree is not None and entree.manuel:
@@ -326,6 +377,20 @@ def link_duplicates(
             representatives.append((article, tokens, False))
             return
         rep_article, score, origine, raison = resultat
+        if origine == "arbitre":
+            # Relecture juste AVANT de poser un lien tranché par Claude (tour
+            # de correction 2/5, cas 2, LE défaut le plus important du
+            # chantier) : entre l'appel à l'arbitre et cet instant, un verdict
+            # manuel "différent" a pu apparaître sur le DISQUE -- typiquement
+            # l'utilisateur qui corrige PENDANT que Claude répond "même actu"
+            # dans le même passage. Le cache en mémoire (lu une fois en début
+            # de passage) ne le sait pas encore ; ne pas relire ici poserait
+            # le lien quand même, contredisant le verdict humain qui vient
+            # d'être écrit.
+            fraiche = lire_cache(cache_chemin).entrees.get(cle_paire(article.id, rep_article.id))
+            if fraiche is not None and fraiche.manuel and not fraiche.meme_actu:
+                representatives.append((article, tokens, False))
+                return
         article.duplicate_of_id = rep_article.id
         if origine == "frais":
             stats.frais += 1
@@ -357,8 +422,12 @@ def link_duplicates(
         )
 
     # Passe 1 : sert les paires jamais tentées en priorité. Un article dont le
-    # SEUL candidat pertinent est une paire déjà en échec est différé, pas
-    # promu représentant tout de suite -- sa véritable issue attend la passe 2.
+    # SEUL candidat pertinent est une paire déjà en échec est différé, mais
+    # reste un REPRÉSENTANT POSSIBLE pour les articles frais traités plus tard
+    # dans CETTE passe (mineur trouvé en revue, tour de correction 2/5) :
+    # sans ça, un article plus récent usurperait la place du plus ancien dans
+    # la docstring ("le représentant est l'article vu le PLUS TÔT"), puisque
+    # l'ancien n'aurait alors jamais figuré parmi les candidats.
     differes: list[tuple[Article, set[str]]] = []
     for article in articles:
         if article.duplicate_of_id is not None:
@@ -367,6 +436,7 @@ def link_duplicates(
         resultat = resoudre(article, tokens, autoriser_retentatives=False)
         if resultat is DIFFERE:
             differes.append((article, tokens))
+            representatives.append((article, tokens, False))
             continue
         appliquer(article, tokens, resultat)
 
@@ -375,6 +445,16 @@ def link_duplicates(
     for article, tokens in differes:
         resultat = resoudre(article, tokens, autoriser_retentatives=True)
         appliquer(article, tokens, resultat)
+        if article.duplicate_of_id is not None:
+            # Cet article servait déjà de représentant possible depuis la
+            # passe 1 (ajout ci-dessus) : s'il devient lui-même un doublon ICI,
+            # tout article qui l'avait pris pour représentant doit être
+            # REPOINTÉ directement vers SA cible -- jamais de chaîne (voir la
+            # docstring de `link_duplicates`, "un seul saut suffit toujours").
+            for pointeur in db.scalars(
+                select(Article).where(Article.duplicate_of_id == article.id)
+            ):
+                pointeur.duplicate_of_id = article.duplicate_of_id
 
     db.commit()
     tentatives_modifiees = {

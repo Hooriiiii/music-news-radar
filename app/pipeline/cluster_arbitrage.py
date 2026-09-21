@@ -58,6 +58,29 @@ si l'ecriture n'est pas confirmee par une relecture : le script appelant ne
 doit JAMAIS delier un article en base sur la foi d'un verdict qui n'a pas ete
 durablement pose (meme defaut que l'ancienne procedure, en silence cette
 fois-ci).
+
+**Tour de correction 2/5 (re-revue).** Deux defauts de plus, et un residu :
+
+1. Le cas le PLUS IMPORTANT du chantier : l'utilisateur marque une paire
+   "differente" PENDANT que Claude, sur ce meme appel, repond "meme actu".
+   Le cache retenait bien le manuel comme gagnant, mais le LIEN etait quand
+   meme pose et commite dans le meme passage (rien n'etait encore lie au
+   moment ou l'utilisateur a agi). Remede en DEUX parties, dans
+   `cluster.link_duplicates` : `appliquer()` RELIT le disque juste avant de
+   poser un lien tranche par Claude (voir `cluster.py`) ; et une
+   AUTO-REPARATION tourne en tete de CHAQUE passage, ici meme, qui defait
+   tout lien deja present en base dont la paire porte un verdict manuel
+   "different" -- quelle que soit la course qui l'a pose. Le verdict manuel
+   CONVERGE, il ne parie plus sur l'ordre de deux ecritures.
+2. `lire_cache` confondait un fichier ABSENT (cache vide, normal) et un
+   fichier PRESENT mais illisible (corrompu) -- les deux rendaient un cache
+   vide. Une fonction qui lit PUIS ecrit (`fusionner_et_ecrire`,
+   `marquer_manuel`) prenait donc un cache corrompu pour un cache vide et
+   l'ecrasait, perdant tous les verdicts existants, manuels compris.
+   `_lire_pour_ecriture` distingue les deux : absent reste un cache vide,
+   present-et-illisible LEVE -- `fusionner_et_ecrire` capture cette
+   exception et n'ecrit RIEN (annulation complete, erreur journalisee),
+   `marquer_manuel` la laisse remonter (le script sort en erreur, comme I3).
 """
 
 import json
@@ -186,31 +209,62 @@ def _chemin_cache() -> Path:
     return settings.cluster_arbitrage_cache_path
 
 
+def _lire_brut(chemin: Path) -> dict | None:
+    """`None` si le fichier n'EXISTE pas -- le cas normal du tout premier
+    passage. LEVE si le fichier existe mais ne se laisse pas lire ou parser :
+    distinguer les deux est le coeur du residu ferme au tour de correction
+    2/5 -- une fonction qui va ENSUITE ECRIRE ne doit jamais confondre
+    « rien encore » et « corrompu », sous peine d'ecraser silencieusement
+    tous les verdicts existants, manuels compris."""
+    if not chemin.exists():
+        return None
+    return json.loads(chemin.read_text(encoding="utf-8"))
+
+
+def _cache_depuis_json(brut: dict) -> Cache:
+    if brut.get("version") != CACHE_VERSION:
+        raise ValueError(f"version de cache inattendue : {brut.get('version')!r}")
+    entrees = {
+        cle: EntreeArbitrage(
+            meme_actu=bool(ligne["meme_actu"]),
+            raison=str(ligne["raison"]),
+            manuel=bool(ligne.get("manuel", False)),
+        )
+        for cle, ligne in (brut.get("verdicts") or {}).items()
+    }
+    tentatives = {cle: int(valeur) for cle, valeur in (brut.get("tentatives") or {}).items()}
+    return Cache(entrees, tentatives)
+
+
 def lire_cache(chemin: Path | None = None) -> Cache:
-    """Les verdicts et tentatives connus. Jamais d'exception : un fichier
-    absent ou corrompu vaut un cache vide, pas un run casse. Pas de TTL sur
+    """Lecture SEULE, tolerante : un fichier absent OU illisible vaut un
+    cache vide, jamais une exception. C'est le bon comportement pour un
+    consommateur qui ne fait QUE lire (`link_duplicates`, en debut de
+    passage) -- il ne risque pas d'ecraser quoi que ce soit. Pas de TTL sur
     les verdicts : un verdict sur une paire de titres/resumes figes ne
-    « perime » pas comme la lecture d'une image."""
+    « perime » pas comme la lecture d'une image.
+
+    Les fonctions qui ECRIVENT ensuite (`fusionner_et_ecrire`,
+    `marquer_manuel`) n'appellent PAS cette fonction pour leur propre
+    relecture -- voir `_lire_pour_ecriture`, qui NE masque PAS un fichier
+    corrompu."""
     chemin = chemin or _chemin_cache()
     try:
-        brut = json.loads(chemin.read_text(encoding="utf-8"))
-        if brut.get("version") != CACHE_VERSION:
-            return Cache({})
-        entrees = {
-            cle: EntreeArbitrage(
-                meme_actu=bool(ligne["meme_actu"]),
-                raison=str(ligne["raison"]),
-                manuel=bool(ligne.get("manuel", False)),
-            )
-            for cle, ligne in (brut.get("verdicts") or {}).items()
-        }
-        tentatives = {
-            cle: int(valeur) for cle, valeur in (brut.get("tentatives") or {}).items()
-        }
-        return Cache(entrees, tentatives)
+        brut = _lire_brut(chemin)
+        return Cache({}) if brut is None else _cache_depuis_json(brut)
     except Exception as exc:  # noqa: BLE001 -- un cache illisible n'est qu'un cache vide
         logger.info("cache d'arbitrage de doublons illisible (%s)", type(exc).__name__)
         return Cache({})
+
+
+def _lire_pour_ecriture(chemin: Path) -> Cache:
+    """Comme `lire_cache`, mais un fichier PRESENT et illisible fait LEVER
+    l'exception d'origine au lieu de la masquer : l'appelant s'apprete a
+    ECRIRE juste apres, et un cache vide sur cette base effacerait tous les
+    verdicts existants -- manuels compris -- d'un seul fichier corrompu. Un
+    fichier ABSENT reste un cache vide normal (premier passage)."""
+    brut = _lire_brut(chemin)
+    return Cache({}) if brut is None else _cache_depuis_json(brut)
 
 
 def _contenu_json(cache: Cache) -> dict:
@@ -275,9 +329,21 @@ def fusionner_et_ecrire(
     et simplement (reproduit en revue). Cette fonction relit le disque a
     l'instant de l'ecriture : un verdict manuel qui y figure GAGNE toujours,
     que ce passage ait ou non une decision concurrente pour la meme paire.
+
+    Si le disque est PRESENT mais illisible a cet instant (corruption, panne
+    disque), l'ecriture est ANNULEE entierement -- jamais un ecrasement par
+    un cache vide, qui perdrait tous les verdicts existants, manuels compris
+    (residu ferme au tour de correction 2/5). Le passage suivant retentera.
     """
     chemin = chemin or _chemin_cache()
-    disque = lire_cache(chemin)
+    try:
+        disque = _lire_pour_ecriture(chemin)
+    except Exception as exc:  # noqa: BLE001 -- ne jamais ecraser sur la foi d'un doute
+        logger.warning(
+            "cache d'arbitrage de doublons illisible : ecriture ANNULEE pour ne pas "
+            "ecraser d'eventuels verdicts existants (%s)", type(exc).__name__,
+        )
+        return
     entrees = dict(disque.entrees)
     for cle, entree in nouveaux_verdicts.items():
         existante = entrees.get(cle)
@@ -310,10 +376,17 @@ def marquer_manuel(
     script) ne doit jamais delier un article en base sur la foi d'un verdict
     qui n'a pas ete durablement pose -- c'est exactement de cette facon
     silencieuse que l'ancienne procedure (effacer deux champs sans rien
-    memoriser) echouait.
+    memoriser) echouait. LEVE de la meme facon si le cache existant est
+    PRESENT mais illisible : y ecrire quand meme effacerait tous les verdicts
+    deja poses, manuels compris (residu ferme au tour de correction 2/5).
     """
     chemin = chemin or _chemin_cache()
-    cache = lire_cache(chemin)
+    try:
+        cache = _lire_pour_ecriture(chemin)
+    except Exception as exc:
+        raise RuntimeError(
+            f"cache d'arbitrage illisible, verdict manuel NON pose ({chemin}) : {exc}"
+        ) from exc
     cle = cle_paire(id_a, id_b)
     cache.entrees[cle] = EntreeArbitrage(meme_actu, raison, manuel=True)
     # Un verdict manuel efface aussi un compteur d'echecs perime sur la meme

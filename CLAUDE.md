@@ -1577,6 +1577,48 @@ cover part sur l'image de secours du gabarit.
    verdict manuel vaut désormais aussi entre deux articles FRAIS (hors
    archive), pas seulement contre l'archive.
 
+   **Tour de correction 2/5** (re-revue, deux défauts qui échappaient encore
+   au premier tour, plus un mineur et un résidu trouvés en creusant) :
+   1. **Le cas le plus important du chantier** : l'utilisateur marque une
+      paire « différente » PENDANT que Claude, sur le même appel, répond
+      « même actu ». Le cache mémorisait bien le manuel comme gagnant, mais
+      le LIEN, lui, était posé et commité dans le même passage — l'article
+      restait enterré avec une `file_exclu_raison` qui citait Claude, alors
+      que l'utilisateur venait de dire le contraire. Deux remèdes, aucun ne
+      suffisant seul : `appliquer()` (dans `link_duplicates`) RELIT le disque
+      juste avant de poser un lien tranché par Claude et renonce si un
+      manuel « différent » y est apparu entre-temps ; et une AUTO-RÉPARATION
+      tourne en tête de CHAQUE passage — tout lien déjà présent en base dont
+      la paire porte un verdict manuel « différent » est défait
+      (`duplicate_of_id` et `file_exclu_raison` remis à `None`), quelle que
+      soit la façon dont il est apparu (course non prévue, crash entre deux
+      écritures, lien posé par une version antérieure du code). Le verdict
+      manuel devient ainsi une propriété qui CONVERGE, pas un pari sur
+      l'ordre relatif de deux écritures.
+   2. **Un mineur trouvé en creusant** : un article dont la paire d'archive
+      est REPORTÉE (déjà en échec, sous le plafond de tentatives) n'entrait
+      pas dans les représentants possibles pendant la passe 1 — un article
+      FRAIS plus RÉCENT qui le reprenait pouvait donc devenir représentant à
+      sa place, et le plus ANCIEN finissait par se lier au plus récent,
+      l'inverse de la règle « le représentant est l'article vu le plus tôt ».
+      Un article reporté reste désormais un représentant possible dès la
+      passe 1 (avec un garde-fou contre l'auto-comparaison, sinon il se
+      matcherait lui-même), et si ce même article résout finalement vers
+      l'archive en passe 2, tout article qui l'avait entre-temps pris pour
+      représentant est REPOINTÉ directement vers la vraie cible — jamais de
+      chaîne à deux sauts.
+   3. **Un résidu fermé** : `lire_cache` rendait un cache VIDE aussi bien pour
+      un fichier ABSENT (normal, premier passage) que pour un fichier
+      PRÉSENT mais illisible (corruption). Une fonction qui lit PUIS écrit
+      (`fusionner_et_ecrire`, `marquer_manuel`) prenait donc un fichier
+      corrompu pour un cache vide et l'écrasait — perdant TOUS les verdicts
+      existants, manuels compris, d'un seul coup. `_lire_pour_ecriture`
+      distingue les deux cas : absent reste un cache vide normal, présent-
+      et-illisible fait LEVER l'exception d'origine, que `fusionner_et_ecrire`
+      capture pour ANNULER l'écriture (rien n'est perdu, une erreur est
+      journalisée) et que `marquer_manuel` laisse remonter (le script sort en
+      erreur, comme pour I3).
+
 ## Rétention
 
 **Exception `USED`** : un article marqué posté n'est JAMAIS purgé — c'est l'archive

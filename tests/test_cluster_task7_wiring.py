@@ -40,7 +40,23 @@ def test_run_veille_n_arbitre_jamais_meme_active_et_avec_une_cle(db_session, mon
     active l'arbitrage et on pose une cle -- exactement les conditions ou
     `run_pipeline` construirait un arbitre -- et on fait planter la fabrique
     si elle est appelee : la preuve que `run_veille` ne la touche jamais est
-    qu'aucune exception ne remonte ET que la paire douteuse reste non liee."""
+    qu'aucune exception ne remonte ET que la paire douteuse reste non liee.
+
+    Corrige au tour de correction 2/5, apres une re-revue qui a prouve que ce
+    test ne prouvait rien : `T0` etait fige au 2026-09-18 alors que
+    `link_duplicates` lit l'heure REELLE (`dt.datetime.now`), donc la reprise
+    tombait hors de la fenetre de 48h et la bande douteuse n'etait jamais
+    meme examinee -- l'arbitre n'avait aucune occasion d'etre appele, mutation
+    ou pas. Les dates des articles sont donc calees sur `dt.datetime.now`,
+    pas sur `T0` (qui ne sert plus qu'a l'horloge interne de `run_veille`,
+    sans rapport avec la fenetre de `link_duplicates`). Le monkeypatch visait
+    aussi `app.pipeline.cluster_arbitrage.make_claude_arbitre` : sans effet
+    sur `dedupliquer_avec_arbitrage`, qui importe ce nom AU CHARGEMENT dans
+    l'espace de noms de `app.pipeline.run` -- corrige en visant CE nom-la.
+
+    Mutation faite et defaite pour prouver que ce test est utile (voir le
+    rapport de la tache) : `run_veille` branche sur `dedupliquer_avec_arbitrage`
+    au lieu de `link_duplicates` fait bien passer ce test au ROUGE."""
     monkeypatch.setattr(settings, "cluster_arbitrage_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
     monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
@@ -49,12 +65,15 @@ def test_run_veille_n_arbitre_jamais_meme_active_et_avec_une_cle(db_session, mon
     def _fabrique_qui_leve(*a, **k):
         raise AssertionError("run_veille ne doit jamais construire d'arbitre")
 
+    monkeypatch.setattr("app.pipeline.run.make_claude_arbitre", _fabrique_qui_leve)
     monkeypatch.setattr(
         "app.pipeline.cluster_arbitrage.make_claude_arbitre", _fabrique_qui_leve
     )
 
     # Une paire reelle dans la bande douteuse (archive < 0.8, recouvrement >= 0.65
-    # -- memes titres que `tests/test_cluster.py::_paire_douteuse`).
+    # -- memes titres que `tests/test_cluster.py::_paire_douteuse`), datee sur
+    # l'HEURE REELLE : `link_duplicates` ne lit jamais `T0`.
+    maintenant = dt.datetime.now(UTC)
     src_publie = Source(name="media-publie", type=SourceType.RSS, url="https://a/feed")
     src_reprise = Source(name="media-reprise", type=SourceType.RSS, url="https://b/feed")
     src_veille = Source(
@@ -66,12 +85,12 @@ def test_run_veille_n_arbitre_jamais_meme_active_et_avec_une_cle(db_session, mon
     publie = Article(
         source_id=src_publie.id, url="https://a/1",
         title="Boris Brejcha annonce son premier album",
-        raw_hash="1", published_at=T0 - dt.timedelta(days=5), status=ArticleStatus.USED,
+        raw_hash="1", published_at=maintenant - dt.timedelta(days=5), status=ArticleStatus.USED,
     )
     reprise = Article(
         source_id=src_reprise.id, url="https://b/1",
         title="Boris Brejcha devoile une tournee mondiale autour de son premier album",
-        raw_hash="2", published_at=T0 - dt.timedelta(hours=1),
+        raw_hash="2", published_at=maintenant - dt.timedelta(hours=1),
     )
     db_session.add_all([publie, reprise])
     db_session.commit()

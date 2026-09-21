@@ -778,3 +778,158 @@ def test_i3_marquer_manuel_leve_si_l_ecriture_echoue(tmp_path):
 
     with pytest.raises(Exception):  # noqa: B017 -- n'importe quelle panne d'ecriture
         marquer_manuel(1, 2, False, "raison", chemin)
+
+
+# -- Tour de correction 2/5 --------------------------------------------------
+
+
+def test_i2_cas_2_l_utilisateur_corrige_pendant_que_claude_repond_meme_actu(
+    db_session, tmp_path, monkeypatch
+):
+    """LE defaut le plus important du chantier (revue avec le VRAI script) :
+    l'utilisateur marque "different" PENDANT l'appel a l'arbitre pour la MEME
+    paire, et Claude repond "meme actu". Sans la relecture juste avant de
+    poser le lien, celui-ci etait pose et commite dans le MEME passage --
+    l'utilisateur voyait "actus differentes" affiche, mais l'article restait
+    enterre avec une `file_exclu_raison` qui citait Claude.
+
+    NI le script NI `link_duplicates` ne reçoivent de chemin explicite ici --
+    exactement comme en production (`dedupliquer_avec_arbitrage` n'en passe
+    jamais) : les deux passent par `settings.cluster_arbitrage_cache_path`,
+    isole par la fixture autouse. Un `cache_chemin` explicite aurait pu
+    masquer le defaut en pointant le script ailleurs que `link_duplicates`."""
+    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+
+    monkeypatch.setattr(settings, "cluster_arbitrage_cache_path", tmp_path / "cluster_arbitrage.json")
+    publie, reprise = _paire_douteuse(db_session)
+
+    def arbitre_pendant_lequel_l_utilisateur_corrige(publie_art, nouveau_art):
+        # Simule le VRAI script lance par l'utilisateur PENDANT cet appel --
+        # a cet instant, rien n'est encore lie en base (l'appel a l'arbitre
+        # n'a pas encore rendu la main a `link_duplicates`).
+        message = appliquer_script(
+            db_session, publie_art.id, nouveau_art.id, meme_actu=False,
+            raison="deux annonces distinctes, verifie a la main",
+        )
+        assert "lien defait" not in message  # rien a defaire : pas encore lie
+        return (True, "meme sortie")  # Claude, lui, dit le contraire
+
+    link_duplicates(db_session, arbitre=arbitre_pendant_lequel_l_utilisateur_corrige)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+    assert reprise.file_exclu_raison is None
+
+
+def test_i2_cas_2_auto_reparation_delie_un_lien_deja_pose_a_chaque_passage(
+    db_session, tmp_path
+):
+    """La deuxieme moitie du remede : un lien deja present EN BASE (pose par
+    une course non prevue, un crash entre deux ecritures, ou une version
+    anterieure du code) dont la paire porte un verdict manuel "different" est
+    defait a CHAQUE passage -- pas seulement empeche a l'avenir. Teste sur
+    PLUSIEURS passages, avec le VRAI script pour poser le verdict manuel."""
+    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+
+    chemin = tmp_path / "cluster_arbitrage.json"
+    publie, reprise = _paire_douteuse(db_session)
+    # Simule un lien deja pose par une source quelconque (course, crash,
+    # ancienne version du code) -- SANS passer par `link_duplicates`.
+    reprise.duplicate_of_id = publie.id
+    reprise.file_exclu_raison = "doublon d'une actu deja publiee (article X, tranche par Claude : X)"
+    db_session.commit()
+
+    appliquer_script(
+        db_session, publie.id, reprise.id, meme_actu=False,
+        raison="deux annonces distinctes",
+    )
+    # Le script lui-meme a deja defait le lien (il le trouve pose) : on le
+    # reproduit "casse" pour prouver que L'AUTO-REPARATION de link_duplicates
+    # rattrape aussi le cas ou le script n'a pas pu le faire (fichier ecrit,
+    # base non touchee -- un crash entre les deux, par exemple).
+    reprise.duplicate_of_id = publie.id
+    reprise.file_exclu_raison = "doublon d'une actu deja publiee (article X, tranche par Claude : X)"
+    db_session.commit()
+
+    for _ in range(3):
+        link_duplicates(db_session, cache_chemin=chemin)
+        db_session.refresh(reprise)
+        assert reprise.duplicate_of_id is None
+        assert reprise.file_exclu_raison is None
+        # Rejoue la casse pour le passage suivant : la reparation doit
+        # converger a CHAQUE passage, pas seulement la premiere fois.
+        reprise.duplicate_of_id = publie.id
+        reprise.file_exclu_raison = "casse a nouveau"
+        db_session.commit()
+
+
+def test_m_le_representant_reste_le_plus_ancien_meme_apres_un_report(db_session, tmp_path):
+    """Mineur trouve en revue (tour de correction 2/5) : un article dont la
+    paire d'archive est REPORTEE (deja en echec, sous le plafond) doit rester
+    un representant POSSIBLE pendant la passe 1 -- sinon un article frais plus
+    RECENT qui le reprend devient representant a sa place, et le plus ancien
+    finit par se lier a lui (l'inverse de la docstring de `link_duplicates`,
+    "le representant est l'article vu le PLUS TOT").
+
+    Le report exige une tentative deja enregistree AVANT que le second article
+    frais n'existe -- d'ou les DEUX passages : le premier isole `plus_ancien`
+    (seul candidat contre l'archive, echoue), le second introduit
+    `plus_recent` (meme histoire, mais hors bande douteuse contre l'archive
+    prise seule) exactement au moment ou `plus_ancien` est reporte."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    old_src = _src(db_session, "media-publie")
+    new_src = _src(db_session, "media-plus-ancien")
+    publie = _art(db_session, old_src, n=1, title=TITRE_PUBLIE_DOUTEUX,
+                  hours_ago=5 * 24, status=ArticleStatus.USED)
+    plus_ancien = _art(db_session, new_src, n=2, title=TITRE_REPRISE_DOUTEUSE, hours_ago=3)
+    arbitre = _arbitre_fixe({})  # panne systematique sur (publie, plus_ancien)
+
+    # Passage 1 : enregistre une tentative en echec sur plus_ancien, AVANT que
+    # plus_recent n'existe.
+    link_duplicates(db_session, arbitre=arbitre, cache_chemin=chemin)
+    db_session.refresh(plus_ancien)
+    assert plus_ancien.duplicate_of_id is None
+
+    # plus_recent arrive : meme histoire que plus_ancien (0.75 de recouvrement
+    # avec lui), mais hors bande douteuse contre l'archive PRISE SEULE (0.4,
+    # sous le seuil de 0.65) -- son seul candidat plausible est plus_ancien.
+    autre_src = _src(db_session, "media-plus-recent")
+    plus_recent = _art(
+        db_session, autre_src, n=3,
+        title="Apex, le nouvel opus de Boris Brejcha, sort en decembre chez KNTXT",
+        hours_ago=1,
+    )
+
+    # Passage 2 : plus_ancien est desormais REPORTE. C'est le passage ou
+    # l'inversion se produisait avant le correctif.
+    link_duplicates(db_session, arbitre=arbitre, cache_chemin=chemin)
+
+    db_session.refresh(plus_ancien)
+    db_session.refresh(plus_recent)
+    assert plus_ancien.duplicate_of_id is None  # jamais lie au plus RECENT
+    assert plus_recent.duplicate_of_id == plus_ancien.id  # le plus ancien gagne
+    # plus_ancien reste, lui, un candidat DOUTEUX (jamais lie) contre l'archive :
+    # `publie` n'est jamais devenu un doublon, seulement une cible possible.
+    assert publie.duplicate_of_id is None
+
+
+def test_residu_un_cache_illisible_n_efface_pas_les_verdicts_existants(db_session, tmp_path):
+    """Residu ferme au tour de correction 2/5 : un fichier de cache PRESENT
+    mais illisible ne doit jamais etre confondu avec un cache VIDE par une
+    fonction qui va ensuite ECRIRE -- sinon un seul fichier corrompu efface
+    tous les verdicts existants, manuels compris."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    marquer_manuel(9001, 9002, False, "verdict existant avant la corruption", chemin)
+    # Corruption du fichier : plus du JSON valide.
+    chemin.write_text("{ceci n'est pas du json valide")
+
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({(publie.id, reprise.id): (True, "meme sortie")})
+
+    # Le passage ne doit PAS lever (une panne de lecture ne doit jamais casser
+    # un run), mais ne doit RIEN ecrire de nouveau non plus : le fichier
+    # illisible n'est pas touche, pour qu'un humain puisse encore le reparer.
+    link_duplicates(db_session, arbitre=arbitre, cache_chemin=chemin)
+
+    contenu_final = chemin.read_text()
+    assert contenu_final == "{ceci n'est pas du json valide"

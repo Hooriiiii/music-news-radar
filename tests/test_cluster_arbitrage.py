@@ -232,3 +232,54 @@ def test_i2_ecrire_cache_n_utilise_plus_un_nom_de_temporaire_fixe(tmp_path):
     # Aucun fichier temporaire ne doit trainer apres coup (succes ou echec).
     fichiers_apres = set(tmp_path.iterdir())
     assert fichiers_apres == fichiers_avant  # que le fichier final, rien de plus
+
+
+# -- Residu ferme au tour de correction 2/5 : absent != illisible -----------
+
+
+def test_residu_lire_cache_traite_absent_et_illisible_pareil_lecture_seule(tmp_path):
+    """`lire_cache` (lecture SEULE) peut continuer a confondre les deux --
+    c'est `_lire_pour_ecriture`, utilisee juste avant une ECRITURE, qui doit
+    les distinguer."""
+    absent = lire_cache(tmp_path / "absent.json")
+    chemin_corrompu = tmp_path / "corrompu.json"
+    chemin_corrompu.write_text("pas du json {{{")
+    corrompu = lire_cache(chemin_corrompu)
+    assert absent.entrees == corrompu.entrees == {}
+
+
+def test_residu_fusionner_et_ecrire_n_ecrase_pas_un_cache_illisible(tmp_path):
+    """Le coeur du residu : un fichier PRESENT mais illisible doit annuler
+    l'ecriture entiere, jamais se faire ecraser par un cache vide -- sinon un
+    seul fichier corrompu efface tous les verdicts existants, manuels
+    compris."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    contenu_corrompu = "{ceci n'est pas du json valide"
+    chemin.write_text(contenu_corrompu)
+
+    fusionner_et_ecrire({cle_paire(1, 2): EntreeArbitrage(True, "verdict automatique")}, {}, chemin)
+
+    assert chemin.read_text() == contenu_corrompu  # intact : rien n'a ete ecrit
+
+
+def test_residu_fusionner_et_ecrire_fonctionne_normalement_sur_fichier_absent(tmp_path):
+    """Un fichier ABSENT reste le cas normal du premier passage : l'ecriture
+    a bien lieu."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    fusionner_et_ecrire({cle_paire(1, 2): EntreeArbitrage(True, "verdict automatique")}, {}, chemin)
+    assert lire_cache(chemin).entrees[cle_paire(1, 2)].meme_actu is True
+
+
+def test_residu_marquer_manuel_leve_sur_un_cache_present_mais_illisible(tmp_path):
+    """Meme garde-fou que I3, pour une raison differente : `marquer_manuel`
+    ne doit jamais ecrire un cache reconstruit a partir de rien par-dessus un
+    fichier corrompu, qui contenait peut-etre d'autres verdicts manuels."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    chemin.write_text("pas du json {{{")
+
+    with pytest.raises(Exception):  # noqa: B017 -- n'importe quelle panne de lecture
+        marquer_manuel(1, 2, False, "raison", chemin)
+
+    # Le fichier corrompu n'a pas ete touche -- un humain peut encore le lire
+    # ou le reparer a la main.
+    assert chemin.read_text() == "pas du json {{{"
