@@ -31,6 +31,7 @@ un credit de COMPTE (`@artiste`) reste affiche (`credit_de_compte` ici,
 """
 
 import re
+import unicodedata
 
 from app.content.emojis import EMOJI_CLASSE
 from app.content.recherche_web import domaine_de, nom_de_source
@@ -117,14 +118,14 @@ def aerer_legende(caption: str) -> str:
     )
 
 
-# En dessous de cette longueur, la racine d'un domaine (sans son TLD) coincide
-# avec un mot ordinaire du francais ou de l'anglais : « vice.com » -> « vice »,
-# « ra.co » -> « ra » (les deux sont des domaines REELEMENT presents dans ce
-# depot -- CLAUDE.md cite Vice, RA). Bannie seule, une telle racine mutilerait
-# une phrase qui n'a rien a voir avec le media ("un vice certain", "un sacre
-# ra-le-bol"). En dessous du seuil on ne bannit donc que le domaine COMPLET
-# (avec son TLD, ex. « vice.com »), jamais la racine isolee.
-RACINE_DOMAINE_MIN = 5
+def _normalise_pour_comparaison(texte: str) -> str:
+    """Casse, accents et tirets/espaces neutralises -- pour comparer la racine
+    d'un domaine (« ouest-france ») au nom de la source (« Ouest-France »)
+    sans se faire piquer par une simple difference de graphie."""
+    sans_accents = "".join(
+        c for c in unicodedata.normalize("NFD", texte) if not unicodedata.combining(c)
+    )
+    return re.sub(r"[\s-]+", "", sans_accents).lower()
 
 
 def noms_a_bannir(article) -> list[str]:
@@ -132,10 +133,23 @@ def noms_a_bannir(article) -> list[str]:
     toujours CONSTRUITS depuis lui : le nom de sa source debarrasse de son
     canal (« Transmusicales (IG) » -> « Transmusicales », le nettoyage existe
     deja dans `recherche_web.nom_de_source`, reutilise plutot que reecrit), et
-    le domaine de `article.url` -- avec son TLD (« stereogum.com ») et, si elle
-    est assez longue pour ne pas etre un mot ordinaire (`RACINE_DOMAINE_MIN`),
-    sans (« stereogum », pour attraper « Stereogum » ecrit en toutes lettres
-    dans la legende, exactement le cas du post 71 reellement publie).
+    le domaine de `article.url` -- avec son TLD (« stereogum.com »), toujours.
+
+    La racine SANS TLD (« stereogum ») n'est ajoutee que si elle se retrouve
+    dans le NOM DE LA SOURCE (comparaison insensible a la casse, aux accents
+    et aux tirets/espaces) -- jamais sur un seuil de longueur. Un essai a
+    seuil (`len(racine) >= 5`) a d'abord ete tente puis rejete en revue,
+    reproduction a l'appui : « radio.fr » a une racine de 5 lettres
+    (« radio »), un mot parfaitement ordinaire, et la bannir seule ampute
+    n'importe quelle legende qui parle de musique passee « a la radio ». Un
+    seuil de longueur n'est qu'une STATISTIQUE sur les mots ; la presence dans
+    le nom de la source est une PREUVE que cette racine designe le media. On
+    ne bannit un mot ordinaire que si l'article lui-meme dit que c'est un nom
+    propre de media -- « Ouest-France » (source) rend ainsi bannissable
+    « ouest-france » (racine de `ouest-france.fr`) meme si le nom du media
+    n'apparait dans la legende que sous cette forme dans la prose, alors que
+    « radio » (racine de `radio.fr`, source generique sans rapport) ne l'est
+    jamais.
     """
     noms: list[str] = []
     source = getattr(article, "source", None)
@@ -146,7 +160,12 @@ def noms_a_bannir(article) -> list[str]:
     if domaine:
         noms.append(domaine)
         racine = domaine.split(".")[0]
-        if racine and len(racine) >= RACINE_DOMAINE_MIN and racine not in noms:
+        if (
+            racine
+            and racine not in noms
+            and nom_source
+            and _normalise_pour_comparaison(racine) == _normalise_pour_comparaison(nom_source)
+        ):
             noms.append(racine)
     return noms
 

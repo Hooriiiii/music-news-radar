@@ -8,6 +8,7 @@ from app.content.legende import (
     LEGENDE_MAX,
     aerer_legende,
     credit_de_compte,
+    noms_a_bannir,
     sans_mentions_de_source,
     texte_legende,
 )
@@ -235,8 +236,9 @@ def test_selon_la_source_est_aussi_retiree():
 
 
 def test_le_domaine_sans_tld_attrape_le_nom_ecrit_en_toutes_lettres():
-    """`stereogum.com` doit attraper « Stereogum » (exigence du plan)."""
-    article = _article(source_name="Le flux (RSS)", url="https://www.stereogum.com/x")
+    """`stereogum.com` doit attraper « Stereogum » (exigence du plan) -- la
+    racine est prouvee ici par le nom de la source, qui EST "Stereogum"."""
+    article = _article(source_name="Stereogum (RSS)", url="https://www.stereogum.com/x")
     caption = "Grosse annonce du jour. Stereogum a sorti l'info en premier."
     assert "Stereogum" not in sans_mentions_de_source(caption, article)
 
@@ -296,22 +298,72 @@ def test_credit_de_compte_retire_seulement_le_domaine_d_un_credit_mixte():
     assert credit_de_compte("@fredagain djmag.com @pinkpantheress") == "@fredagain @pinkpantheress"
 
 
-# --- Une racine de domaine courte ne mutile pas un mot ordinaire ------------
+# --- La racine d'un domaine n'est bannie QUE si le nom de la source le prouve
 #
-# « vice.com » -> « vice », « ra.co » -> « ra » : deux domaines REELLEMENT
-# presents dans ce depot (CLAUDE.md cite Vice, RA), et deux mots ordinaires.
+# Tour de correction 2/5 : un seuil de longueur (racine >= 5 caracteres) a ete
+# tente puis rejete en revue, reproduction a l'appui -- « radio.fr » a une
+# racine de 5 lettres ("radio"), un mot parfaitement ordinaire, et la bannir
+# aurait ampute toute legende qui parle de musique passee "a la radio". Le
+# remede retenu : la racine n'est bannie que si elle se retrouve dans le NOM
+# DE LA SOURCE (comparaison insensible a la casse, aux accents, aux
+# tirets/espaces) -- une PREUVE, pas une statistique sur la longueur du mot.
 
 
-def test_une_racine_de_domaine_courte_ne_mutile_pas_un_mot_ordinaire():
-    # Le nom de la SOURCE est generique (pas "Vice") pour isoler le risque
-    # -- ici seule la racine du DOMAINE ("vice") pourrait, a tort, bannir le
-    # mot ordinaire "vice".
+def test_une_racine_sans_rapport_avec_la_source_ne_mutile_pas_un_mot_ordinaire():
+    """Cas reproduit par la revue : source generique, domaine « radio.fr » --
+    la racine "radio" n'est nulle part dans le nom de la source, donc jamais
+    bannie seule. La phrase sur la radio survit."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.radio.fr/article/x")
+    caption = "Enorme soiree hier soir. On a passe la radio a fond toute la nuit, ambiance dingue."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_vice_com_n_est_pas_banni_seul_sans_preuve_dans_le_nom_de_la_source():
+    # Le nom de la SOURCE est generique (pas "Vice") : rien ne prouve que la
+    # racine du domaine ("vice") designe le media, donc elle n'est pas bannie.
     article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
     caption = "Le clip assume un vice certain pour la nuit electro. On adore ce parti pris."
     assert sans_mentions_de_source(caption, article) == caption
 
 
-def test_le_domaine_complet_reste_banni_meme_avec_une_racine_courte():
+def test_le_domaine_complet_reste_toujours_banni_sans_condition():
+    """Le domaine COMPLET (avec son TLD) reste banni sans condition, meme
+    quand sa racine seule ne l'est pas -- il n'a aucune chance de coincider
+    avec un mot du langage courant."""
     article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
     caption = "Gros dossier electro. A lire sur vice.com des ce soir."
     assert "vice.com" not in sans_mentions_de_source(caption, article)
+
+
+def test_noms_a_bannir_ajoute_la_racine_prouvee_par_le_nom_de_la_source():
+    """Unite : le nom de la source ("Ouest-France") prouve que la racine du
+    domaine ("ouest-france") designe bien le media -- elle rejoint la liste."""
+    article = _article(source_name="Ouest-France (RSS)", url="https://www.ouest-france.fr/x")
+    assert "ouest-france" in noms_a_bannir(article)
+
+
+def test_noms_a_bannir_n_ajoute_pas_la_racine_sans_preuve():
+    """Unite, cas radio.fr : rien dans le nom de la source ne dit que "radio"
+    designe ce media -- la racine reste hors de la liste, seul le domaine
+    complet y figure."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.radio.fr/x")
+    noms = noms_a_bannir(article)
+    assert "radio" not in noms
+    assert "radio.fr" in noms
+
+
+def test_la_racine_prouvee_attrape_une_graphie_que_le_nom_de_la_source_seul_raterait():
+    """La SOURCE est enregistree sans tiret ("Ouest France"), la LEGENDE ecrit
+    le media avec un tiret ("Ouest-France", la graphie du domaine) : le nom de
+    la source seul (`\\bOuest France\\b`, avec un espace) ne matcherait pas
+    "Ouest-France". La racine prouvee ("ouest-france", tiret compris) si."""
+    article = _article(source_name="Ouest France (RSS)", url="https://www.ouest-france.fr/x")
+    caption = "Le festival prend de l'ampleur. C'est confirme par Ouest-France ce matin."
+    assert sans_mentions_de_source(caption, article) == "Le festival prend de l'ampleur."
+
+
+def test_la_preuve_ignore_casse_accents_et_tirets():
+    """La comparaison entre la racine du domaine et le nom de la source est
+    insensible a la casse, aux accents et aux tirets/espaces."""
+    article = _article(source_name="ouest france", url="https://www.Ouest-France.fr/x")
+    assert "ouest-france" in noms_a_bannir(article)
