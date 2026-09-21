@@ -506,3 +506,32 @@ def test_un_reel_sans_compte_sur_sa_video_retombe_sur_le_credit():
     choix = ChoixVisuels([video], credit="ra.co")
 
     assert compte_du_visuel(choix, FormatCreneau.REEL) == "ra.co"
+
+
+def test_le_lot_elargi_ne_depasse_jamais_le_budget_du_juge(db_session, fred, monkeypatch):
+    """Revue du 2026-09-21 (I-3) : `prejuger` ne juge que
+    `illustration_max_candidats` images. Un groupe de 4-5 membres portant
+    chacun plusieurs medias depassait ce budget ; les actifs au-dela n'etaient
+    jamais juges, donc gardes, et `plafonner_affiches` ne pouvait pas les
+    compter -- le defaut des sept cartes des Trans Musicales redevenait
+    atteignable. La liste est bornee au budget du juge, le representant en tete."""
+    monkeypatch.setattr(settings, "illustration_max_candidats", 4)
+    representant = _article(
+        db_session, _presse(db_session), "Trans Musicales la programmation",
+        media=[entree("photo", f"https://presse.example/{i}.jpg") for i in range(3)],
+    )
+    for n in range(3):
+        doublon = _article(
+            db_session, fred, f"Trans Musicales la programmation ({n})",
+            media=[entree("photo", f"https://cdn.ig/{n}-{i}.jpg") for i in range(3)],
+        )
+        _lier(db_session, doublon, representant)
+
+    choix = _choisir(db_session, representant)
+
+    assert [a["url"] for a in choix.actifs] == [
+        "https://presse.example/0.jpg",
+        "https://presse.example/1.jpg",
+        "https://presse.example/2.jpg",
+        "https://cdn.ig/0-0.jpg",
+    ]

@@ -216,11 +216,23 @@ def _propres(
     # dont le brouillon partirait sans fond, et le gel l'exclurait pour de bon.
     if not any(image_de(media) for _, media in paires):
         return None
+    # Borne au budget du JUGE (`illustration_max_candidats`, 10 -- la taille
+    # d'un carrousel Meta) : `prejuger` ne note que ce nombre d'images, et un
+    # actif au-dela n'est jamais juge, donc garde par la regle du doute -- et
+    # invisible pour `plafonner_affiches`. Un groupe de 4-5 membres portant
+    # chacun plusieurs medias depassait ce budget, et le defaut des sept cartes
+    # des Trans Musicales (2026-09-19) redevenait atteignable (revue du
+    # 2026-09-21). L'ordre du groupe (representant d'abord) decide de ce qui
+    # reste, donc les medias de l'actu elle-meme ne sont jamais les sacrifies.
     publiables = [
         (membre, media)
         for membre, media in paires
         if image_de(media) or (media.get("type") == VIDEO and media.get("url"))
-    ]
+    ][: settings.illustration_max_candidats]
+    if not any(image_de(media) for _, media in publiables):
+        # Meme exigence d'une image fixe, APRES la borne : dix videos sans
+        # vignette en tete de groupe ne donneraient aucun fond.
+        return None
     actifs = [
         actif(
             media,
