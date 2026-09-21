@@ -750,7 +750,19 @@ qui nomment la source de l'article (nom de la source nettoyé de son canal,
 domaine de l'URL avec et sans TLD — construits depuis l'article, jamais
 devinés), appliqué à la composition (`create_post`) pour que la légende
 persistée soit déjà celle qui part en ligne ; une légende qui deviendrait vide
-part telle quelle. La clôture en question, elle, est un défaut de FORME :
+part telle quelle.
+
+**Le filet ne bannit le NOM de la source que si c'est un MÉDIA** (catégorie
+`media`, ou `None` : dans le doute on protège du plagiat). Ne pas simplifier
+cette condition : pour un compte d'artiste, de festival, de label ou de club,
+`source.name` est le SUJET de l'actu, pas la source de l'info (« Qui parle :
+`sources.categorie` »). Mesuré en revue le 2026-09-21, source « Astropolis
+(IG) » : « Astropolis dévoile sa programmation. Trois jours à Brest fin août. »
+perdait sa première phrase — celle qui porte l'actu —, c'est-à-dire la
+mutilation des posts mêmes que le feed priorise. La racine sans TLD suit la
+même règle (elle n'est bannissable que parce qu'elle se confond avec le nom de
+la source) ; le domaine COMPLET (`astropolis.org`) nomme un site, jamais le
+sujet, et reste banni dans tous les cas. La clôture en question, elle, est un défaut de FORME :
 `probleme_cloture_question()` suit exactement `probleme_emojis()` /
 `probleme_accents()`, relance une fois puis accepte avec un warning plutôt que
 de perdre un créneau.

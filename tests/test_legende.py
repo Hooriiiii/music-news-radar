@@ -12,6 +12,7 @@ from app.content.legende import (
     sans_mentions_de_source,
     texte_legende,
 )
+from app.models import SourceCategorie
 
 
 def _post(caption="Une legende 🎧 ✨", hashtags=("#electro",), url="https://tsugi.fr/a"):
@@ -367,3 +368,62 @@ def test_la_preuve_ignore_casse_accents_et_tirets():
     insensible a la casse, aux accents et aux tirets/espaces."""
     article = _article(source_name="ouest france", url="https://www.Ouest-France.fr/x")
     assert "ouest-france" in noms_a_bannir(article)
+
+
+# --- La source EST le sujet : festival, artiste, label, club (revue 2026-09-21)
+# Mesure : source « Astropolis (IG) », la phrase qui porte l'actu disparaissait.
+# CLAUDE.md, « Qui parle : `sources.categorie` » : pour un compte d'artiste, de
+# festival, de label ou de club, `source.name` est le SUJET de l'actu, pas la
+# source de l'info. Seul un compte `media` (ou de categorie inconnue, dans le
+# doute) voit son nom banni.
+
+LEGENDE_ASTROPOLIS = (
+    "Astropolis devoile sa programmation. Trois jours a Brest fin aout. "
+    "Les billets partent vite."
+)
+
+
+def _article_de(categorie, nom="Astropolis (IG)", url="https://www.instagram.com/p/abc/"):
+    return SimpleNamespace(source=SimpleNamespace(name=nom, categorie=categorie), url=url)
+
+
+def test_le_nom_d_un_festival_qui_publie_son_actu_n_est_jamais_banni():
+    article = _article_de(SourceCategorie.FESTIVAL)
+
+    assert sans_mentions_de_source(LEGENDE_ASTROPOLIS, article) == LEGENDE_ASTROPOLIS
+
+
+def test_le_nom_d_un_media_reste_banni_a_cote():
+    """Meme legende, meme nom, mais la source est un MEDIA : la phrase qui le
+    nomme renvoie vers un concurrent, elle part."""
+    article = _article_de(SourceCategorie.MEDIA)
+
+    assert sans_mentions_de_source(LEGENDE_ASTROPOLIS, article) == (
+        "Trois jours a Brest fin aout. Les billets partent vite."
+    )
+
+
+def test_une_source_de_categorie_inconnue_est_traitee_comme_un_media():
+    """Dans le doute on protege du plagiat : `None` = inconnu (sources X, ou pas
+    encore classee)."""
+    assert "Astropolis" in noms_a_bannir(_article_de(None))
+
+
+def test_artiste_label_et_club_sont_aussi_le_sujet():
+    for categorie in (SourceCategorie.ARTISTE, SourceCategorie.LABEL, SourceCategorie.CLUB):
+        assert "Astropolis" not in noms_a_bannir(_article_de(categorie))
+
+
+def test_le_domaine_reste_bannissable_meme_pour_un_festival():
+    """Le domaine de `article.url` nomme le SITE, jamais le sujet de l'actu : il
+    reste banni dans tous les cas. Sa racine, elle, se confond avec le nom du
+    festival (« astropolis.org » / « Astropolis ») et n'est donc plus bannie."""
+    article = _article_de(
+        SourceCategorie.FESTIVAL, nom="Astropolis", url="https://www.astropolis.org/prog",
+    )
+
+    noms = noms_a_bannir(article)
+
+    assert "astropolis.org" in noms
+    assert "astropolis" not in noms
+    assert "Astropolis" not in noms

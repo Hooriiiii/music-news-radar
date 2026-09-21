@@ -35,6 +35,7 @@ import unicodedata
 
 from app.content.emojis import EMOJI_CLASSE
 from app.content.recherche_web import domaine_de, nom_de_source
+from app.models import SourceCategorie
 
 LEGENDE_MAX = 2200
 # Marge sous la limite de Meta, en points de code sur TOUT le texte publie :
@@ -150,10 +151,23 @@ def noms_a_bannir(article) -> list[str]:
     n'apparait dans la legende que sous cette forme dans la prose, alors que
     « radio » (racine de `radio.fr`, source generique sans rapport) ne l'est
     jamais.
+
+    **Le nom de la source n'est banni que si la source est un MEDIA** (ou de
+    categorie inconnue). Mesure en revue le 2026-09-21, source « Astropolis
+    (IG) », categorie festival : « Astropolis devoile sa programmation. Trois
+    jours a Brest fin aout. » perdait sa premiere phrase -- celle qui PORTE
+    l'actu. Pour un compte d'artiste, de festival, de label ou de club,
+    `source.name` est le SUJET, pas la source de l'info (CLAUDE.md, « Qui
+    parle : `sources.categorie` ») ; le bannir mutile precisement les posts que
+    le feed priorise. Categorie `None` (sources X, ou pas encore classee) :
+    dans le doute on protege du plagiat, comme pour un media. La racine du
+    domaine suit la meme regle -- elle n'est bannissable QUE parce qu'elle se
+    confond avec le nom de la source. Le domaine complet (« astropolis.org »),
+    lui, nomme un SITE, jamais le sujet : banni dans tous les cas.
     """
     noms: list[str] = []
     source = getattr(article, "source", None)
-    nom_source = nom_de_source(getattr(source, "name", None))
+    nom_source = nom_de_source(getattr(source, "name", None)) if _nomme_un_media(source) else None
     if nom_source:
         noms.append(nom_source)
     domaine = domaine_de(getattr(article, "url", None) or "")
@@ -168,6 +182,15 @@ def noms_a_bannir(article) -> list[str]:
         ):
             noms.append(racine)
     return noms
+
+
+def _nomme_un_media(source) -> bool:
+    """Vrai si le nom de `source` designe un MEDIA -- ou si on ne sait pas.
+
+    `getattr` : des appelants passent des sources partielles (SimpleNamespace
+    sans categorie), lues comme inconnues donc protegees."""
+    categorie = getattr(source, "categorie", None)
+    return categorie is None or categorie == SourceCategorie.MEDIA
 
 
 def sans_mentions_de_source(caption: str, article) -> str:
