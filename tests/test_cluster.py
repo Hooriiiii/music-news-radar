@@ -4,7 +4,7 @@ import pytest
 
 from app.config import settings
 from app.models import Article, ArticleStatus, Source, SourceType
-from app.pipeline.cluster import link_duplicates, title_similarity
+from app.pipeline.cluster import RAISON_DOUBLON_PREFIXE, link_duplicates, title_similarity
 from app.pipeline.cluster_arbitrage import cle_paire, lire_cache, marquer_manuel
 
 UTC = dt.timezone.utc
@@ -1127,3 +1127,66 @@ def test_i4_l_auto_reparation_n_efface_pas_une_exclusion_etrangere(db_session, t
     assert reprise.duplicate_of_id is None  # le lien EST defait
     # Mais la raison ETRANGERE (posee par la publication) doit survivre.
     assert reprise.file_exclu_raison == "gel impossible : le post n'a pas de visuel publiable"
+
+
+# --- Tour de correction 4/5 : un article repointe par l'aplatissement vers
+# un representant d'archive laisse la meme trace qu'un lien d'archive direct.
+
+
+def test_un_article_repointe_vers_l_archive_porte_la_trace_et_est_compte(db_session):
+    """P -> D devient P -> R quand D rejoint l'archive R. Avant ce tour, P
+    suivait son representant EN SILENCE : sorti de la file par un lien
+    d'archive, sans `file_exclu_raison` ni compteur `archive` -- exactement
+    l'invisibilite que la trace et le compteur separe devaient empecher."""
+    db_session.autoflush = False  # comme `SessionLocal` en production
+    src_d, src_p, src_r = (
+        _src(db_session, "media-d"), _src(db_session, "media-p"), _src(db_session, "media-r"),
+    )
+    d = _art(db_session, src_d, n=1, title="Dour Festival unveils its 2027 lineup", hours_ago=6)
+    p = _art(db_session, src_p, n=2, title="Dour Festival devoile son line-up 2027", hours_ago=4)
+    link_duplicates(db_session)
+    db_session.refresh(p)
+    assert p.duplicate_of_id == d.id
+    assert p.file_exclu_raison is None  # lien frais : aucune trace
+
+    # R, deja publie, porte EXACTEMENT le titre de D : bande certaine.
+    r = _art(db_session, src_r, n=3, title="Dour Festival unveils its 2027 lineup",
+             hours_ago=5 * 24, status=ArticleStatus.USED)
+
+    stats = link_duplicates(db_session)
+
+    db_session.refresh(d)
+    db_session.refresh(p)
+    assert d.duplicate_of_id == r.id
+    assert p.duplicate_of_id == r.id
+    assert stats.archive == 2  # D direct + P repointe
+    assert stats.frais == 0
+    assert p.file_exclu_raison is not None
+    assert p.file_exclu_raison.startswith(f"{RAISON_DOUBLON_PREFIXE} (article {r.id},")
+    assert f"representant {d.id}" in p.file_exclu_raison
+
+
+def test_un_article_repointe_garde_une_exclusion_etrangere(db_session):
+    """La trace de doublon ne recouvre pas une raison posee ailleurs (gel ou
+    composition impossibles) : elle dit une vraie raison de ne pas publier,
+    que l'auto-reparation, elle, n'effacerait jamais."""
+    db_session.autoflush = False
+    src_d, src_p, src_r = (
+        _src(db_session, "media-d"), _src(db_session, "media-p"), _src(db_session, "media-r"),
+    )
+    d = _art(db_session, src_d, n=1, title="Dour Festival unveils its 2027 lineup", hours_ago=6)
+    p = _art(db_session, src_p, n=2, title="Dour Festival devoile son line-up 2027", hours_ago=4)
+    link_duplicates(db_session)
+    db_session.refresh(p)
+    assert p.duplicate_of_id == d.id
+    p.file_exclu_raison = "gel impossible : le post n'a pas de visuel publiable"
+    db_session.commit()
+    r = _art(db_session, src_r, n=3, title="Dour Festival unveils its 2027 lineup",
+             hours_ago=5 * 24, status=ArticleStatus.USED)
+
+    stats = link_duplicates(db_session)
+
+    db_session.refresh(p)
+    assert p.duplicate_of_id == r.id
+    assert stats.archive == 2
+    assert p.file_exclu_raison == "gel impossible : le post n'a pas de visuel publiable"

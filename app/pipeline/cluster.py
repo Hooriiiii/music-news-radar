@@ -392,7 +392,7 @@ def link_duplicates(
 
         return DIFFERE if differe else None
 
-    def lier(article: Article, representant: Article) -> None:
+    def lier(article: Article, representant: Article) -> list[Article]:
         """SEUL point d'écriture de `duplicate_of_id` VERS un autre article
         dans ce module (tour de correction 3/5) : pose le lien ET aplatit
         IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers
@@ -412,11 +412,20 @@ def link_duplicates(
         l'affectation qui précède -- exactement le trou mesuré en re-revue
         (chaîne à deux sauts invisible avec `autoflush=False`, masquée dans
         les tests par la fixture `db_session`, qui tourne en autoflush par
-        défaut)."""
+        défaut).
+
+        Rend les articles REPOINTÉS : la mécanique est la même quelle que soit
+        l'origine du lien, mais ce qu'il faut en ENREGISTRER (trace, compteur)
+        dépend de l'origine, que seul `appliquer` connaît (tour de correction
+        4/5)."""
         article.duplicate_of_id = representant.id
         db.flush()
-        for pointeur in db.scalars(select(Article).where(Article.duplicate_of_id == article.id)):
+        repointes = list(
+            db.scalars(select(Article).where(Article.duplicate_of_id == article.id))
+        )
+        for pointeur in repointes:
             pointeur.duplicate_of_id = representant.id
+        return repointes
 
     def appliquer(article: Article, tokens: set[str], resultat) -> None:
         if resultat is None:
@@ -437,7 +446,7 @@ def link_duplicates(
             if fraiche is not None and fraiche.manuel and not fraiche.meme_actu:
                 representatives.append((article, tokens, False))
                 return
-        lier(article, rep_article)
+        repointes = lier(article, rep_article)
         if origine == "frais":
             stats.frais += 1
             return
@@ -466,6 +475,29 @@ def link_duplicates(
             "doublon d'archive : « %s » (%s) rattache a « %s » (%s), %s",
             article.title, article.id, rep_article.title, rep_article.id, detail,
         )
+        # Un article qui SUIVAIT `article` (lien frais P -> D, aplati en P -> R
+        # par `lier`) sort lui aussi de la file sous une actu déjà publiée :
+        # même trace, même compteur qu'un lien d'archive direct. Avant le tour
+        # de correction 4/5 il suivait son représentant EN SILENCE -- ni
+        # `file_exclu_raison` ni `archive`, l'invisibilité même que la trace
+        # et le compteur séparé devaient empêcher. Pas `arbitres` : Claude a
+        # jugé la paire (D, R), jamais (P, R).
+        for pointeur in repointes:
+            stats.archive += 1
+            # Une raison posée AILLEURS (« gel impossible : … ») dit déjà une
+            # vraie raison de ne pas publier : ne pas la recouvrir, pour la
+            # même raison que l'auto-réparation ne l'efface jamais.
+            if (pointeur.file_exclu_raison or RAISON_DOUBLON_PREFIXE).startswith(
+                RAISON_DOUBLON_PREFIXE
+            ):
+                pointeur.file_exclu_raison = (
+                    f"{RAISON_DOUBLON_PREFIXE} (article {rep_article.id}, "
+                    f"via son representant {article.id} : {detail})"
+                )[:500]
+            logger.warning(
+                "doublon d'archive : « %s » (%s) suit son representant %s vers « %s » (%s)",
+                pointeur.title, pointeur.id, article.id, rep_article.title, rep_article.id,
+            )
 
     # Passe 1 : sert les paires jamais tentées en priorité. Un article dont le
     # SEUL candidat pertinent est une paire déjà en échec est différé, mais
