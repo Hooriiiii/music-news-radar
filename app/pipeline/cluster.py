@@ -107,7 +107,7 @@ def link_duplicates(
             Article.duplicate_of_id.is_(None),
             seen_at < cutoff,
             seen_at >= archive_cutoff,
-        )
+        ).order_by(seen_at, Article.id)
     ).all()
 
     representatives: list[tuple[int, set[str]]] = [

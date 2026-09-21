@@ -169,6 +169,28 @@ def test_archive_window_bounds_the_comparison(db_session, monkeypatch):
     assert repeat.duplicate_of_id is None
 
 
+def test_archive_candidates_are_tried_oldest_first(db_session):
+    # Tour de correction 1/5 : la requete sur l'archive doit trier par date
+    # (comme celle sur les articles frais), sinon le representant retenu
+    # depend de l'ordre physique des lignes -- non garanti par SQL, encore
+    # moins par Postgres/Neon en production. Insertion dans l'ordre qui
+    # echouait : le plus RECENT (4j) prend l'id le plus PETIT, le plus ANCIEN
+    # (9j, "vu le plus tot") prend l'id le plus grand.
+    src_recent = _src(db_session, "recent-src")
+    src_old = _src(db_session, "old-src")
+    new_src = _src(db_session, "tsugi")
+    _art(db_session, src_recent, n=1, title="Astropolis 2027 devoile son line-up",
+         hours_ago=4 * 24, status=ArticleStatus.USED)
+    plus_ancien = _art(db_session, src_old, n=2, title="Astropolis 2027 : le line-up est devoile",
+                       hours_ago=9 * 24, status=ArticleStatus.USED)
+    repeat = _art(db_session, new_src, n=3, title="Astropolis 2027 : line-up devoile aujourd'hui",
+                 hours_ago=1)
+
+    link_duplicates(db_session)
+    db_session.refresh(repeat)
+    assert repeat.duplicate_of_id == plus_ancien.id
+
+
 def test_archive_matching_is_idempotent(db_session):
     old_src = _src(db_session, "mixmag")
     new_src = _src(db_session, "tsugi")
