@@ -79,6 +79,22 @@ def _pas_de_juge_visuel_ambiant(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pas_d_arbitrage_de_doublons_ambiant(monkeypatch, tmp_path):
+    """Meme motif que le juge visuel et la recherche web : sans ca, un
+    `run_pipeline` de test qui passe par `dedupliquer_avec_arbitrage` (le
+    cluster par defaut) pourrait, un jour, construire un vrai client Anthropic
+    et arbitrer une paire douteuse avec la cle du `.env` de l'utilisateur, des
+    qu'un test fabrique par megarde un article d'archive et une reprise dans
+    la bande douteuse. Les tests d'arbitrage rallument le reglage et injectent
+    leur propre arbitre. Le chemin de cache est aussi isole : sans ca, un
+    verdict de test pourrait polluer -- ou lire -- le fichier reel."""
+    monkeypatch.setattr(settings, "cluster_arbitrage_enabled", False)
+    monkeypatch.setattr(
+        settings, "cluster_arbitrage_cache_path", tmp_path / "cluster_arbitrage.json"
+    )
+
+
+@pytest.fixture(autouse=True)
 def _pas_de_recherche_web_ambiante(monkeypatch):
     """Meme motif : sans ca, chaque choix de visuels sans issue lancerait une
     vraie recherche web facturee. Les tests du dernier recours injectent leur

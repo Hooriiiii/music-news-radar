@@ -8,7 +8,8 @@ from app.config import settings
 from app.delivery.discord import send_hot_alerts
 from app.delivery.notify import notifier
 from app.pipeline.artists import record_mentions
-from app.pipeline.cluster import link_duplicates
+from app.pipeline.cluster import ClusterStats, link_duplicates
+from app.pipeline.cluster_arbitrage import make_claude_arbitre
 from app.pipeline.comptes_artistes import construire_index, lier_artistes_comptes
 from app.pipeline.election import ElectionStats, elire_representants
 from app.pipeline.health import diagnostiquer
@@ -29,6 +30,12 @@ class PipelineReport:
     # ce sont les seuls qui sortent un article neuf de la file pour de bon, donc
     # les seuls dont un faux positif coute une actu (cf. `cluster.ClusterStats`).
     duplicates_archive: int = 0
+    # Sous-ensemble de `duplicates_archive` : liens tranches par Claude (bande
+    # douteuse), et pannes d'arbitrage (jamais un lien, mais des credits
+    # epuises ne se voyaient sinon que par des WARNING repetes dans les logs --
+    # Minor M2 de la revue du tour de correction 1/5).
+    duplicates_arbitres: int = 0
+    duplicates_arbitrage_pannes: int = 0
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -50,10 +57,23 @@ def reevaluer_clusters(db: Session) -> ElectionStats:
     return elire_representants(db, construire_index(db))
 
 
+def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
+    """Le cluster PAR DEFAUT du passage horaire, seul a arbitrer (Task 7,
+    2026-09-21) : `run_veille` (toutes les 5 min) appelle `link_duplicates`
+    sans argument, donc sans jamais construire cet arbitre -- distinction par
+    PARAMETRE, pas par le nom de l'appelant. Construit un client Claude a
+    chaque appel (jamais au chargement du module) : un `.env` de test peut
+    ainsi neutraliser `cluster_arbitrage_enabled` ou `anthropic_api_key` sans
+    qu'un client fantome ait deja ete cree avec une mauvaise cle."""
+    if not settings.cluster_arbitrage_enabled or not settings.anthropic_api_key:
+        return link_duplicates(db)
+    return link_duplicates(db, arbitre=make_claude_arbitre())
+
+
 def run_pipeline(
     db: Session,
     ingest=run_ingest,
-    cluster=link_duplicates,
+    cluster=dedupliquer_avec_arbitrage,
     elire=reevaluer_clusters,
     score=score_pending,
     record=record_mentions,
@@ -78,6 +98,8 @@ def run_pipeline(
     doublons = cluster(db)
     report.duplicates_linked = doublons.total
     report.duplicates_archive = doublons.archive
+    report.duplicates_arbitres = doublons.arbitres
+    report.duplicates_arbitrage_pannes = doublons.arbitrage_pannes
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

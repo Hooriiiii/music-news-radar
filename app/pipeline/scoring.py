@@ -238,10 +238,18 @@ FORMATS = {
 }
 
 
+# Un article pas encore score peut porter la description RSS brute (parfois
+# l'article entier) ou la caption Instagram avec son bandeau de metriques :
+# rien ne le borne en amont. Reutilisee par `cluster_arbitrage.py`, qui
+# arbitre AVANT le scoring et recoit donc le meme resume brut -- un cout
+# d'entree qui doit rester borne de la meme facon.
+RESUME_MAX_CARACTERES = 1500
+
+
 def build_user_prompt(article: Article) -> str:
     parts = [f"Titre : {article.title}"]
     if article.summary:
-        parts.append(f"Extrait : {article.summary[:1500]}")
+        parts.append(f"Extrait : {article.summary[:RESUME_MAX_CARACTERES]}")
     if article.source is not None:
         parts.append(f"Source : {article.source.name}")
         parts.append(f"Format : {FORMATS.get(article.source.type, 'inconnu')}")

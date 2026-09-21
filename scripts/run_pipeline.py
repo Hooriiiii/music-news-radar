@@ -35,8 +35,15 @@ def main() -> None:
     if report.duplicates_linked:
         # L'archive a part : un lien contre une actu deja publiee sort un article
         # neuf de la file pour de bon -- un faux positif doit se voir ici.
+        # `arbitres` : sous-ensemble tranche par Claude (bande douteuse), pas
+        # par le seuil "certain" -- Minor M2, sans lui des credits epuises ne
+        # se voyaient que dans les logs, en WARNING repetes.
         print(f"  doublons : {report.duplicates_linked} lies, dont "
-              f"{report.duplicates_archive} contre une actu deja publiee")
+              f"{report.duplicates_archive} contre une actu deja publiee "
+              f"({report.duplicates_arbitres} tranches par Claude)")
+    if report.duplicates_arbitrage_pannes:
+        print(f"  ⚠ arbitrage de doublons : {report.duplicates_arbitrage_pannes} "
+              f"panne(s) (paire redemandee au prochain passage)")
     if report.scoring is not None:
         ligne = f"  scoring : {report.scoring.scored} scorés, {report.scoring.errors} erreurs"
         # N'afficher le pré-filtre que s'il a servi : sur une installation sans
