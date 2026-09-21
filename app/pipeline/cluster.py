@@ -18,7 +18,8 @@ import unicodedata
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Article
+from app.config import settings
+from app.models import Article, ArticleStatus
 
 # Mots vides FR + EN : trop fréquents pour porter le sens d'un titre
 _STOPWORDS = {
@@ -70,6 +71,7 @@ def link_duplicates(
     db: Session,
     window_hours: int = DEFAULT_WINDOW_HOURS,
     threshold: float = DEFAULT_THRESHOLD,
+    archive_days: int | None = None,
 ) -> int:
     """Pointe chaque doublon vers son représentant et renvoie le nombre de liens créés.
 
@@ -80,14 +82,37 @@ def link_duplicates(
 
     Idempotent : l'ordre de parcours est déterministe et les articles déjà liés sont
     laissés en place, donc rejouer la fonction ne crée aucun lien supplémentaire.
+
+    Une actu déjà PUBLIÉE (`ArticleStatus.USED`) ne ressort jamais : les articles
+    USED échappent à la purge (`retention.py`) précisément pour servir d'archive
+    éditoriale, mais rien ne les comparait aux nouveaux articles au-delà de la
+    fenêtre `window_hours` -- une reprise plus tardive de la même actu n'était
+    donc jamais reconnue. On étend l'ensemble des représentants POSSIBLES aux
+    articles USED de l'archive (bornée par `archive_days`, voir `app/config.py`),
+    sans jamais les faire entrer dans la boucle : un article archivé ne peut donc
+    jamais devenir lui-même un doublon, seulement servir de cible.
     """
+    archive_days = settings.cluster_archive_jours if archive_days is None else archive_days
     seen_at = func.coalesce(Article.published_at, Article.fetched_at)
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=window_hours)
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(hours=window_hours)
     articles = db.scalars(
         select(Article).where(seen_at >= cutoff).order_by(seen_at, Article.id)
     ).all()
 
-    representatives: list[tuple[int, set[str]]] = []
+    archive_cutoff = now - dt.timedelta(days=archive_days)
+    archived = db.scalars(
+        select(Article).where(
+            Article.status == ArticleStatus.USED,
+            Article.duplicate_of_id.is_(None),
+            seen_at < cutoff,
+            seen_at >= archive_cutoff,
+        )
+    ).all()
+
+    representatives: list[tuple[int, set[str]]] = [
+        (article.id, significant_tokens(article.title)) for article in archived
+    ]
     linked = 0
     for article in articles:
         tokens = significant_tokens(article.title)

@@ -1,6 +1,7 @@
 import datetime as dt
 
-from app.models import Article, Source, SourceType
+from app.config import settings
+from app.models import Article, ArticleStatus, Source, SourceType
 from app.pipeline.cluster import link_duplicates, title_similarity
 
 UTC = dt.timezone.utc
@@ -13,13 +14,14 @@ def _src(db, name):
     return src
 
 
-def _art(db, src, *, n, title, hours_ago=1):
+def _art(db, src, *, n, title, hours_ago=1, status=ArticleStatus.NEW):
     art = Article(
         source_id=src.id,
         url=f"https://{src.name}.example/{n}",
         title=title,
         raw_hash=f"{n:064d}",
         published_at=dt.datetime.now(UTC) - dt.timedelta(hours=hours_ago),
+        status=status,
     )
     db.add(art)
     db.commit()
@@ -120,3 +122,79 @@ def test_ignores_articles_outside_the_window(db_session):
     _art(db_session, b_src, n=2, title="Dour Festival devoile son line-up 2027", hours_ago=1)
 
     assert link_duplicates(db_session, window_hours=48) == 0
+
+
+# -- archive : une actu deja publiee ne ressort jamais ---------------------
+
+
+def test_a_used_article_outside_the_window_catches_a_fresh_repeat(db_session):
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    published = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                     hours_ago=5 * 24, status=ArticleStatus.USED)
+    repeat = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                 hours_ago=1)
+
+    assert link_duplicates(db_session) == 1
+    db_session.refresh(published)
+    db_session.refresh(repeat)
+    assert repeat.duplicate_of_id == published.id
+
+
+def test_a_used_representative_is_never_marked_a_duplicate_itself(db_session):
+    # L'archive ne pretend jamais qu'une actu deja publiee est le doublon d'une
+    # autre plus recente -- elle ne sert que de representant possible.
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    published = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                     hours_ago=5 * 24, status=ArticleStatus.USED)
+    _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027", hours_ago=1)
+
+    link_duplicates(db_session)
+    db_session.refresh(published)
+    assert published.duplicate_of_id is None
+
+
+def test_archive_window_bounds_the_comparison(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "cluster_archive_jours", 30)
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+         hours_ago=40 * 24, status=ArticleStatus.USED)
+    repeat = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                 hours_ago=1)
+
+    assert link_duplicates(db_session) == 0
+    db_session.refresh(repeat)
+    assert repeat.duplicate_of_id is None
+
+
+def test_archive_matching_is_idempotent(db_session):
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+         hours_ago=5 * 24, status=ArticleStatus.USED)
+    _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027", hours_ago=1)
+
+    assert link_duplicates(db_session) == 1
+    assert link_duplicates(db_session) == 0
+
+
+def test_a_used_article_that_is_itself_a_duplicate_is_not_reused_as_a_representative(db_session):
+    # Le representant racine du groupe archive doit etre atteint, jamais un
+    # membre archive qui pointe deja vers un autre.
+    root_src = _src(db_session, "mixmag")
+    other_src = _src(db_session, "dj-mag")
+    new_src = _src(db_session, "tsugi")
+    root = _art(db_session, root_src, n=1, title="Dour Festival unveils its 2027 lineup",
+               hours_ago=6 * 24, status=ArticleStatus.USED)
+    already_linked = _art(db_session, other_src, n=2, title="Dour Festival line-up 2027 revealed",
+                          hours_ago=5 * 24, status=ArticleStatus.USED)
+    already_linked.duplicate_of_id = root.id
+    db_session.commit()
+    repeat = _art(db_session, new_src, n=3, title="Dour Festival devoile son line-up 2027",
+                 hours_ago=1)
+
+    link_duplicates(db_session)
+    db_session.refresh(repeat)
+    assert repeat.duplicate_of_id == root.id

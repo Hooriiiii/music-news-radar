@@ -1371,6 +1371,22 @@ cover part sur l'image de secours du gabarit.
    `/articles` masque les doublons par défaut (`include_duplicates=true` pour les
    voir).
 
+   **Une actu déjà publiée ne ressort jamais** (2026-09-21). La fenêtre de 48 h
+   ne comparait que des articles frais entre eux : une reprise plus tardive de
+   la même actu par une autre source n'était rapprochée de rien, alors que les
+   articles `USED` ne sont jamais purgés (« Rétention » ci-dessous) précisément
+   pour servir d'archive éditoriale — l'archive existait, rien ne la
+   consultait. `link_duplicates` élargit désormais l'ensemble des
+   représentants POSSIBLES aux articles `USED` de l'archive, bornés par
+   `cluster_archive_jours` (30, `app/config.py`) et hors de la fenêtre de 48 h
+   (pas de double compte avec les articles frais) : même rapprochement de
+   titres, même seuil. Un article archivé ne peut jamais devenir lui-même un
+   doublon (seulement servir de cible), et un représentant déjà `USED` reste
+   verrouillé par `elire_representants` même s'il est hors fenêtre — cette
+   fonction se fonde sur la date du DOUBLON, pas celle du représentant, donc un
+   groupe formé contre un article publié il y a des jours est bien réexaminé,
+   mais jamais détrôné.
+
 ## Rétention
 
 **Exception `USED`** : un article marqué posté n'est JAMAIS purgé — c'est l'archive

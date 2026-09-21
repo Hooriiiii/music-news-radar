@@ -182,6 +182,17 @@ class Settings(BaseSettings):
     # Borne des reelections de representant et des remises a noter par run : au
     # plus un appel Claude chacune.
     cluster_reevaluations_max_par_run: int = 10
+    # Fenetre d'archive (2026-09-21) : distincte de DEFAULT_WINDOW_HOURS (48h,
+    # rapprochement ordinaire entre articles frais). Un article deja PUBLIE
+    # (USED) sert de representant possible pour un nouvel article au-dela de
+    # cette fenetre -- lui seul, jamais l'inverse (voir `link_duplicates`).
+    # 30 jours : mesure en production le 2026-09-21, 18 articles USED en 6
+    # jours (le plus ancien du 2026-09-15) -- une reprise d'actu ressort
+    # largement dans la semaine, un mois de marge couvre les reprises tardives
+    # (interview differee, sortie repoussee) sans faire grossir la comparaison
+    # sans fin : les USED restant en base indefiniment (jamais purges), sans
+    # cette borne le cout de `link_duplicates` grandirait avec l'age du projet.
+    cluster_archive_jours: int = 30
 
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
