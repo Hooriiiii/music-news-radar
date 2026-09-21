@@ -11,8 +11,11 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     # Rétention : on ne garde en base que les articles publiés dans les N derniers
-    # jours (par date de POST, pas d'ajout) -- le reste est purgé à chaque run
-    retention_days: int = 14
+    # jours (par date de POST, pas d'ajout) -- le reste est purgé à chaque run.
+    # 2 jours (2026-09-21) : le feed ne vit que de l'actu fraîche, et la file de
+    # publication ne regarde que `publication_fraicheur_jours`. Les USED ne sont
+    # jamais purgés (archive éditoriale), voir `pipeline/retention.py`.
+    retention_days: int = 2
 
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
