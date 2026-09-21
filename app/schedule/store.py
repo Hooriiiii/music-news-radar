@@ -20,6 +20,7 @@ from app.content.actifs_artistes import classer, posts_en_base
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
 from app.content.visuels import (
+    ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     a_une_image_autorisee,
     origine_interdite,
@@ -144,11 +145,24 @@ def actifs_interdits(db: Session, post: Post) -> list[dict]:
     La source d'un actif d'artiste est RELUE (par l'`article_id` du post
     d'origine, sinon par son handle) : un compte passe en categorie `media`
     APRES la composition ne doit pas voir son visuel publie. `preparation.py`
-    tient la meme ceinture pour les medias de l'article lui-meme, mais il n'a
-    pas de session pour remonter au compte d'un actif d'artiste.
+    tient la meme ceinture pour les medias du representant, mais il n'a pas de
+    session pour remonter au compte d'un actif venu d'ailleurs.
+
+    Les actifs d'origine `article` sont relus EUX AUSSI, par membre (revue du
+    2026-09-21) : depuis que les visuels d'un carrousel viennent de tout le
+    groupe de doublons, un actif `article` porte l'`article_id` du MEMBRE dont
+    il vient, pas forcement celui du representant. La ceinture ne relisait que
+    les actifs d'artistes, et `preparation.py` que la source du representant :
+    un doublon reclasse `media` entre la composition (J-1) et le gel (T-2h)
+    passait donc au travers -- exactement le scenario que cette ceinture existe
+    pour couvrir. Le handle sert de repli quand le membre a ete purge entre-temps
+    (retention de 2 jours) ; une photo de presse RSS n'en a pas, et n'en a pas
+    besoin : `origine_interdite` ne vise que les comptes Instagram.
     """
     actifs = getattr(post, "assets", None) or []
-    artistes = [a for a in actifs if a.get("origine") == ORIGINE_ARTISTE]
+    artistes = [
+        a for a in actifs if a.get("origine") in (ORIGINE_ARTISTE, ORIGINE_ARTICLE)
+    ]
     if not artistes:
         return []
     ids = {a["article_id"] for a in artistes if a.get("article_id")}

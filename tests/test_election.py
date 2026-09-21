@@ -215,6 +215,24 @@ def test_un_representant_engage_n_est_jamais_remis_a_noter(db_session):
     assert (rep.relevance_score, rep.scored_by) == (25, ScoredBy.LOCAL)
 
 
+def test_un_representant_used_hors_fenetre_n_est_jamais_detrone(db_session):
+    # Cas de la Task 3 (`link_duplicates`) : le representant est un article
+    # PUBLIE depuis des jours (hors de DEFAULT_WINDOW_HOURS, 48h), le doublon
+    # est frais et plus informatif. `elire_representants` se fonde sur la date
+    # du DOUBLON (recente), donc le groupe est bien examine -- mais le
+    # representant engage (USED) doit rester en place : le detroner
+    # publierait un article deja sorti une seconde fois.
+    ancien = _article(db_session, _source(db_session, "mixmag"), MIXMAG, heures=24 * 5,
+                      status=ArticleStatus.USED)
+    reprise = _article(db_session, _source(db_session, "djmag"), DJMAG, heures=3, rep=ancien)
+
+    stats = elire_representants(db_session, construire_index(db_session), maintenant=MAINTENANT)
+
+    assert (stats.reelus, stats.verrouilles) == (0, 1)
+    assert reprise.duplicate_of_id == ancien.id
+    assert ancien.duplicate_of_id is None
+
+
 def test_la_borne_est_exacte_meme_dans_un_seul_groupe(db_session, fred):
     # Reelection ET remise a noter possibles dans le meme groupe : une seule action.
     mixmag = _article(db_session, _source(db_session, "mixmag"), MIXMAG, heures=6)

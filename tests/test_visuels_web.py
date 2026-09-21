@@ -22,11 +22,13 @@ from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.legende import texte_legende
 from app.content.media import entree
 from app.content.visuels import (
+    FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_KINDA,
     ORIGINE_WEB,
+    candidats_de_fond,
     image_de_fond,
 )
 from app.models import Article, Source, SourceCategorie, SourceType
@@ -138,20 +140,23 @@ def test_le_web_reste_ferme_quand_l_article_a_sa_propre_image(db_session):
 # --- Le credit -------------------------------------------------------------
 
 
-def test_une_image_du_web_est_creditee_par_son_domaine(db_session, monkeypatch):
+def test_une_image_du_web_n_est_plus_creditee_par_son_domaine(db_session, monkeypatch):
+    """`actif_du_web` garde encore le domaine sur l'actif (`compte`, permalink) --
+    c'est `credit_des_actifs` qui ne le fait plus remonter en credit de legende,
+    decision de l'utilisateur le 2026-09-21 (« retirer aussi le credit web »)."""
     monkeypatch.setattr("app.content.recherche_web.image_de_partage",
                         _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"}))
     article = _article(db_session, _source(db_session))
 
     choix = _visuels(db_session, article, chercheur_web=Chercheur())
 
-    assert choix.credit == "ra.co"
+    assert choix.credit is None
     assert choix.actifs[0]["permalink"] == "https://ra.co/news/1"
 
 
-def test_le_credit_du_web_apparait_dans_la_legende(db_session, monkeypatch):
-    """« 📸 ra.co », sans « via » et sans ligne « Source : » -- les regles de
-    credit du 2026-09-17 valent aussi pour une image du web."""
+def test_le_domaine_du_web_n_apparait_plus_dans_la_legende(db_session, monkeypatch):
+    """Plus de « via » ni de ligne « Source : » (regles du 2026-09-17), et
+    desormais plus de credit de domaine du tout (2026-09-21)."""
     monkeypatch.setattr("app.content.recherche_web.image_de_partage",
                         _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"}))
     article = _article(db_session, _source(db_session))
@@ -163,7 +168,7 @@ def test_le_credit_du_web_apparait_dans_la_legende(db_session, monkeypatch):
 
     texte = texte_legende(Faux())
 
-    assert "📸 ra.co" in texte
+    assert "ra.co" not in texte
     assert "via" not in texte and "Source :" not in texte
 
 
@@ -176,7 +181,7 @@ def test_une_photo_du_web_retenue_en_secours_reste_creditee(db_session, monkeypa
                              telecharger=_telecharger, chercheur=Chercheur())
     choisi = Fond(fichiers[0], ORIGINE_WEB, tuple(fichiers))
 
-    nouveaux = actifs_de_secours(choisi, [])
+    nouveaux = actifs_de_secours(choisi, [], maintenant=MAINTENANT)
 
     assert nouveaux[0]["compte"] == "ra.co"
     assert nouveaux[0]["origine"] == ORIGINE_WEB
@@ -310,4 +315,60 @@ def test_l_article_18260_ne_part_sur_l_aplat_que_si_le_web_n_a_rien(db_session, 
     fond = _fond_de_l_article_18260(db_session, chercheur, monkeypatch, pages_ok=False)
 
     assert fond.origine == ORIGINE_KINDA
+    assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"
+
+
+# --- Le meme parcours pour un fond TROP PETIT (2026-09-21) -----------------
+#
+# Decision de l'utilisateur apres la revue : avec une retention de 2 jours, les
+# reserves « compte source » et « artiste cite » lisent une base quasi vide --
+# `fond_secours_fenetre_jours` et `visuels_artiste_fenetre_jours` ne peuvent pas
+# remonter au-dela de la purge. La RECHERCHE WEB, seul barreau qui ne lit pas la
+# base, reprend le relais. Le plancher de nettete doit donc l'atteindre
+# exactement comme une affiche averee le fait : sinon une photo floue serait
+# remplacee par PAS de photo du tout.
+
+PETITE_18260 = "https://cdn.ig/capture-trans.jpg"
+CIBLE_POST = (1080, 1350)
+
+
+def _fond_trop_petit(db, chercheur, monkeypatch, pages_ok=True):
+    monkeypatch.setattr(
+        "app.content.recherche_web.image_de_partage",
+        _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"} if pages_ok else {}),
+    )
+    # Aucune reserve en base : le compte du festival n'a pas d'autre post (la
+    # purge a 2 jours les a emportes), aucun artiste suivi n'est cite.
+    article = _article(db, _trans(db), titre=TITRE_18260,
+                       media=[entree("photo", PETITE_18260)], artistes=())
+    choix = _visuels(db, article, chercheur_web=chercheur)
+    # Le cablage de `create_post`, plancher de resolution compris.
+    return eviter_l_affiche(
+        image_de_fond(choix.actifs), *choix.secours,
+        origine=ORIGINE_ARTICLE,
+        verdicts=lambda urls: {url: PHOTO for url in urls},
+        cible=CIBLE_POST,
+        tailles=lambda urls: {url: (564, 345) for url in urls if url == PETITE_18260},
+        candidats=candidats_de_fond(choix.actifs),
+    )
+
+
+def test_un_fond_trop_petit_sans_reserve_en_base_trouve_son_fond_sur_le_web(
+    db_session, monkeypatch
+):
+    chercheur = Chercheur()
+
+    fond = _fond_trop_petit(db_session, chercheur, monkeypatch)
+
+    assert fond.origine == ORIGINE_WEB
+    assert fond.url.startswith("file://")
+    assert chercheur.requetes, "le plancher de nettete doit atteindre le barreau web"
+
+
+def test_un_fond_trop_petit_ne_part_sur_l_aplat_qu_apres_le_web(db_session, monkeypatch):
+    chercheur = Chercheur()
+
+    fond = _fond_trop_petit(db_session, chercheur, monkeypatch, pages_ok=False)
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
     assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"

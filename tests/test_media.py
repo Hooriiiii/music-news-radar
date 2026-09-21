@@ -125,3 +125,44 @@ def test_une_video_sans_url_n_est_toujours_pas_exploitable_directement():
 )
 def test_video_recuperable(media, permalink, attendu):
     assert video_recuperable(media, permalink) is attendu
+
+
+# --- La duree lue dans l'URL du CDN Instagram (2026-09-21) -------------------
+#
+# Mesure du jour : les 642 videos Instagram de la base ont `duration_ms` a None
+# (l'adapter ne remplit pas le champ, Graph ne le donne pas), et les 642 portent
+# pourtant leur duree dans le parametre `efg` de leur URL signee. Sans cette
+# lecture, une video de 190 s passe le predicat « duree inconnue », se fait
+# composer (Claude paye) et n'echoue qu'au gel, apres telechargement.
+
+def _url_cdn(duree_s: int | None) -> str:
+    import base64
+    import json
+
+    charge = {"venc_tag": "xpv_progressive", "xpv_asset_id": 1, "urlgen_source": "www"}
+    if duree_s is not None:
+        charge["duration_s"] = duree_s
+    efg = base64.b64encode(json.dumps(charge).encode()).decode().rstrip("=")
+    return f"https://scontent-cdg4-3.cdninstagram.com/o1/v/t16/f2/m84/AQ.mp4?_nc_cat=110&efg={efg}&ccb=17-1"
+
+
+def test_la_duree_est_lue_dans_l_url_du_cdn_instagram():
+    m = entree("video", _url_cdn(190))
+    assert m["duration_ms"] == 190_000
+    assert videos_exploitables([m]) == []
+    assert "190 s" in raison_pas_de_reel([m])
+
+
+def test_une_duree_fournie_par_la_source_fait_foi():
+    # La sonde ffprobe et l'API X sont plus sures que l'URL : on ne les ecrase pas.
+    m = entree("video", _url_cdn(190), duration_ms=12_000)
+    assert m["duration_ms"] == 12_000
+
+
+def test_une_url_sans_duree_lisible_reste_inconnue():
+    for url in (_url_cdn(None), "https://video.twimg.com/vid.mp4", "https://x.test/a?efg=pas-du-base64"):
+        assert entree("video", url)["duration_ms"] is None
+
+
+def test_la_duree_de_l_url_ne_vaut_que_pour_une_video():
+    assert entree("photo", _url_cdn(190))["duration_ms"] is None

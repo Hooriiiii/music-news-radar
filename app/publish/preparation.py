@@ -111,7 +111,11 @@ def medias_du_carrousel(post, article) -> list[dict]:
     if actifs is not None:
         # La policy est RE-VERIFIEE a la relecture : un actif pose quand la source
         # etait autorisee ne part pas si elle est passee en compte media depuis,
-        # ni si son URL est devenue interdite.
+        # ni si son URL est devenue interdite. Ici, seule la source du
+        # REPRESENTANT est connue (pas de session) ; celle de chaque MEMBRE du
+        # groupe de doublons dont un actif est venu est relue par
+        # `store.actifs_interdits`, que le gel appelle juste avant ce module
+        # (`runner._brouillon_perime`) -- revue du 2026-09-21.
         interdite_maintenant = origine_interdite(getattr(article, "source", None))
         candidats += [
             _media_d_actif(a)

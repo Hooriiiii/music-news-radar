@@ -11,8 +11,11 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     # Rétention : on ne garde en base que les articles publiés dans les N derniers
-    # jours (par date de POST, pas d'ajout) -- le reste est purgé à chaque run
-    retention_days: int = 14
+    # jours (par date de POST, pas d'ajout) -- le reste est purgé à chaque run.
+    # 2 jours (2026-09-21) : le feed ne vit que de l'actu fraîche, et la file de
+    # publication ne regarde que `publication_fraicheur_jours`. Les USED ne sont
+    # jamais purgés (archive éditoriale), voir `pipeline/retention.py`.
+    retention_days: int = 2
 
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
@@ -159,6 +162,18 @@ class Settings(BaseSettings):
     # Borne le coût réseau d'un run -- surtout au premier passage, où l'arriéré
     # se compte en centaines d'articles.
     illustration_max_par_run: int = 40
+    # Variante PLEINE RESOLUTION de l'og:image (2026-09-21). Certains CDN
+    # d'editeurs (WordPress) recopient dans og:image le parametre de
+    # redimensionnement de la page -- mesure sur le post 71 (CLAUDE.md) :
+    # `?w=564` rendait 564x345 (50 Ko) la ou la meme image sans ce parametre
+    # pese 386 Ko en 2156x1320. Le resultat (variante retenue) est memorise par
+    # URL, meme mecanique que `illustration_cache_path`, pour ne pas repayer la
+    # requete de verification a chaque passage tant que l'og:image de
+    # l'article ne change pas.
+    illustration_variante_cache_path: Path = (
+        Path.home() / "Library/Application Support/Kinda/illustrations_variantes.json"
+    )
+    illustration_variante_cache_jours: int = 7
 
     # --- Regroupement des doublons et cascade (2026-09-17) ---
     # Une actu couverte par au moins N sources DISTINCTES passe toujours chez
@@ -167,11 +182,42 @@ class Settings(BaseSettings):
     # Borne des reelections de representant et des remises a noter par run : au
     # plus un appel Claude chacune.
     cluster_reevaluations_max_par_run: int = 10
+    # Fenetre d'archive (2026-09-21) : distincte de DEFAULT_WINDOW_HOURS (48h,
+    # rapprochement ordinaire entre articles frais). Un article deja PUBLIE
+    # (USED) sert de representant possible pour un nouvel article au-dela de
+    # cette fenetre -- lui seul, jamais l'inverse (voir `link_duplicates`).
+    # 7 jours : une reprise d'actu ressort dans la SEMAINE ; au-dela, le risque
+    # de faux positif depasse le service rendu. Un mois avait d'abord ete pose,
+    # puis ramene a la semaine apres mesure (2026-09-21) : sur un feed centre
+    # sur quelques artistes recurrents, plus la fenetre est large, plus deux
+    # actus DIFFERENTES du meme artiste ont de chances de se croiser. Cette
+    # borne sert aussi au cout : les USED ne sont jamais purges, donc sans elle
+    # la comparaison (quadratique) grandirait avec l'age du projet.
+    cluster_archive_jours: int = 7
+    # Seuil PROPRE a l'archive, strictement plus haut que `DEFAULT_THRESHOLD`
+    # (0,65) et sur une mesure differente (`archive_similarity_from_tokens` :
+    # les mots partages rapportes au titre le plus LONG, la seule facon de
+    # compter ce qui DIFFERE -- le recouvrement, lui, vaut 1.00 des qu'un titre
+    # est contenu dans l'autre). Cale sur les trois faux positifs releves le
+    # 2026-09-21 : « ... annonce un nouvel EP » / « ... annonce une tournee
+    # mondiale » (0,60), « ... sort un nouveau morceau » / « ... un nouvel
+    # album » (0,75), « Les Transmusicales devoilent leur programmation » /
+    # « ... une nouvelle vague » (0,67) -- tous trois epargnes. Une vraie
+    # reprise traduite (« Dour Festival unveils its 2027 lineup » / « Dour
+    # Festival devoile son line-up 2027 ») reste a 0,80, donc attrapee.
+    cluster_archive_seuil: float = 0.8
 
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
+    # BORNE PAR LA PURGE : ces posts sont lus dans la table `articles`, que
+    # `retention_days` (2 depuis le 2026-09-21) vide au-dela de 2 jours. Tant
+    # que la retention reste plus courte, 10 j ne peut PAS etre atteint -- la
+    # fenetre effective est celle de la purge. Valeur gardee telle quelle : elle
+    # redevient utile si la retention remonte. D'ici la, c'est la recherche WEB
+    # (seul barreau qui ne lit pas la base) qui reprend le relais du fond.
     visuels_artiste_fenetre_jours: int = 10
     # Hors sujet (un portrait, un live), un post n'est accepte qu'a N jours de l'actu.
+    # Meme borne par la purge que ci-dessus.
     visuels_artiste_generique_jours: int = 5
     visuels_max_photos: int = 3
     # business_discovery en direct, a la composition : le quota Graph est partage
@@ -218,7 +264,40 @@ class Settings(BaseSettings):
     # d'artistes (10 j) -- un fond n'a pas a ILLUSTRER l'actu, une photo de
     # concert d'il y a trois semaines fait parfaitement l'affaire.
     fond_secours_max_photos: int = 6
+    # BORNE PAR LA PURGE (2026-09-21) : les reserves « compte source » et
+    # « artiste cite » lisent la table `articles`, que `retention_days` (2) vide
+    # au-dela de 2 jours. 30 j est donc DECORATIF tant que la retention reste
+    # courte : ces deux reserves sont quasi vides, sauf lecture en direct du
+    # compte source. Decision de l'utilisateur : c'est la recherche WEB, seul
+    # barreau qui ne lit pas la base, qui reprend le relais -- y compris pour un
+    # fond ecarte par le plancher de nettete. Valeur gardee : elle redevient
+    # utile si la retention remonte un jour.
     fond_secours_fenetre_jours: int = 30
+    # Plancher de resolution du FOND de cover (2026-09-21). Distinct de
+    # `publication_crop_upscale_max` : ce dernier borne le cadrage des SLIDES du
+    # carrousel (toujours 1080x1350), alors que le fond peut remplir le gabarit
+    # REEL, plus grand (1080x1920) -- pas la meme cible, donc pas le meme reglage.
+    # Mesure sur les 6 derniers posts REELLEMENT publies (CLAUDE.md, releve du
+    # 2026-09-21) : nets a 1,05x et 0,89x d'agrandissement (aucun agrandissement
+    # notable), flous des 2,13x (2,13x / 2,39x / 3,52x / 3,91x, dont un visage
+    # baveux a l'oeil nu sur le post 71).
+    #
+    # Le seuil est 2,2x -- la MEME valeur et la meme famille de raisonnement que
+    # `publication_crop_upscale_max`, pour la meme raison : l'og:image standard
+    # d'un editeur fait 1200x630, soit 1080/1200 = 0,9 mais 1350/630 = 2,14x en
+    # hauteur, et c'est de loin l'illustration la plus frequente du pipeline
+    # (1920x1080 -> 1920/1080 = 1,78x en reel, meme famille). Un seuil a 1,5x la
+    # rejetait : la majorite des posts de presse seraient partis sur l'aplat
+    # Kinda, et un article dont les slides sont par ailleurs ecartees par
+    # `publication_crop_upscale_max` finissait en `PreparationImpossible`, donc
+    # `file_exclu_raison` -- il ne revient JAMAIS. Jamais degrader le cas
+    # nominal pour attraper un cas limite : un fond un peu mou vaut mieux qu'un
+    # aplat Kinda, et bien mieux qu'un article perdu.
+    #
+    # Ce qu'on laisse passer sciemment : le fond du post 62 (720x900 pour un
+    # reel, 2,13x), a un centieme du seuil. Les trois autres fonds flous mesures
+    # (2,39x, 3,52x, 3,91x) sont bien attrapes.
+    cover_fond_upscale_max: float = 2.2
     # DERNIER recours, apres le compte source et les artistes cites : une image
     # du WEB (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en
     # dernier recours »). Une seule recherche par composition, memorisee par

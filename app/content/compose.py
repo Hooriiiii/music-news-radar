@@ -27,6 +27,7 @@ from app.content.choix_visuels import actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
+from app.content.legende import sans_mentions_de_source
 from app.content.illustration import (
     choisir_illustration,
     eviter_l_affiche,
@@ -34,12 +35,14 @@ from app.content.illustration import (
     plafonner_affiches,
     prejuger,
 )
+from app.content.layout import gabarit as gabarit_de
 from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_WEB,
     actif,
+    candidats_de_fond,
     credit_des_actifs,
     image_de,
     image_de_fond,
@@ -206,9 +209,46 @@ def probleme_accents(caption: str) -> str | None:
     )
 
 
+def probleme_cloture_question(caption: str) -> str | None:
+    """Decrit, pour la relance, une legende qui se termine par une question ;
+    None sinon.
+
+    Releve le 2026-09-21 en ouvrant le compte : les SIX derniers posts publies
+    finissaient tous par une question rhetorique (« Qu'en pensez-vous ? »,
+    « Vous suivez CORTIS depuis leurs debuts ? », « Qui tente le deplacement
+    pour cette derniere session estivale ? »...). Six sur six, ca s'entend comme
+    un tic de machine sur un feed. Meme mecanique que `probleme_emojis` et
+    `probleme_accents`, et pour la meme raison (CLAUDE.md, « Emojis de legende :
+    relances, jamais bloquants ») : ce n'est PAS un validateur de `PostDraft` --
+    jeter le brouillon entier pour un defaut de forme ferait perdre la
+    composition d'un creneau. Le compositeur relance, puis accepte avec un
+    avertissement : une legende qui finit par une question de plus vaut mieux
+    que pas de post.
+
+    Et le prompt dit la MEME chose (revue du 2026-09-21) : il proposait encore
+    « une question » parmi les clotures, alors que ce controle les refuse
+    toutes -- sur un modele qui en mettait six sur six, c'etait une relance
+    quasi systematique, jusqu'a trois appels `composer_model` par composition.
+    Un controle sans memoire ne sait pas faire « de temps en temps », seulement
+    « jamais » : c'est donc la question qui sort des clotures du prompt, pas le
+    controle qui s'assouplit. Une question reste permise AU MILIEU de la legende.
+    """
+    fin = _EMOJI_RE.sub("", caption).rstrip()
+    if not fin.endswith("?"):
+        return None
+    return (
+        "La legende (`caption`) se termine par une question, comme les six "
+        "derniers posts publies sur le compte -- cette repetition s'entend comme "
+        "un tic de machine. Termine autrement : un fait qui reste pour la fin, "
+        "une date ou un lieu a retenir, une projection sur la suite, une phrase "
+        "qui referme l'actu. La derniere phrase ne se termine jamais par un "
+        "point d'interrogation."
+    )
+
+
 def probleme_de_legende(caption: str) -> str | None:
     """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
-    return probleme_emojis(caption) or probleme_accents(caption)
+    return probleme_emojis(caption) or probleme_accents(caption) or probleme_cloture_question(caption)
 
 
 SYSTEM_PROMPT = """\
@@ -258,12 +298,21 @@ subtitle : le line-up electro tombe **ce week-end**
 formulations de cover, pas des angles editoriaux distincts, une seule legende \
 suffit. Le texte sous le post, en francais, en 2 a 4 paragraphes courts (1 a 2 \
 phrases chacun), SEPARES PAR UNE ligne vide -- jamais un bloc compact, illisible \
-sur mobile. Elle developpe ce que la cover annonce et cite la source de l'info. Pas de hashtags dans la legende, et \
-AUCUN balisage ** : le surlignage n'existe que sur la cover, qui est une image ; \
-dans la legende les asterisques s'afficheraient telles quelles.
-La CLOTURE depend de la nature de l'actu :
-- actu ordinaire (annonce, sortie, line-up, date, record) : termine par une \
-question ou une invitation a reagir.
+sur mobile. Elle developpe ce que la cover annonce, SANS JAMAIS NOMMER LE MEDIA \
+d'ou vient l'info -- ni "via X", ni "selon X", ni "d'apres X", ni "info a \
+retrouver sur X" : Kinda est une source, pas un intermediaire qui renvoie vers \
+un concurrent. Les noms d'ARTISTES, de labels, de festivals, de salles, de \
+villes restent evidemment permis : ce sont le sujet de l'actu, pas sa source. \
+Pas de hashtags dans la legende, et AUCUN balisage ** : le surlignage n'existe \
+que sur la cover, qui est une image ; dans la legende les asterisques \
+s'afficheraient telles quelles.
+La CLOTURE depend de la nature de l'actu, et NE PREND PAS TOUJOURS LA MEME \
+FORME -- alterne. La derniere phrase ne se termine JAMAIS par une question : \
+une question peut vivre au milieu de la legende, jamais a la fin.
+- actu ordinaire (annonce, sortie, line-up, date, record) : termine par un \
+fait marquant garde pour la fin, une date ou un lieu a retenir, une \
+projection sur la suite, ou une invitation a reagir formulee sans point \
+d'interrogation. Varie reellement d'une composition a l'autre.
 - ACTU TERMINALE -- annulation, liquidation judiciaire, faillite, deces, \
 separation d'un groupe, derniere edition, arret definitif -- : termine par une \
 projection (ce qui reste, ce qui vient apres) ou par un hommage. JAMAIS par une \
@@ -397,6 +446,13 @@ def make_claude_composer(
                     article.id, tentative, max_attempts, raison,
                 )
                 continue
+            # Le filet des sources AVANT le controle de forme. Applique apres
+            # (dans `create_post`), il pouvait retirer la derniere phrase
+            # (« Info via Tsugi. ») et remettre en fin de legende la question
+            # que le controle venait d'ecarter : la garantie n'en etait pas une.
+            nettoyee = sans_mentions_de_source(draft.caption, article)
+            if nettoyee != draft.caption:
+                draft = draft.model_copy(update={"caption": nettoyee})
             probleme = probleme_de_legende(draft.caption)
             if probleme is None:
                 return draft
@@ -467,7 +523,21 @@ def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     return image_de_fond(visuels_autorises(article), selecteur)
 
 
-def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
+def _cible_gabarit(template: str) -> tuple[int, int] | None:
+    """La taille (largeur, hauteur) du gabarit publie, ou None si le nom est
+    inconnu -- jamais d'exception pour un plancher de resolution qui est un
+    confort, pas une garantie."""
+    try:
+        gabarit_ = gabarit_de(template)
+    except KeyError:
+        logger.warning("gabarit inconnu (%s) : plancher de resolution du fond desactive", template)
+        return None
+    return gabarit_.width, gabarit_.height
+
+
+def actifs_de_secours(
+    choisi, actifs: list[dict], *, maintenant: dt.datetime | None = None
+) -> list[dict]:
     """Les photos de la reserve retenue, en ACTIFS -- donc en slides du carrousel.
 
     Le defaut du post Noisia (article 17946, 2026-09-18) : l'unique image de
@@ -480,9 +550,15 @@ def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
     origine (`compte` ou `artiste`), que le dashboard affiche, et sont bornees
     par `visuels_max_photos` comme les visuels d'artistes d'un article sans
     image propre.
+
+    `maintenant` est INJECTABLE et non lu de l'horloge systeme : il sert a lire
+    le cache des attributions du web (`attribution_de`, memorise
+    `visuels_web_cache_jours`), et un appelant qui travaille sur une date fixee
+    -- un test -- verrait sinon son entree de cache expirer le jour ou il
+    relance la suite. Defaut = maintenant, le cas de la production.
     """
     connues = {image_de(a) for a in actifs}
-    maintenant = dt.datetime.now(dt.timezone.utc)
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
     nouveaux: list[dict] = []
     for url in choisi.photos[: settings.visuels_max_photos]:
         if url in connues:
@@ -540,8 +616,8 @@ def create_post(
     ecrite dans la slide, plus rien ne dirait si elle vient de l'actu, du compte,
     d'un artiste ou de l'aplat Kinda -- et c'est ce que le dashboard montre.
 
-    Les champs sont DENORMALISES expres : l'article sera purge a 14 jours, le post
-    doit rester lisible sans lui.
+    Les champs sont DENORMALISES expres : l'article sera purge a `retention_days`
+    (2 jours depuis le 2026-09-21), le post doit rester lisible sans lui.
     """
     premiere = draft.variantes[0]
     if visuels is not None:
@@ -561,6 +637,15 @@ def create_post(
             *(getattr(visuels, "secours", None) or []),
             origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
             verdicts=verdicts_fond,
+            # Le plancher de resolution (2026-09-21) : la cible depend du
+            # gabarit publie, jamais fixe -- un reel (1080x1920) est plus
+            # exigeant qu'un post (1080x1350) sur la meme photo.
+            cible=_cible_gabarit(template),
+            # Le premier barreau balaye ses propres candidats -- tout le groupe
+            # de doublons -- avant d'ouvrir une reserve : un fond elu trop petit
+            # cede la place a une photo plus grande de la meme actu (revue I-4).
+            candidats=candidats_de_fond(actifs),
+            origine_de=lambda url: origine_du_fond(actifs, url),
         )
         fond, origine_fond = choisi.url, choisi.origine
         # Le fond retenu vient d'une reserve : ses photos deviennent aussi des
@@ -607,7 +692,11 @@ def create_post(
         credit=credit,
         assets=actifs,
         template=template,
-        caption=draft.caption,
+        # Filet deterministe derriere la regle 4 du prompt : le brouillon rendu
+        # par Claude peut encore nommer sa source (« Info via Stereogum. »,
+        # posts 71/63/65 reellement publies) -- retire ici, a la composition,
+        # pour que la legende persistee soit deja celle qui part en ligne.
+        caption=sans_mentions_de_source(draft.caption, article),
         hashtags=draft.hashtags or None,
         # La cover affiche la variante 1 en attendant un choix, pour que le rendu
         # soit possible immediatement ; `variants.retenue` reste null.
@@ -623,7 +712,7 @@ def create_post(
         variants={
             "variantes": [v.model_dump() for v in draft.variantes],
             "retenue": None,
-            # La teinte est FIGEE ici : l'article sera purge a 14 jours, le post
+            # La teinte est FIGEE ici : l'article sera purge a 2 jours, le post
             # doit rester rendable sans lui (meme motif que les champs
             # denormalises ci-dessus). Editable ensuite sans re-scorer.
             "palette": teinte_de_article(article),

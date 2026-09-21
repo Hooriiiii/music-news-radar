@@ -16,6 +16,7 @@ from app.content.render import RenduSlide, fetch_image_data_uri
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
+    ORIGINE_WEB,
     actif,
     chemin_cache,
     credit_des_actifs,
@@ -120,6 +121,18 @@ def test_le_credit_des_actifs_liste_les_comptes_distincts_dans_l_ordre():
     ]
     assert credit_des_actifs(actifs) == "@fredagain @pinkpantheress"
     assert credit_des_actifs([actif(PHOTO_IG, origine=ORIGINE_ARTICLE)]) is None
+
+
+def test_le_credit_des_actifs_ignore_un_domaine_du_web():
+    """Decision de l'utilisateur, 2026-09-21 (« retirer aussi le credit web ») :
+    un `compte` qui n'est pas un `@handle` est un domaine (`actif_du_web`,
+    « ra.co ») et ne doit plus etre emis en credit."""
+    actifs = [
+        actif(PHOTO_IG, origine=ORIGINE_WEB, compte="ra.co"),
+        actif(PHOTO_IG, origine=ORIGINE_ARTISTE, compte="@fredagain"),
+    ]
+    assert credit_des_actifs(actifs) == "@fredagain"
+    assert credit_des_actifs([actif(PHOTO_IG, origine=ORIGINE_WEB, compte="djmag.com")]) is None
 
 
 def test_la_copie_locale_se_lit_dans_le_cache_seulement(tmp_path):

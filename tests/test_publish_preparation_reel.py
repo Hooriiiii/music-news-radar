@@ -565,3 +565,32 @@ def test_un_reel_sans_fond_de_cover_n_est_jamais_gele(tmp_path, fond):
     with pytest.raises(PreparationImpossible, match="aucun fond de cover"):
         preparer_reel(_post(fond=fond), _article(VIDEO, url=REEL), tmp_path,
                       recuperer_ytdlp=_interdit, **outils)
+
+
+# --- La video ne convient pas, l'article n'y est pour rien (2026-09-21) -------
+
+def test_une_duree_hors_bornes_leve_reel_inadapte_et_dit_ce_qu_elle_a_mesure():
+    """Le 21/09, l'article 18951 (Billboard, The Weeknd) a ete EXCLU
+    definitivement parce qu'une video de 190 s etait trop longue -- une video
+    qui n'etait meme pas la sienne, empruntee a un compte d'artiste. La faute
+    est celle du visuel, pas de l'actu : `ReelInadapte` la distingue, et porte
+    la duree MESUREE pour qu'on l'ecrive plutot que de la redecouvrir.
+    """
+    from app.publish.preparation_reel import ReelInadapte, verifier_source
+
+    with pytest.raises(ReelInadapte) as leve:
+        verifier_source({"duration": 190.0}, url="https://cdn/v.mp4", article_id=18951)
+
+    assert leve.value.duree_ms == 190_000
+    assert (leve.value.url, leve.value.article_id) == ("https://cdn/v.mp4", 18951)
+    assert isinstance(leve.value, PreparationImpossible)  # le gel la saute comme avant
+
+
+def test_le_gel_d_un_reel_trop_long_porte_la_video_et_son_article(tmp_path):
+    from app.publish.preparation_reel import ReelInadapte
+
+    with pytest.raises(ReelInadapte) as leve:
+        preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(source={**SOURCE, "duration": 190.0}))
+
+    assert leve.value.url == VIDEO["url"]
+    assert leve.value.duree_ms == 190_000

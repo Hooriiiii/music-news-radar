@@ -23,6 +23,19 @@ def _pas_de_prefiltre_ambiant(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _retention_stable(monkeypatch):
+    """La fenetre de retention ne vient JAMAIS du `.env` de la machine.
+
+    Elle a ete ramenee de 14 a 2 jours le 2026-09-21 : cinq tests ecrits autour
+    d'articles « vieux de deux jours, donc dans la fenetre » sont devenus rouges
+    sans qu'une ligne de code ait bouge. Une suite dont le resultat depend d'un
+    reglage de production ne prouve rien -- les tests de retention passent leur
+    valeur en argument, les autres prennent celle-ci.
+    """
+    monkeypatch.setattr(settings, "retention_days", 14)
+
+
+@pytest.fixture(autouse=True)
 def _pas_de_fichiers_applicatifs_reels(monkeypatch, tmp_path):
     """Aucun test ne lit ni n'ecrit dans ~/Library/Application Support/Kinda.
 

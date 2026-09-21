@@ -15,6 +15,7 @@ import datetime as dt
 import pytest
 
 from app.config import settings
+from app.pipeline.cluster import ClusterStats
 from app.models import Article, Source, SourceCategorie, SourceType
 from app.pipeline.ingest import IngestStats
 from app.pipeline.quota_graph import chemin_etat as chemin_quota
@@ -207,7 +208,7 @@ def _item(n=1):
 
 
 def _run(db, adapters, **kwargs):
-    kwargs.setdefault("cluster", lambda _db: 0)
+    kwargs.setdefault("cluster", lambda _db: ClusterStats())
     kwargs.setdefault("score", lambda _db, limit=None: None)
     kwargs.setdefault("record", lambda _db: 0)
     kwargs.setdefault("notify", lambda *_: True)
@@ -358,7 +359,7 @@ def test_une_erreur_de_quota_met_la_veille_en_pause_et_notifie_une_fois(db_sessi
     rapport2 = run_veille(
         db_session, T0 + dt.timedelta(minutes=5),
         get_adapter=lambda s: adapters[s.id], notify=lambda *args: notifications.append(args),
-        cluster=lambda _db: 0, score=lambda _db, limit=None: None, record=lambda _db: 0,
+        cluster=lambda _db: ClusterStats(), score=lambda _db, limit=None: None, record=lambda _db: 0,
     )
     assert rapport2.en_pause is True
     assert rapport2.ingest == []
@@ -430,7 +431,7 @@ def test_le_rapport_dit_ce_qui_s_est_passe(db_session, monkeypatch):
 
     rapport = _run(
         db_session, {source.id: FauxAdapter([_item()])},
-        cluster=lambda _db: 3, record=lambda _db: 2,
+        cluster=lambda _db: ClusterStats(frais=3), record=lambda _db: 2,
         score=lambda _db, limit=None: "STATS",
     )
 

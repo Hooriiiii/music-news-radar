@@ -2,11 +2,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.content.legende import HASHTAGS_MAX, LEGENDE_MARGE, LEGENDE_MAX, aerer_legende, texte_legende
+from app.content.legende import (
+    HASHTAGS_MAX,
+    LEGENDE_MARGE,
+    LEGENDE_MAX,
+    aerer_legende,
+    credit_de_compte,
+    noms_a_bannir,
+    sans_mentions_de_source,
+    texte_legende,
+)
+from app.models import SourceCategorie
 
 
 def _post(caption="Une legende 🎧 ✨", hashtags=("#electro",), url="https://tsugi.fr/a"):
     return SimpleNamespace(caption=caption, hashtags=list(hashtags), article_url=url)
+
+
+def _article(url="https://www.stereogum.com/sheeran-gaza", source_name="Stereogum (RSS)"):
+    return SimpleNamespace(source=SimpleNamespace(name=source_name), url=url)
 
 
 def test_legende_puis_hashtags_sans_ligne_source():
@@ -190,3 +204,226 @@ def test_un_hashtag_sans_rien_d_utilisable_disparait():
     """Publier un `#` seul serait pire que de ne rien publier."""
     post = _post(hashtags=["#", "🎧", "electro"])
     assert texte_legende(post).endswith("\n\n#electro")
+
+
+# --- Les legendes ne nomment plus aucun media (2026-09-21) ------------------
+#
+# Mesure sur les posts REELLEMENT publies sur @kindanewsfrance : post 71
+# « Qu'en pensez-vous ? Info a retrouver via Stereogum. », post 63
+# « Info via Stereogum. », post 65 « ... selon Soompi ... ». « supprime les
+# sources des descriptions [...] parle de l'actu en elle-meme. »
+
+
+def test_une_phrase_via_la_source_est_retiree():
+    article = _article()
+    caption = "Ed Sheeran evoque Gaza dans un discours poignant. Info via Stereogum."
+    assert sans_mentions_de_source(caption, article) == (
+        "Ed Sheeran evoque Gaza dans un discours poignant."
+    )
+
+
+def test_la_phrase_reellement_publiee_du_post_71_ne_survit_pas():
+    article = _article()
+    caption = "Qu'en pensez-vous ? Info a retrouver via Stereogum."
+    assert sans_mentions_de_source(caption, article) == "Qu'en pensez-vous ?"
+
+
+def test_selon_la_source_est_aussi_retiree():
+    article = _article(url="https://www.soompi.com/article/1", source_name="Soompi (RSS)")
+    caption = "LE SSERAFIM revient sur le devant de la scene. C'est confirme selon Soompi."
+    assert sans_mentions_de_source(caption, article) == (
+        "LE SSERAFIM revient sur le devant de la scene."
+    )
+
+
+def test_le_domaine_sans_tld_attrape_le_nom_ecrit_en_toutes_lettres():
+    """`stereogum.com` doit attraper « Stereogum » (exigence du plan) -- la
+    racine est prouvee ici par le nom de la source, qui EST "Stereogum"."""
+    article = _article(source_name="Stereogum (RSS)", url="https://www.stereogum.com/x")
+    caption = "Grosse annonce du jour. Stereogum a sorti l'info en premier."
+    assert "Stereogum" not in sans_mentions_de_source(caption, article)
+
+
+def test_un_artiste_homonyme_d_un_media_sans_rapport_n_est_pas_mutile():
+    """Le nom banni est celui de LA source de CET article, jamais devine : un
+    artiste qui porte par coincidence le nom d'un media SANS RAPPORT reste."""
+    article = _article(source_name="Tsugi (RSS)", url="https://www.tsugi.fr/x")
+    caption = "Stereogum, jeune artiste rennais, sort son premier titre. Il tourne en Bretagne."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_une_legende_entierement_faite_de_mentions_de_source_reste_intacte():
+    """Une legende vide serait pire qu'une legende qui cite un media --
+    `PostDraft` la validerait mal."""
+    article = _article()
+    caption = "Info via Stereogum. Selon Stereogum, c'est confirme."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_un_paragraphe_garde_ses_autres_phrases():
+    article = _article()
+    caption = "Ed Sheeran evoque Gaza.\n\nInfo via Stereogum. La sortie est prevue vendredi."
+    assert sans_mentions_de_source(caption, article) == (
+        "Ed Sheeran evoque Gaza.\n\nLa sortie est prevue vendredi."
+    )
+
+
+def test_credit_de_domaine_ne_s_affiche_plus():
+    """Post 59 reellement publie : credit `djmag.com beatportal.com`."""
+    post = _post(hashtags=())
+    post.credit, post.template = "djmag.com", "kinda_post"
+    assert texte_legende(post) == "Une legende 🎧 ✨"
+
+
+def test_credit_de_compte_reste_affiche():
+    post = _post(hashtags=())
+    post.credit, post.template = "@defectedrecords", "kinda_post"
+    assert texte_legende(post).endswith("📸 @defectedrecords")
+
+
+def test_credit_de_compte_est_pur():
+    assert credit_de_compte("djmag.com") is None
+    assert credit_de_compte("@defectedrecords") == "@defectedrecords"
+    assert credit_de_compte("@fredagain @pinkpantheress") == "@fredagain @pinkpantheress"
+    assert credit_de_compte(None) is None
+
+
+def test_credit_de_compte_retire_seulement_le_domaine_d_un_credit_mixte():
+    """Un fond d'origine `artiste` qui s'avere etre une affiche peut ouvrir une
+    reserve `web` sur le MEME `actifs` (ordre compte -> artiste -> web dans
+    `choix_visuels.py`) : un brouillon compose par l'ancienne version peut donc
+    porter un credit MIXTE (« @fredagain ra.co »). Seul le domaine doit partir,
+    jamais le credit d'artiste legitime -- pas de tout-ou-rien."""
+    assert credit_de_compte("@fredagain ra.co") == "@fredagain"
+    assert credit_de_compte("ra.co @fredagain") == "@fredagain"
+    assert credit_de_compte("@fredagain djmag.com @pinkpantheress") == "@fredagain @pinkpantheress"
+
+
+# --- La racine d'un domaine n'est bannie QUE si le nom de la source le prouve
+#
+# Tour de correction 2/5 : un seuil de longueur (racine >= 5 caracteres) a ete
+# tente puis rejete en revue, reproduction a l'appui -- « radio.fr » a une
+# racine de 5 lettres ("radio"), un mot parfaitement ordinaire, et la bannir
+# aurait ampute toute legende qui parle de musique passee "a la radio". Le
+# remede retenu : la racine n'est bannie que si elle se retrouve dans le NOM
+# DE LA SOURCE (comparaison insensible a la casse, aux accents, aux
+# tirets/espaces) -- une PREUVE, pas une statistique sur la longueur du mot.
+
+
+def test_une_racine_sans_rapport_avec_la_source_ne_mutile_pas_un_mot_ordinaire():
+    """Cas reproduit par la revue : source generique, domaine « radio.fr » --
+    la racine "radio" n'est nulle part dans le nom de la source, donc jamais
+    bannie seule. La phrase sur la radio survit."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.radio.fr/article/x")
+    caption = "Enorme soiree hier soir. On a passe la radio a fond toute la nuit, ambiance dingue."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_vice_com_n_est_pas_banni_seul_sans_preuve_dans_le_nom_de_la_source():
+    # Le nom de la SOURCE est generique (pas "Vice") : rien ne prouve que la
+    # racine du domaine ("vice") designe le media, donc elle n'est pas bannie.
+    article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
+    caption = "Le clip assume un vice certain pour la nuit electro. On adore ce parti pris."
+    assert sans_mentions_de_source(caption, article) == caption
+
+
+def test_le_domaine_complet_reste_toujours_banni_sans_condition():
+    """Le domaine COMPLET (avec son TLD) reste banni sans condition, meme
+    quand sa racine seule ne l'est pas -- il n'a aucune chance de coincider
+    avec un mot du langage courant."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.vice.com/fr/article/x")
+    caption = "Gros dossier electro. A lire sur vice.com des ce soir."
+    assert "vice.com" not in sans_mentions_de_source(caption, article)
+
+
+def test_noms_a_bannir_ajoute_la_racine_prouvee_par_le_nom_de_la_source():
+    """Unite : le nom de la source ("Ouest-France") prouve que la racine du
+    domaine ("ouest-france") designe bien le media -- elle rejoint la liste."""
+    article = _article(source_name="Ouest-France (RSS)", url="https://www.ouest-france.fr/x")
+    assert "ouest-france" in noms_a_bannir(article)
+
+
+def test_noms_a_bannir_n_ajoute_pas_la_racine_sans_preuve():
+    """Unite, cas radio.fr : rien dans le nom de la source ne dit que "radio"
+    designe ce media -- la racine reste hors de la liste, seul le domaine
+    complet y figure."""
+    article = _article(source_name="Le flux (RSS)", url="https://www.radio.fr/x")
+    noms = noms_a_bannir(article)
+    assert "radio" not in noms
+    assert "radio.fr" in noms
+
+
+def test_la_racine_prouvee_attrape_une_graphie_que_le_nom_de_la_source_seul_raterait():
+    """La SOURCE est enregistree sans tiret ("Ouest France"), la LEGENDE ecrit
+    le media avec un tiret ("Ouest-France", la graphie du domaine) : le nom de
+    la source seul (`\\bOuest France\\b`, avec un espace) ne matcherait pas
+    "Ouest-France". La racine prouvee ("ouest-france", tiret compris) si."""
+    article = _article(source_name="Ouest France (RSS)", url="https://www.ouest-france.fr/x")
+    caption = "Le festival prend de l'ampleur. C'est confirme par Ouest-France ce matin."
+    assert sans_mentions_de_source(caption, article) == "Le festival prend de l'ampleur."
+
+
+def test_la_preuve_ignore_casse_accents_et_tirets():
+    """La comparaison entre la racine du domaine et le nom de la source est
+    insensible a la casse, aux accents et aux tirets/espaces."""
+    article = _article(source_name="ouest france", url="https://www.Ouest-France.fr/x")
+    assert "ouest-france" in noms_a_bannir(article)
+
+
+# --- La source EST le sujet : festival, artiste, label, club (revue 2026-09-21)
+# Mesure : source « Astropolis (IG) », la phrase qui porte l'actu disparaissait.
+# CLAUDE.md, « Qui parle : `sources.categorie` » : pour un compte d'artiste, de
+# festival, de label ou de club, `source.name` est le SUJET de l'actu, pas la
+# source de l'info. Seul un compte `media` (ou de categorie inconnue, dans le
+# doute) voit son nom banni.
+
+LEGENDE_ASTROPOLIS = (
+    "Astropolis devoile sa programmation. Trois jours a Brest fin aout. "
+    "Les billets partent vite."
+)
+
+
+def _article_de(categorie, nom="Astropolis (IG)", url="https://www.instagram.com/p/abc/"):
+    return SimpleNamespace(source=SimpleNamespace(name=nom, categorie=categorie), url=url)
+
+
+def test_le_nom_d_un_festival_qui_publie_son_actu_n_est_jamais_banni():
+    article = _article_de(SourceCategorie.FESTIVAL)
+
+    assert sans_mentions_de_source(LEGENDE_ASTROPOLIS, article) == LEGENDE_ASTROPOLIS
+
+
+def test_le_nom_d_un_media_reste_banni_a_cote():
+    """Meme legende, meme nom, mais la source est un MEDIA : la phrase qui le
+    nomme renvoie vers un concurrent, elle part."""
+    article = _article_de(SourceCategorie.MEDIA)
+
+    assert sans_mentions_de_source(LEGENDE_ASTROPOLIS, article) == (
+        "Trois jours a Brest fin aout. Les billets partent vite."
+    )
+
+
+def test_une_source_de_categorie_inconnue_est_traitee_comme_un_media():
+    """Dans le doute on protege du plagiat : `None` = inconnu (sources X, ou pas
+    encore classee)."""
+    assert "Astropolis" in noms_a_bannir(_article_de(None))
+
+
+def test_artiste_label_et_club_sont_aussi_le_sujet():
+    for categorie in (SourceCategorie.ARTISTE, SourceCategorie.LABEL, SourceCategorie.CLUB):
+        assert "Astropolis" not in noms_a_bannir(_article_de(categorie))
+
+
+def test_le_domaine_reste_bannissable_meme_pour_un_festival():
+    """Le domaine de `article.url` nomme le SITE, jamais le sujet de l'actu : il
+    reste banni dans tous les cas. Sa racine, elle, se confond avec le nom du
+    festival (« astropolis.org » / « Astropolis ») et n'est donc plus bannie."""
+    article = _article_de(
+        SourceCategorie.FESTIVAL, nom="Astropolis", url="https://www.astropolis.org/prog",
+    )
+
+    noms = noms_a_bannir(article)
+
+    assert "astropolis.org" in noms
+    assert "astropolis" not in noms
+    assert "Astropolis" not in noms

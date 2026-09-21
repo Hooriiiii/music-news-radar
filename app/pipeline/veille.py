@@ -135,6 +135,9 @@ def sources_surveillees(db: Session) -> list[Source]:
 class RapportVeille:
     ingest: list[IngestStats] = field(default_factory=list)
     doublons: int = 0
+    # Liens poses contre l'archive (actu deja publiee) -- comptes a part, cf.
+    # `cluster.ClusterStats`.
+    doublons_archive: int = 0
     scoring: object | None = None
     mentions: int = 0
     # Appels Graph reellement passes pendant ce passage.
@@ -223,7 +226,9 @@ def run_veille(
 
     # Rien de neuf : pas une requete de plus. 288 passages par jour.
     if rapport.nouveaux:
-        rapport.doublons = cluster(db)
+        doublons = cluster(db)
+        rapport.doublons = doublons.total
+        rapport.doublons_archive = doublons.archive
         if settings.anthropic_api_key:
             rapport.scoring = score(db, limit=settings.veille_scoring_max)
         rapport.mentions = record(db)

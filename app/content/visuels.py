@@ -206,7 +206,13 @@ def a_une_image_autorisee(article) -> bool:
 
 
 def credit_des_actifs(actifs: list[dict] | None) -> str | None:
-    comptes = dict.fromkeys(a["compte"] for a in actifs or [] if a.get("compte"))
+    """Les comptes distincts a crediter, ou None. Un `compte` qui ne porte pas
+    de `@` est un DOMAINE (`actif_du_web`, « ra.co ») : l'utilisateur a retire
+    cette citation le 2026-09-21 (« retirer aussi le credit web »), le credit
+    d'un compte reste seul obligatoire."""
+    comptes = dict.fromkeys(
+        a["compte"] for a in actifs or [] if a.get("compte") and a["compte"].startswith("@")
+    )
     return " ".join(comptes) or None
 
 

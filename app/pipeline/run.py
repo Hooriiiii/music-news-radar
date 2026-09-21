@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 class PipelineReport:
     ingest: list[IngestStats] = field(default_factory=list)
     duplicates_linked: int = 0
+    # Les liens poses CONTRE L'ARCHIVE (une actu deja publiee), comptes a part :
+    # ce sont les seuls qui sortent un article neuf de la file pour de bon, donc
+    # les seuls dont un faux positif coute une actu (cf. `cluster.ClusterStats`).
+    duplicates_archive: int = 0
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -71,7 +75,9 @@ def run_pipeline(
     """
     report = PipelineReport()
     report.ingest = ingest(db)
-    report.duplicates_linked = cluster(db)
+    doublons = cluster(db)
+    report.duplicates_linked = doublons.total
+    report.duplicates_archive = doublons.archive
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

@@ -15,6 +15,7 @@ from app.content.compose import (
     create_post,
     make_claude_composer,
     probleme_accents,
+    probleme_cloture_question,
     probleme_emojis,
 )
 from app.content.choix_visuels import ChoixVisuels
@@ -177,6 +178,22 @@ def test_le_prompt_porte_la_regle_emojis():
         assert emoji in SYSTEM_PROMPT
 
 
+def test_le_prompt_interdit_de_nommer_le_media_source():
+    """Retour de l'utilisateur le 2026-09-21 : « supprime les sources des
+    descriptions [...] parle de l'actu en elle-meme. »"""
+    assert "SANS JAMAIS NOMMER LE MEDIA" in SYSTEM_PROMPT
+    assert '"via X"' in SYSTEM_PROMPT
+    assert '"selon X"' in SYSTEM_PROMPT
+    assert "pas sa source" in SYSTEM_PROMPT
+
+
+def test_le_prompt_demande_de_varier_la_cloture():
+    """Les six derniers posts publies finissaient TOUS par une question : le
+    prompt doit donner d'autres formes et demander d'alterner."""
+    assert "NE PREND PAS TOUJOURS LA MEME" in SYSTEM_PROMPT
+    assert "alterne" in SYSTEM_PROMPT
+
+
 def test_le_brouillon_exige_exactement_quatre_variantes():
     for nombre in (3, 5):
         with pytest.raises(ValidationError):
@@ -235,6 +252,23 @@ def test_create_post_prend_la_vignette_dune_video_comme_fond(db_session):
     post = create_post(db_session, article, _draft())
 
     assert post.slides[0]["image_url"] == "https://thumb.jpg"
+
+
+def test_create_post_retire_les_mentions_de_source_de_la_legende_persistee(db_session):
+    """La legende persistee doit deja etre propre : le dashboard affiche
+    `post.caption`, elle ne doit pas montrer autre chose que ce qui partira
+    reellement (2026-09-21)."""
+    article = _article(db_session)
+    draft = PostDraft(
+        variantes=[_variante(i) for i in range(4)],
+        caption="Nico Moreno annonce une date. 🎧 Info via Tsugi. ✨",
+        hashtags=["#festival"],
+    )
+
+    post = create_post(db_session, article, draft)
+
+    assert "Tsugi" not in post.caption
+    assert post.caption == "Nico Moreno annonce une date. 🎧"
 
 
 def _validation_error() -> ValidationError:
@@ -536,6 +570,89 @@ def test_la_cover_reel_suit_la_meme_regle(db_session):
     )
 
     assert post.slides[0]["image_url"] == "https://cdn/live.jpg"
+
+
+def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):
+    """Post 71 (CLAUDE.md) : une seule og:image, 564x345, agrandie 3,91x pour
+    remplir 1080x1350 -- trop petite, elle doit descendre d'un barreau vers le
+    fond Kinda plutot que d'etre publiee floue."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn/petite.jpg": (564, 345)}
+    )
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+        },
+    )
+
+    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert post.variants["fond"] == {"origine": ORIGINE_KINDA}
+
+
+def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, monkeypatch):
+    """Le reel (1080x1920) est plus exigeant que le post (1080x1350) sur la MEME
+    photo : la cible depend du gabarit publie, jamais fixe."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    monkeypatch.setattr(
+        illustration,
+        "tailles_de",
+        lambda urls, **k: {"https://cdn/moyenne.jpg": (1080, 800)},
+    )
+    article = _article(db_session)
+
+    def _choix():
+        return ChoixVisuels(
+            [actif(entree("photo", "https://cdn/moyenne.jpg"), origine="article")], "@source",
+        )
+
+    verdicts = lambda urls: {  # noqa: E731
+        "https://cdn/moyenne.jpg": Verdict(affiche=False, sujet="scene", note=70)
+    }
+
+    post_carrousel = create_post(
+        db_session, article, _draft(), visuels=_choix(),
+        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+    )
+    assert post_carrousel.slides[0]["image_url"] == "https://cdn/moyenne.jpg"
+
+    post_reel = create_post(
+        db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
+        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+    )
+    assert post_reel.slides[0]["image_url"] == FOND_KINDA
+
+
+def test_un_gabarit_inconnu_desactive_le_plancher_sans_lever(db_session, caplog):
+    """Un plancher de resolution est un confort, jamais une garantie : un nom de
+    gabarit qu'on ne connait pas ne doit pas faire echouer la composition."""
+    from app.content.illustration import Verdict
+
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+    )
+
+    post = create_post(
+        db_session, article, _draft(), template="gabarit-fantome", visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+        },
+    )
+
+    assert post.slides[0]["image_url"] == "https://cdn/petite.jpg"
 
 
 def test_un_juge_muet_garde_le_premier_candidat(db_session):
@@ -859,6 +976,58 @@ def test_le_prompt_exige_le_francais_accentue():
     assert "ACCENTUE" in SYSTEM_PROMPT and "intitulé" in SYSTEM_PROMPT
 
 
+# --- La cloture n'est plus systematiquement une question (2026-09-21) -------
+#
+# Les SIX derniers posts publies finissaient tous par une question rhetorique
+# (« Qu'en pensez-vous ? », « Vous suivez CORTIS depuis leurs debuts ? »...).
+
+
+def test_probleme_cloture_question_repere_une_legende_qui_finit_par_l_interrogation():
+    probleme = probleme_cloture_question("Le festival revient en octobre. Qu'en pensez-vous ?")
+    assert probleme is not None
+    assert "question" in probleme
+
+
+def test_probleme_cloture_question_ignore_les_emojis_de_fin():
+    """« Qui tente le deplacement ? ✨ » (post 62) finit bien par une question,
+    l'emoji de ponctuation ne doit pas le masquer."""
+    assert probleme_cloture_question("Qui tente le deplacement ? ✨") is not None
+
+
+def test_probleme_cloture_question_laisse_passer_une_cloture_variee():
+    assert probleme_cloture_question("La billetterie ouvre vendredi a midi.") is None
+
+
+def test_composer_relance_une_legende_qui_finit_par_une_question(db_session):
+    article = _article(db_session)
+    question = _draft_legende("Le festival revient en octobre 🎧. Qu'en pensez-vous ✨?")
+    variee = _draft_legende("Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨")
+    client = _FakeClient([_FakeParsedResponse(question), _FakeParsedResponse(variee)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is variee
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "question" in relance and "caption" in relance
+
+
+def test_composer_accepte_une_cloture_en_question_apres_les_tentatives(db_session, caplog):
+    """Jamais une composition perdue pour un defaut de forme : une legende qui
+    finit encore par une question part avec un avertissement."""
+    article = _article(db_session)
+    drafts = [
+        _draft_legende(f"Le festival revient en octobre ({i}) 🎧. On y va ✨?") for i in range(3)
+    ]
+    client = _FakeClient([_FakeParsedResponse(d) for d in drafts])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    with caplog.at_level("WARNING"):
+        resultat = composer(article)
+
+    assert resultat is drafts[-1]
+    assert len(client.messages.appels) == 3
+    assert "acceptee malgre" in caplog.text
+
+
 def test_le_prompt_dit_de_quel_compte_vient_le_visuel(db_session):
     """Le compositeur ne recoit que l'article : sans cette ligne, il ne sait pas
     que la video vient de LE SSERAFIM et titre le premier nom du line-up (le reel
@@ -918,3 +1087,93 @@ def test_un_compositeur_qui_accepte_le_compte_du_visuel_le_recoit(db_session):
     # Et sans compte connu, l'appel reste celui d'avant.
     appeler_compositeur(compositeur, article)
     assert recus == ["@le_sserafim", None]
+
+
+def test_la_grande_photo_d_un_doublon_devient_le_fond_quand_celle_de_l_actu_est_trop_petite(
+    db_session, monkeypatch
+):
+    """Revue du 2026-09-21 (I-4), le cas qui justifiait les taches 2 et 4
+    ensemble : une capture de 564 px chez le representant, la photo de presse
+    2156 px du meme evenement chez un doublon. Le juge les dit toutes deux des
+    photos ; le plancher de nettete ecarte la premiere -- la seconde doit
+    devenir le fond, pas rester en slide pendant que la cover part sur l'aplat
+    Kinda. Et elle n'est pas republiee en slide derriere (regle du 2026-09-19)."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    petite, grande = "https://cdn/capture.jpg", "https://presse.example/grande.jpg"
+    monkeypatch.setattr(
+        illustration, "tailles_de",
+        lambda urls, **k: {petite: (564, 345), grande: (2156, 1320)},
+    )
+    ouverts = []
+    choix = ChoixVisuels(
+        [
+            actif(entree("photo", petite), origine="article", article_id=1),
+            actif(entree("photo", grande), origine="article", article_id=2),
+        ],
+        "@source",
+        secours=[Lot(ORIGINE_COMPTE, lambda: ouverts.append("compte") or [])],
+    )
+
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: petite,
+        verdicts_fond=lambda urls: {
+            petite: Verdict(affiche=False, sujet="portrait", note=80),
+            grande: Verdict(affiche=False, sujet="scene", note=60),
+        },
+    )
+
+    assert post.slides[0]["image_url"] == grande
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+    assert ouverts == []
+
+
+# --- Prompt et controle de cloture coherents (revue du 2026-09-21, I-5) ----
+#
+# Le prompt proposait encore « une question » parmi les clotures possibles, et
+# le controle refusait TOUTE cloture en `?` : sur un historique ou 6 posts sur 6
+# finissaient par une question, une relance quasi systematique -- jusqu'a trois
+# appels `composer_model` par composition. Tranche : la question sort des
+# clotures proposees. Un controle sans memoire ne sait pas faire « de temps en
+# temps », il ne sait faire que « jamais » ; c'est donc le prompt qui s'aligne.
+
+
+def test_le_prompt_ne_propose_plus_la_question_comme_cloture():
+    assert "termine par une \\\nquestion" not in SYSTEM_PROMPT
+    assert "termine par une question" not in SYSTEM_PROMPT.replace("\n", " ")
+    assert "JAMAIS par une question" in SYSTEM_PROMPT
+
+
+def test_la_relance_ne_dit_plus_qu_une_question_reste_possible():
+    probleme = probleme_cloture_question("Le festival revient. On y va ?")
+    assert "reste possible" not in probleme
+
+
+def test_le_filtre_des_sources_passe_avant_le_controle_de_cloture(db_session):
+    """Applique APRES la validation, `sans_mentions_de_source` pouvait retirer la
+    derniere phrase et laisser en fin de legende la question que le controle
+    venait d'ecarter : « ... Vous y serez ? Info via Tsugi. » passait le
+    controle, puis partait en ligne sur « Vous y serez ? »."""
+    article = _article(db_session)
+    cachee = _draft_legende("Le festival revient en octobre 🎧. Vous y serez ✨? Info via Tsugi.")
+    variee = _draft_legende("Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨")
+    client = _FakeClient([_FakeParsedResponse(cachee), _FakeParsedResponse(variee)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is variee
+    assert len(client.messages.appels) == 2
+
+
+def test_le_brouillon_rendu_porte_deja_la_legende_filtree(db_session):
+    article = _article(db_session)
+    draft = _draft_legende(
+        "Le festival revient en octobre 🎧. La billetterie ouvre vendredi ✨. Info via Tsugi."
+    )
+    client = _FakeClient([_FakeParsedResponse(draft)])
+
+    resultat = make_claude_composer(client=client, max_attempts=3)(article)
+
+    assert "Tsugi" not in resultat.caption
+    assert resultat.caption.endswith("vendredi ✨.")

@@ -32,6 +32,11 @@ def main() -> None:
           f"({len(report.ingest)} sources, {len(errors)} en erreur)")
     for stats in errors:
         print(f"  [ERREUR] {stats.source_name}: {stats.error}")
+    if report.duplicates_linked:
+        # L'archive a part : un lien contre une actu deja publiee sort un article
+        # neuf de la file pour de bon -- un faux positif doit se voir ici.
+        print(f"  doublons : {report.duplicates_linked} lies, dont "
+              f"{report.duplicates_archive} contre une actu deja publiee")
     if report.scoring is not None:
         ligne = f"  scoring : {report.scoring.scored} scorés, {report.scoring.errors} erreurs"
         # N'afficher le pré-filtre que s'il a servi : sur une installation sans

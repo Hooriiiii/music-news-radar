@@ -159,6 +159,11 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Nettoyage des URL de médias déjà en base (entités HTML) :
   `uv run python -m scripts.nettoyer_urls_medias [--apply]` (sans `--apply` :
   le plan ; idempotent — voir « URL de médias » dans les contraintes)
+- Remplissage des durées de vidéos déjà en base :
+  `uv run python -m scripts.remplir_durees_medias [--apply]` (sans `--apply` :
+  le plan ; idempotent — voir « La durée d'une vidéo Instagram » dans les
+  contraintes). Passé en production le 2026-09-21 : 655 vidéos datées dans 273
+  articles et 12 posts, dont 25 au-delà de la limite du reel.
 - Tests : `uv run pytest`
 - Lint : `uv run ruff check .`
 - Migrations : `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."`
@@ -389,7 +394,7 @@ sentinelle (`tests/test_quota_graph.py`) échoue si un module de `app/publish` o
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
 
-Les articles sont purgés à 14 jours ; **les artistes et leurs citations, jamais**.
+Les articles sont purgés à 2 jours ; **les artistes et leurs citations, jamais**.
 Ce qui intéresse un label n'est pas « qui est cité aujourd'hui » mais « depuis quand,
 à quelle fréquence, est-ce que ça accélère » — cette courbe est l'actif de Kinda.
 `app/pipeline/artists.py` : `record_mentions()` (idempotent, tourne après le scoring
@@ -552,6 +557,49 @@ derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
 affiche. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel
 suit la même règle sans code en double.
 
+**Le fond doit aussi être ASSEZ GRAND, pas seulement pas une affiche**
+(2026-09-21). Relevé en ouvrant le compte : 4 des 6 derniers posts publiés
+avaient un fond flou (post 71, visage baveux à l'œil nu) — l'`og:image`
+retenue mesurait 564×345, agrandie 3,91× pour remplir 1080×1350. Rien ne
+mesurait jamais la résolution avant de rendre. `illustration.eviter_l_affiche`
+reçoit désormais `cible` (la taille du gabarit publié, fournie par
+`create_post` depuis `template` — 1080×1350 en post, 1080×1920 en reel, un
+reel étant plus exigeant sur la même photo) et traite un fond trop petit
+EXACTEMENT comme une affiche avérée : il descend d'un barreau vers les mêmes
+réserves — **web compris** —, et à défaut part sur `FOND_KINDA`. Mais AVANT de
+descendre, le premier barreau **balaye ses propres candidats par taille**
+(`candidats`, tout le groupe de doublons) : `choisir_illustration` ne classe
+que sur le verdict affiche/photo, et sans ce balayage la photo de presse 2 156 px
+d'un doublon restait en slide pendant que la capture de 564 px du représentant
+envoyait la cover vers les réserves (revue du 2026-09-21).
+
+Seuil : `cover_fond_upscale_max` = **2,2×** (`app/config.py`), la MÊME valeur et
+le même raisonnement que `publication_crop_upscale_max` (voir « Publication
+automatique ») : laisser passer l'`og:image` standard de 1200×630 (2,14× pour
+remplir 1080×1350), de loin l'illustration la plus fréquente du pipeline. Un
+premier seuil à 1,5× la rejetait : la plupart des posts de presse seraient
+partis sur l'aplat Kinda, et un article dont les slides étaient par ailleurs
+écartées finissait en `PreparationImpossible`, donc exclu pour toujours. On ne
+dégrade jamais le cas nominal pour attraper un cas limite. Assumé : le fond du
+post 62 (720×900 en reel, 2,13×) passe, à un centième du seuil ; les trois
+autres fonds flous mesurés (2,39×, 3,52×, 3,91×) sont attrapés. Une taille non
+mesurable est GARDÉE — même règle du doute que le juge d'affiches. La mesure ne coûte rien de plus : les
+dimensions réelles sont lues au moment où le juge visuel décode déjà l'image
+pour la réduire à 512 px, et mémorisées dans le même `illustration_cache_path`
+(`Cache.tailles`, à côté des verdicts).
+
+Et l'`og:image` elle-même peut être en cause : certains CDN d'éditeurs
+(WordPress) recopient le paramètre de redimensionnement de la page dans
+`og:image` — mesuré sur le post 71, `?w=564` rendait 564×345 (50 Ko) là où la
+même image sans ce paramètre pèse 386 Ko en 2156×1320. `app/pipeline/
+illustrations.py::image_de_partage` retente donc, quand l'URL porte un
+paramètre connu (`w`, `width`, `h`, `height`, `resize`, `fit`, `s`), la
+variante sans ce paramètre — et ne la retient que si elle est RÉELLEMENT plus
+grande une fois téléchargée et décodée (jamais déduit de l'URL, un éditeur
+peut ignorer le paramètre). Mémorisé par URL dans
+`illustration_variante_cache_path` : un article dont l'`og:image` ne change
+pas ne repaie pas cette vérification à chaque passage.
+
 **Et si tout est une affiche, on cherche ailleurs — et à défaut, mieux vaut le
 fond Kinda qu'une affiche** (2026-09-18, `illustration.eviter_l_affiche` +
 `choix_visuels.{photos_du_compte,photos_des_artistes_cites}`). Post 40 puis 41
@@ -580,7 +628,15 @@ passé de 2 à **6** par réserve (deux posts d'un compte de festival en saison,
 sont deux affiches de plus) ; une fenêtre propre au fond,
 `fond_secours_fenetre_jours` = **30 j** au lieu des 10 j des visuels de carrousel
 (un visuel de carrousel doit ILLUSTRER l'actu, un fond n'a qu'à être une belle
-photo du bon compte) ; et une lecture `business_discovery` en direct **même si le
+photo du bon compte) — **mais bornée par la purge** : ces réserves lisent la
+table `articles`, que `retention_days` (**2** depuis le 2026-09-21) vide au-delà
+de 2 jours. Tant que la rétention reste courte, les 30 j (et les 10 j des
+visuels d'artistes) sont décoratifs et les réserves « compte source » et
+« artiste cité » sont quasi vides — hors lecture en direct du compte source.
+Décision de l'utilisateur : c'est la **recherche web**, seul barreau qui ne lit
+pas la base, qui reprend le relais, pour une affiche comme pour un fond trop
+petit (verrouillé de bout en bout dans `tests/test_visuels_web.py`). Les valeurs
+sont gardées : elles redeviendront utiles si la rétention remonte ; et une lecture `business_discovery` en direct **même si le
 pipeline vient d'ingérer le compte** (`LecteurComptes(..., ignorer_fraicheur=True)`).
 Cette garde-là est une économie — « la base suffit » — et ici la base ne suffit
 justement pas. Les **plafonds durs** du lecteur, eux, tiennent toujours :
@@ -701,6 +757,50 @@ Une sortie structurée vide (`parsed_output` None : `max_tokens` ou refus) est
 traitée comme un échec de validation : relance, puis `CompositionError`.
 L'interdiction d'emoji dans `headline`/`title`/`subtitle` reste stricte (textes
 rendus dans une police).
+
+**Légendes : plus de média nommé, plus de clôture systématique en question**
+(2026-09-21, retour de l'utilisateur en ouvrant le compte réellement publié :
+« supprime les sources des descriptions [...] parle de l'actu en elle-même » —
+posts 71, 63, 65 : « Info via Stereogum. », « ... selon Soompi ... » — puis,
+sur les six derniers posts en ligne, une clôture identique à chaque fois,
+« Qu'en pensez-vous ? »). Deux défauts, même mécanique de correction : une
+règle de prompt (`SYSTEM_PROMPT`, règle 4) plus un filet, parce qu'un prompt ne
+garantit jamais rien à lui seul. Le nom du média n'est PAS un défaut de forme
+tolérable comme les emojis ou les accents — le retirer après coup est
+nécessaire, `app/content/legende.sans_mentions_de_source` retire les phrases
+qui nomment la source de l'article (nom de la source nettoyé de son canal,
+domaine de l'URL avec et sans TLD — construits depuis l'article, jamais
+devinés), appliqué à la composition — dans la boucle du compositeur, AVANT
+le contrôle de forme, et encore dans `create_post` (idempotent) — pour que la
+légende persistée soit déjà celle qui part en ligne ; une légende qui
+deviendrait vide part telle quelle. Avant le contrôle et pas après : retirer
+une dernière phrase « Info via Tsugi. » pouvait sinon laisser en fin de légende
+la question que le contrôle de clôture venait d'écarter.
+
+**Le filet ne bannit le NOM de la source que si c'est un MÉDIA** (catégorie
+`media`, ou `None` : dans le doute on protège du plagiat). Ne pas simplifier
+cette condition : pour un compte d'artiste, de festival, de label ou de club,
+`source.name` est le SUJET de l'actu, pas la source de l'info (« Qui parle :
+`sources.categorie` »). Mesuré en revue le 2026-09-21, source « Astropolis
+(IG) » : « Astropolis dévoile sa programmation. Trois jours à Brest fin août. »
+perdait sa première phrase — celle qui porte l'actu —, c'est-à-dire la
+mutilation des posts mêmes que le feed priorise. La racine sans TLD suit la
+même règle (elle n'est bannissable que parce qu'elle se confond avec le nom de
+la source) ; le domaine COMPLET (`astropolis.org`) nomme un site, jamais le
+sujet, et reste banni dans tous les cas.
+
+La clôture en question, elle, est un défaut de FORME :
+`probleme_cloture_question()` suit exactement `probleme_emojis()` /
+`probleme_accents()`, relance puis accepte avec un warning plutôt que de perdre
+un créneau. **La dernière phrase ne se termine JAMAIS par une question**, et le
+prompt dit la même chose que le contrôle (revue du 2026-09-21) : il proposait
+encore « une question » parmi les clôtures possibles alors que le contrôle les
+refuse toutes — sur un modèle qui en mettait six sur six, une relance quasi
+systématique, jusqu'à trois appels `composer_model` par composition. Un
+contrôle sans mémoire ne sait pas faire « de temps en temps », seulement
+« jamais » : c'est la question qui est sortie des clôtures proposées, pas le
+contrôle qui s'est assoupli. Une question reste permise au milieu de la
+légende.
 
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
@@ -886,6 +986,28 @@ un crash — mieux vaut un post manqué qu'un post publié deux fois. Une panne
 systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'un
 post qui ne porte plus l'article de son créneau (gel ou publication refusés,
 erreur posée).
+
+**Une VIDÉO inadaptée n'est pas une faute de l'ARTICLE** (2026-09-21,
+`preparation_reel.ReelInadapte`). L'article 18951 (Billboard, « The Weeknd
+Debuts New Song Sampling "Neon Genesis Evangelion" Theme ») a été exclu à vie
+parce qu'une vidéo de 190 s dépassait la limite du reel — or cet article n'avait
+qu'**une photo** : la vidéo était EMPRUNTÉE à un compte d'artiste suivi
+(`choix_visuels` / `_porteur_video`). On brûlait une actu à cause d'un visuel
+prêté. `verifier_source` lève donc une exception distincte, sous-classe de
+`PreparationImpossible` pour que tout ce qui l'attrape déjà continue de la
+traiter comme un refus de gel (même motif qu'`ImageEcartee` sous
+`ImageInexploitable`) ; le gel la reconnaît et **libère le créneau sans
+exclure**, comme pour une inéligibilité relue.
+
+Mais libérer ne suffit pas : sans mémoire, la même vidéo serait rechoisie au
+créneau suivant et **recomposée à chaque fois** (Claude payé) — c'est
+l'exclusion qui tenait ce rôle. L'exception porte donc la durée MESURÉE par
+ffprobe, sa vidéo et l'article qui la détient, et `runner._memoriser_duree`
+l'écrit dans `articles.media` : `videos_exploitables` l'écarte alors des reels
+pour toujours, sans fermer les carrousels à l'article. **Si la leçon ne peut pas
+être écrite** — article introuvable, ou URL qui ne correspond à aucun média, le
+cas d'un repli yt-dlp qui porte un permalink —, on retombe sur l'exclusion : la
+protection d'avant, là où l'information manque.
 
 **Le dashboard édite pendant un passage.** L'agent relit chaque créneau avant de
 le modifier et n'écrit le résultat d'une composition, d'un gel ou d'une
@@ -1111,7 +1233,23 @@ change de mécanisme : ce n'est plus la note qui protège Kinda du plagiat visue
 
 **Où chercher à la place** (`choix_visuels.py`, AVANT l'appel Claude de la
 composition — le choix des visuels précède le coût payé) : d'abord les médias
-propres de l'article s'ils sont autorisés ; sinon les comptes Instagram des
+propres de l'article s'ils sont autorisés — et, en CARROUSEL (2026-09-21,
+`choix_visuels._propres`/`_membres_du_groupe`), ceux de TOUT son groupe de
+doublons (les articles dont `duplicate_of_id` pointe vers le représentant,
+jamais de remontée de chaîne : un saut suffit toujours). Mesuré le 2026-09-21 :
+21 articles liés comme doublons, dont 13 portaient des médias jusque-là jetés
+parce que seul le représentant élu (le plus INFORMATIF par le TITRE, pas par la
+photo) était regardé — une photo de presse nette peut ainsi remplacer une
+capture Instagram basse résolution du même événement postée par une autre
+source du groupe. `origine_interdite` reste vérifiée PAR MEMBRE, sur sa source
+lue en base, jamais héritée du représentant : un groupe mixte presse + compte
+Instagram média contient les deux, seul le second reste interdit. À qualité
+égale les médias du représentant passent en premier, et le crédit suit le
+membre dont vient le visuel retenu. Le REEL n'est pas élargi (son éligibilité —
+catégorie du compte, durée de la vidéo — se décide sur l'article seul). Le
+juge visuel (`illustration.prejuger`) et le plafond d'une affiche par
+carrousel s'appliquent au lot élargi sans appel supplémentaire : le lot
+s'élargit, il ne se dédouble pas. Sinon les comptes Instagram des
 artistes SUIVIS cités (`comptes_artistes.py` : nom de la source sans
 parenthèses, handle, fiches `artists` liées par `source_instagram_id` qui
 écrasent l'index — un nom d'un seul mot comme « Anyma » n'est jamais cherché en
@@ -1127,8 +1265,9 @@ AWARE UTC, rien inséré en base ; (c) pour un reel, jamais de lecture en direct
 exploitable d'un post d'artiste déjà en base.
 
 Heuristique (`actifs_artistes.py`) : même artiste (nom et handle retirés du
-sujet), fenêtre dure `visuels_artiste_fenetre_jours` (10 j) sur la date de
-l'article, sur le sujet d'abord (recouvrement des mots significatifs du titre),
+sujet), fenêtre dure `visuels_artiste_fenetre_jours` (10 j — en pratique
+bornée par la purge à `retention_days`, 2 j, puisque ces posts sont lus en
+base) sur la date de l'article, sur le sujet d'abord (recouvrement des mots significatifs du titre),
 hors sujet accepté seulement à `visuels_artiste_generique_jours` (5 j) au plus
 de la date de l'article, tri par recouvrement puis écart de date. Carrousel :
 au plus `visuels_max_photos` (3) PHOTOS — jamais de vignette de vidéo, qui
@@ -1211,14 +1350,20 @@ cas même pour lequel il a été écrit. La requête produite est désormais
 qu'APRÈS une recherche web restée bredouille.
 
 **Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
-c'est un projet perso donc c'est ok »). En contrepartie le site est TOUJOURS
-cité : le domaine part dans le crédit de la légende (« 📸 ra.co »), jamais
-coupé, sans « via » ni ligne « Source : » — mêmes règles que le crédit d'un
-compte. Il est reconstitué depuis le seul `file://` publié
-(`recherche_web.attribution_de` : le nom du fichier de cache EST le SHA-256 de
-l'URL d'origine), donc il survit à un redémarrage ; et `create_post` relit le
-crédit sur les actifs FINAUX, sinon une image arrivée par une réserve serait
-publiée sans dire d'où elle vient.
+c'est un projet perso donc c'est ok »). **Le site n'est en revanche plus cité**
+(revirement du 2026-09-21, en réponse à la question posée après le retour sur
+les posts publiés : « retirer aussi le crédit web ») : un `compte` d'actif qui
+n'est pas un `@handle` est un domaine du web, et `credit_des_actifs`
+(`app/content/visuels.py`) ne l'émet plus dans le crédit de la légende — seul
+un crédit de COMPTE (`@artiste`) y reste. `recherche_web.attribution_de` et
+`credit_de` continuent d'exister et de reconstituer l'attribution depuis le
+seul `file://` publié (le nom du fichier de cache EST le SHA-256 de l'URL
+d'origine) : cette reconstitution reste vraie et sert encore le permalien
+gardé sur l'actif, elle n'alimente simplement plus l'affichage. Un crédit de
+domaine posé avant ce revirement (`djmag.com`, `ra.co`, sur un brouillon déjà
+en base) ne s'affiche plus non plus : le filtre vaut aussi à la lecture
+(`app/content/legende.credit_de_compte`), seul endroit que publication, export
+et essai à la main traversent tous.
 
 Coût : une recherche par requête, mémorisée `visuels_web_cache_jours` (3) dans
 `visuels_web_cache_path` ; au plus `visuels_web_max_candidats` (3) pages ; image
@@ -1290,13 +1435,56 @@ cover part sur l'image de secours du gabarit.
    `/articles` masque les doublons par défaut (`include_duplicates=true` pour les
    voir).
 
+   **Une actu déjà publiée ne ressort jamais** (2026-09-21). La fenêtre de 48 h
+   ne comparait que des articles frais entre eux : une reprise plus tardive de
+   la même actu par une autre source n'était rapprochée de rien, alors que les
+   articles `USED` ne sont jamais purgés (« Rétention » ci-dessous) précisément
+   pour servir d'archive éditoriale — l'archive existait, rien ne la
+   consultait. `link_duplicates` élargit désormais l'ensemble des
+   représentants POSSIBLES aux articles `USED` de l'archive, bornés par
+   `cluster_archive_jours` (**7**, `app/config.py`) et hors de la fenêtre de 48 h
+   (pas de double compte avec les articles frais). Un article archivé ne peut jamais devenir lui-même un
+   doublon (seulement servir de cible), et un représentant déjà `USED` reste
+   verrouillé par `elire_representants` même s'il est hors fenêtre — cette
+   fonction se fonde sur la date du DOUBLON, pas celle du représentant, donc un
+   groupe formé contre un article publié il y a des jours est bien réexaminé,
+   mais jamais détrôné.
+
+   **Contre l'archive, une mesure et un seuil PROPRES** (revue du 2026-09-21).
+   La première version réutilisait le seuil de 0.65, éprouvé sur 48 h ; sur une
+   archive d'un mois d'un feed centré sur quelques artistes récurrents, il
+   enterrait des actus NEUVES, et le lien est irréversible en pratique (l'article
+   sort de la file, le représentant `USED` est verrouillé, rien ne remonte).
+   Paires mesurées, toutes des actus différentes : « Charlotte de Witte annonce
+   un nouvel EP » / « … annonce une tournée mondiale » (1.00 : « EP » tombe, le
+   premier titre est CONTENU dans le second), « Fred again.. sort un nouveau
+   morceau » / « … un nouvel album » (0.75), « Les Transmusicales dévoilent leur
+   programmation » / « … une nouvelle vague » (0.67). Aucun seuil de
+   recouvrement n'épargne la première, qui vaut 1.00 : l'archive utilise donc
+   `archive_similarity_from_tokens` — mots partagés rapportés au titre le plus
+   LONG, qui compte ce qui DIFFÈRE — avec `cluster_archive_seuil` (**0.8**). Les
+   trois paires tombent à 0.60 / 0.75 / 0.67, une vraie reprise traduite
+   (« Dour Festival unveils its 2027 lineup » / « … dévoile son line-up 2027 »)
+   reste à 0.80. La fenêtre fraîche de 48 h, elle, ne change pas. Et la fenêtre
+   d'archive est passée de 30 à **7 jours** : une reprise ressort dans la
+   semaine, au-delà le risque de faux positif dépasse le service rendu.
+
+   **Un lien d'archive se VOIT** : compté à part (`ClusterStats.archive`,
+   distinct de `frais` ; « dont N contre une actu déjà publiée » dans la sortie
+   de `run_pipeline` et de `run_veille`), journalisé en WARNING avec les deux
+   titres et la similarité, et tracé sur l'article lié dans `file_exclu_raison`
+   (« doublon d'une actu deja publiee (article N, similarite 0.80) »).
+   **Réparer un faux positif, c'est effacer les DEUX champs**
+   (`duplicate_of_id` et `file_exclu_raison`), sinon l'article reste hors file.
+
 ## Rétention
 
 **Exception `USED`** : un article marqué posté n'est JAMAIS purgé — c'est l'archive
 éditoriale (savoir ce qui a été publié, ne pas le reposter). `REVIEWED` n'est que du
 tri et ne protège pas.
 
-On ne garde en base que les articles publiés dans les `retention_days` (14) derniers
+On ne garde en base que les articles publiés dans les `retention_days` (**2** depuis le
+2026-09-21 ; 14 auparavant) derniers
 jours, par DATE DE POST (`published_at`), pas date d'ajout — `app/pipeline/retention.py`.
 Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hors fenêtre).
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
@@ -1407,6 +1595,21 @@ Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.e
   le post reste illustré et identifiable comme reel, et `video_recuperable` dit
   si yt-dlp pourra le chercher au gel (permalink `/reel/`, ou vidéo seule).
   L'offre (`directes` contre le reste) est à surveiller au dashboard.
+- **La durée d'une vidéo Instagram n'est pas dans Graph, elle est dans son
+  URL.** Le champ demandé est `media_url,thumbnail_url` et rien d'autre : les
+  642 vidéos Instagram de la base avaient `duration_ms` à NULL le 2026-09-21.
+  Or `videos_exploitables` laisse passer une durée INCONNUE — choix assumé
+  (« mieux vaut proposer le reel que griser un bouton sur une donnée absente »).
+  Conséquence mesurée ce jour-là : une vidéo de **190 s** est restée éligible,
+  a fait composer un post (Sonnet payé) et n'a échoué qu'au gel, APRÈS
+  téléchargement. L'URL signée du CDN portait pourtant la réponse depuis le
+  début, dans le paramètre `efg` (base64 → JSON → `duration_s`) : **642 sur
+  642** le portaient. D'où `media.duree_depuis_url()`, appelée dans `entree()`
+  — le point de passage de toutes les sources — en DERNIER recours seulement :
+  une durée donnée par la source (sonde ffprobe, API X) est mesurée, celle de
+  l'URL n'est que déclarative, et elle n'est jamais écrasée. Le module ne lève
+  jamais : paramètre absent, base64 ou JSON invalide, valeur absurde → `None`,
+  donc exactement le comportement d'avant.
 - **Le quota Graph de l'app est partagé et vite atteint** : le 2026-09-17, ~310
   appels de vérification plus un passage sur 120 comptes dans la même heure ont
   rendu l'erreur code 4 (« Application request limit reached ») pendant une heure.

@@ -156,17 +156,53 @@ def telecharger_video(
             client.close()
 
 
-def verifier_source(infos: dict) -> None:
+class ReelInadapte(PreparationImpossible):
+    """La VIDEO ne convient pas a un reel -- l'article, lui, reste publiable.
+
+    Le 2026-09-21, l'article 18951 (Billboard, « The Weeknd Debuts New Song
+    Sampling "Neon Genesis Evangelion" Theme ») a ete exclu DEFINITIVEMENT de la
+    file parce qu'une video de 190 s depassait la limite. Cet article n'avait
+    qu'une photo : la video etait empruntee a un compte d'artiste suivi. On a
+    donc brule une actu a cause d'un visuel pret.
+
+    D'ou une exception distincte, sous-classe de `PreparationImpossible` pour
+    que tout ce qui l'attrape deja continue de la traiter comme un refus de gel
+    (meme motif que `ImageEcartee` sous `ImageInexploitable`). Le gel, lui, la
+    reconnait et LIBERE le creneau au lieu d'exclure.
+
+    Elle porte la duree MESUREE et la video concernee : c'est l'exclusion qui
+    empechait jusqu'ici de recomposer le meme reel a chaque creneau (Claude
+    paye a chaque fois). En ecrivant ce qu'on vient d'apprendre dans
+    `articles.media`, `videos_exploitables` l'ecarte des reels pour toujours --
+    sans fermer les carrousels a l'article.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: str | None = None,
+        duree_ms: int | None = None,
+        article_id: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.url = url
+        self.duree_ms = duree_ms
+        self.article_id = article_id
+
+
+def verifier_source(infos: dict, *, url: str | None = None, article_id: int | None = None) -> None:
     duree = infos["duration"]
-    if duree < settings.publication_reel_duree_min_s:
-        raise PreparationImpossible(
-            f"video trop courte : {duree:.1f} s, minimum {settings.publication_reel_duree_min_s:.0f} s"
-        )
-    if duree > settings.publication_reel_duree_max_s:
+    hors_bornes = (
+        f"video trop courte : {duree:.1f} s, minimum {settings.publication_reel_duree_min_s:.0f} s"
+        if duree < settings.publication_reel_duree_min_s
         # Refusee, jamais coupee : couper le contenu d'un artiste en trahirait le sens.
-        raise PreparationImpossible(
-            f"video trop longue : {duree:.0f} s, maximum {settings.publication_reel_duree_max_s:.0f} s"
-        )
+        else f"video trop longue : {duree:.0f} s, maximum {settings.publication_reel_duree_max_s:.0f} s"
+        if duree > settings.publication_reel_duree_max_s
+        else None
+    )
+    if hors_bornes is not None:
+        raise ReelInadapte(hors_bornes, url=url, duree_ms=int(duree * 1000), article_id=article_id)
 
 
 def verifier_sortie(infos: dict, poids: int) -> None:
@@ -290,7 +326,12 @@ def preparer_reel(
     try:
         try:
             infos_source = sonder(source)
-            verifier_source(infos_source)
+            # L'URL de `origine` est celle du MEDIA quand elle vient de l'API ;
+            # pour un repli yt-dlp c'est un permalink, qui ne correspond a aucune
+            # entree de `media` -- le gel s'en apercoit et exclut alors, comme avant.
+            verifier_source(
+                infos_source, url=origine[1], article_id=getattr(porteur, "id", None)
+            )
         except (KeyError, ValueError) as exc:
             # Un flux que ffprobe decrit sans duree, ou avec une valeur absurde :
             # propre a cette video. L'exclure evite de rebruler le budget yt-dlp.

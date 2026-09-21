@@ -1,6 +1,7 @@
 import pytest
 
 from app.config import settings
+from app.pipeline.cluster import ClusterStats
 from app.pipeline.election import ElectionStats
 from app.pipeline.ingest import IngestStats
 from app.pipeline.run import run_pipeline
@@ -119,7 +120,7 @@ def test_run_pipeline_elit_avant_le_scoring_et_lie_les_artistes_apres(db_session
     report = run_pipeline(
         db_session,
         ingest=lambda db: calls.append("ingest") or [],
-        cluster=lambda db: calls.append("cluster") or 0,
+        cluster=lambda db: calls.append("cluster") or ClusterStats(),
         elire=lambda db: calls.append("elire") or ElectionStats(reelus=1),
         score=lambda db: calls.append("score") or ScoringStats(),
         record=lambda db: calls.append("record") or 0,
