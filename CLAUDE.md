@@ -1509,12 +1509,24 @@ cover part sur l'image de secours du gabarit.
    Chaque paire (les deux ids d'article, ordre indifférent) n'est arbitrée
    qu'UNE FOIS : le verdict est mémorisé dans `cluster_arbitrage_cache_path`
    (JSON à côté du jeton, écriture atomique — même mécanique que
-   `illustration_cache_path`), et relu avant tout appel. Un `CACHE_VERSION`
-   différent (`app/pipeline/cluster_arbitrage.py`) fait LEVER la lecture
-   stricte utilisée avant écriture (`_lire_pour_ecriture`, voir plus bas) :
-   changer cette valeur sans fournir de migration (ou sans supprimer le
-   fichier à la main) empêche silencieusement tout nouveau verdict de
-   s'écrire, jusqu'à ce que le fichier redevienne lisible. Une PANNE (clé
+   `illustration_cache_path`), et relu avant tout appel.
+
+   **Changer `CACHE_VERSION` (`app/pipeline/cluster_arbitrage.py`) désarme
+   les verdicts manuels.** Un fichier d'une autre version est traité comme
+   illisible, des DEUX côtés. En LECTURE, `lire_cache` rend alors un cache
+   VIDE : les verdicts manuels « différent » existants **cessent de
+   protéger** — l'auto-réparation ne les voit plus, et les liens qu'ils
+   interdisaient se reforment dès le passage suivant, actus neuves
+   enterrées sous l'archive comprises. En ÉCRITURE, `_lire_pour_ecriture`
+   lève et plus aucun verdict ni compteur de tentatives ne s'écrit : chaque
+   passage horaire redemande donc les mêmes paires douteuses et repaie
+   jusqu'à `cluster_arbitrage_max_par_passage` appels, et
+   `scripts.marquer_doublon_manuel` échoue. Supprimer le fichier « pour
+   débloquer » efface les verdicts manuels pour de bon. Qui change la
+   version doit donc fournir, dans le même commit, une **migration** qui
+   relit l'ancien format et réécrit le nouveau en **préservant toutes les
+   entrées `manuel`** (les verdicts de Claude et les tentatives peuvent, au
+   pire, être rejoués) — jamais un simple changement de la constante. Une PANNE (clé
    absente, crédits épuisés, réseau mort, réponse hors schéma) n'est JAMAIS
    mémorisée comme un verdict et ne pose aucun lien : le doute favorise
    toujours la publication, la paire sera réarbitrée au passage suivant (sous
@@ -1575,19 +1587,33 @@ cover part sur l'image de secours du gabarit.
    il est apparu (course, crash entre deux écritures, version antérieure du
    code) — elle n'efface que sa propre raison d'exclusion
    (`RAISON_DOUBLON_PREFIXE`), jamais une exclusion posée ailleurs (gel ou
-   composition impossibles).
+   composition impossibles). `scripts.marquer_doublon_manuel --different`
+   applique le même filtre quand il défait un lien.
 
-   **Un seul point pose un lien vers un autre article**
-   (`link_duplicates.lier`, dans `app/pipeline/cluster.py`) : il aplatit
-   IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers la
-   cible finale tout article qui pointait déjà vers l'article qu'on vient de
-   lier — la garantie « jamais de chaîne, un seul saut suffit toujours »
-   tient par construction plutôt que par un correctif localisé à un seul
-   endroit (une passe, une origine de lien). `db.flush()` y est explicite et
-   nécessaire : `SessionLocal` tourne en `autoflush=False` en production
-   (`app/db.py`), donc sans ce flush, la requête qui cherche « qui pointe
-   vers cet article » ne verrait pas un lien posé plus tôt dans le MÊME
-   passage.
+   **Deux points posent un lien vers un autre article, et chacun garde la
+   règle « jamais de chaîne, un seul saut suffit toujours ».**
+   - `link_duplicates.lier` (`app/pipeline/cluster.py`), pour TOUS les liens
+     de la dédup (frais, certain, arbitré, manuel) : il aplatit
+     IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers la
+     cible finale tout article qui pointait déjà vers l'article qu'on vient
+     de lier — par construction plutôt que par un correctif localisé à une
+     passe ou à une origine de lien. `db.flush()` y est explicite et
+     nécessaire : `SessionLocal` tourne en `autoflush=False` en production
+     (`app/db.py`), donc sans ce flush, la requête qui cherche « qui pointe
+     vers cet article » ne verrait pas un lien posé plus tôt dans le MÊME
+     passage. Un article ainsi repointé vers un représentant d'ARCHIVE
+     (P → D → R devenu P → R) reçoit la même trace `file_exclu_raison`
+     (« … via son representant D … », sans recouvrir une exclusion posée
+     ailleurs) et le même compteur `archive` qu'un lien d'archive direct :
+     sinon il sortirait de la file en silence.
+   - `elire_representants` (`app/pipeline/election.py`), quand l'élection
+     promeut un nouveau représentant : il délie l'élu et repointe vers lui
+     tous les membres du groupe. Sans danger pour la règle : il ne traite
+     que le groupe d'un représentant lui-même NON lié, dont tous les membres
+     pointent vers lui en un saut, et jamais celui d'un représentant engagé
+     — or un représentant d'archive est toujours `USED`, donc verrouillé
+     (`representant_engage`). Un groupe rattaché à l'archive ne change donc
+     jamais de tête par ce chemin.
 
    Trois limites résiduelles, assumées : une reprise ingérée par `run_veille`
    (toutes les 5 min) reste non arbitrée — donc potentiellement publiable —

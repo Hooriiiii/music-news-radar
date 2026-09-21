@@ -99,14 +99,17 @@ from app.models import Article
 logger = logging.getLogger(__name__)
 
 # Changer cette valeur sans fournir de migration (relire l'ancien format et le
-# reecrire au nouveau) coupe l'ecriture de TOUT nouveau verdict jusqu'a ce que
-# le fichier redevienne lisible : `_lire_pour_ecriture` traite un fichier
-# present dont la version ne correspond pas comme illisible (voir
-# `_cache_depuis_json`) et refuse d'ecrire par-dessus plutot que d'ecraser
-# silencieusement des verdicts manuels existants (tour de correction 2/5). Le
-# bon reflexe reste de refuser l'ecrasement -- mais un changement de version
-# doit donc s'accompagner d'une migration du fichier, ou de sa suppression a
-# la main, jamais d'un simple bump de cette constante.
+# reecrire au nouveau) a DEUX effets, parce qu'un fichier d'une autre version
+# est traite comme illisible (`_cache_depuis_json`) :
+# - en LECTURE, `lire_cache` rend un cache VIDE : les verdicts manuels
+#   « different » existants cessent de proteger, et les liens qu'ils
+#   interdisaient se reforment au passage suivant -- c'est la consequence qui
+#   compte pour l'utilisateur (tour de correction 4/5) ;
+# - en ECRITURE, `_lire_pour_ecriture` leve et plus rien ne s'ecrit (ni
+#   verdict ni tentative) : les memes paires sont repayees a chaque passage.
+# Supprimer le fichier « pour debloquer » efface les verdicts manuels pour de
+# bon. Un changement de version s'accompagne donc TOUJOURS d'une migration qui
+# preserve les entrees `manuel`, jamais d'un simple bump de cette constante.
 CACHE_VERSION = 1
 
 # Trace de supervision seulement : la longueur n'est PLUS une contrainte du
