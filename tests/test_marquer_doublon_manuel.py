@@ -103,3 +103,28 @@ def test_i3_une_ecriture_echouee_ne_delie_rien_en_base(db_session, tmp_path, mon
     db_session.refresh(reprise)
     assert reprise.duplicate_of_id == publie.id  # rien delie : le verdict n'a pas ete pose
     assert reprise.file_exclu_raison is not None
+
+
+def test_marquer_different_n_efface_pas_une_exclusion_etrangere(db_session, tmp_path, monkeypatch):
+    """Meme defaut que l'auto-reparation de `link_duplicates` (corrigee au tour
+    3/5), ici dans le script : `--different` remettait `file_exclu_raison` a
+    None sans condition, donc remettait dans la file un article que la
+    publication avait ecarte pour une vraie raison (« gel impossible : … »).
+    Le lien est defait, la raison etrangere survit."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "cluster_arbitrage_cache_path", tmp_path / "cache.json")
+    db_session.autoflush = False
+    src = _src(db_session)
+    publie = _art(db_session, src, n=1, title="A", status=ArticleStatus.USED)
+    etrangere = "gel impossible : le post n'a pas de visuel publiable"
+    reprise = _art(
+        db_session, src, n=2, title="B", duplicate_of_id=publie.id,
+        file_exclu_raison=etrangere,
+    )
+
+    appliquer(db_session, publie.id, reprise.id, meme_actu=False, raison="deux annonces distinctes")
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+    assert reprise.file_exclu_raison == etrangere

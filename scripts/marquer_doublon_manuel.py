@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, attendre_base
 from app.models import Article
+from app.pipeline.cluster import RAISON_DOUBLON_PREFIXE
 from app.pipeline.cluster_arbitrage import marquer_manuel
 
 
@@ -57,14 +58,22 @@ def appliquer(
 
     if not meme_actu:
         defait = []
-        if article_a.duplicate_of_id == article_b_id:
-            article_a.duplicate_of_id = None
-            article_a.file_exclu_raison = None
-            defait.append(article_a_id)
-        if article_b.duplicate_of_id == article_a_id:
-            article_b.duplicate_of_id = None
-            article_b.file_exclu_raison = None
-            defait.append(article_b_id)
+        for article, id_article, id_autre in (
+            (article_a, article_a_id, article_b_id),
+            (article_b, article_b_id, article_a_id),
+        ):
+            if article.duplicate_of_id != id_autre:
+                continue
+            article.duplicate_of_id = None
+            # N'efface QUE la raison posee par la dedup (meme filtre que
+            # l'auto-reparation de `link_duplicates`) : une exclusion posee
+            # par la publication ou la composition (« gel impossible : … »)
+            # n'a rien a voir avec ce lien. L'effacer sans condition --
+            # comportement jusqu'au 2026-09-21 -- remettait dans la file un
+            # article ecarte pour une vraie raison.
+            if (article.file_exclu_raison or "").startswith(RAISON_DOUBLON_PREFIXE):
+                article.file_exclu_raison = None
+            defait.append(id_article)
         if defait:
             db.commit()
             message += f" (lien defait sur {defait})"
