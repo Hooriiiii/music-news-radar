@@ -285,8 +285,9 @@ def test_le_juge_envoie_une_image_par_candidat():
 
 # --- Plancher de resolution du fond (2026-09-21) ----------------------------
 # Mesure sur les 6 derniers posts publies (CLAUDE.md) : nets a 1,05x et 0,89x
-# d'agrandissement, flous a partir de 2,13x. `cover_fond_upscale_max` (1,5x par
-# defaut) separe les deux.
+# d'agrandissement, flous a partir de 2,13x. `cover_fond_upscale_max` (2,2x par
+# defaut, la meme valeur et la meme famille de raisonnement que
+# `publication_crop_upscale_max`) separe le cas nominal des fonds minuscules.
 
 CIBLE_POST = (1080, 1350)
 CIBLE_REEL = (1080, 1920)
@@ -297,6 +298,27 @@ def test_resolution_suffisante_sur_les_cas_reellement_mesures():
     (post 65, net)."""
     assert resolution_suffisante((564, 345), CIBLE_POST) is False
     assert resolution_suffisante((1920, 1280), CIBLE_POST) is True
+
+
+def test_l_og_image_standard_reste_admise_en_fond():
+    """LE cas nominal du pipeline : une og:image 1200x630 demande 2,14x pour
+    remplir 1080x1350. Un seuil a 1,5x la rejetait, ce qui envoyait la majorite
+    des posts de presse sur l'aplat Kinda -- et, quand les slides etaient par
+    ailleurs ecartees par `publication_crop_upscale_max`, jusqu'a l'exclusion
+    definitive de l'article (`PreparationImpossible` -> `file_exclu_raison`).
+    Meme arbitrage que le garde-fou voisin : jamais degrader le cas nominal
+    pour attraper un cas limite."""
+    assert resolution_suffisante((1200, 630), CIBLE_POST) is True
+    assert resolution_suffisante((1920, 1080), CIBLE_REEL) is True
+
+
+def test_un_fond_a_un_centieme_du_seuil_reste_admis_sciemment():
+    """Le fond du post 62 (720x900 pour un reel, 2,13x) passe, a un centieme du
+    seuil : assume, un fond un peu mou vaut mieux qu'un aplat Kinda ou qu'un
+    article exclu. Les trois autres fonds flous mesures restent attrapes."""
+    assert resolution_suffisante((720, 900), CIBLE_REEL) is True
+    assert resolution_suffisante((1005, 565), CIBLE_POST) is False  # 2,39x
+    assert resolution_suffisante((564, 384), CIBLE_POST) is False  # 3,52x
 
 
 def test_resolution_suffisante_est_indifferente_a_une_taille_inconnue():
@@ -505,13 +527,13 @@ def test_une_affiche_averee_reste_rejetee_meme_assez_grande():
 
 
 def test_le_reel_est_plus_exigeant_que_le_post_sur_la_meme_photo():
-    """1215x2160 (post 64) est net pour un post (0,89x) mais reste net pour un
-    reel aussi (0,89x) -- en revanche 1080x1200 suffit pour un post (1,125x)
-    et manque pour un reel (1,6x)."""
+    """La cible depend du gabarit publie : 1080x800 suffit pour un post
+    (1350/800 = 1,69x) et manque pour un reel (1920/800 = 2,4x), au-dela du
+    seuil commun de 2,2x."""
     verdicts = _verdicts_fixes({
         "https://cdn.test/x.jpg": Verdict(affiche=False, sujet="scene", note=70),
     })
-    tailles = _tailles_fixes({"https://cdn.test/x.jpg": (1080, 1200)})
+    tailles = _tailles_fixes({"https://cdn.test/x.jpg": (1080, 800)})
 
     assert eviter_l_affiche(
         "https://cdn.test/x.jpg", cible=CIBLE_POST, verdicts=verdicts, tailles=tailles,

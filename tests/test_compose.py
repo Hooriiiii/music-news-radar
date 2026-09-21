@@ -608,7 +608,7 @@ def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, m
     monkeypatch.setattr(
         illustration,
         "tailles_de",
-        lambda urls, **k: {"https://cdn/moyenne.jpg": (1080, 1200)},
+        lambda urls, **k: {"https://cdn/moyenne.jpg": (1080, 800)},
     )
     article = _article(db_session)
 

@@ -252,10 +252,24 @@ class Settings(BaseSettings):
     # Mesure sur les 6 derniers posts REELLEMENT publies (CLAUDE.md, releve du
     # 2026-09-21) : nets a 1,05x et 0,89x d'agrandissement (aucun agrandissement
     # notable), flous des 2,13x (2,13x / 2,39x / 3,52x / 3,91x, dont un visage
-    # baveux a l'oeil nu sur le post 71). Le seuil est pose a 1,5x, au milieu de
-    # cet ecart mesure, avec de la marge des deux cotes plutot qu'au plus pres
-    # d'une des deux bornes.
-    cover_fond_upscale_max: float = 1.5
+    # baveux a l'oeil nu sur le post 71).
+    #
+    # Le seuil est 2,2x -- la MEME valeur et la meme famille de raisonnement que
+    # `publication_crop_upscale_max`, pour la meme raison : l'og:image standard
+    # d'un editeur fait 1200x630, soit 1080/1200 = 0,9 mais 1350/630 = 2,14x en
+    # hauteur, et c'est de loin l'illustration la plus frequente du pipeline
+    # (1920x1080 -> 1920/1080 = 1,78x en reel, meme famille). Un seuil a 1,5x la
+    # rejetait : la majorite des posts de presse seraient partis sur l'aplat
+    # Kinda, et un article dont les slides sont par ailleurs ecartees par
+    # `publication_crop_upscale_max` finissait en `PreparationImpossible`, donc
+    # `file_exclu_raison` -- il ne revient JAMAIS. Jamais degrader le cas
+    # nominal pour attraper un cas limite : un fond un peu mou vaut mieux qu'un
+    # aplat Kinda, et bien mieux qu'un article perdu.
+    #
+    # Ce qu'on laisse passer sciemment : le fond du post 62 (720x900 pour un
+    # reel, 2,13x), a un centieme du seuil. Les trois autres fonds flous mesures
+    # (2,39x, 3,52x, 3,91x) sont bien attrapes.
+    cover_fond_upscale_max: float = 2.2
     # DERNIER recours, apres le compte source et les artistes cites : une image
     # du WEB (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en
     # dernier recours »). Une seule recherche par composition, memorisee par

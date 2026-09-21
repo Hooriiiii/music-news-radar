@@ -431,9 +431,11 @@ def resolution_suffisante(
     `seuil` (`cover_fond_upscale_max`) d'agrandissement.
 
     Mesure du 2026-09-21 (CLAUDE.md, 6 derniers posts publies) : nets a 1,05x et
-    0,89x d'agrandissement, flous a partir de 2,13x. `seuil` doit se situer entre
-    les deux -- voir le commentaire de `cover_fond_upscale_max` dans
-    `app/config.py` pour la valeur retenue et sa justification.
+    0,89x d'agrandissement, flous a partir de 2,13x. Le seuil retenu (2,2x)
+    n'est PAS au milieu de cet ecart : il laisse volontairement passer
+    l'og:image standard 1200x630 (2,14x), de loin l'illustration la plus
+    frequente du pipeline -- voir le commentaire de `cover_fond_upscale_max`
+    dans `app/config.py` pour l'arbitrage complet.
 
     Taille inconnue -> True : meme regle du doute que le juge d'affiches, une
     image ecartee par erreur appauvrit le post, et l'alternative ici est soit
