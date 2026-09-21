@@ -272,6 +272,92 @@ def test_un_compte_media_cite_n_empeche_pas_l_artiste(db_session, fred, guettape
     assert choix.credit == "@fredagain"
 
 
+def _lier(db, membre, representant):
+    """Fait de `membre` un doublon de `representant`, comme `link_duplicates`."""
+    membre.duplicate_of_id = representant.id
+    db.add(membre)
+    db.commit()
+
+
+def _presse(db, nom="Stereogum (RSS)"):
+    return _source(db, nom, categorie=SourceCategorie.MEDIA, type_=SourceType.RSS)
+
+
+def test_un_doublon_prete_sa_photo_quand_le_representant_n_a_rien(db_session, fred):
+    """21 articles lies comme doublons le 2026-09-21 (CLAUDE.md), 13 avec medias
+    -- jetes jusqu'ici. Le representant sans image propre publie desormais celle
+    d'un membre de son groupe."""
+    representant = _article(db_session, _presse(db_session), "Sheeran evoque Gaza")
+    doublon = _article(db_session, fred, "Sheeran evoque Gaza (reprise)",
+                       media=[entree("photo", "https://cdn.ig/sheeran.jpg")])
+    _lier(db_session, doublon, representant)
+
+    choix = _choisir(db_session, representant)
+
+    assert [(a["url"], a["compte"], a["article_id"]) for a in choix.actifs] == [
+        ("https://cdn.ig/sheeran.jpg", "@fredagain", doublon.id),
+    ]
+    assert choix.credit == "@fredagain"
+
+
+def test_le_representant_passe_avant_ses_doublons_a_qualite_egale(db_session, fred):
+    """L'ordre de preference reste celui de l'actu : le representant garde la
+    priorite sur ses doublons, meme quand les deux ont une image."""
+    representant = _article(db_session, _presse(db_session), "Actu partagee",
+                            media=[entree("photo", "https://presse.example/og.jpg")])
+    doublon = _article(db_session, fred, "Actu partagee (reprise)",
+                       media=[entree("photo", "https://cdn.ig/fred.jpg")])
+    _lier(db_session, doublon, representant)
+
+    choix = _choisir(db_session, representant)
+
+    assert [a["url"] for a in choix.actifs] == [
+        "https://presse.example/og.jpg",
+        "https://cdn.ig/fred.jpg",
+    ]
+    # La photo de presse n'est d'aucun compte ; seul le doublon Instagram l'est.
+    assert choix.credit == "@fredagain"
+
+
+def test_un_doublon_compte_media_ne_prete_rien(db_session, guettapen):
+    """Le piege du groupe mixte : presse (autorisee) + compte Instagram de
+    categorie media (interdit). La verification se fait MEMBRE PAR MEMBRE, sur
+    la source lue en base -- jamais heritee du representant."""
+    representant = _article(db_session, _presse(db_session), "Actu couverte partout",
+                            media=[entree("photo", "https://presse.example/og.jpg")])
+    doublon = _article(db_session, guettapen, "Actu couverte partout (Guettapen)",
+                       media=[entree("photo", "https://cdn.ig/guettapen.jpg")])
+    _lier(db_session, doublon, representant)
+
+    choix = _choisir(db_session, representant)
+
+    assert [a["url"] for a in choix.actifs] == ["https://presse.example/og.jpg"]
+    assert choix.credit is None
+
+
+def test_un_groupe_dont_seul_le_doublon_media_a_une_image_n_a_rien_a_offrir(db_session, guettapen):
+    """Le representant n'a rien d'exploitable, et l'unique image du groupe vient
+    d'un compte media : le groupe entier n'a rien a preter."""
+    representant = _article(db_session, _presse(db_session), "Actu sans image")
+    doublon = _article(db_session, guettapen, "Actu sans image (Guettapen)",
+                       media=[entree("photo", "https://cdn.ig/guettapen.jpg")])
+    _lier(db_session, doublon, representant)
+
+    with pytest.raises(AucunVisuel):
+        _choisir(db_session, representant)
+
+
+def test_un_article_sans_doublon_se_comporte_comme_avant(db_session, fred):
+    """Sentinelle de non-regression : sans groupe, le comportement anterieur a
+    la Tache 4 est inchange."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/fred-propre.jpg")])
+
+    choix = _choisir(db_session, article)
+
+    assert [a["url"] for a in choix.actifs] == ["https://cdn.ig/fred-propre.jpg"]
+    assert choix.credit == "@fredagain"
+
+
 def test_une_coupure_reseau_differe_au_lieu_d_exclure(db_session, fred, guettapen):
     """Un timeout n'est pas une absence de visuel : l'article serait exclu POUR
     TOUJOURS sur une panne de quelques minutes."""

@@ -2,7 +2,11 @@
 
 Dans l'ordre (design du 2026-09-17) :
 1. les medias de l'article, s'ils sont autorises (photo de presse, post d'un
-   compte d'artiste, de festival, de label, de club) ;
+   compte d'artiste, de festival, de label, de club) -- ET, en carrousel
+   (2026-09-21), ceux de tout son groupe de doublons : 21 articles lies comme
+   doublons le 2026-09-21, dont 13 portaient des medias jetes faute de regarder
+   au-dela du seul representant elu. `origine_interdite` reste verifiee PAR
+   MEMBRE, jamais heritee du representant (`choix_visuels._propres`) ;
 2. sinon les posts des artistes SUIVIS cites : en base, puis -- carrousel
    seulement, sans rien sur le sujet en base -- lus en direct, avec un budget.
 
@@ -49,7 +53,6 @@ from app.content.visuels import (
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_WEB,
-    a_une_image_autorisee,
     actif,
     chemin_cache,
     credit_des_actifs,
@@ -125,21 +128,59 @@ def compte_du_visuel(choix, format_: FormatCreneau = FormatCreneau.CARROUSEL) ->
     return getattr(choix, "credit", None)
 
 
-def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
-    """Les visuels de l'article lui-meme, ou None s'il n'en a pas d'autorise."""
-    medias = visuels_autorises(article)
+def _membres_du_groupe(db: Session, article: Article) -> list[Article]:
+    """Le representant et tous les membres de son groupe de doublons, dans
+    l'ordre de preference -- le representant en tete.
+
+    Un article qui atteint la composition est TOUJOURS un representant
+    (`duplicate_of_id IS NULL`, `store._articles_publiables`) : les membres a
+    consulter sont donc ceux dont `duplicate_of_id` pointe vers lui, jamais une
+    chaine a remonter -- le projet garantit qu'un saut suffit toujours
+    (CLAUDE.md, « Dedup a deux etages »).
+
+    2026-09-21 : 21 articles lies comme doublons, dont 13 portent des medias --
+    jetes jusqu'ici parce que seul le representant elu (le plus INFORMATIF par
+    le TITRE, `elire_representants`) etait regarde. Le representant garde la
+    priorite : c'est lui qui ouvre la liste, ses medias passent donc en premier
+    a qualite egale dans `_propres`."""
+    doublons = db.scalars(
+        select(Article).where(Article.duplicate_of_id == article.id).order_by(Article.id)
+    ).all()
+    return [article, *doublons]
+
+
+def _propres(
+    article: Article, format_: FormatCreneau, membres: list[Article] | None = None
+) -> ChoixVisuels | None:
+    """Les visuels de l'article lui-meme -- et, en carrousel, de tout son groupe
+    de doublons (`membres`) -- ou None s'il n'y a rien d'autorise.
+
+    `membres` est le representant en tete puis ses doublons par id ; sans lui
+    (tests unitaires sur des objets simples, sans session), seul l'article
+    compte, comme avant. Le REEL n'est pas elargi : son eligibilite (categorie
+    du compte, duree de la video) se decide sur l'article seul, et l'elargir
+    demanderait de revalider ces regles par membre -- hors perimetre de cette
+    tache (CLAUDE.md, « Reels automatiques »).
+
+    `origine_interdite` (« jamais le visuel d'un compte Instagram media ») est
+    reverifiee PAR MEMBRE : `visuels_autorises` et `credit_video` la relisent
+    chacun sur LA SOURCE DU MEMBRE, jamais heritee du representant. Un groupe
+    mixte presse + compte media (le cas courant) contient les deux ; seul le
+    second est banni."""
     compte = credit_video(article)
 
-    def en_actif(entree_media: dict) -> dict:
-        return actif(
-            entree_media,
-            origine=ORIGINE_ARTICLE,
-            compte=compte,
-            permalink=article.url,
-            article_id=article.id,
-        )
-
     if format_ == FormatCreneau.REEL:
+        medias = visuels_autorises(article)
+
+        def en_actif(entree_media: dict) -> dict:
+            return actif(
+                entree_media,
+                origine=ORIGINE_ARTICLE,
+                compte=compte,
+                permalink=article.url,
+                article_id=article.id,
+            )
+
         if raison_reel_propre(article) is not None:
             return None
         videos = medias_utilisables(medias, article.url, format_)
@@ -159,18 +200,44 @@ def _propres(article: Article, format_: FormatCreneau) -> ChoixVisuels | None:
         # Un fond peut manquer encore : l'appelant le cherchera chez les artistes.
         return ChoixVisuels(actifs, credit_des_actifs(actifs) or compte)
 
-    # Tout ce qui donne une image fixe (photo, vignette, gif) -- c'est elle qui
-    # fera le fond de la cover -- PLUS les videos publiables (le gel telecharge
-    # la video, et retombe sur sa vignette). Un `gif` ne sert donc que de fond :
+    # Carrousel : tout ce qui donne une image fixe (photo, vignette, gif) -- ce
+    # sera le fond de la cover -- PLUS les videos publiables (le gel telecharge
+    # la video, et retombe sur sa vignette), chez le representant ET chez tous
+    # les membres de son groupe. Un `gif` ne sert donc que de fond :
     # `medias_du_carrousel` ne publie, lui, que des photos et des videos.
-    publiables = [m for m in medias if image_de(m) or (m.get("type") == VIDEO and m.get("url"))]
-    # Il faut au moins une IMAGE FIXE. Une video avec URL mais sans vignette n'en
-    # donne aucune -- MEME predicat que la file (`a_une_image_autorisee`), sinon
-    # elle retiendrait un article dont le brouillon partirait sans fond, et le gel
-    # l'exclurait pour de bon.
-    if not a_une_image_autorisee(article):
+    paires = [
+        (membre, media)
+        for membre in (membres if membres is not None else [article])
+        for media in visuels_autorises(membre)
+    ]
+    # Il faut au moins une IMAGE FIXE quelque part dans le groupe. Une video avec
+    # URL mais sans vignette n'en donne aucune -- MEME predicat que la file pour
+    # un article seul (`a_une_image_autorisee`), sinon on retiendrait un groupe
+    # dont le brouillon partirait sans fond, et le gel l'exclurait pour de bon.
+    if not any(image_de(media) for _, media in paires):
         return None
-    return ChoixVisuels([en_actif(m) for m in publiables], compte)
+    publiables = [
+        (membre, media)
+        for membre, media in paires
+        if image_de(media) or (media.get("type") == VIDEO and media.get("url"))
+    ]
+    actifs = [
+        actif(
+            media,
+            origine=ORIGINE_ARTICLE,
+            # Credite le membre DONT VIENT le visuel, pas systematiquement le
+            # representant -- un doublon garde son propre compte (ou aucun,
+            # pour une photo de presse RSS).
+            compte=credit_video(membre),
+            permalink=membre.url,
+            article_id=membre.id,
+        )
+        for membre, media in publiables
+    ]
+    # `credit_des_actifs` agrege les comptes `@...` reellement presents parmi
+    # les actifs retenus ; repli sur le credit du representant seul quand aucun
+    # actif n'en porte (medias de presse RSS, jamais credites en compte).
+    return ChoixVisuels(actifs, credit_des_actifs(actifs) or compte)
 
 
 def _comptes_autorises(db: Session, comptes: list[CompteArtiste]) -> list[CompteArtiste]:
@@ -581,7 +648,8 @@ def _choisir_visuels(
     telecharger,
     chercheur_web=None,
 ) -> ChoixVisuels:
-    propres = _propres(article, format_)
+    membres = _membres_du_groupe(db, article) if format_ != FormatCreneau.REEL else None
+    propres = _propres(article, format_, membres)
     if propres is not None and (
         format_ != FormatCreneau.REEL or image_de_fond(propres.actifs) is not None
     ):

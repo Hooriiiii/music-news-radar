@@ -1186,7 +1186,23 @@ change de mécanisme : ce n'est plus la note qui protège Kinda du plagiat visue
 
 **Où chercher à la place** (`choix_visuels.py`, AVANT l'appel Claude de la
 composition — le choix des visuels précède le coût payé) : d'abord les médias
-propres de l'article s'ils sont autorisés ; sinon les comptes Instagram des
+propres de l'article s'ils sont autorisés — et, en CARROUSEL (2026-09-21,
+`choix_visuels._propres`/`_membres_du_groupe`), ceux de TOUT son groupe de
+doublons (les articles dont `duplicate_of_id` pointe vers le représentant,
+jamais de remontée de chaîne : un saut suffit toujours). Mesuré le 2026-09-21 :
+21 articles liés comme doublons, dont 13 portaient des médias jusque-là jetés
+parce que seul le représentant élu (le plus INFORMATIF par le TITRE, pas par la
+photo) était regardé — une photo de presse nette peut ainsi remplacer une
+capture Instagram basse résolution du même événement postée par une autre
+source du groupe. `origine_interdite` reste vérifiée PAR MEMBRE, sur sa source
+lue en base, jamais héritée du représentant : un groupe mixte presse + compte
+Instagram média contient les deux, seul le second reste interdit. À qualité
+égale les médias du représentant passent en premier, et le crédit suit le
+membre dont vient le visuel retenu. Le REEL n'est pas élargi (son éligibilité —
+catégorie du compte, durée de la vidéo — se décide sur l'article seul). Le
+juge visuel (`illustration.prejuger`) et le plafond d'une affiche par
+carrousel s'appliquent au lot élargi sans appel supplémentaire : le lot
+s'élargit, il ne se dédouble pas. Sinon les comptes Instagram des
 artistes SUIVIS cités (`comptes_artistes.py` : nom de la source sans
 parenthèses, handle, fiches `artists` liées par `source_instagram_id` qui
 écrasent l'index — un nom d'un seul mot comme « Anyma » n'est jamais cherché en
