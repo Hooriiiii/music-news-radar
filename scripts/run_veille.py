@@ -75,6 +75,8 @@ def main() -> None:
     morceaux = [f"{rapport.nouveaux} nouveaux", f"{rapport.appels} appels"]
     if rapport.doublons:
         morceaux.append(f"{rapport.doublons} doublons")
+    if rapport.doublons_archive:
+        morceaux.append(f"dont {rapport.doublons_archive} contre une actu deja publiee")
     if rapport.scoring is not None:
         morceaux.append(f"{rapport.scoring.scored} scorés")
     print(f"[{maintenant:%d/%m %H:%M}] veille : {', '.join(morceaux)}")

@@ -186,13 +186,26 @@ class Settings(BaseSettings):
     # rapprochement ordinaire entre articles frais). Un article deja PUBLIE
     # (USED) sert de representant possible pour un nouvel article au-dela de
     # cette fenetre -- lui seul, jamais l'inverse (voir `link_duplicates`).
-    # 30 jours : mesure en production le 2026-09-21, 18 articles USED en 6
-    # jours (le plus ancien du 2026-09-15) -- une reprise d'actu ressort
-    # largement dans la semaine, un mois de marge couvre les reprises tardives
-    # (interview differee, sortie repoussee) sans faire grossir la comparaison
-    # sans fin : les USED restant en base indefiniment (jamais purges), sans
-    # cette borne le cout de `link_duplicates` grandirait avec l'age du projet.
-    cluster_archive_jours: int = 30
+    # 7 jours : une reprise d'actu ressort dans la SEMAINE ; au-dela, le risque
+    # de faux positif depasse le service rendu. Un mois avait d'abord ete pose,
+    # puis ramene a la semaine apres mesure (2026-09-21) : sur un feed centre
+    # sur quelques artistes recurrents, plus la fenetre est large, plus deux
+    # actus DIFFERENTES du meme artiste ont de chances de se croiser. Cette
+    # borne sert aussi au cout : les USED ne sont jamais purges, donc sans elle
+    # la comparaison (quadratique) grandirait avec l'age du projet.
+    cluster_archive_jours: int = 7
+    # Seuil PROPRE a l'archive, strictement plus haut que `DEFAULT_THRESHOLD`
+    # (0,65) et sur une mesure differente (`archive_similarity_from_tokens` :
+    # les mots partages rapportes au titre le plus LONG, la seule facon de
+    # compter ce qui DIFFERE -- le recouvrement, lui, vaut 1.00 des qu'un titre
+    # est contenu dans l'autre). Cale sur les trois faux positifs releves le
+    # 2026-09-21 : « ... annonce un nouvel EP » / « ... annonce une tournee
+    # mondiale » (0,60), « ... sort un nouveau morceau » / « ... un nouvel
+    # album » (0,75), « Les Transmusicales devoilent leur programmation » /
+    # « ... une nouvelle vague » (0,67) -- tous trois epargnes. Une vraie
+    # reprise traduite (« Dour Festival unveils its 2027 lineup » / « Dour
+    # Festival devoile son line-up 2027 ») reste a 0,80, donc attrapee.
+    cluster_archive_seuil: float = 0.8
 
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.

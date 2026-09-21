@@ -1394,14 +1394,40 @@ cover part sur l'image de secours du gabarit.
    pour servir d'archive éditoriale — l'archive existait, rien ne la
    consultait. `link_duplicates` élargit désormais l'ensemble des
    représentants POSSIBLES aux articles `USED` de l'archive, bornés par
-   `cluster_archive_jours` (30, `app/config.py`) et hors de la fenêtre de 48 h
-   (pas de double compte avec les articles frais) : même rapprochement de
-   titres, même seuil. Un article archivé ne peut jamais devenir lui-même un
+   `cluster_archive_jours` (**7**, `app/config.py`) et hors de la fenêtre de 48 h
+   (pas de double compte avec les articles frais). Un article archivé ne peut jamais devenir lui-même un
    doublon (seulement servir de cible), et un représentant déjà `USED` reste
    verrouillé par `elire_representants` même s'il est hors fenêtre — cette
    fonction se fonde sur la date du DOUBLON, pas celle du représentant, donc un
    groupe formé contre un article publié il y a des jours est bien réexaminé,
    mais jamais détrôné.
+
+   **Contre l'archive, une mesure et un seuil PROPRES** (revue du 2026-09-21).
+   La première version réutilisait le seuil de 0.65, éprouvé sur 48 h ; sur une
+   archive d'un mois d'un feed centré sur quelques artistes récurrents, il
+   enterrait des actus NEUVES, et le lien est irréversible en pratique (l'article
+   sort de la file, le représentant `USED` est verrouillé, rien ne remonte).
+   Paires mesurées, toutes des actus différentes : « Charlotte de Witte annonce
+   un nouvel EP » / « … annonce une tournée mondiale » (1.00 : « EP » tombe, le
+   premier titre est CONTENU dans le second), « Fred again.. sort un nouveau
+   morceau » / « … un nouvel album » (0.75), « Les Transmusicales dévoilent leur
+   programmation » / « … une nouvelle vague » (0.67). Aucun seuil de
+   recouvrement n'épargne la première, qui vaut 1.00 : l'archive utilise donc
+   `archive_similarity_from_tokens` — mots partagés rapportés au titre le plus
+   LONG, qui compte ce qui DIFFÈRE — avec `cluster_archive_seuil` (**0.8**). Les
+   trois paires tombent à 0.60 / 0.75 / 0.67, une vraie reprise traduite
+   (« Dour Festival unveils its 2027 lineup » / « … dévoile son line-up 2027 »)
+   reste à 0.80. La fenêtre fraîche de 48 h, elle, ne change pas. Et la fenêtre
+   d'archive est passée de 30 à **7 jours** : une reprise ressort dans la
+   semaine, au-delà le risque de faux positif dépasse le service rendu.
+
+   **Un lien d'archive se VOIT** : compté à part (`ClusterStats.archive`,
+   distinct de `frais` ; « dont N contre une actu déjà publiée » dans la sortie
+   de `run_pipeline` et de `run_veille`), journalisé en WARNING avec les deux
+   titres et la similarité, et tracé sur l'article lié dans `file_exclu_raison`
+   (« doublon d'une actu deja publiee (article N, similarite 0.80) »).
+   **Réparer un faux positif, c'est effacer les DEUX champs**
+   (`duplicate_of_id` et `file_exclu_raison`), sinon l'article reste hors file.
 
 ## Rétention
 

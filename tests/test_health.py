@@ -3,6 +3,7 @@
 import datetime as dt
 
 from app.config import settings
+from app.pipeline.cluster import ClusterStats
 from app.models import Source, SourceType
 from app.pipeline.health import CREDITS_EPUISES, diagnostiquer, marquer_sante
 from app.pipeline.ingest import IngestStats
@@ -112,7 +113,7 @@ def test_run_pipeline_notifie_quand_ca_va_mal(db_session):
     run_pipeline(
         db_session,
         ingest=lambda db: [],
-        cluster=lambda db: 0,
+        cluster=lambda db: ClusterStats(),
         score=lambda db: ScoringStats(scored=1),
         record=lambda db: 0,
         alert=lambda db: None,
@@ -133,7 +134,7 @@ def test_run_pipeline_reste_muet_quand_tout_va_bien(db_session):
     run_pipeline(
         db_session,
         ingest=lambda db: [],
-        cluster=lambda db: 0,
+        cluster=lambda db: ClusterStats(),
         score=lambda db: ScoringStats(scored=3),
         record=lambda db: 0,
         alert=lambda db: None,
@@ -157,7 +158,7 @@ def test_un_notifieur_casse_ne_casse_pas_le_run(db_session):
     rapport = run_pipeline(
         db_session,
         ingest=lambda db: [],
-        cluster=lambda db: 0,
+        cluster=lambda db: ClusterStats(),
         score=lambda db: ScoringStats(scored=1),
         record=lambda db: 0,
         alert=lambda db: None,
