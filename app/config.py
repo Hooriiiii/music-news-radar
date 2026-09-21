@@ -209,8 +209,15 @@ class Settings(BaseSettings):
 
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
+    # BORNE PAR LA PURGE : ces posts sont lus dans la table `articles`, que
+    # `retention_days` (2 depuis le 2026-09-21) vide au-dela de 2 jours. Tant
+    # que la retention reste plus courte, 10 j ne peut PAS etre atteint -- la
+    # fenetre effective est celle de la purge. Valeur gardee telle quelle : elle
+    # redevient utile si la retention remonte. D'ici la, c'est la recherche WEB
+    # (seul barreau qui ne lit pas la base) qui reprend le relais du fond.
     visuels_artiste_fenetre_jours: int = 10
     # Hors sujet (un portrait, un live), un post n'est accepte qu'a N jours de l'actu.
+    # Meme borne par la purge que ci-dessus.
     visuels_artiste_generique_jours: int = 5
     visuels_max_photos: int = 3
     # business_discovery en direct, a la composition : le quota Graph est partage
@@ -257,6 +264,14 @@ class Settings(BaseSettings):
     # d'artistes (10 j) -- un fond n'a pas a ILLUSTRER l'actu, une photo de
     # concert d'il y a trois semaines fait parfaitement l'affaire.
     fond_secours_max_photos: int = 6
+    # BORNE PAR LA PURGE (2026-09-21) : les reserves « compte source » et
+    # « artiste cite » lisent la table `articles`, que `retention_days` (2) vide
+    # au-dela de 2 jours. 30 j est donc DECORATIF tant que la retention reste
+    # courte : ces deux reserves sont quasi vides, sauf lecture en direct du
+    # compte source. Decision de l'utilisateur : c'est la recherche WEB, seul
+    # barreau qui ne lit pas la base, qui reprend le relais -- y compris pour un
+    # fond ecarte par le plancher de nettete. Valeur gardee : elle redevient
+    # utile si la retention remonte un jour.
     fond_secours_fenetre_jours: int = 30
     # Plancher de resolution du FOND de cover (2026-09-21). Distinct de
     # `publication_crop_upscale_max` : ce dernier borne le cadrage des SLIDES du

@@ -566,10 +566,24 @@ reçoit désormais `cible` (la taille du gabarit publié, fournie par
 `create_post` depuis `template` — 1080×1350 en post, 1080×1920 en reel, un
 reel étant plus exigeant sur la même photo) et traite un fond trop petit
 EXACTEMENT comme une affiche avérée : il descend d'un barreau vers les mêmes
-réserves, et à défaut part sur `FOND_KINDA`. Seuil : `cover_fond_upscale_max`
-(1,5×, `app/config.py`), posé entre les agrandissements mesurés nets (1,05× et
-0,89×) et flous (dès 2,13×). Une taille non mesurable est GARDÉE — même règle
-du doute que le juge d'affiches. La mesure ne coûte rien de plus : les
+réserves — **web compris** —, et à défaut part sur `FOND_KINDA`. Mais AVANT de
+descendre, le premier barreau **balaye ses propres candidats par taille**
+(`candidats`, tout le groupe de doublons) : `choisir_illustration` ne classe
+que sur le verdict affiche/photo, et sans ce balayage la photo de presse 2 156 px
+d'un doublon restait en slide pendant que la capture de 564 px du représentant
+envoyait la cover vers les réserves (revue du 2026-09-21).
+
+Seuil : `cover_fond_upscale_max` = **2,2×** (`app/config.py`), la MÊME valeur et
+le même raisonnement que `publication_crop_upscale_max` (voir « Publication
+automatique ») : laisser passer l'`og:image` standard de 1200×630 (2,14× pour
+remplir 1080×1350), de loin l'illustration la plus fréquente du pipeline. Un
+premier seuil à 1,5× la rejetait : la plupart des posts de presse seraient
+partis sur l'aplat Kinda, et un article dont les slides étaient par ailleurs
+écartées finissait en `PreparationImpossible`, donc exclu pour toujours. On ne
+dégrade jamais le cas nominal pour attraper un cas limite. Assumé : le fond du
+post 62 (720×900 en reel, 2,13×) passe, à un centième du seuil ; les trois
+autres fonds flous mesurés (2,39×, 3,52×, 3,91×) sont attrapés. Une taille non
+mesurable est GARDÉE — même règle du doute que le juge d'affiches. La mesure ne coûte rien de plus : les
 dimensions réelles sont lues au moment où le juge visuel décode déjà l'image
 pour la réduire à 512 px, et mémorisées dans le même `illustration_cache_path`
 (`Cache.tailles`, à côté des verdicts).
@@ -614,7 +628,15 @@ passé de 2 à **6** par réserve (deux posts d'un compte de festival en saison,
 sont deux affiches de plus) ; une fenêtre propre au fond,
 `fond_secours_fenetre_jours` = **30 j** au lieu des 10 j des visuels de carrousel
 (un visuel de carrousel doit ILLUSTRER l'actu, un fond n'a qu'à être une belle
-photo du bon compte) ; et une lecture `business_discovery` en direct **même si le
+photo du bon compte) — **mais bornée par la purge** : ces réserves lisent la
+table `articles`, que `retention_days` (**2** depuis le 2026-09-21) vide au-delà
+de 2 jours. Tant que la rétention reste courte, les 30 j (et les 10 j des
+visuels d'artistes) sont décoratifs et les réserves « compte source » et
+« artiste cité » sont quasi vides — hors lecture en direct du compte source.
+Décision de l'utilisateur : c'est la **recherche web**, seul barreau qui ne lit
+pas la base, qui reprend le relais, pour une affiche comme pour un fond trop
+petit (verrouillé de bout en bout dans `tests/test_visuels_web.py`). Les valeurs
+sont gardées : elles redeviendront utiles si la rétention remonte ; et une lecture `business_discovery` en direct **même si le
 pipeline vient d'ingérer le compte** (`LecteurComptes(..., ignorer_fraicheur=True)`).
 Cette garde-là est une économie — « la base suffit » — et ici la base ne suffit
 justement pas. Les **plafonds durs** du lecteur, eux, tiennent toujours :
@@ -1230,8 +1252,9 @@ AWARE UTC, rien inséré en base ; (c) pour un reel, jamais de lecture en direct
 exploitable d'un post d'artiste déjà en base.
 
 Heuristique (`actifs_artistes.py`) : même artiste (nom et handle retirés du
-sujet), fenêtre dure `visuels_artiste_fenetre_jours` (10 j) sur la date de
-l'article, sur le sujet d'abord (recouvrement des mots significatifs du titre),
+sujet), fenêtre dure `visuels_artiste_fenetre_jours` (10 j — en pratique
+bornée par la purge à `retention_days`, 2 j, puisque ces posts sont lus en
+base) sur la date de l'article, sur le sujet d'abord (recouvrement des mots significatifs du titre),
 hors sujet accepté seulement à `visuels_artiste_generique_jours` (5 j) au plus
 de la date de l'article, tri par recouvrement puis écart de date. Carrousel :
 au plus `visuels_max_photos` (3) PHOTOS — jamais de vignette de vidéo, qui

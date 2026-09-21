@@ -22,11 +22,13 @@ from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.legende import texte_legende
 from app.content.media import entree
 from app.content.visuels import (
+    FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_KINDA,
     ORIGINE_WEB,
+    candidats_de_fond,
     image_de_fond,
 )
 from app.models import Article, Source, SourceCategorie, SourceType
@@ -313,4 +315,60 @@ def test_l_article_18260_ne_part_sur_l_aplat_que_si_le_web_n_a_rien(db_session, 
     fond = _fond_de_l_article_18260(db_session, chercheur, monkeypatch, pages_ok=False)
 
     assert fond.origine == ORIGINE_KINDA
+    assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"
+
+
+# --- Le meme parcours pour un fond TROP PETIT (2026-09-21) -----------------
+#
+# Decision de l'utilisateur apres la revue : avec une retention de 2 jours, les
+# reserves « compte source » et « artiste cite » lisent une base quasi vide --
+# `fond_secours_fenetre_jours` et `visuels_artiste_fenetre_jours` ne peuvent pas
+# remonter au-dela de la purge. La RECHERCHE WEB, seul barreau qui ne lit pas la
+# base, reprend le relais. Le plancher de nettete doit donc l'atteindre
+# exactement comme une affiche averee le fait : sinon une photo floue serait
+# remplacee par PAS de photo du tout.
+
+PETITE_18260 = "https://cdn.ig/capture-trans.jpg"
+CIBLE_POST = (1080, 1350)
+
+
+def _fond_trop_petit(db, chercheur, monkeypatch, pages_ok=True):
+    monkeypatch.setattr(
+        "app.content.recherche_web.image_de_partage",
+        _extraction({"https://ra.co/news/1": "https://ra.co/img/1.jpg"} if pages_ok else {}),
+    )
+    # Aucune reserve en base : le compte du festival n'a pas d'autre post (la
+    # purge a 2 jours les a emportes), aucun artiste suivi n'est cite.
+    article = _article(db, _trans(db), titre=TITRE_18260,
+                       media=[entree("photo", PETITE_18260)], artistes=())
+    choix = _visuels(db, article, chercheur_web=chercheur)
+    # Le cablage de `create_post`, plancher de resolution compris.
+    return eviter_l_affiche(
+        image_de_fond(choix.actifs), *choix.secours,
+        origine=ORIGINE_ARTICLE,
+        verdicts=lambda urls: {url: PHOTO for url in urls},
+        cible=CIBLE_POST,
+        tailles=lambda urls: {url: (564, 345) for url in urls if url == PETITE_18260},
+        candidats=candidats_de_fond(choix.actifs),
+    )
+
+
+def test_un_fond_trop_petit_sans_reserve_en_base_trouve_son_fond_sur_le_web(
+    db_session, monkeypatch
+):
+    chercheur = Chercheur()
+
+    fond = _fond_trop_petit(db_session, chercheur, monkeypatch)
+
+    assert fond.origine == ORIGINE_WEB
+    assert fond.url.startswith("file://")
+    assert chercheur.requetes, "le plancher de nettete doit atteindre le barreau web"
+
+
+def test_un_fond_trop_petit_ne_part_sur_l_aplat_qu_apres_le_web(db_session, monkeypatch):
+    chercheur = Chercheur()
+
+    fond = _fond_trop_petit(db_session, chercheur, monkeypatch, pages_ok=False)
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
     assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"
