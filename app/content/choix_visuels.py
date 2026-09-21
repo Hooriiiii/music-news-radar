@@ -92,6 +92,19 @@ class VisuelsDifferes(RuntimeError):
     """Les visuels ne peuvent pas etre choisis MAINTENANT. Message affichable."""
 
 
+class VisuelIntrouvable(RuntimeError):
+    """Toute l'echelle a ete parcourue (actu, compte source, artiste cite, web)
+    sans trouver une image ni affiche ni trop petite pour le gabarit (2026-09-21,
+    Tache 5 : FOND_KINDA n'est plus une issue publiable, seulement le signal
+    interne d'echec de `illustration.eviter_l_affiche`).
+
+    A la difference d'`AucunVisuel`, ceci ne DOIT PAS exclure l'article : un
+    article sans bonne image aujourd'hui peut en avoir une demain (le compte
+    source publie, ou la recherche web sort du cache). Le creneau se libere
+    (SAUT) et l'article reste eligible -- c'est la retention de 2 jours qui
+    conclut, jamais une exclusion posee a la main. Message affichable."""
+
+
 @dataclass
 class ChoixVisuels:
     actifs: list[dict] = field(default_factory=list)

@@ -12,7 +12,7 @@ from app.config import settings
 from app.content.choix_visuels import ChoixVisuels, VisuelsDifferes
 from app.content.compose import CoverVariante, PostDraft
 from app.content.media import entree
-from app.content.visuels import actif, chemin_cache
+from app.content.visuels import FOND_KINDA, actif, chemin_cache
 from app.models import (
     Article,
     Creneau,
@@ -457,3 +457,165 @@ def test_un_membre_purge_est_retrouve_par_son_compte(db_session):
 
     assert len(actifs_interdits(db_session, post)) == 1
     assert source.categorie == SourceCategorie.MEDIA
+
+
+# --- Tache 5 (2026-09-21) : l'echelle du fond va jusqu'au bout, sinon on saute -
+
+
+def test_un_visuel_trop_petit_sans_secours_saute_le_creneau_sans_exclure(
+    db_session, fred, monkeypatch
+):
+    """L'echelle est allee jusqu'au bout (ici : rien que la photo de l'actu, pas
+    de reserve) sans rien trouver d'assez net : le creneau SAUTE -- il se libere
+    (`_liberer`) au lieu d'exclure (`_exclure`). L'article n'est PAS en defaut,
+    il peut avoir une photo demain ; c'est la retention de 2 jours qui conclura
+    s'il n'en trouve jamais. Compte a part dans `RapportPublication.sautes`, et
+    jamais l'appel paye a Sonnet pour lui (`outils.composes` ne le contient pas).
+
+    Le creneau libere est repris DANS LE MEME PASSAGE par le candidat suivant
+    (`exclusions=True` relance l'arbitrage) : ici, l'unique autre article
+    eligible du compte -- la preuve textuelle du « le creneau se libere et
+    prend le candidat suivant » du plan."""
+    from app.content import illustration
+
+    petit = _article(db_session, fred, "Petite photo",
+                     media=[entree("photo", "https://cdn.ig/petite.jpg")], heures=3)
+    bon = _article(db_session, fred, "Bonne photo",
+                   media=[entree("photo", "https://cdn.ig/bonne.jpg")], heures=2)
+    creneau = _epingler(db_session, petit)
+    # 200x150 -> 5,4x/9x d'agrandissement pour 1080x1350 : tres au-dela du
+    # plancher (`cover_fond_upscale_max`, 2,2x).
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+
+    def choisir(db, a, format_, maintenant):
+        if a.id == petit.id:
+            return ChoixVisuels(
+                [actif(entree("photo", "https://cdn.ig/petite.jpg"), origine="article",
+                       compte="@fred", article_id=petit.id)],
+                "@fred",
+            )  # aucune reserve pour remplacer
+        return ChoixVisuels(
+            [actif(entree("photo", "https://cdn.ig/bonne.jpg"), origine="article",
+                   compte="@fred", article_id=bon.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=choisir)
+    db_session.refresh(petit)
+    db_session.refresh(creneau)
+
+    # Seul "bon" est compose : "petit" a saute AVANT l'appel paye a Sonnet.
+    assert outils.composes == [bon.id]
+    (post,) = db_session.query(Post).all()
+    assert post.article_id == bon.id
+    assert petit.file_exclu_raison is None
+    assert rapport.sautes == 1
+    # Le creneau, libere par le saut, a ete repris par le candidat suivant --
+    # jamais laisse vide alors qu'un autre article pouvait le remplir.
+    assert creneau.article_id == bon.id
+
+
+def test_une_reserve_evite_le_saut_quand_le_fond_de_lactu_est_trop_petit(
+    db_session, fred, monkeypatch, tmp_path
+):
+    """Le plancher fait descendre d'un barreau (ici : la reserve du compte
+    source) au lieu de sauter directement -- l'echelle continue avant de
+    conclure. Bout en bout avec le vrai chemin du juge (comme les tests de la
+    Tache 2/4), pour prouver que la reserve est bien ce qui separe le saut de
+    la publication."""
+    from app.content import illustration
+    from app.content.illustration import Lot, Verdict
+    from app.content.visuels import ORIGINE_COMPTE
+
+    monkeypatch.setattr(settings, "illustration_cache_path", tmp_path / "verdicts.json")
+    monkeypatch.setattr(settings, "illustration_vision_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    monkeypatch.setattr(illustration, "_octets", lambda url: b"jpeg")
+    monkeypatch.setattr(illustration, "reduire", lambda octets, taille=None: octets)
+    monkeypatch.setattr(
+        illustration, "make_claude_juge",
+        lambda: (lambda images: [Verdict(affiche=False, sujet="scene", note=70)] * len(images)),
+    )
+    # Seule la photo de l'actu est petite ; la reserve, de taille inconnue,
+    # passe par la regle du doute (ne pas savoir n'est pas savoir que c'est trop
+    # petit).
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/petite.jpg")])
+    creneau = _epingler(db_session, article)
+    choisi = actif(entree("photo", "https://cdn.ig/petite.jpg"), origine="article",
+                   compte="@fred", article_id=article.id)
+
+    def choisir(db, a, format_, maintenant):
+        return ChoixVisuels(
+            [choisi], "@fred",
+            secours=[Lot(ORIGINE_COMPTE, lambda: ["file:///cache/grande.jpg"])],
+        )
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=choisir)
+    db_session.refresh(creneau)
+
+    assert rapport.sautes == 0
+    (post,) = db_session.query(Post).all()
+    assert post.slides[0]["image_url"] == "file:///cache/grande.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert creneau.post_id == post.id
+
+
+def test_une_panne_de_transport_reste_un_report_jamais_un_saut(db_session, fred):
+    """`VisuelsDifferes` (choix des visuels : quota, reseau) est tranchee AVANT
+    que la Tache 5 n'entre en jeu -- une panne de transport ne doit jamais se
+    faire passer pour un saut faute d'image de qualite. Non-regression : le
+    comportement (deja garanti avant la Tache 5) doit survivre a l'ajout du
+    pre-controle du fond."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    creneau = _epingler(db_session, article)
+
+    def differer(db, article, format_, maintenant):
+        raise VisuelsDifferes("quota Graph atteint")
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=differer)
+    db_session.refresh(article)
+    db_session.refresh(creneau)
+
+    assert outils.composes == [] and rapport.sautes == 0
+    assert article.file_exclu_raison is None
+    assert creneau.erreur == "composition differee : quota Graph atteint"
+    assert creneau.article_id == article.id  # le creneau garde l'article, il ne saute pas
+
+
+def test_un_brouillon_anterieur_a_la_tache_5_sur_l_aplat_kinda_est_recompose(db_session, fred):
+    """Brouillon compose AVANT la Tache 5 (2026-09-21), fond sur l'aplat Kinda --
+    c'etait alors une issue publiable. Elle ne l'est plus : la file le traite
+    comme perime (`runner._brouillon_perime`) et le recompose au lieu de le
+    reprendre tel quel (meme mecanique que `post_a_reprendre` -- un brouillon
+    existant pour l'article, jamais encore attache a ce creneau)."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    # `assets` porte une VRAIE image (comme le ferait `actifs_de_secours`) : ce
+    # brouillon n'est perime pour AUCUNE des raisons preexistantes (assets vide,
+    # aucun fond extractible) -- seule la Tache 5 (fond == FOND_KINDA) doit le
+    # faire recomposer.
+    ancien = Post(
+        article_id=article.id, article_title=article.title, article_url=article.url,
+        caption="L", slides=[{"kind": "cover", "image_url": FOND_KINDA}],
+        template="kinda_post",
+        assets=[actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article")],
+        variants={"fond": {"origine": "kinda"}},
+    )
+    db_session.add(ancien)
+    db_session.commit()
+    creneau = _epingler(db_session, article)
+
+    choisi = actif(entree("photo", "https://cdn.ig/fred.jpg"), origine="artiste", compte="@fredagain")
+    outils = Outils()
+    outils.tourner(db_session, choisir=lambda db, a, f, m: ChoixVisuels([choisi], "@fredagain"))
+    db_session.refresh(creneau)
+
+    assert outils.composes == [article.id]
+    assert creneau.post_id not in (None, ancien.id)

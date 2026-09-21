@@ -23,12 +23,14 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.content.choix_visuels import actif_du_web
+from app.content.choix_visuels import VisuelIntrouvable, actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
 from app.content.legende import sans_mentions_de_source
 from app.content.illustration import (
+    Fond,
+    Verdict,
     choisir_illustration,
     eviter_l_affiche,
     lecture_memorisee,
@@ -40,6 +42,7 @@ from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
     ORIGINE_ARTICLE,
+    ORIGINE_KINDA,
     ORIGINE_WEB,
     actif,
     candidats_de_fond,
@@ -573,6 +576,59 @@ def actifs_de_secours(
     return nouveaux
 
 
+# Message pose sur le creneau (et notifie au dashboard) quand toute l'echelle a
+# ete parcourue -- actu, compte source, artiste suivi cite, recherche web -- sans
+# trouver une image ni affiche ni trop petite. Lisible : ce n'est ni une panne
+# (VisuelsDifferes) ni un defaut de l'article (AucunVisuel), juste pas de bonne
+# photo AUJOURD'HUI.
+RAISON_VISUEL_INTROUVABLE = (
+    "aucune image de bonne qualite pour cette actu (ni sur l'actu, ni sur le "
+    "compte source, ni chez un artiste suivi cite, ni sur le web)"
+)
+
+
+def resoudre_fond(
+    visuels,
+    template: str,
+    *,
+    selecteur_fond=choisir_illustration,
+    verdicts_fond=None,
+) -> tuple[list[dict], Fond, dict[str, Verdict]]:
+    """Le fond FINAL d'un post -- actifs, `Fond` retenu, verdicts memorises --
+    calcule UNE SEULE FOIS, avant l'appel PAYE de composition (Sonnet).
+
+    Tache 5 (2026-09-21) : decider du saut se fait AVANT de payer la
+    composition, la ou les visuels sont deja choisis (`choix_visuels` tourne
+    avant l'appel Claude). `app/schedule/runner.py` appelle cette fonction pour
+    savoir s'il faut sauter le creneau ; `create_post` l'appelle ensuite pour
+    persister -- avec le MEME resultat, jamais un second calcul : les reserves
+    de secours (`visuels.secours`, cf. `choix_visuels.py`) sont des lots
+    PARESSEUX qui lisent le reseau (compte Instagram, recherche web) des qu'on
+    les ouvre, et les ouvrir deux fois doublerait ce cout.
+
+    Leve `VisuelIntrouvable` quand `eviter_l_affiche` a parcouru toute
+    l'echelle -- actu, compte, artiste, web -- sans rien trouver d'assez net :
+    `FOND_KINDA` n'est plus une issue publiable (Tache 5), seulement le signal
+    interne d'echec que cette fonction traduit en saut.
+    """
+    actifs = list(visuels.actifs)
+    connus = prejuger(actifs, verdicts=verdicts_fond)
+    retenu = image_de_fond(actifs, selecteur_fond)
+    choisi = eviter_l_affiche(
+        retenu,
+        # `getattr` : des appels plus anciens passent un objet partiel.
+        *(getattr(visuels, "secours", None) or []),
+        origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
+        verdicts=verdicts_fond,
+        cible=_cible_gabarit(template),
+        candidats=candidats_de_fond(actifs),
+        origine_de=lambda url: origine_du_fond(actifs, url),
+    )
+    if choisi.origine == ORIGINE_KINDA:
+        raise VisuelIntrouvable(RAISON_VISUEL_INTROUVABLE)
+    return actifs, choisi, connus
+
+
 def create_post(
     db: Session,
     article: Article,
@@ -581,6 +637,7 @@ def create_post(
     visuels=None,
     selecteur_fond=choisir_illustration,
     verdicts_fond=None,
+    fond_precalcule: tuple[list[dict], Fond, dict[str, Verdict]] | None = None,
 ) -> Post:
     """Persiste un brouillon : les quatre variantes, une cover sans retenue, et les
     visuels choisis (`ChoixVisuels`, cf. `choix_visuels.py`).
@@ -600,12 +657,17 @@ def create_post(
     le gabarit, donc la cover reel suit la meme regle. Le passer a None rend le
     comportement d'avant (la premiere image exploitable).
 
-    Quand le fond retenu est ENCORE une affiche -- le cas ou tous les candidats en
-    sont, comme le carrousel de line-up des Transmusicales --, on ouvre les
-    reserves attachees aux visuels (`visuels.secours` : le compte de l'actu, puis
-    les artistes cites), et a defaut la cover part sur le FOND KINDA. Jamais une
-    affiche (cf. `illustration.eviter_l_affiche`). `verdicts_fond` n'existe que
-    pour injecter un juge dans les tests.
+    Quand le fond retenu est ENCORE une affiche, ou trop petit pour le gabarit --
+    le cas ou tous les candidats en sont, comme le carrousel de line-up des
+    Transmusicales --, on ouvre les reserves attachees aux visuels
+    (`visuels.secours` : le compte de l'actu, les artistes cites, puis le web),
+    via `resoudre_fond`. Depuis la Tache 5 (2026-09-21), quand meme le web n'a
+    rien donne, `resoudre_fond` leve `VisuelIntrouvable` -- l'aplat Kinda n'est
+    plus une issue publiable, ce POST N'EST PAS CREE. `verdicts_fond` n'existe
+    que pour injecter un juge dans les tests. `fond_precalcule` permet au
+    planificateur (`app/schedule/runner.py`) de passer le resultat d'un appel
+    DEJA fait a `resoudre_fond` (avant l'appel paye de composition), pour ne
+    jamais ouvrir une reserve reseau deux fois pour le meme creneau.
 
     Et le carrousel ne porte qu'UNE carte d'annonce (`plafonner_affiches`) : sept
     slides de la charte d'un festival font de notre post le sien. Le choix est
@@ -621,32 +683,20 @@ def create_post(
     """
     premiere = draft.variantes[0]
     if visuels is not None:
-        actifs, credit = list(visuels.actifs), visuels.credit
-        # L'APPEL PAYE de la composition, et il porte sur tout ce que le post
-        # peut montrer -- fond ET slides. Le choix du fond, juste apres, et le
-        # plafond des cartes d'annonce, plus bas, ne font que relire ces
-        # verdicts (cache par URL) : un lot elargi, jamais un second appel.
-        connus = prejuger(actifs, verdicts=verdicts_fond)
-        # Le fond retenu peut etre une affiche malgre le juge, quand TOUS les
-        # candidats en sont (un carrousel de line-up). On va alors chercher une
-        # photo sur le compte qui a publie l'actu -- et seulement alors.
-        retenu = image_de_fond(actifs, selecteur_fond)
-        choisi = eviter_l_affiche(
-            retenu,
-            # `getattr` : des appels plus anciens passent un objet partiel.
-            *(getattr(visuels, "secours", None) or []),
-            origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
-            verdicts=verdicts_fond,
-            # Le plancher de resolution (2026-09-21) : la cible depend du
-            # gabarit publie, jamais fixe -- un reel (1080x1920) est plus
-            # exigeant qu'un post (1080x1350) sur la meme photo.
-            cible=_cible_gabarit(template),
-            # Le premier barreau balaye ses propres candidats -- tout le groupe
-            # de doublons -- avant d'ouvrir une reserve : un fond elu trop petit
-            # cede la place a une photo plus grande de la meme actu (revue I-4).
-            candidats=candidats_de_fond(actifs),
-            origine_de=lambda url: origine_du_fond(actifs, url),
-        )
+        credit = visuels.credit
+        if fond_precalcule is not None:
+            # Deja calcule par le planificateur, AVANT l'appel paye de
+            # composition (cf. `resoudre_fond`) : une nouvelle liste, jamais la
+            # meme reference, puisqu'on va lui ajouter les slides de secours.
+            actifs, choisi, connus = fond_precalcule
+            actifs = list(actifs)
+        else:
+            # Appel direct (dashboard, tests, brouillon a la main) : calcule ici,
+            # une seule fois. Peut lever `VisuelIntrouvable` (Tache 5) : plus
+            # aucun chemin ne persiste un post sur l'aplat Kinda.
+            actifs, choisi, connus = resoudre_fond(
+                visuels, template, selecteur_fond=selecteur_fond, verdicts_fond=verdicts_fond
+            )
         fond, origine_fond = choisi.url, choisi.origine
         # Le fond retenu vient d'une reserve : ses photos deviennent aussi des
         # SLIDES. Sans cela, un article dont l'unique image est une affiche part

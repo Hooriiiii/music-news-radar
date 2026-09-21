@@ -63,14 +63,21 @@ from sqlalchemy.exc import InterfaceError, InvalidRequestError, OperationalError
 from app.config import settings
 from app.content.choix_visuels import (
     AucunVisuel,
+    VisuelIntrouvable,
     VisuelsDifferes,
     choisir_visuels,
     compte_du_visuel,
 )
-from app.content.compose import CompositionError, appeler_compositeur, create_post
+from app.content.compose import CompositionError, appeler_compositeur, create_post, resoudre_fond
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
-from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite, purger_cache
+from app.content.visuels import (
+    FOND_KINDA,
+    fond_de_cover,
+    image_de_fond,
+    origine_interdite,
+    purger_cache,
+)
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
@@ -105,6 +112,12 @@ class RapportPublication:
     # Parmi les manques : ceux d'un format sans outils (reels coupes au
     # dashboard). Ils ne doivent pas etre annonces comme un Mac en veille.
     manques_formats_coupes: int = 0
+    # Tache 5 (2026-09-21) : un creneau libere faute d'image de bonne qualite,
+    # PAS une exclusion -- l'article reste eligible et repartira des qu'un
+    # barreau de l'echelle (compte, artiste, web) donnera mieux. Compte a part
+    # des `manques`, pour que le saut reste VISIBLE au lieu de se confondre avec
+    # un Mac en veille ou un article vraiment en defaut.
+    sautes: int = 0
     erreurs: list[str] = field(default_factory=list)
 
 
@@ -310,6 +323,12 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
         # composition suivante reposera un fond. Les DEUX gabarits : la cover d'un
         # reel est rendue comme celle d'un carrousel et sert de `cover_url`.
         return True
+    if fond_de_cover(post) == FOND_KINDA:
+        # Brouillon compose AVANT la Tache 5 (2026-09-21) : l'aplat Kinda etait
+        # alors un fond valable. Il ne l'est plus -- la composition suivante
+        # refait tourner l'echelle au complet (compte, artiste, web) et, si elle
+        # ne trouve toujours rien, le creneau saute au lieu de geler ce fond.
+        return True
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))
     if image_de_fond(post.assets) is None:
@@ -404,6 +423,21 @@ def _composer(
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
                 exclusions = True
                 continue
+            # Le fond AVANT l'appel paye (Sonnet) : Tache 5, decider du saut se
+            # fait la ou les visuels sont deja choisis, jamais apres avoir paye
+            # la composition. `resoudre_fond` ouvre les MEMES reserves reseau
+            # (compte, artiste, web) que `create_post` en aurait ouvertes de
+            # toute facon -- ce n'est pas un appel de plus, seulement plus tot.
+            try:
+                fond_precalcule = resoudre_fond(visuels, template)
+            except VisuelIntrouvable as exc:
+                # SAUT, pas exclusion : l'article peut avoir une photo demain
+                # (nouveau post du compte, recherche web qui sort du cache). Le
+                # creneau se libere et prend le candidat suivant tout de suite.
+                _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
+                rapport.sautes += 1
+                exclusions = True
+                continue
             try:
                 # Le compte du visuel part avec l'article : le compositeur ne
                 # sait pas, sinon, de qui est la video qu'il titre (le reel « BTS »
@@ -422,7 +456,10 @@ def _composer(
                 _prevenir(notifier, erreur)
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
-            post_id = create_post(db, article, draft, template=template, visuels=visuels).id
+            post_id = create_post(
+                db, article, draft, template=template, visuels=visuels,
+                fond_precalcule=fond_precalcule,
+            ).id
             rapport.composes += 1
         # Si le dashboard a change le creneau pendant la composition, son choix
         # prime : le post reste un brouillon, repris plus tard si l'article revient.

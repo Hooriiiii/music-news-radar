@@ -616,11 +616,34 @@ de photo, la cover part sur `FOND_KINDA` — l'aplat sombre du gabarit
 (`assets/fallback.jpg`), celui pour lequel la typo a été dessinée, donc lisible.
 
 `FOND_KINDA` (`kinda:fond`, dans `app/content/visuels.py`) est une **sentinelle,
-pas une URL** : un fond `None` veut dire « ce post n'a pas de visuel » et le gel
-le refuse, `FOND_KINDA` veut dire « on a cherché, tout était une affiche ». Sans
-cette distinction, écarter une affiche aurait laissé le fond vide et la file
-aurait refusé le post à chaque passage jusqu'à MANQUE. Le schéma `kinda:` n'est
-ni http(s) ni `file://` : aucune requête, aucun fichier lu.
+pas une URL** : un fond `None` veut dire « ce post n'a pas de visuel », et
+`FOND_KINDA` veut dire « on a cherché partout, rien ne convient ». Le schéma
+`kinda:` n'est ni http(s) ni `file://` : aucune requête, aucun fichier lu.
+
+**Depuis la Tâche 5 (2026-09-21), `FOND_KINDA` n'est plus une issue
+PUBLIABLE — seulement le signal interne que `eviter_l_affiche` a parcouru
+toute l'échelle sans rien trouver.** Demande de l'utilisateur : « Dans l'ordre.
+[…] Sinon skip le post/reels. » `compose.resoudre_fond` (appelé par
+`create_post` ET, en amont, par `app/schedule/runner.py::_composer` AVANT
+l'appel payé à Sonnet) lève `VisuelIntrouvable` quand `eviter_l_affiche` rend
+`FOND_KINDA` : **aucun post n'est plus jamais créé avec cet aplat en fond.**
+Dans le planificateur, cette exception SAUTE le créneau (`_liberer`, jamais
+`_exclure`) — l'article n'est PAS `file_exclu_raison`, il reste éligible et
+repartira dès qu'un barreau donnera mieux (nouveau post du compte source, ou
+la recherche web qui ressort du cache après `visuels_web_cache_jours`) ; c'est
+la purge à `retention_days` (2 j) qui conclut s'il ne trouve jamais rien,
+jamais une exclusion posée à la main. Compté à part dans
+`RapportPublication.sautes`, avec une raison lisible sur le créneau (« visuel
+introuvable : … »). `resoudre_fond` calcule le choix EXACTEMENT une fois par
+créneau (les réserves compte/artiste/web sont des lots paresseux qui lisent le
+réseau dès qu'on les ouvre) : son résultat voyage jusqu'à `create_post` par le
+paramètre `fond_precalcule`, pour ne jamais rouvrir une réserve deux fois. Un
+brouillon composé AVANT cette tâche et qui porte encore `FOND_KINDA` en fond
+est traité comme périmé (`runner._brouillon_perime`) : la composition
+suivante refait tourner l'échelle au complet plutôt que de le geler tel quel.
+Le gel (`app/publish/preparation.py::verifier_fond`) continue d'accepter
+`FOND_KINDA` sur un tel brouillon ancien — filet de compatibilité, jamais un
+chemin qu'une composition neuve peut encore emprunter.
 
 Deux **réserves**, ouvertes dans l'ordre et seulement tant qu'aucune n'a donné :
 1. le compte qui a publié l'actu (jamais un `categorie=media`) ;
@@ -701,7 +724,11 @@ posée là où l'information existe.
    (`FOND_KINDA`, aucune photo trouvée nulle part) ET qu'il n'y a aucune autre
    slide, le post ne montrerait rien — `PreparationImpossible`, exclusion et
    créneau suivant. C'est la distinction à garder en tête : ce qui est interdit,
-   ce n'est pas « un seul élément », c'est « aucune image de l'actu ».
+   ce n'est pas « un seul élément », c'est « aucune image de l'actu ». Depuis la
+   Tâche 5, ce chemin ne s'ouvre plus qu'sur un brouillon composé AVANT elle :
+   une composition neuve ne pose plus jamais `FOND_KINDA`, elle SAUTE le créneau
+   en amont (voir plus haut) — l'exclusion au gel reste le filet pour l'archive
+   déjà en base, pas le cas normal.
    Inchangé : si les visuels existent et que seule leur récupération a échoué
    pour une raison passagère (`echec_transitoire`), c'est `PreparationDifferee`
    — on retente au passage suivant, parce qu'un article exclu ne revient jamais.
@@ -709,9 +736,14 @@ posée là où l'information existe.
    `MANQUE` là où on aurait pu publier la cover seule ; le gel court 2 h avant
    l'heure, il a le temps de retenter.
 
-Ordre de préférence du fond, inchangé et désormais explicite : photo de l'actu
-(non-affiche) → photo du compte source → photo d'un artiste cité → fond Kinda.
-Une affiche n'est refusée qu'en FOND ; en slide, c'est le visuel de l'actu.
+Ordre de préférence du fond, mis à jour par la Tâche 5 (2026-09-21) : photo de
+l'actu (non-affiche, assez grande) → photo du compte source → photo d'un
+artiste cité → recherche web → **on saute le créneau** (plus de fond Kinda en
+bout d'échelle, voir ci-dessus). Le plancher de résolution
+(`cover_fond_upscale_max`) s'applique à CHAQUE barreau, pas seulement au
+premier : une photo de réserve trop petite ne sauve pas plus le post qu'une
+photo d'actu trop petite. Une affiche n'est refusée qu'en FOND ; en slide,
+c'est le visuel de l'actu.
 
 **Mais UNE SEULE affiche en slide, jamais sept** (2026-09-19, post du 18/09 13h10
 sur les Trans Musicales : les slides 2 à 8 étaient la carte d'annonce entière du
