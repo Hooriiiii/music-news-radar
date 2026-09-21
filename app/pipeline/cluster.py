@@ -55,6 +55,14 @@ MIN_SHARED_TOKENS = 2
 DEFAULT_THRESHOLD = 0.65
 DEFAULT_WINDOW_HOURS = 48
 
+# Prefixe des raisons d'exclusion posees PAR CE MODULE (`appliquer`, plus bas) :
+# seule une raison qui COMMENCE PAR CECI peut etre effacee par l'auto-reparation
+# du verdict manuel (tour de correction 3/5). Sans ce filtre, l'auto-reparation
+# effacait AUSSI une exclusion posee ailleurs (gel ou composition impossibles),
+# remettant dans la file un article que la publication avait ecarte pour une
+# raison sans rapport avec un doublon.
+RAISON_DOUBLON_PREFIXE = "doublon d'une actu deja publiee"
+
 
 def normalize_title(title: str) -> str:
     """Minuscules, sans accents ni ponctuation, traits d'union recollés."""
@@ -268,7 +276,14 @@ def link_duplicates(
             article_lie = db.get(Article, id_article)
             if article_lie is not None and article_lie.duplicate_of_id == id_representant:
                 article_lie.duplicate_of_id = None
-                article_lie.file_exclu_raison = None
+                # N'efface QUE la raison posee par CE module (tour de
+                # correction 3/5) : une exclusion posee ailleurs (gel ou
+                # composition impossibles, ex. « gel impossible : … ») n'a
+                # rien à voir avec ce verdict manuel -- l'effacer remettrait
+                # dans la file un article que la publication avait écarté
+                # pour une vraie raison, sans rapport avec un doublon.
+                if (article_lie.file_exclu_raison or "").startswith(RAISON_DOUBLON_PREFIXE):
+                    article_lie.file_exclu_raison = None
     db.commit()
 
     articles = db.scalars(
@@ -314,7 +329,12 @@ def link_duplicates(
                 # coup sûr (mêmes jetons) et le lierait à... lui-même.
                 continue
             cle = cle_paire(article.id, rep_article.id)
-            entree = cache.entrees.get(cle)
+            # `nouveaux_verdicts` d'ABORD que le cache disque : un verdict
+            # rendu plus tôt dans CE passage (passe 1) n'est écrit sur disque
+            # qu'à la toute fin (`fusionner_et_ecrire`) -- sans le consulter
+            # ici, la passe 2 rappelait l'arbitre sur la MÊME paire (tour de
+            # correction 3/5, appels observés `[(2,3), (1,2), (2,3)]`).
+            entree = nouveaux_verdicts.get(cle) or cache.entrees.get(cle)
             if entree is not None and entree.manuel:
                 # Le verdict humain prime sur tout, y compris sur un score qui
                 # atteindrait la bande certaine ci-dessous -- FRAIS ou ARCHIVE.
@@ -372,6 +392,32 @@ def link_duplicates(
 
         return DIFFERE if differe else None
 
+    def lier(article: Article, representant: Article) -> None:
+        """SEUL point d'écriture de `duplicate_of_id` VERS un autre article
+        dans ce module (tour de correction 3/5) : pose le lien ET aplatit
+        IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers
+        `representant` tout article qui pointait déjà vers `article`. La
+        garantie « jamais de chaîne, un seul saut suffit toujours » doit
+        tenir par CONSTRUCTION -- un correctif localisé à la passe 2 (version
+        précédente) ratait deux cas rejoués en re-revue : un lien posé en
+        passe 1 la même passe (P rejoint D en passe 1, D rejoint R en passe
+        2 -- la requête ci-dessous ne voyait pas le lien P→D posé plus tôt
+        dans CE MÊME passage), et un lien plus ancien (D représentant d'un
+        passage PRÉCÉDENT avec P→D, D lié à R par un verdict manuel « même »
+        ou par l'arbitre un passage plus tard).
+
+        `db.flush()` est OBLIGATOIRE avant la requête : `SessionLocal` tourne
+        en `autoflush=False` en production (`app/db.py`), donc SANS flush
+        explicite ni ce chemin ni le paragraphe précédent ne verraient
+        l'affectation qui précède -- exactement le trou mesuré en re-revue
+        (chaîne à deux sauts invisible avec `autoflush=False`, masquée dans
+        les tests par la fixture `db_session`, qui tourne en autoflush par
+        défaut)."""
+        article.duplicate_of_id = representant.id
+        db.flush()
+        for pointeur in db.scalars(select(Article).where(Article.duplicate_of_id == article.id)):
+            pointeur.duplicate_of_id = representant.id
+
     def appliquer(article: Article, tokens: set[str], resultat) -> None:
         if resultat is None:
             representatives.append((article, tokens, False))
@@ -391,7 +437,7 @@ def link_duplicates(
             if fraiche is not None and fraiche.manuel and not fraiche.meme_actu:
                 representatives.append((article, tokens, False))
                 return
-        article.duplicate_of_id = rep_article.id
+        lier(article, rep_article)
         if origine == "frais":
             stats.frais += 1
             return
@@ -414,7 +460,7 @@ def link_duplicates(
         else:
             detail = "verdict manuel"
         article.file_exclu_raison = (
-            f"doublon d'une actu deja publiee (article {rep_article.id}, {detail})"
+            f"{RAISON_DOUBLON_PREFIXE} (article {rep_article.id}, {detail})"
         )[:500]
         logger.warning(
             "doublon d'archive : « %s » (%s) rattache a « %s » (%s), %s",
@@ -442,19 +488,13 @@ def link_duplicates(
 
     # Passe 2 : ce qui reste du budget rejoue les paires déjà en échec, dans
     # le même ordre. Aucune paire jamais tentée n'attend plus à ce stade.
+    # L'aplatissement anti-chaîne (un article différé qui servait déjà de
+    # représentant possible depuis la passe 1 peut lui-même devenir un
+    # doublon ici) est géré à la SOURCE par `lier()`, pas ici -- voir sa
+    # docstring (tour de correction 3/5).
     for article, tokens in differes:
         resultat = resoudre(article, tokens, autoriser_retentatives=True)
         appliquer(article, tokens, resultat)
-        if article.duplicate_of_id is not None:
-            # Cet article servait déjà de représentant possible depuis la
-            # passe 1 (ajout ci-dessus) : s'il devient lui-même un doublon ICI,
-            # tout article qui l'avait pris pour représentant doit être
-            # REPOINTÉ directement vers SA cible -- jamais de chaîne (voir la
-            # docstring de `link_duplicates`, "un seul saut suffit toujours").
-            for pointeur in db.scalars(
-                select(Article).where(Article.duplicate_of_id == article.id)
-            ):
-                pointeur.duplicate_of_id = article.duplicate_of_id
 
     db.commit()
     tentatives_modifiees = {

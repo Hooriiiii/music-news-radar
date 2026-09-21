@@ -1484,12 +1484,12 @@ cover part sur l'image de secours du gabarit.
 
    **Claude tranche la bande douteuse, entre les deux seuils** (Task 7,
    2026-09-21). `archive_similarity_from_tokens` et `title_similarity_from_tokens`
-   se contredisent sur toute une bande de scores : une re-revue a mesuré 15
-   reprises plausibles d'une même actu, 11 passaient entre les mailles du seuil
-   de 0.8, et aucun seuil ne peut à la fois les attraper et épargner les actus
-   neuves (voir la démonstration mathématique dans
-   `archive_similarity_from_tokens`). `link_duplicates` classe donc chaque
-   rapprochement contre l'archive en TROIS bandes :
+   se contredisent sur toute une bande de scores : mesuré sur 15 reprises
+   plausibles d'une même actu, 11 passaient entre les mailles du seuil de 0.8,
+   et aucun seuil ne peut à la fois les attraper et épargner les actus neuves
+   (voir la démonstration mathématique dans `archive_similarity_from_tokens`).
+   `link_duplicates` classe donc chaque rapprochement contre l'archive en
+   TROIS bandes :
    - **certaine** — `archive_similarity_from_tokens` ≥ `cluster_archive_seuil`
      (0.8) → lié sans rien demander, comme avant ;
    - **douteuse** — sous ce seuil, mais `title_similarity_from_tokens` (le
@@ -1497,19 +1497,24 @@ cover part sur l'image de secours du gabarit.
      cluster_arbitrage.py`), avec les DEUX titres et leurs résumés
      (`Article.summary`) ; motif `messages.parse()` identique à
      `scoring.make_claude_scorer`, modèle `settings.scoring_model` (Haiku,
-     ~800 jetons d'entrée / ~35 de sortie mesurés, ~0,001 $/appel). **Le
-     résumé n'est PAS encore réécrit par le scoring** à ce stade —
-     `link_duplicates` tourne AVANT (voir plus haut) : c'est la description
-     RSS brute (parfois l'article entier) ou la caption Instagram avec son
-     bandeau de métriques. Tronqué à `scoring.RESUME_MAX_CARACTERES` (1500),
-     comme `scoring.build_user_prompt` et pour la même raison : un coût
-     d'entrée non maîtrisé sinon ;
+     ~800 jetons d'entrée / ~35 de sortie mesurés, ~0,001 $/appel). Le résumé
+     n'est PAS encore réécrit par le scoring à ce stade — `link_duplicates`
+     tourne AVANT (voir plus haut) : c'est la description RSS brute (parfois
+     l'article entier) ou la caption Instagram avec son bandeau de
+     métriques. Tronqué à `scoring.RESUME_MAX_CARACTERES` (1500), comme
+     `scoring.build_user_prompt` et pour la même raison : un coût d'entrée
+     non maîtrisé sinon ;
    - **différente** — sous les deux seuils → aucun lien, aucun appel.
 
    Chaque paire (les deux ids d'article, ordre indifférent) n'est arbitrée
    qu'UNE FOIS : le verdict est mémorisé dans `cluster_arbitrage_cache_path`
    (JSON à côté du jeton, écriture atomique — même mécanique que
-   `illustration_cache_path`), et relu avant tout appel. Une PANNE (clé
+   `illustration_cache_path`), et relu avant tout appel. Un `CACHE_VERSION`
+   différent (`app/pipeline/cluster_arbitrage.py`) fait LEVER la lecture
+   stricte utilisée avant écriture (`_lire_pour_ecriture`, voir plus bas) :
+   changer cette valeur sans fournir de migration (ou sans supprimer le
+   fichier à la main) empêche silencieusement tout nouveau verdict de
+   s'écrire, jusqu'à ce que le fichier redevienne lisible. Une PANNE (clé
    absente, crédits épuisés, réseau mort, réponse hors schéma) n'est JAMAIS
    mémorisée comme un verdict et ne pose aucun lien : le doute favorise
    toujours la publication, la paire sera réarbitrée au passage suivant (sous
@@ -1524,40 +1529,32 @@ cover part sur l'image de secours du gabarit.
    de `run_pipeline` rendent ça visible sans fouiller les logs. Coupe-circuit :
    `cluster_arbitrage_enabled` (`.env`).
 
-   **Tour de correction 1/5** (revue sur le vrai SDK Anthropic, via
-   `MockTransport`, 2026-09-21) : trois défauts corrigés dans
-   `app/pipeline/cluster_arbitrage.py` et `cluster.py`.
-   1. Le SDK (0.116.0) retire `maxLength` du schéma JSON envoyé au modèle
-      (déplacé dans la description) : la contrainte de longueur sur `raison`
-      n'était donc appliquée QUE côté client, après facturation — une réponse
-      systématiquement trop longue payait à chaque appel sans jamais
-      mémoriser de verdict, et pouvait geler l'arbitrage si les paires les
-      plus anciennes (traitées en premier) étaient celles qui débordaient.
-      `raison` n'a plus de contrainte de longueur (un validateur la tronque à
-      400 caractères) et un compteur de TENTATIVES par paire, distinct des
-      verdicts (`Cache.tentatives`), abandonne définitivement une paire après
-      `cluster_arbitrage_tentatives_max` (3) échecs, sans jamais poser de
-      lien. `link_duplicates` sert d'abord les paires JAMAIS tentées (passe
-      1) avant de rejouer celles déjà en échec sous le plafond (passe 2).
-   2. Le fichier temporaire d'écriture portait un nom FIXE (`.tmp`) : deux
-      écritures concurrentes (le passage horaire et
-      `scripts.marquer_doublon_manuel` lancé pendant ce passage) pouvaient se
-      marcher dessus. Nom de temporaire PAR PROCESSUS désormais
-      (`tempfile.mkstemp`), même mécanique que `app/pipeline/quota_graph.py`.
-   3. `link_duplicates` lisait le cache une fois au début du passage et le
-      réécrivait en BLOC à la fin : un verdict manuel posé PENDANT ce passage
-      (fenêtre de plusieurs minutes, jusqu'à 20 appels) était donc EFFACÉ.
-      `fusionner_et_ecrire` relit le disque juste avant d'écrire et ne laisse
-      jamais une décision automatique de ce passage remplacer un verdict
-      manuel posé entre-temps sur la même paire.
+   Une réponse dont `raison` (la trace de supervision) dépasse la longueur
+   attendue n'est jamais rejetée : un validateur la tronque à
+   `RAISON_MAX_CARACTERES` (400), le SDK Anthropic ne garantissant cette
+   longueur que côté description du schéma, pas côté validation. Chaque paire
+   garde aussi un compteur de TENTATIVES distinct des verdicts
+   (`Cache.tentatives`) ; passé `cluster_arbitrage_tentatives_max` (3), elle
+   n'est plus jamais retentée (sans qu'aucun verdict ne soit mémorisé pour
+   autant) — une panne systématique sur une paire ne doit pas consommer le
+   budget de chaque passage indéfiniment. `link_duplicates` sert d'abord les
+   paires JAMAIS tentées (passe 1) avant de rejouer celles déjà en échec sous
+   le plafond (passe 2). Un article DIFFÉRÉ en passe 1 reste néanmoins un
+   représentant POSSIBLE dès cette passe (avec un garde-fou contre
+   l'auto-comparaison) : sinon un article frais plus RÉCENT qui le reprend
+   usurpe sa place, et le plus ancien finit par se lier au plus récent —
+   l'inverse de la règle « le représentant est l'article vu le plus tôt ».
+   L'écriture du cache atomique utilise un nom de temporaire PAR PROCESSUS
+   (`tempfile.mkstemp`), même mécanique que `app/pipeline/quota_graph.py` :
+   un nom fixe serait écrit à deux mains par le passage horaire et
+   `scripts.marquer_doublon_manuel` lancé pendant ce passage.
 
    **Réparer un faux positif exige un verdict MANUEL, pas seulement d'effacer
-   les deux champs.** La procédure posée le 2026-09-21 (« effacer
-   `duplicate_of_id` et `file_exclu_raison` ») s'est révélée FAUSSE dans la
-   même revue qui a amené l'arbitrage : le passage suivant de `link_duplicates`
-   relie l'article à nouveau tant qu'il reste dans la fenêtre de 48 h de sa vie
-   publiable, c'est-à-dire pendant toute sa vie publiable. La réparation qui
-   tient : `uv run python -m scripts.marquer_doublon_manuel --article-a ID
+   les deux champs** — effacer `duplicate_of_id` et `file_exclu_raison` ne
+   suffit pas : le passage suivant de `link_duplicates` relie l'article à
+   nouveau tant qu'il reste dans la fenêtre de 48 h de sa vie publiable,
+   c'est-à-dire pendant toute sa vie publiable. La réparation qui tient :
+   `uv run python -m scripts.marquer_doublon_manuel --article-a ID
    --article-b ID --different --raison "..."` défait le lien existant ET pose
    un verdict manuel qui prime sur tout rapprochement automatique ultérieur —
    y compris sur la bande CERTAINE et sur une paire d'articles FRAIS (aucune
@@ -1565,59 +1562,41 @@ cover part sur l'image de secours du gabarit.
    toute mesure de score. Le même script avec `--meme-actu` confirme au
    contraire un lien qu'on veut garder quoi qu'il arrive
    (`app/pipeline/cluster_arbitrage.marquer_manuel`, qui LÈVE si l'écriture
-   n'est pas confirmée par une relecture — le script ne délie donc jamais un
-   article en base sur la foi d'un verdict qui n'a pas été durablement posé).
+   n'est pas confirmée par une relecture, ou si le cache existant est présent
+   mais illisible — jamais un cache reconstruit à partir de rien par-dessus
+   un fichier corrompu, ce qui effacerait des verdicts manuels existants ;
+   `fusionner_et_ecrire` applique la même règle côté écriture automatique,
+   en annulant l'écriture plutôt qu'en écrasant). Un verdict manuel posé
+   PENDANT un passage — pendant que Claude, sur le même appel, répond le
+   contraire — prime toujours : `link_duplicates` relit le disque juste avant
+   de poser un lien tranché par Claude, et une auto-réparation tourne en tête
+   de CHAQUE passage pour défaire tout lien déjà présent en base dont la
+   paire porte un verdict manuel « différent », quelle que soit la façon dont
+   il est apparu (course, crash entre deux écritures, version antérieure du
+   code) — elle n'efface que sa propre raison d'exclusion
+   (`RAISON_DOUBLON_PREFIXE`), jamais une exclusion posée ailleurs (gel ou
+   composition impossibles).
 
-   **Trois limites résiduelles, assumées** (revue du tour de correction 1/5) :
-   une reprise ingérée par `run_veille` (toutes les 5 min) reste non arbitrée
-   — donc potentiellement publiable — jusqu'au prochain passage horaire, qui
-   seul arbitre ; une paire qui échoue à répétition reste redemandée à chaque
-   passage tant que `cluster_arbitrage_tentatives_max` n'est pas atteint,
-   avant d'être abandonnée pour de bon (sans jamais poser de lien) ; et un
-   verdict manuel vaut désormais aussi entre deux articles FRAIS (hors
-   archive), pas seulement contre l'archive.
+   **Un seul point pose un lien vers un autre article**
+   (`link_duplicates.lier`, dans `app/pipeline/cluster.py`) : il aplatit
+   IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers la
+   cible finale tout article qui pointait déjà vers l'article qu'on vient de
+   lier — la garantie « jamais de chaîne, un seul saut suffit toujours »
+   tient par construction plutôt que par un correctif localisé à un seul
+   endroit (une passe, une origine de lien). `db.flush()` y est explicite et
+   nécessaire : `SessionLocal` tourne en `autoflush=False` en production
+   (`app/db.py`), donc sans ce flush, la requête qui cherche « qui pointe
+   vers cet article » ne verrait pas un lien posé plus tôt dans le MÊME
+   passage.
 
-   **Tour de correction 2/5** (re-revue, deux défauts qui échappaient encore
-   au premier tour, plus un mineur et un résidu trouvés en creusant) :
-   1. **Le cas le plus important du chantier** : l'utilisateur marque une
-      paire « différente » PENDANT que Claude, sur le même appel, répond
-      « même actu ». Le cache mémorisait bien le manuel comme gagnant, mais
-      le LIEN, lui, était posé et commité dans le même passage — l'article
-      restait enterré avec une `file_exclu_raison` qui citait Claude, alors
-      que l'utilisateur venait de dire le contraire. Deux remèdes, aucun ne
-      suffisant seul : `appliquer()` (dans `link_duplicates`) RELIT le disque
-      juste avant de poser un lien tranché par Claude et renonce si un
-      manuel « différent » y est apparu entre-temps ; et une AUTO-RÉPARATION
-      tourne en tête de CHAQUE passage — tout lien déjà présent en base dont
-      la paire porte un verdict manuel « différent » est défait
-      (`duplicate_of_id` et `file_exclu_raison` remis à `None`), quelle que
-      soit la façon dont il est apparu (course non prévue, crash entre deux
-      écritures, lien posé par une version antérieure du code). Le verdict
-      manuel devient ainsi une propriété qui CONVERGE, pas un pari sur
-      l'ordre relatif de deux écritures.
-   2. **Un mineur trouvé en creusant** : un article dont la paire d'archive
-      est REPORTÉE (déjà en échec, sous le plafond de tentatives) n'entrait
-      pas dans les représentants possibles pendant la passe 1 — un article
-      FRAIS plus RÉCENT qui le reprenait pouvait donc devenir représentant à
-      sa place, et le plus ANCIEN finissait par se lier au plus récent,
-      l'inverse de la règle « le représentant est l'article vu le plus tôt ».
-      Un article reporté reste désormais un représentant possible dès la
-      passe 1 (avec un garde-fou contre l'auto-comparaison, sinon il se
-      matcherait lui-même), et si ce même article résout finalement vers
-      l'archive en passe 2, tout article qui l'avait entre-temps pris pour
-      représentant est REPOINTÉ directement vers la vraie cible — jamais de
-      chaîne à deux sauts.
-   3. **Un résidu fermé** : `lire_cache` rendait un cache VIDE aussi bien pour
-      un fichier ABSENT (normal, premier passage) que pour un fichier
-      PRÉSENT mais illisible (corruption). Une fonction qui lit PUIS écrit
-      (`fusionner_et_ecrire`, `marquer_manuel`) prenait donc un fichier
-      corrompu pour un cache vide et l'écrasait — perdant TOUS les verdicts
-      existants, manuels compris, d'un seul coup. `_lire_pour_ecriture`
-      distingue les deux cas : absent reste un cache vide normal, présent-
-      et-illisible fait LEVER l'exception d'origine, que `fusionner_et_ecrire`
-      capture pour ANNULER l'écriture (rien n'est perdu, une erreur est
-      journalisée) et que `marquer_manuel` laisse remonter (le script sort en
-      erreur, comme pour I3).
+   Trois limites résiduelles, assumées : une reprise ingérée par `run_veille`
+   (toutes les 5 min) reste non arbitrée — donc potentiellement publiable —
+   jusqu'au prochain passage horaire, qui seul arbitre ; une paire qui échoue
+   à répétition reste redemandée à chaque passage tant que
+   `cluster_arbitrage_tentatives_max` n'est pas atteint, avant d'être
+   abandonnée pour de bon (sans jamais poser de lien) ; et un verdict manuel
+   vaut aussi entre deux articles FRAIS (hors archive), pas seulement contre
+   l'archive.
 
 ## Rétention
 

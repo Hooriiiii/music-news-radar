@@ -857,9 +857,12 @@ def test_i2_cas_2_auto_reparation_delie_un_lien_deja_pose_a_chaque_passage(
         assert reprise.duplicate_of_id is None
         assert reprise.file_exclu_raison is None
         # Rejoue la casse pour le passage suivant : la reparation doit
-        # converger a CHAQUE passage, pas seulement la premiere fois.
+        # converger a CHAQUE passage, pas seulement la premiere fois. La
+        # raison doit porter le PREFIXE que ce module pose reellement --
+        # l'auto-reparation n'efface plus qu'une raison de DOUBLON (tour de
+        # correction 3/5), jamais une exclusion posee ailleurs.
         reprise.duplicate_of_id = publie.id
-        reprise.file_exclu_raison = "casse a nouveau"
+        reprise.file_exclu_raison = "doublon d'une actu deja publiee (article X, casse a nouveau)"
         db_session.commit()
 
 
@@ -933,3 +936,176 @@ def test_residu_un_cache_illisible_n_efface_pas_les_verdicts_existants(db_sessio
 
     contenu_final = chemin.read_text()
     assert contenu_final == "{ceci n'est pas du json valide"
+
+
+# -- Tour de correction 3/5 --------------------------------------------------
+# Le point commun aux trois premiers tests : `db_session.autoflush = False`,
+# EXACTEMENT le reglage de `SessionLocal` en production (`app/db.py`). La
+# fixture `db_session` par defaut tourne en autoflush (le defaut SQLAlchemy),
+# ce qui masquait le trou -- une requete qui cherche "qui pointe vers X"
+# voyait alors les affectations en attente sans jamais que le code les ait
+# explicitement poussees.
+
+
+def test_i1_l_aplatissement_voit_un_lien_pose_dans_la_meme_passe_en_autoflush_false(
+    db_session, tmp_path
+):
+    """Reproduit en re-revue : R (archive) ; D douteux, en echec au passage 1 ;
+    au passage 2, P arrive et se lie a D en PASSE 1 ; D est retente en passe 2
+    et l'arbitre le lie a R. Sans aplatissement qui voit ce qui vient de se
+    passer DANS la meme passe (donc sans flush explicite avec
+    autoflush=False), on obtient P -> D -> R, une chaine a deux sauts."""
+    db_session.autoflush = False
+    chemin = tmp_path / "cluster_arbitrage.json"
+    old_src = _src(db_session, "media-r")
+    new_src = _src(db_session, "media-d")
+    r = _art(db_session, old_src, n=1, title=TITRE_PUBLIE_DOUTEUX,
+             hours_ago=5 * 24, status=ArticleStatus.USED)
+    d = _art(db_session, new_src, n=2, title=TITRE_REPRISE_DOUTEUSE, hours_ago=3)
+
+    # Passage 1 : seuls R et D existent. L'arbitre echoue -- une tentative est
+    # enregistree contre R, AVANT que P n'existe.
+    arbitre_toujours_panne = _arbitre_fixe({})
+    link_duplicates(db_session, arbitre=arbitre_toujours_panne, cache_chemin=chemin)
+    db_session.refresh(d)
+    assert d.duplicate_of_id is None
+
+    # P arrive : meme histoire que D (0.75 de recouvrement avec lui), hors
+    # bande douteuse contre R pris seul (0.4, sous le seuil).
+    p_src = _src(db_session, "media-p")
+    p = _art(
+        db_session, p_src, n=3,
+        title="Apex, le nouvel opus de Boris Brejcha, sort en decembre chez KNTXT",
+        hours_ago=1,
+    )
+
+    # Passage 2 : D est REPORTE (une tentative deja enregistree) -> passe 1
+    # laisse P se lier a D (D reste representant possible, tour 2/5) ; passe 2
+    # retente D, qui cette fois-ci reussit contre R.
+    arbitre_reussit_cette_fois = _arbitre_fixe({(r.id, d.id): (True, "meme sortie")})
+    link_duplicates(db_session, arbitre=arbitre_reussit_cette_fois, cache_chemin=chemin)
+
+    db_session.refresh(d)
+    db_session.refresh(p)
+    assert d.duplicate_of_id == r.id
+    # LE test qui aurait echoue avant le correctif : P doit pointer DIRECTEMENT
+    # vers R, jamais vers D (qui n'est plus un representant valide).
+    assert p.duplicate_of_id == r.id
+
+
+def test_i2_un_lien_preexistant_est_aplati_quand_son_representant_resout_plus_tard(
+    db_session, tmp_path
+):
+    """Prexistant, meme famille : D represente deja P depuis un passage
+    ANTERIEUR (budget epuise ou simplement aucun candidat d'archive a
+    l'epoque). Un verdict manuel "meme" pose ensuite lie D a R. Sans
+    aplatissement a la SOURCE du lien (et non plus seulement en passe 2), P
+    reste enterre derriere D -> une chaine P -> D -> R."""
+    db_session.autoflush = False
+    chemin = tmp_path / "cluster_arbitrage.json"
+
+    # Passage 1 : P et D, deux articles FRAIS, aucune archive. D devient le
+    # representant de P via la mesure fraiche -- un lien tout a fait normal,
+    # aucun candidat d'archive n'est meme regarde ici.
+    src_d, src_p = _src(db_session, "media-d"), _src(db_session, "media-p")
+    d = _art(db_session, src_d, n=1, title="Dour Festival unveils its 2027 lineup",
+             hours_ago=6)
+    p = _art(db_session, src_p, n=2, title="Dour Festival devoile son line-up 2027",
+             hours_ago=4)
+    link_duplicates(db_session, cache_chemin=chemin)
+    db_session.refresh(p)
+    assert p.duplicate_of_id == d.id
+
+    # Un article d'archive R apparait, et un verdict manuel "meme" relie D a R
+    # (confirme a la main, sans jamais passer par l'arbitre).
+    src_r = _src(db_session, "media-r")
+    r = _art(db_session, src_r, n=3, title="Dour Festival annonce son line-up 2027",
+             hours_ago=5 * 24, status=ArticleStatus.USED)
+    marquer_manuel(d.id, r.id, True, "confirme a la main", chemin)
+
+    link_duplicates(db_session, cache_chemin=chemin)
+
+    db_session.refresh(d)
+    db_session.refresh(p)
+    assert d.duplicate_of_id == r.id
+    assert p.duplicate_of_id == r.id  # jamais P -> D -> R
+
+
+# La preuve que le test ci-dessus (`test_i1_l_aplatissement_voit_un_lien_pose_
+# dans_la_meme_passe_en_autoflush_false`) est utile n'est PAS un test permanent
+# ici : monkeypatcher `Session.flush` casse `Session.commit()` elle-meme (qui
+# appelle `flush()` en interne dans sa boucle de stabilisation -- neutraliser
+# l'un neutralise l'autre, `FlushError: Over 100 subsequent flushes`). La
+# mutation reelle -- retirer le `db.flush()` de `lier()` dans `cluster.py` --
+# a ete faite et defaite a la main (voir le rapport de la tache : rouge sur ce
+# test precis, `p.duplicate_of_id == d.id` au lieu de `r.id`, restaure ensuite).
+
+
+def test_i3_une_meme_paire_n_est_pas_payee_deux_fois_dans_un_passage(db_session):
+    """Reproduit en re-revue : un verdict "different" obtenu en passe 1 est
+    range dans `nouveaux_verdicts`, jamais ecrit sur disque avant la fin du
+    passage -- `resoudre` doit le consulter en plus du cache disque, sinon la
+    passe 2 rappelle l'arbitre sur la MEME paire."""
+    old_src, other_src, new_src = (
+        _src(db_session, "media-jamais-tente"),
+        _src(db_session, "media-deja-differe"),
+        _src(db_session, "media-x"),
+    )
+    # R_jamais_tente : jamais interroge, plus ancien -> scanne en PREMIER.
+    r_jamais_tente = _art(
+        db_session, old_src, n=1,
+        title="Apex de Boris Brejcha attendu chez KNTXT en decembre prochain",
+        hours_ago=6 * 24, status=ArticleStatus.USED,
+    )
+    # R_deja_differe : deja en echec (tentative enregistree au prealable).
+    r_deja_differe = _art(db_session, other_src, n=2, title=TITRE_PUBLIE_DOUTEUX,
+                          hours_ago=5 * 24, status=ArticleStatus.USED)
+    x = _art(db_session, new_src, n=3, title=TITRE_REPRISE_DOUTEUSE, hours_ago=1)
+
+    appels = []
+
+    def arbitre(publie_art, nouveau_art):
+        appels.append(tuple(sorted((publie_art.id, nouveau_art.id))))
+        if publie_art.id == r_jamais_tente.id:
+            return (False, "differentes")
+        return None  # panne systematique sur r_deja_differe, pour le differer
+
+    # Enregistre une tentative en echec sur (r_deja_differe, x) AVANT que
+    # r_jamais_tente n'existe -- l'objectif est de le retrouver DEJA en echec
+    # au moment du passage mesure.
+    link_duplicates(db_session, arbitre=lambda pub, nouv: None, arbitrage_max=1)
+    db_session.refresh(x)
+    assert x.duplicate_of_id is None
+
+    x.duplicate_of_id = None  # explicite : rien ne doit rester lie
+    db_session.commit()
+
+    link_duplicates(db_session, arbitre=arbitre)
+
+    # (r_jamais_tente, x) n'apparait qu'UNE fois, malgre les deux passes.
+    compte = appels.count(tuple(sorted((r_jamais_tente.id, x.id))))
+    assert compte == 1, f"paire rappelee {compte} fois : {appels}"
+    # r_deja_differe echoue systematiquement (panne) : x ne lui est jamais lie.
+    db_session.refresh(x)
+    assert x.duplicate_of_id != r_deja_differe.id
+
+
+def test_i4_l_auto_reparation_n_efface_pas_une_exclusion_etrangere(db_session, tmp_path):
+    """`file_exclu_raison` peut porter une raison posee par la PUBLICATION ou
+    la COMPOSITION (« gel impossible : … », « composition impossible : … »).
+    L'auto-reparation du verdict manuel ne doit effacer QUE sa propre raison
+    de doublon -- sinon un article ecarte pour une vraie raison reviendrait
+    dans la file des qu'un verdict manuel touche sa paire."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    publie, reprise = _paire_douteuse(db_session)
+    reprise.duplicate_of_id = publie.id
+    reprise.file_exclu_raison = "gel impossible : le post n'a pas de visuel publiable"
+    db_session.commit()
+    marquer_manuel(publie.id, reprise.id, False, "deux annonces distinctes", chemin)
+
+    link_duplicates(db_session, cache_chemin=chemin)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None  # le lien EST defait
+    # Mais la raison ETRANGERE (posee par la publication) doit survivre.
+    assert reprise.file_exclu_raison == "gel impossible : le post n'a pas de visuel publiable"

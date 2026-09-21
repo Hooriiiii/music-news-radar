@@ -98,6 +98,15 @@ from app.models import Article
 
 logger = logging.getLogger(__name__)
 
+# Changer cette valeur sans fournir de migration (relire l'ancien format et le
+# reecrire au nouveau) coupe l'ecriture de TOUT nouveau verdict jusqu'a ce que
+# le fichier redevienne lisible : `_lire_pour_ecriture` traite un fichier
+# present dont la version ne correspond pas comme illisible (voir
+# `_cache_depuis_json`) et refuse d'ecrire par-dessus plutot que d'ecraser
+# silencieusement des verdicts manuels existants (tour de correction 2/5). Le
+# bon reflexe reste de refuser l'ecrasement -- mais un changement de version
+# doit donc s'accompagner d'une migration du fichier, ou de sa suppression a
+# la main, jamais d'un simple bump de cette constante.
 CACHE_VERSION = 1
 
 # Trace de supervision seulement : la longueur n'est PLUS une contrainte du
