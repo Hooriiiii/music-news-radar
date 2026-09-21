@@ -179,7 +179,7 @@ def test_une_photo_du_web_retenue_en_secours_reste_creditee(db_session, monkeypa
                              telecharger=_telecharger, chercheur=Chercheur())
     choisi = Fond(fichiers[0], ORIGINE_WEB, tuple(fichiers))
 
-    nouveaux = actifs_de_secours(choisi, [])
+    nouveaux = actifs_de_secours(choisi, [], maintenant=MAINTENANT)
 
     assert nouveaux[0]["compte"] == "ra.co"
     assert nouveaux[0]["origine"] == ORIGINE_WEB

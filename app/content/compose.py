@@ -518,7 +518,9 @@ def _cible_gabarit(template: str) -> tuple[int, int] | None:
     return gabarit_.width, gabarit_.height
 
 
-def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
+def actifs_de_secours(
+    choisi, actifs: list[dict], *, maintenant: dt.datetime | None = None
+) -> list[dict]:
     """Les photos de la reserve retenue, en ACTIFS -- donc en slides du carrousel.
 
     Le defaut du post Noisia (article 17946, 2026-09-18) : l'unique image de
@@ -531,9 +533,15 @@ def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
     origine (`compte` ou `artiste`), que le dashboard affiche, et sont bornees
     par `visuels_max_photos` comme les visuels d'artistes d'un article sans
     image propre.
+
+    `maintenant` est INJECTABLE et non lu de l'horloge systeme : il sert a lire
+    le cache des attributions du web (`attribution_de`, memorise
+    `visuels_web_cache_jours`), et un appelant qui travaille sur une date fixee
+    -- un test -- verrait sinon son entree de cache expirer le jour ou il
+    relance la suite. Defaut = maintenant, le cas de la production.
     """
     connues = {image_de(a) for a in actifs}
-    maintenant = dt.datetime.now(dt.timezone.utc)
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
     nouveaux: list[dict] = []
     for url in choisi.photos[: settings.visuels_max_photos]:
         if url in connues:
