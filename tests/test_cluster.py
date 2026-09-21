@@ -1045,22 +1045,47 @@ def test_i3_une_meme_paire_n_est_pas_payee_deux_fois_dans_un_passage(db_session)
     """Reproduit en re-revue : un verdict "different" obtenu en passe 1 est
     range dans `nouveaux_verdicts`, jamais ecrit sur disque avant la fin du
     passage -- `resoudre` doit le consulter en plus du cache disque, sinon la
-    passe 2 rappelle l'arbitre sur la MEME paire."""
-    old_src, other_src, new_src = (
-        _src(db_session, "media-jamais-tente"),
+    passe 2 rappelle l'arbitre sur la MEME paire.
+
+    L'ordre de creation est ce qui fait mordre le test (tour de correction
+    4/5) : la version precedente creait `r_jamais_tente` AVANT le passage
+    preparatoire, dont l'unique appel tombait alors sur (r_jamais_tente, x) et
+    non sur (r_deja_differe, x) -- appels observes `[(2,3), (1,3), (2,3)]`,
+    et le seul double appel etait la paire en panne, retentee legitimement.
+    Le test restait VERT sans la correction. Cree APRES, `r_jamais_tente` est
+    reellement jamais tente : `[(2,3), (1,2)]` avec la correction,
+    `[(2,3), (2,3), (1,2)]` sans."""
+    db_session.autoflush = False  # comme `SessionLocal` en production
+    other_src, new_src, old_src = (
         _src(db_session, "media-deja-differe"),
         _src(db_session, "media-x"),
+        _src(db_session, "media-jamais-tente"),
     )
-    # R_jamais_tente : jamais interroge, plus ancien -> scanne en PREMIER.
+    # R_deja_differe : sera en echec apres le passage preparatoire.
+    r_deja_differe = _art(db_session, other_src, n=1, title=TITRE_PUBLIE_DOUTEUX,
+                          hours_ago=5 * 24, status=ArticleStatus.USED)
+    x = _art(db_session, new_src, n=2, title=TITRE_REPRISE_DOUTEUSE, hours_ago=1)
+
+    # Passage preparatoire : SEUL candidat possible (r_deja_differe, x), en
+    # panne -> une tentative enregistree, aucun verdict.
+    preparatoire = []
+
+    def en_panne(publie_art, nouveau_art):
+        preparatoire.append(tuple(sorted((publie_art.id, nouveau_art.id))))
+        return None
+
+    link_duplicates(db_session, arbitre=en_panne, arbitrage_max=1)
+    assert preparatoire == [tuple(sorted((r_deja_differe.id, x.id)))]
+    db_session.refresh(x)
+    assert x.duplicate_of_id is None
+
+    # R_jamais_tente : cree APRES le passage preparatoire, donc jamais
+    # interroge ; plus ancien -> scanne en PREMIER au passage mesure.
     r_jamais_tente = _art(
-        db_session, old_src, n=1,
+        db_session, old_src, n=3,
         title="Apex de Boris Brejcha attendu chez KNTXT en decembre prochain",
         hours_ago=6 * 24, status=ArticleStatus.USED,
     )
-    # R_deja_differe : deja en echec (tentative enregistree au prealable).
-    r_deja_differe = _art(db_session, other_src, n=2, title=TITRE_PUBLIE_DOUTEUX,
-                          hours_ago=5 * 24, status=ArticleStatus.USED)
-    x = _art(db_session, new_src, n=3, title=TITRE_REPRISE_DOUTEUSE, hours_ago=1)
 
     appels = []
 
@@ -1068,26 +1093,19 @@ def test_i3_une_meme_paire_n_est_pas_payee_deux_fois_dans_un_passage(db_session)
         appels.append(tuple(sorted((publie_art.id, nouveau_art.id))))
         if publie_art.id == r_jamais_tente.id:
             return (False, "differentes")
-        return None  # panne systematique sur r_deja_differe, pour le differer
-
-    # Enregistre une tentative en echec sur (r_deja_differe, x) AVANT que
-    # r_jamais_tente n'existe -- l'objectif est de le retrouver DEJA en echec
-    # au moment du passage mesure.
-    link_duplicates(db_session, arbitre=lambda pub, nouv: None, arbitrage_max=1)
-    db_session.refresh(x)
-    assert x.duplicate_of_id is None
-
-    x.duplicate_of_id = None  # explicite : rien ne doit rester lie
-    db_session.commit()
+        return None  # panne persistante sur r_deja_differe, pour forcer la passe 2
 
     link_duplicates(db_session, arbitre=arbitre)
 
+    paire_jamais = tuple(sorted((r_jamais_tente.id, x.id)))
+    paire_differee = tuple(sorted((r_deja_differe.id, x.id)))
+    # La passe 2 a bien tourne (la paire differee y est rejouee) : sans ca, le
+    # compte ci-dessous serait trivialement 1.
+    assert paire_differee in appels, appels
     # (r_jamais_tente, x) n'apparait qu'UNE fois, malgre les deux passes.
-    compte = appels.count(tuple(sorted((r_jamais_tente.id, x.id))))
-    assert compte == 1, f"paire rappelee {compte} fois : {appels}"
-    # r_deja_differe echoue systematiquement (panne) : x ne lui est jamais lie.
+    assert appels == [paire_jamais, paire_differee], appels
     db_session.refresh(x)
-    assert x.duplicate_of_id != r_deja_differe.id
+    assert x.duplicate_of_id is None
 
 
 def test_i4_l_auto_reparation_n_efface_pas_une_exclusion_etrangere(db_session, tmp_path):
