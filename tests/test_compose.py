@@ -1087,3 +1087,44 @@ def test_un_compositeur_qui_accepte_le_compte_du_visuel_le_recoit(db_session):
     # Et sans compte connu, l'appel reste celui d'avant.
     appeler_compositeur(compositeur, article)
     assert recus == ["@le_sserafim", None]
+
+
+def test_la_grande_photo_d_un_doublon_devient_le_fond_quand_celle_de_l_actu_est_trop_petite(
+    db_session, monkeypatch
+):
+    """Revue du 2026-09-21 (I-4), le cas qui justifiait les taches 2 et 4
+    ensemble : une capture de 564 px chez le representant, la photo de presse
+    2156 px du meme evenement chez un doublon. Le juge les dit toutes deux des
+    photos ; le plancher de nettete ecarte la premiere -- la seconde doit
+    devenir le fond, pas rester en slide pendant que la cover part sur l'aplat
+    Kinda. Et elle n'est pas republiee en slide derriere (regle du 2026-09-19)."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    petite, grande = "https://cdn/capture.jpg", "https://presse.example/grande.jpg"
+    monkeypatch.setattr(
+        illustration, "tailles_de",
+        lambda urls, **k: {petite: (564, 345), grande: (2156, 1320)},
+    )
+    ouverts = []
+    choix = ChoixVisuels(
+        [
+            actif(entree("photo", petite), origine="article", article_id=1),
+            actif(entree("photo", grande), origine="article", article_id=2),
+        ],
+        "@source",
+        secours=[Lot(ORIGINE_COMPTE, lambda: ouverts.append("compte") or [])],
+    )
+
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: petite,
+        verdicts_fond=lambda urls: {
+            petite: Verdict(affiche=False, sujet="portrait", note=80),
+            grande: Verdict(affiche=False, sujet="scene", note=60),
+        },
+    )
+
+    assert post.slides[0]["image_url"] == grande
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+    assert ouverts == []

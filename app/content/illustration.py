@@ -46,7 +46,7 @@ import io
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -524,6 +524,8 @@ def eviter_l_affiche(
     verdicts=None,
     cible: tuple[int, int] | None = None,
     tailles=None,
+    candidats: Sequence[str] = (),
+    origine_de: Callable[[str], str | None] | None = None,
     **options,
 ) -> Fond:
     """JAMAIS une affiche en fond de cover, ni un fond trop petit pour le gabarit.
@@ -557,6 +559,17 @@ def eviter_l_affiche(
     ensuite. On s'arrete au premier lot qui offre une photo NI affiche NI trop
     petite.
 
+    **Avant de descendre d'un barreau, le premier balaye SES PROPRES candidats**
+    (`candidats`, les images de l'actu -- et, depuis 2026-09-21, de tout son
+    groupe de doublons ; revue I-4). `choisir_illustration` ne classe que sur le
+    verdict affiche/photo, jamais sur la taille : sans ce balayage, un fond
+    elu trop petit descendait directement vers les reserves, et la grande photo
+    apportee par un doublon (la photo de presse 2156 px du meme evenement,
+    face a une capture de 564 px) restait en slide sans jamais devenir le fond
+    -- le plancher de nettete et l'elargissement au groupe, poses le meme jour
+    pour le meme defaut, ne se composaient pas. `origine_de` relit l'origine du
+    candidat retenu (un actif `artiste` peut voisiner avec l'actu).
+
     Quatre issues : le fond d'origine (ni affiche ni trop petit, ou l'un des
     deux n'a pas pu etre etabli -- ne pas savoir n'est pas savoir) ; la
     meilleure photo assez grande du premier lot qui en offre une ; le fond
@@ -581,6 +594,10 @@ def eviter_l_affiche(
         # et le fond reste. C'est aussi le comportement quand la vision est
         # coupee ou que `cible` n'est pas fourni.
         return Fond(fond, origine)
+    remplacant = _meilleur_candidat(fond, candidats, rendre, cible, mesurer)
+    if remplacant is not None:
+        logger.info("fond de cover remplace par un autre visuel de l'actu : %s", remplacant)
+        return Fond(remplacant, (origine_de(remplacant) if origine_de else None) or origine)
     for lot in lots:
         candidat = _meilleur_du_lot(lot, rendre, cible, mesurer)
         if candidat is not None:
@@ -600,6 +617,42 @@ def _assez_grand(url: str, cible: tuple[int, int], mesurer) -> bool:
     except Exception:  # noqa: BLE001 -- ne pas savoir vaut mieux que rejeter a tort
         return True
     return resolution_suffisante(taille, cible)
+
+
+def _meilleur_candidat(fond, candidats, rendre, cible, mesurer) -> str | None:
+    """Le meilleur AUTRE candidat du premier barreau, ni affiche averee ni trop
+    petit, ou None. Classe comme `choisir_illustration` (`_rang`) : un candidat
+    que le juge n'a pas note passe -- c'est la regle du doute de ce barreau, ou
+    l'inconnu passe deja devant une affiche averee -- et une taille inconnue
+    vaut « assez grand » (`resolution_suffisante`).
+
+    Aucune depense : les candidats ont deja ete juges et mesures par
+    `prejuger`, une fois par composition ; `rendre` et `mesurer` ne font que
+    relire le cache. Ne leve jamais : une panne vaut « rien de mieux ici », et
+    l'echelle continue."""
+    autres = [url for url in dict.fromkeys(candidats or ()) if url and url != fond]
+    if not autres:
+        return None
+    try:
+        connus = rendre(autres)
+    except Exception:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        return None
+    try:
+        tailles = mesurer(autres) if cible is not None else {}
+    except Exception:  # noqa: BLE001 -- ne pas savoir vaut mieux que rejeter a tort
+        tailles = {}
+    retenus = [
+        (index, url)
+        for index, url in enumerate(autres)
+        if not (url in connus and connus[url].affiche)
+        and (cible is None or resolution_suffisante(tailles.get(url), cible))
+    ]
+    if not retenus:
+        return None
+    _, meilleur = max(
+        retenus, key=lambda paire: _rang(paire[0], connus.get(paire[1], VERDICT_INCONNU))
+    )
+    return meilleur
 
 
 def _meilleur_du_lot(lot, rendre, cible, mesurer) -> tuple[str, tuple[str, ...]] | None:

@@ -557,3 +557,70 @@ def test_une_panne_de_mesure_ne_leve_pas_et_garde_le_fond():
     )
 
     assert fond == Fond("https://cdn.test/x.jpg", ORIGINE_ARTICLE)
+
+
+# --- Le barreau 1 balaye ses propres candidats par taille (revue I-4) ------
+# Les taches 2 (plancher de nettete) et 4 (visuels de tout le groupe de
+# doublons) ne se composaient pas : `choisir_illustration` ne classe que sur le
+# verdict affiche/photo, et un fond trop petit descendait directement vers les
+# reserves sans essayer les autres photos du MEME groupe. La grande photo
+# apportee par un doublon restait en slide, jamais en fond.
+
+PETITE = "https://stereogum.example/og.png?w=564"
+GRANDE = "https://presse.example/grande.jpg"
+
+
+def test_un_fond_trop_petit_cede_la_place_a_une_grande_photo_du_meme_barreau():
+    ouverts = []
+
+    def lot():
+        ouverts.append("compte")
+        return ["file:///cache/compte.jpg"]
+
+    fond = eviter_l_affiche(
+        PETITE,
+        Lot(ORIGINE_COMPTE, lot),
+        candidats=[PETITE, GRANDE],
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            PETITE: Verdict(affiche=False, sujet="portrait", note=80),
+            GRANDE: Verdict(affiche=False, sujet="scene", note=60),
+            "file:///cache/compte.jpg": Verdict(affiche=False, sujet="scene", note=90),
+        }),
+        tailles=_tailles_fixes({PETITE: (564, 345), GRANDE: (2156, 1320),
+                                "file:///cache/compte.jpg": (1080, 1350)}),
+    )
+
+    assert fond == Fond(GRANDE, ORIGINE_ARTICLE)
+    assert ouverts == [], "le barreau suivant n'est ouvert que si le premier n'a rien"
+
+
+def test_le_balayage_n_elit_jamais_une_affiche_meme_grande():
+    fond = eviter_l_affiche(
+        PETITE,
+        candidats=[PETITE, GRANDE],
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            PETITE: Verdict(affiche=False, sujet="portrait", note=80),
+            GRANDE: Verdict(affiche=True, sujet="autre", note=10),
+        }),
+        tailles=_tailles_fixes({PETITE: (564, 345), GRANDE: (2156, 1320)}),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_le_balayage_rend_l_origine_du_candidat_retenu():
+    """Le fond remplacant peut venir d'un actif d'une autre origine que le fond
+    elu (une photo d'artiste cite a cote de la photo de l'actu) : son origine
+    est relue sur lui, pas heritee."""
+    fond = eviter_l_affiche(
+        PETITE,
+        candidats=[PETITE, GRANDE],
+        origine_de={PETITE: ORIGINE_ARTICLE, GRANDE: "artiste"}.get,
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({GRANDE: Verdict(affiche=False, sujet="scene", note=60)}),
+        tailles=_tailles_fixes({PETITE: (564, 345), GRANDE: (2156, 1320)}),
+    )
+
+    assert fond == Fond(GRANDE, "artiste")

@@ -42,6 +42,7 @@ from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_WEB,
     actif,
+    candidats_de_fond,
     credit_des_actifs,
     image_de,
     image_de_fond,
@@ -624,6 +625,11 @@ def create_post(
             # gabarit publie, jamais fixe -- un reel (1080x1920) est plus
             # exigeant qu'un post (1080x1350) sur la meme photo.
             cible=_cible_gabarit(template),
+            # Le premier barreau balaye ses propres candidats -- tout le groupe
+            # de doublons -- avant d'ouvrir une reserve : un fond elu trop petit
+            # cede la place a une photo plus grande de la meme actu (revue I-4).
+            candidats=candidats_de_fond(actifs),
+            origine_de=lambda url: origine_du_fond(actifs, url),
         )
         fond, origine_fond = choisi.url, choisi.origine
         # Le fond retenu vient d'une reserve : ses photos deviennent aussi des
