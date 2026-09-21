@@ -223,6 +223,19 @@ class Settings(BaseSettings):
     cluster_arbitrage_cache_path: Path = (
         Path.home() / "Library/Application Support/Kinda/cluster_arbitrage.json"
     )
+    # Tour de correction 1/5 (2026-09-21) : le SDK retire `maxLength` du schema
+    # envoye au modele, donc une reponse dont `raison` deborde n'etait PAS
+    # rejetee cote serveur -- seulement revalidee cote client, APRES
+    # facturation (`VerdictArbitrage` tronque desormais au lieu de rejeter).
+    # Ce plafond de TENTATIVES reste un filet pour toute autre panne
+    # systematique sur une meme paire (JSON hors schema pour une autre
+    # raison, par exemple) : sans lui, une paire qui echoue toujours aurait pu
+    # consommer le budget de CHAQUE passage indefiniment, au detriment des
+    # paires jamais tentees (voir `link_duplicates`, qui sert ces dernieres en
+    # priorite). Au-dela, la paire n'est plus jamais retentee -- sans pour
+    # autant memoriser un verdict, puisqu'aucune reponse valide n'a jamais ete
+    # rendue.
+    cluster_arbitrage_tentatives_max: int = 3
 
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.

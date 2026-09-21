@@ -1495,10 +1495,15 @@ cover part sur l'image de secours du gabarit.
    - **douteuse** — sous ce seuil, mais `title_similarity_from_tokens` (le
      recouvrement) ≥ 0.65 → **Claude tranche** (`app/pipeline/
      cluster_arbitrage.py`), avec les DEUX titres et leurs résumés
-     (`Article.summary`, réécrit en français par le scoring) ; motif
-     `messages.parse()` identique à `scoring.make_claude_scorer`, modèle
-     `settings.scoring_model` (Haiku, ~800 jetons d'entrée / ~35 de sortie
-     mesurés, ~0,001 $/appel) ;
+     (`Article.summary`) ; motif `messages.parse()` identique à
+     `scoring.make_claude_scorer`, modèle `settings.scoring_model` (Haiku,
+     ~800 jetons d'entrée / ~35 de sortie mesurés, ~0,001 $/appel). **Le
+     résumé n'est PAS encore réécrit par le scoring** à ce stade —
+     `link_duplicates` tourne AVANT (voir plus haut) : c'est la description
+     RSS brute (parfois l'article entier) ou la caption Instagram avec son
+     bandeau de métriques. Tronqué à `scoring.RESUME_MAX_CARACTERES` (1500),
+     comme `scoring.build_user_prompt` et pour la même raison : un coût
+     d'entrée non maîtrisé sinon ;
    - **différente** — sous les deux seuils → aucun lien, aucun appel.
 
    Chaque paire (les deux ids d'article, ordre indifférent) n'est arbitrée
@@ -1507,14 +1512,44 @@ cover part sur l'image de secours du gabarit.
    `illustration_cache_path`), et relu avant tout appel. Une PANNE (clé
    absente, crédits épuisés, réseau mort, réponse hors schéma) n'est JAMAIS
    mémorisée comme un verdict et ne pose aucun lien : le doute favorise
-   toujours la publication, la paire sera réarbitrée au passage suivant.
-   Coût borné par passage (`cluster_arbitrage_max_par_passage`, 20). **Seul le
-   passage horaire (`run_pipeline`, via `dedupliquer_avec_arbitrage`) arbitre**
-   — `run_veille` (toutes les 5 min) appelle `link_duplicates` sans argument
-   `arbitre`, distinction par PARAMÈTRE et non en devinant l'appelant. Mesuré
-   en production le 2026-09-21 (352 articles frais, 14 dans l'archive) :
-   1 seule paire douteuse, 0 certaine — le volume réel est loin du plafond.
-   Coupe-circuit : `cluster_arbitrage_enabled` (`.env`).
+   toujours la publication, la paire sera réarbitrée au passage suivant (sous
+   le plafond de tentatives ci-dessous). Coût borné par passage
+   (`cluster_arbitrage_max_par_passage`, 20). **Seul le passage horaire
+   (`run_pipeline`, via `dedupliquer_avec_arbitrage`) arbitre** — `run_veille`
+   (toutes les 5 min) appelle `link_duplicates` sans argument `arbitre`,
+   distinction par PARAMÈTRE et non en devinant l'appelant. Mesuré en
+   production le 2026-09-21 (352 articles frais, 14 dans l'archive) : 1 seule
+   paire douteuse, 0 certaine — le volume réel est loin du plafond. Les
+   compteurs `duplicates_arbitres` / `duplicates_arbitrage_pannes` du rapport
+   de `run_pipeline` rendent ça visible sans fouiller les logs. Coupe-circuit :
+   `cluster_arbitrage_enabled` (`.env`).
+
+   **Tour de correction 1/5** (revue sur le vrai SDK Anthropic, via
+   `MockTransport`, 2026-09-21) : trois défauts corrigés dans
+   `app/pipeline/cluster_arbitrage.py` et `cluster.py`.
+   1. Le SDK (0.116.0) retire `maxLength` du schéma JSON envoyé au modèle
+      (déplacé dans la description) : la contrainte de longueur sur `raison`
+      n'était donc appliquée QUE côté client, après facturation — une réponse
+      systématiquement trop longue payait à chaque appel sans jamais
+      mémoriser de verdict, et pouvait geler l'arbitrage si les paires les
+      plus anciennes (traitées en premier) étaient celles qui débordaient.
+      `raison` n'a plus de contrainte de longueur (un validateur la tronque à
+      400 caractères) et un compteur de TENTATIVES par paire, distinct des
+      verdicts (`Cache.tentatives`), abandonne définitivement une paire après
+      `cluster_arbitrage_tentatives_max` (3) échecs, sans jamais poser de
+      lien. `link_duplicates` sert d'abord les paires JAMAIS tentées (passe
+      1) avant de rejouer celles déjà en échec sous le plafond (passe 2).
+   2. Le fichier temporaire d'écriture portait un nom FIXE (`.tmp`) : deux
+      écritures concurrentes (le passage horaire et
+      `scripts.marquer_doublon_manuel` lancé pendant ce passage) pouvaient se
+      marcher dessus. Nom de temporaire PAR PROCESSUS désormais
+      (`tempfile.mkstemp`), même mécanique que `app/pipeline/quota_graph.py`.
+   3. `link_duplicates` lisait le cache une fois au début du passage et le
+      réécrivait en BLOC à la fin : un verdict manuel posé PENDANT ce passage
+      (fenêtre de plusieurs minutes, jusqu'à 20 appels) était donc EFFACÉ.
+      `fusionner_et_ecrire` relit le disque juste avant d'écrire et ne laisse
+      jamais une décision automatique de ce passage remplacer un verdict
+      manuel posé entre-temps sur la même paire.
 
    **Réparer un faux positif exige un verdict MANUEL, pas seulement d'effacer
    les deux champs.** La procédure posée le 2026-09-21 (« effacer
@@ -1525,9 +1560,22 @@ cover part sur l'image de secours du gabarit.
    tient : `uv run python -m scripts.marquer_doublon_manuel --article-a ID
    --article-b ID --different --raison "..."` défait le lien existant ET pose
    un verdict manuel qui prime sur tout rapprochement automatique ultérieur —
-   y compris sur la bande CERTAINE, vérifié avant toute mesure de score. Le
-   même script avec `--meme-actu` confirme au contraire un lien qu'on veut
-   garder quoi qu'il arrive (`app/pipeline/cluster_arbitrage.marquer_manuel`).
+   y compris sur la bande CERTAINE et sur une paire d'articles FRAIS (aucune
+   des deux mesures de score n'échappe à cette vérification), vérifié avant
+   toute mesure de score. Le même script avec `--meme-actu` confirme au
+   contraire un lien qu'on veut garder quoi qu'il arrive
+   (`app/pipeline/cluster_arbitrage.marquer_manuel`, qui LÈVE si l'écriture
+   n'est pas confirmée par une relecture — le script ne délie donc jamais un
+   article en base sur la foi d'un verdict qui n'a pas été durablement posé).
+
+   **Trois limites résiduelles, assumées** (revue du tour de correction 1/5) :
+   une reprise ingérée par `run_veille` (toutes les 5 min) reste non arbitrée
+   — donc potentiellement publiable — jusqu'au prochain passage horaire, qui
+   seul arbitre ; une paire qui échoue à répétition reste redemandée à chaque
+   passage tant que `cluster_arbitrage_tentatives_max` n'est pas atteint,
+   avant d'être abandonnée pour de bon (sans jamais poser de lien) ; et un
+   verdict manuel vaut désormais aussi entre deux articles FRAIS (hors
+   archive), pas seulement contre l'archive.
 
 ## Rétention
 

@@ -1,9 +1,11 @@
 import datetime as dt
 
+import pytest
+
 from app.config import settings
 from app.models import Article, ArticleStatus, Source, SourceType
 from app.pipeline.cluster import link_duplicates, title_similarity
-from app.pipeline.cluster_arbitrage import lire_cache, marquer_manuel
+from app.pipeline.cluster_arbitrage import cle_paire, lire_cache, marquer_manuel
 
 UTC = dt.timezone.utc
 
@@ -251,6 +253,30 @@ def test_le_seuil_d_archive_epargne_les_trois_faux_positifs_mesures(db_session):
 
         db_session.refresh(reprise)
         assert reprise.duplicate_of_id is None, f"faux positif sur « {nouveau} »"
+
+
+def test_les_trois_faux_positifs_tombent_dans_la_bande_douteuse_et_l_arbitre_les_epargne(
+    db_session,
+):
+    """Les trois FAUX_POSITIFS ci-dessus sont tous dans la bande DOUTEUSE
+    (archive < 0.8, recouvrement >= 0.65) : demande explicite de la revue,
+    distincte du test `test_l_arbitre_dit_actus_differentes_et_ne_relie_jamais`
+    plus bas, qui tourne sur une vraie REPRISE (Boris Brejcha), pas un faux
+    positif. Avec un arbitre qui dit "different" sur les trois, aucun lien."""
+    for index, (publie_titre, nouveau_titre) in enumerate(FAUX_POSITIFS):
+        old_src = _src(db_session, f"media-arbitre-{index}")
+        new_src = _src(db_session, f"presse-arbitre-{index}")
+        publie = _art(db_session, old_src, n=300 + index * 2, title=publie_titre,
+                      hours_ago=5 * 24, status=ArticleStatus.USED)
+        reprise = _art(db_session, new_src, n=301 + index * 2, title=nouveau_titre, hours_ago=1)
+        arbitre = _arbitre_fixe({(publie.id, reprise.id): (False, "deux actus distinctes")})
+
+        stats = link_duplicates(db_session, arbitre=arbitre)
+
+        db_session.refresh(reprise)
+        assert reprise.duplicate_of_id is None, f"faux positif sur « {nouveau_titre} »"
+        assert arbitre.appels == [tuple(sorted((publie.id, reprise.id)))]
+        assert stats.arbitres == 0
 
 
 def test_la_vraie_reprise_reste_attrapee_par_le_seuil_d_archive(db_session):
@@ -541,3 +567,214 @@ def test_le_cache_d_arbitrage_persiste_sur_disque(db_session, tmp_path):
     entree = cache.entrees[f"{min(publie.id, reprise.id)}:{max(publie.id, reprise.id)}"]
     assert entree.meme_actu is True
     assert entree.manuel is False
+
+
+# -- Tour de correction 1/5 (revue sur le vrai SDK) -------------------------
+
+
+def test_m1_un_verdict_manuel_vaut_aussi_entre_deux_articles_frais(db_session):
+    """Minor M1 : la branche "frais" (deux articles de la fenetre de 48h, hors
+    archive) ne lisait pas le cache -- un verdict manuel y etait ignore, alors
+    que le script annonce "ne sera plus jamais rapprochee". L'utilisateur a le
+    droit de defaire n'importe quel lien, pas seulement un lien d'archive."""
+    src_a, src_b = _src(db_session, "a"), _src(db_session, "b")
+    premier = _art(db_session, src_a, n=1, title="Dour Festival unveils its 2027 lineup",
+                   hours_ago=6)
+    second = _art(db_session, src_b, n=2, title="Dour Festival devoile son line-up 2027",
+                  hours_ago=4)
+    marquer_manuel(premier.id, second.id, False, "deux festivals distincts, homonymes")
+
+    link_duplicates(db_session)
+
+    db_session.refresh(second)
+    assert second.duplicate_of_id is None
+
+
+def test_m1_un_verdict_manuel_meme_actu_relie_deux_articles_frais(db_session):
+    src_a, src_b = _src(db_session, "a"), _src(db_session, "b")
+    premier = _art(db_session, src_a, n=1, title="Les sorties electro de la semaine",
+                   hours_ago=6)
+    second = _art(db_session, src_b, n=2, title="Un article totalement different",
+                  hours_ago=4)
+    marquer_manuel(premier.id, second.id, True, "confirme a la main malgre des titres eloignes")
+
+    stats = link_duplicates(db_session)
+
+    db_session.refresh(second)
+    assert second.duplicate_of_id == premier.id
+    assert stats.frais == 0  # ce n'est pas passe par la mesure de recouvrement
+    assert stats.archive == 1  # compte comme un lien "hors mesure ordinaire"
+
+
+def test_un_verdict_manuel_survit_a_plusieurs_passages_horaires(db_session, tmp_path):
+    """Le coeur de la reparation, sur plusieurs passages : un verdict manuel
+    pose une fois doit tenir indefiniment, pas seulement au passage suivant."""
+    from app.config import settings as reglages
+
+    chemin = tmp_path / "cluster_arbitrage.json"
+    reglages_avant = reglages.cluster_arbitrage_cache_path
+    reglages.cluster_arbitrage_cache_path = chemin
+    try:
+        old_src = _src(db_session, "mixmag")
+        new_src = _src(db_session, "tsugi")
+        publie = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                      hours_ago=5 * 24, status=ArticleStatus.USED)
+        reprise = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                       hours_ago=1)
+        marquer_manuel(publie.id, reprise.id, False, "deux festivals distincts")
+
+        for _ in range(4):
+            link_duplicates(db_session)
+            db_session.refresh(reprise)
+            assert reprise.duplicate_of_id is None
+    finally:
+        reglages.cluster_arbitrage_cache_path = reglages_avant
+
+
+def test_un_verdict_manuel_pose_par_le_script_survit_aux_passages_suivants(
+    db_session, tmp_path, monkeypatch
+):
+    """Meme preuve que ci-dessus, mais en passant reellement par
+    `scripts.marquer_doublon_manuel` -- l'outil que l'utilisateur emploie pour
+    de vrai, pas un appel direct a `marquer_manuel`."""
+    from app.config import settings as reglages
+    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+
+    monkeypatch.setattr(reglages, "cluster_arbitrage_cache_path", tmp_path / "cache.json")
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    publie = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                  hours_ago=5 * 24, status=ArticleStatus.USED)
+    reprise = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                   hours_ago=1)
+    # D'abord lie automatiquement (bande certaine), comme un vrai faux positif.
+    link_duplicates(db_session)
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id == publie.id
+
+    appliquer_script(db_session, publie.id, reprise.id, meme_actu=False,
+                      raison="deux festivals distincts, homonymes")
+
+    for _ in range(3):
+        link_duplicates(db_session)
+        db_session.refresh(reprise)
+        assert reprise.duplicate_of_id is None
+
+
+def test_i2_un_verdict_manuel_pose_pendant_le_passage_n_est_pas_efface(db_session, tmp_path):
+    """Reproduit en revue : `link_duplicates` relit le cache une fois au debut
+    et le reecrivait en bloc a la fin -- un verdict manuel pose PENDANT ce
+    passage (par un AUTRE processus, ex. `scripts.marquer_doublon_manuel`, sur
+    une paire qui n'a rien a voir avec celle en cours d'arbitrage) disparaissait
+    a l'ecriture finale. L'arbitre factice simule cette ecriture concurrente."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    publie, reprise = _paire_douteuse(db_session)
+
+    def arbitre_qui_ecrit_une_autre_paire_pendant_l_appel(publie_art, nouveau_art):
+        # Simule un `scripts.marquer_doublon_manuel` lance par un AUTRE
+        # processus PENDANT que ce passage-ci arbitre encore une autre paire.
+        marquer_manuel(9001, 9002, False, "posee par un autre processus pendant le passage",
+                        chemin)
+        return (True, "meme sortie")
+
+    link_duplicates(
+        db_session, arbitre=arbitre_qui_ecrit_une_autre_paire_pendant_l_appel, cache_chemin=chemin
+    )
+
+    db_session.refresh(reprise)
+    # La paire realement arbitree ce passage se comporte normalement.
+    assert reprise.duplicate_of_id == publie.id
+    # Le verdict manuel pose PENDANT l'appel, sur une AUTRE paire, doit
+    # survivre a l'ecriture de fin de passage -- sans la relecture tardive
+    # (`fusionner_et_ecrire`), la reecriture en bloc de l'ancien code
+    # l'aurait efface (le disque, au moment de cette ecriture, ne contenait
+    # QUE cette entree manuelle -- rien d'autre a perdre).
+    cache = lire_cache(chemin)
+    entree = cache.entrees["9001:9002"]
+    assert entree.manuel is True
+    assert entree.meme_actu is False
+
+
+def test_i1_une_paire_qui_echoue_ne_prive_pas_indefiniment_les_paires_jamais_tentees(
+    db_session,
+):
+    """Reproduit en revue : sans priorite aux paires jamais tentees, une paire
+    qui echoue TOUJOURS (bug de schema, ou toute autre panne systematique)
+    consommerait le budget de CHAQUE passage tant qu'elle reste la plus
+    ancienne -- privant une seconde paire, parfaitement valide, de tout appel.
+    Deux passages, budget de 1 : le premier est necessairement "perdu" sur la
+    paire cassee (rien ne permet de savoir a l'avance qu'elle va echouer) ;
+    mais des le second passage, elle est deja en echec (tentative enregistree)
+    et cede la priorite du budget a la paire jamais tentee."""
+    src1a, src1b = _src(db_session, "casse-a"), _src(db_session, "casse-b")
+    publie1 = _art(db_session, src1a, n=1, title=TITRE_PUBLIE_DOUTEUX,
+                   hours_ago=6 * 24, status=ArticleStatus.USED)
+    reprise1 = _art(db_session, src1b, n=2, title=TITRE_REPRISE_DOUTEUSE, hours_ago=2)
+
+    src2a, src2b = _src(db_session, "valide-a"), _src(db_session, "valide-b")
+    publie2 = _art(db_session, src2a, n=3, title="Charlotte de Witte annonce un nouvel EP",
+                   hours_ago=5 * 24, status=ArticleStatus.USED)
+    reprise2 = _art(db_session, src2b, n=4,
+                    title="Charlotte de Witte annonce un EP sur son label KNTXT", hours_ago=1)
+
+    appels = []
+
+    def arbitre(publie_art, nouveau_art):
+        appels.append((publie_art.id, nouveau_art.id))
+        if publie_art.id == publie1.id:
+            return None  # panne systematique sur cette paire
+        return (True, "meme sortie")
+
+    # Passage 1 : la paire cassee, plus ancienne, consomme le seul appel.
+    stats1 = link_duplicates(db_session, arbitre=arbitre, arbitrage_max=1)
+    db_session.refresh(reprise1)
+    db_session.refresh(reprise2)
+    assert reprise1.duplicate_of_id is None
+    assert reprise2.duplicate_of_id is None
+    assert stats1.arbitrage_pannes == 1
+
+    # Passage 2 : la paire cassee a desormais une tentative enregistree, donc
+    # differee -- le budget va a la paire jamais tentee.
+    stats2 = link_duplicates(db_session, arbitre=arbitre, arbitrage_max=1)
+    db_session.refresh(reprise1)
+    db_session.refresh(reprise2)
+    assert reprise2.duplicate_of_id == publie2.id
+    assert reprise1.duplicate_of_id is None
+    assert appels == [
+        (publie1.id, reprise1.id),  # passage 1
+        (publie2.id, reprise2.id),  # passage 2 : la cassee a ete differee
+    ]
+    assert stats2.arbitres == 1
+
+
+def test_i1_une_paire_est_abandonnee_apres_le_plafond_de_tentatives(db_session, tmp_path):
+    chemin = tmp_path / "cluster_arbitrage.json"
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({})  # rend toujours None (panne)
+
+    for _ in range(3):
+        link_duplicates(
+            db_session, arbitre=arbitre, cache_chemin=chemin, tentatives_max=3
+        )
+
+    assert len(arbitre.appels) == 3
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+
+    # Un quatrieme passage n'appelle plus jamais l'arbitre sur cette paire :
+    # elle est abandonnee, sans qu'aucun verdict n'ait ete memorise pour ca.
+    link_duplicates(db_session, arbitre=arbitre, cache_chemin=chemin, tentatives_max=3)
+    assert len(arbitre.appels) == 3
+    cache = lire_cache(chemin)
+    assert cle_paire(publie.id, reprise.id) not in cache.entrees
+
+
+def test_i3_marquer_manuel_leve_si_l_ecriture_echoue(tmp_path):
+    # Un fichier existant utilise comme repertoire parent : impossible d'y
+    # ecrire quoi que ce soit.
+    impossible = tmp_path / "fichier-existant"
+    impossible.write_text("je suis un fichier, pas un dossier")
+    chemin = impossible / "sous-dossier" / "cluster_arbitrage.json"
+
+    with pytest.raises(Exception):  # noqa: B017 -- n'importe quelle panne d'ecriture
+        marquer_manuel(1, 2, False, "raison", chemin)

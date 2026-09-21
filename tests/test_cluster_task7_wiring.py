@@ -2,20 +2,90 @@
 peut arbitrer, jamais `run_veille` (toutes les 5 minutes) -- distinction par
 PARAMETRE, pas en devinant qui appelle."""
 
-import inspect
+import datetime as dt
 
 from app.config import settings
-from app.pipeline.cluster import link_duplicates
+from app.models import Article, ArticleStatus, Source, SourceCategorie, SourceType
 from app.pipeline.run import dedupliquer_avec_arbitrage
 from app.pipeline.veille import run_veille
+from app.sources.base import RawItem
+
+UTC = dt.timezone.utc
+T0 = dt.datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
 
 
-def test_run_veille_utilise_link_duplicates_brut_sans_arbitre():
-    """Le defaut de `run_veille` doit etre EXACTEMENT `link_duplicates`, jamais
-    un wrapper qui construirait un arbitre -- ainsi aucune modification future
-    de `run_veille` ne peut, par megarde, se remettre a arbitrer."""
-    parametre = inspect.signature(run_veille).parameters["cluster"]
-    assert parametre.default is link_duplicates
+class _FauxAdapter:
+    """Un item a ingerer, pour que `run_veille` ait de quoi appeler `cluster`
+    (elle ne le fait que si `rapport.nouveaux` est vrai -- 288 passages/jour,
+    un passage a vide ne doit rien couter)."""
+
+    def a_lire(self, maintenant):
+        return True
+
+    def fetch(self, maintenant=None):
+        return [
+            RawItem(
+                url="https://www.instagram.com/p/1/",
+                title="Un post sans rapport",
+                summary="rien a voir",
+                published_at=T0,
+            )
+        ]
+
+
+def test_run_veille_n_arbitre_jamais_meme_active_et_avec_une_cle(db_session, monkeypatch):
+    """Tour de correction 1/5 (M4) : un test de COMPORTEMENT, pas une simple
+    inspection de signature (qui resterait vert si `run_veille` appelait
+    l'arbitre depuis son CORPS plutot que via un defaut de parametre). On
+    active l'arbitrage et on pose une cle -- exactement les conditions ou
+    `run_pipeline` construirait un arbitre -- et on fait planter la fabrique
+    si elle est appelee : la preuve que `run_veille` ne la touche jamais est
+    qu'aucune exception ne remonte ET que la paire douteuse reste non liee."""
+    monkeypatch.setattr(settings, "cluster_arbitrage_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
+    monkeypatch.setattr(settings, "meta_fb_access_token", "TOK")
+    monkeypatch.setattr(settings, "meta_ig_user_id", "1")
+
+    def _fabrique_qui_leve(*a, **k):
+        raise AssertionError("run_veille ne doit jamais construire d'arbitre")
+
+    monkeypatch.setattr(
+        "app.pipeline.cluster_arbitrage.make_claude_arbitre", _fabrique_qui_leve
+    )
+
+    # Une paire reelle dans la bande douteuse (archive < 0.8, recouvrement >= 0.65
+    # -- memes titres que `tests/test_cluster.py::_paire_douteuse`).
+    src_publie = Source(name="media-publie", type=SourceType.RSS, url="https://a/feed")
+    src_reprise = Source(name="media-reprise", type=SourceType.RSS, url="https://b/feed")
+    src_veille = Source(
+        name="stmpdrcrds", type=SourceType.INSTAGRAM, url="ig:stmpdrcrds",
+        categorie=SourceCategorie.ARTISTE,
+    )
+    db_session.add_all([src_publie, src_reprise, src_veille])
+    db_session.commit()
+    publie = Article(
+        source_id=src_publie.id, url="https://a/1",
+        title="Boris Brejcha annonce son premier album",
+        raw_hash="1", published_at=T0 - dt.timedelta(days=5), status=ArticleStatus.USED,
+    )
+    reprise = Article(
+        source_id=src_reprise.id, url="https://b/1",
+        title="Boris Brejcha devoile une tournee mondiale autour de son premier album",
+        raw_hash="2", published_at=T0 - dt.timedelta(hours=1),
+    )
+    db_session.add_all([publie, reprise])
+    db_session.commit()
+    monkeypatch.setattr(settings, "veille_comptes", "stmpdrcrds")
+
+    rapport = run_veille(
+        db_session, T0, get_adapter=lambda source: _FauxAdapter(),
+        score=lambda db, limit=None: None, record=lambda db: 0,
+        notify=lambda *a: True,
+    )
+
+    assert rapport.nouveaux == 1  # confirme que `cluster` a bien ete appele
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
 
 
 def test_dedupliquer_avec_arbitrage_ne_construit_rien_sans_cle(monkeypatch):

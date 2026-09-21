@@ -1,9 +1,13 @@
+import pytest
+
 from app.pipeline.cluster_arbitrage import (
     Cache,
     EntreeArbitrage,
+    RAISON_MAX_CARACTERES,
     VerdictArbitrage,
     cle_paire,
     ecrire_cache,
+    fusionner_et_ecrire,
     lire_cache,
     make_claude_arbitre,
     marquer_manuel,
@@ -128,3 +132,103 @@ def test_l_arbitre_rend_none_quand_la_sortie_structuree_est_vide():
     arbitre = make_claude_arbitre(client)
 
     assert arbitre(_article(1, "A"), _article(2, "B")) is None
+
+
+# -- Tour de correction 1/5 : raison tronquee, pas rejetee ------------------
+
+
+def test_i1_une_raison_trop_longue_est_tronquee_pas_rejetee():
+    """Le SDK (0.116.0) retire `maxLength` du schema envoye au modele -- la
+    contrainte n'etait donc appliquee QUE cote client, apres facturation. Une
+    reponse au verdict par ailleurs valide ne doit plus jamais etre rejetee
+    pour la longueur d'un champ qui n'est qu'une trace de supervision."""
+    verdict = VerdictArbitrage(meme_actu=True, raison="x" * 1000)
+    assert len(verdict.raison) == RAISON_MAX_CARACTERES
+
+
+def test_i1_une_raison_courte_n_est_pas_touchee():
+    verdict = VerdictArbitrage(meme_actu=False, raison="deux annonces distinctes")
+    assert verdict.raison == "deux annonces distinctes"
+
+
+# -- Tour de correction 1/5 (I2) : fusion juste avant l'ecriture ------------
+
+
+def test_i2_fusionner_et_ecrire_garde_un_verdict_manuel_pose_entre_temps(tmp_path):
+    """Le coeur du remede I2 : un verdict manuel present sur le DISQUE au
+    moment de l'ecriture doit gagner sur la decision automatique de CE
+    passage pour la MEME paire, meme si le passage l'ignorait au moment de sa
+    propre lecture initiale."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    marquer_manuel(1, 2, False, "pose entre-temps par un autre processus", chemin)
+
+    fusionner_et_ecrire({cle_paire(1, 2): EntreeArbitrage(True, "verdict automatique")}, {}, chemin)
+
+    entree = lire_cache(chemin).entrees[cle_paire(1, 2)]
+    assert entree.manuel is True
+    assert entree.meme_actu is False
+
+
+def test_i2_fusionner_et_ecrire_garde_les_entrees_non_concernees(tmp_path):
+    chemin = tmp_path / "cluster_arbitrage.json"
+    marquer_manuel(9, 9, False, "sans rapport", chemin)  # une autre paire, deja sur le disque
+
+    fusionner_et_ecrire({cle_paire(1, 2): EntreeArbitrage(True, "verdict automatique")}, {}, chemin)
+
+    cache = lire_cache(chemin)
+    assert cache.entrees[cle_paire(1, 2)].meme_actu is True
+    assert cache.entrees[cle_paire(9, 9)].manuel is True
+
+
+def test_i2_les_tentatives_survivent_a_la_fusion(tmp_path):
+    chemin = tmp_path / "cluster_arbitrage.json"
+    fusionner_et_ecrire({}, {cle_paire(1, 2): 2}, chemin)
+
+    cache = lire_cache(chemin)
+    assert cache.tentatives[cle_paire(1, 2)] == 2
+
+
+def test_i2_un_verdict_manuel_efface_le_compteur_de_tentatives_de_la_meme_paire(tmp_path):
+    """Un verdict manuel rend un compteur d'echecs obsolete : `link_duplicates`
+    ne doit plus jamais retenter une paire que l'utilisateur vient de trancher."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    marquer_manuel(1, 2, False, "tranchee a la main", chemin)
+
+    fusionner_et_ecrire({}, {cle_paire(1, 2): 1}, chemin)
+
+    cache = lire_cache(chemin)
+    assert cle_paire(1, 2) not in cache.tentatives
+
+
+# -- Tour de correction 1/5 (I3) : marquer_manuel leve sur un echec d'ecriture
+
+
+def test_i3_marquer_manuel_leve_si_l_ecriture_echoue(tmp_path):
+    impossible = tmp_path / "fichier-existant"
+    impossible.write_text("un fichier, pas un dossier")
+    chemin = impossible / "sous-dossier" / "cluster_arbitrage.json"
+
+    with pytest.raises(Exception):  # noqa: B017 -- n'importe quelle panne d'ecriture
+        marquer_manuel(1, 2, False, "raison", chemin)
+
+
+def test_i3_marquer_manuel_ne_leve_pas_quand_l_ecriture_reussit(tmp_path):
+    chemin = tmp_path / "cluster_arbitrage.json"
+    marquer_manuel(1, 2, False, "raison", chemin)  # ne leve pas
+    assert lire_cache(chemin).entrees[cle_paire(1, 2)].manuel is True
+
+
+# -- Tour de correction 1/5 (I2) : temporaire nomme par processus -----------
+
+
+def test_i2_ecrire_cache_n_utilise_plus_un_nom_de_temporaire_fixe(tmp_path):
+    """Deux ecritures qui se recouvrent dans le temps ne doivent pas se
+    marcher dessus : `tempfile.mkstemp` garantit un nom unique par appel,
+    contrairement a l'ancien `chemin.with_suffix(\".tmp\")`."""
+    chemin = tmp_path / "cluster_arbitrage.json"
+    ecrire_cache(Cache({cle_paire(1, 2): EntreeArbitrage(True, "a")}), chemin)
+    fichiers_avant = set(tmp_path.iterdir())
+    ecrire_cache(Cache({cle_paire(3, 4): EntreeArbitrage(False, "b")}), chemin)
+    # Aucun fichier temporaire ne doit trainer apres coup (succes ou echec).
+    fichiers_apres = set(tmp_path.iterdir())
+    assert fichiers_apres == fichiers_avant  # que le fichier final, rien de plus

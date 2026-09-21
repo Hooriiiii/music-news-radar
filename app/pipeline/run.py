@@ -30,6 +30,12 @@ class PipelineReport:
     # ce sont les seuls qui sortent un article neuf de la file pour de bon, donc
     # les seuls dont un faux positif coute une actu (cf. `cluster.ClusterStats`).
     duplicates_archive: int = 0
+    # Sous-ensemble de `duplicates_archive` : liens tranches par Claude (bande
+    # douteuse), et pannes d'arbitrage (jamais un lien, mais des credits
+    # epuises ne se voyaient sinon que par des WARNING repetes dans les logs --
+    # Minor M2 de la revue du tour de correction 1/5).
+    duplicates_arbitres: int = 0
+    duplicates_arbitrage_pannes: int = 0
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -92,6 +98,8 @@ def run_pipeline(
     doublons = cluster(db)
     report.duplicates_linked = doublons.total
     report.duplicates_archive = doublons.archive
+    report.duplicates_arbitres = doublons.arbitres
+    report.duplicates_arbitrage_pannes = doublons.arbitrage_pannes
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

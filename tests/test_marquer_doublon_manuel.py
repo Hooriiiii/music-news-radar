@@ -75,3 +75,31 @@ def test_marquer_meme_actu_ne_touche_pas_les_articles(db_session, tmp_path, monk
 def test_article_introuvable_leve(db_session):
     with pytest.raises(SystemExit):
         appliquer(db_session, 9999, 9998, meme_actu=False, raison="x")
+
+
+def test_i3_une_ecriture_echouee_ne_delie_rien_en_base(db_session, tmp_path, monkeypatch):
+    """Tour de correction 1/5 (I3) : si le verdict manuel n'est pas
+    durablement pose, l'article ne doit JAMAIS etre delie en base -- c'est
+    exactement de cette facon silencieuse que l'ancienne procedure (effacer
+    deux champs sans rien memoriser) echouait."""
+    from app.config import settings
+
+    # Chemin impossible a ecrire : un fichier existant utilise comme parent.
+    impossible = tmp_path / "fichier-existant"
+    impossible.write_text("un fichier, pas un dossier")
+    monkeypatch.setattr(
+        settings, "cluster_arbitrage_cache_path", impossible / "sous-dossier" / "cache.json"
+    )
+    src = _src(db_session)
+    publie = _art(db_session, src, n=1, title="A", status=ArticleStatus.USED)
+    reprise = _art(
+        db_session, src, n=2, title="B", duplicate_of_id=publie.id,
+        file_exclu_raison="doublon d'une actu deja publiee (article 1, similarite 0.85)",
+    )
+
+    with pytest.raises(Exception):  # noqa: B017 -- n'importe quelle panne d'ecriture
+        appliquer(db_session, publie.id, reprise.id, meme_actu=False, raison="x")
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id == publie.id  # rien delie : le verdict n'a pas ete pose
+    assert reprise.file_exclu_raison is not None

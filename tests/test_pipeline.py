@@ -130,3 +130,18 @@ def test_run_pipeline_elit_avant_le_scoring_et_lie_les_artistes_apres(db_session
     assert calls == ["ingest", "cluster", "elire", "score", "record", "lier"]
     assert report.election.reelus == 1
     assert report.artistes_lies == 2
+
+
+def test_run_pipeline_expose_les_compteurs_d_arbitrage_de_doublons(db_session, full_config):
+    """Minor M2 : sans ces compteurs sur le rapport, des credits Anthropic
+    epuises ne se voyaient que par des WARNING repetes dans les logs."""
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: [],
+        cluster=lambda db: ClusterStats(archive=3, arbitres=2, arbitrage_pannes=1),
+        score=lambda db: ScoringStats(),
+        alert=lambda db: FakeAlertStats(),
+    )
+    assert report.duplicates_archive == 3
+    assert report.duplicates_arbitres == 2
+    assert report.duplicates_arbitrage_pannes == 1

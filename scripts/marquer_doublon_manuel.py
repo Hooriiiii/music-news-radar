@@ -83,13 +83,19 @@ def main() -> None:
 
     attendre_base()
     with SessionLocal() as db:
-        message = appliquer(
-            db,
-            args.article_a,
-            args.article_b,
-            meme_actu=args.meme_actu,
-            raison=args.raison,
-        )
+        try:
+            message = appliquer(
+                db,
+                args.article_a,
+                args.article_b,
+                meme_actu=args.meme_actu,
+                raison=args.raison,
+            )
+        except RuntimeError as exc:
+            # `marquer_manuel` leve AVANT toute ecriture en base (voir
+            # `appliquer`) : rien n'a ete delie ici, l'ordre le garantit.
+            print(f"[ERREUR] verdict manuel non enregistre, rien touche en base : {exc}")
+            raise SystemExit(1) from exc
     print(message)
 
 

@@ -12,29 +12,63 @@ certain mais au-dessus du seuil de recouvrement.
 
 Le verdict est memorise par PAIRE (les deux ids d'article, ordre indifferent)
 dans un fichier JSON a cote du jeton -- meme mecanique que
-`illustration_cache_path` / `visuels_web_cache_path` : ecriture atomique
-(fichier temporaire + `os.replace`), jamais de migration. Une panne (cle
-absente, credits epuises, reseau mort, reponse hors schema) n'est JAMAIS
-memorisee : seule une reponse effectivement rendue par Claude, conforme au
-schema, l'est, sinon une panne passagere figerait "different" pour toujours et
-enterrerait une actu neuve sans retour possible.
+`illustration_cache_path` / `visuels_web_cache_path`. Une panne (cle absente,
+credits epuises, reseau mort, reponse hors schema) n'est JAMAIS memorisee :
+seule une reponse effectivement rendue par Claude, conforme au schema, l'est,
+sinon une panne passagere figerait "different" pour toujours et enterrerait
+une actu neuve sans retour possible.
+
+**Tour de correction 1/5 (revue sur le vrai SDK, via `MockTransport`).**
+Trois defauts corriges ici :
+
+1. Le SDK (0.116.0) retire `maxLength` du schema JSON envoye au modele
+   (`transform_schema` le deplace dans la description) : la contrainte
+   `Field(max_length=...)` d'avant n'etait donc PAS appliquee cote serveur,
+   seulement revalidee cote client par Pydantic -- APRES facturation. Une
+   reponse systematiquement trop longue payait a chaque appel, sans jamais
+   memoriser de verdict, et pouvait geler tout l'arbitrage 48h si les paires
+   les plus anciennes (traitees en premier) etaient celles qui debordaient.
+   `VerdictArbitrage.raison` n'a donc plus de contrainte de longueur : un
+   validateur la TRONQUE au lieu de rejeter une reponse par ailleurs valide.
+   En complement, un compteur de TENTATIVES par paire (distinct des verdicts,
+   `Cache.tentatives`) abandonne apres `cluster_arbitrage_tentatives_max`
+   echecs SANS jamais poser de lien -- une panne systematique sur une paire
+   ne bloque plus les autres indefiniment. Et `cluster.link_duplicates` sert
+   d'abord les paires JAMAIS tentees avant de rejouer celles deja en echec :
+   voir le commentaire sur les deux passes dans ce module-la.
+2. Le temporaire d'ecriture portait un nom FIXE (`.tmp`) : deux processus qui
+   ecrivent (le passage horaire et `scripts.marquer_doublon_manuel` lance
+   pendant ce passage) auraient pu se marcher dessus. Nom de temporaire PAR
+   PROCESSUS desormais (`tempfile.mkstemp`), meme mecanique que
+   `app/pipeline/quota_graph.py`.
+3. `link_duplicates` lisait le cache une fois au debut du passage et le
+   reecrivait en BLOC a la fin : un verdict manuel pose PENDANT le passage
+   (fenetre de plusieurs minutes, jusqu'a `cluster_arbitrage_max_par_passage`
+   appels) etait donc EFFACE par cette reecriture. `fusionner_et_ecrire`
+   relit le disque juste avant d'ecrire et ne laisse jamais une decision
+   automatique de ce passage remplacer un verdict manuel pose entre-temps.
 
 Un verdict MANUEL (pose par `scripts.marquer_doublon_manuel`) prime sur tout
 rapprochement automatique ulterieur, y compris sur la bande certaine : c'est ce
 qui rend enfin reelle la procedure de reparation d'un faux positif d'archive
 (l'ancienne procedure de CLAUDE.md -- effacer `duplicate_of_id` et
 `file_exclu_raison` -- ne tenait pas, le passage suivant relie l'article tant
-qu'il reste dans la fenetre de 48 h de sa vie publiable).
+qu'il reste dans la fenetre de 48 h de sa vie publiable). `marquer_manuel` leve
+si l'ecriture n'est pas confirmee par une relecture : le script appelant ne
+doit JAMAIS delier un article en base sur la foi d'un verdict qui n'a pas ete
+durablement pose (meme defaut que l'ancienne procedure, en silence cette
+fois-ci).
 """
 
 import json
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator
 
 from app.config import settings
 from app.models import Article
@@ -43,14 +77,27 @@ logger = logging.getLogger(__name__)
 
 CACHE_VERSION = 1
 
+# Trace de supervision seulement : la longueur n'est PLUS une contrainte du
+# schema envoye au modele (le SDK la retire quoi qu'il arrive, voir le module
+# docstring), donc un depassement ne doit plus jamais faire echouer la
+# validation Pydantic -- il est tronque.
+RAISON_MAX_CARACTERES = 400
+
 
 class VerdictArbitrage(BaseModel):
     """Sortie JSON stricte de l'arbitrage -- meme motif que `ArticleScore`
     (`app/pipeline/scoring.py`) : schema impose par `output_format`, revalide
-    par Pydantic."""
+    par Pydantic. `raison` ne porte plus de `max_length` : une reponse dont le
+    verdict est valide ne doit jamais etre rejetee pour la longueur d'un champ
+    qui n'est qu'une trace -- elle est tronquee, pas refusee."""
 
     meme_actu: bool
-    raison: str = Field(max_length=400)
+    raison: str
+
+    @field_validator("raison")
+    @classmethod
+    def _tronquer(cls, valeur: str) -> str:
+        return valeur[:RAISON_MAX_CARACTERES]
 
 
 SYSTEM_PROMPT = """\
@@ -84,10 +131,25 @@ courte (15 mots maximum) : elle est stockee comme trace de supervision, pas \
 comme une explication detaillee."""
 
 
+def _resume_borne(article: Article) -> str:
+    """Le resume d'un article pas encore score peut etre la description RSS
+    brute (parfois l'article entier) ou la caption Instagram avec son bandeau
+    de metriques -- rien ne le borne avant le scoring, qui n'a pas encore eu
+    lieu au moment de l'arbitrage (`link_duplicates` tourne AVANT). Meme borne
+    que `scoring.build_user_prompt`, pour la meme raison : un cout d'entree
+    non maitrise. Import LOCAL : `scoring` importe `comptes_artistes`, qui
+    importe `cluster`, qui importe ce module -- un import en tete de fichier
+    boucle."""
+    from app.pipeline.scoring import RESUME_MAX_CARACTERES
+
+    if not article.summary:
+        return "(pas de resume)"
+    return article.summary[:RESUME_MAX_CARACTERES]
+
+
 def build_user_prompt(publie: Article, nouveau: Article) -> str:
     def _bloc(article: Article) -> str:
-        resume = article.summary or "(pas de resume)"
-        return f"Titre : {article.title}\nResume : {resume}"
+        return f"Titre : {article.title}\nResume : {_resume_borne(article)}"
 
     return (
         f"ARTICLE DEJA PUBLIE :\n{_bloc(publie)}\n\n"
@@ -113,6 +175,11 @@ class EntreeArbitrage:
 @dataclass(frozen=True)
 class Cache:
     entrees: dict[str, EntreeArbitrage] = field(default_factory=dict)
+    # Echecs comptes PAR PAIRE, jamais melanges aux verdicts : un verdict veut
+    # dire "Claude a repondu", une tentative veut dire "on a essaye". Distinct
+    # aussi pour qu'un verdict manuel pose sur une paire en echec efface son
+    # compteur (voir `fusionner_et_ecrire`) sans avoir a toucher aux verdicts.
+    tentatives: dict[str, int] = field(default_factory=dict)
 
 
 def _chemin_cache() -> Path:
@@ -120,9 +187,10 @@ def _chemin_cache() -> Path:
 
 
 def lire_cache(chemin: Path | None = None) -> Cache:
-    """Les verdicts connus. Jamais d'exception : un fichier absent ou corrompu
-    vaut un cache vide, pas un run casse. Pas de TTL : un verdict sur une paire
-    de titres/resumes figes ne « perime » pas comme la lecture d'une image."""
+    """Les verdicts et tentatives connus. Jamais d'exception : un fichier
+    absent ou corrompu vaut un cache vide, pas un run casse. Pas de TTL sur
+    les verdicts : un verdict sur une paire de titres/resumes figes ne
+    « perime » pas comme la lecture d'une image."""
     chemin = chemin or _chemin_cache()
     try:
         brut = json.loads(chemin.read_text(encoding="utf-8"))
@@ -136,37 +204,93 @@ def lire_cache(chemin: Path | None = None) -> Cache:
             )
             for cle, ligne in (brut.get("verdicts") or {}).items()
         }
-        return Cache(entrees)
+        tentatives = {
+            cle: int(valeur) for cle, valeur in (brut.get("tentatives") or {}).items()
+        }
+        return Cache(entrees, tentatives)
     except Exception as exc:  # noqa: BLE001 -- un cache illisible n'est qu'un cache vide
         logger.info("cache d'arbitrage de doublons illisible (%s)", type(exc).__name__)
         return Cache({})
 
 
+def _contenu_json(cache: Cache) -> dict:
+    return {
+        "version": CACHE_VERSION,
+        "verdicts": {
+            cle: {
+                "meme_actu": entree.meme_actu,
+                "raison": entree.raison,
+                "manuel": entree.manuel,
+            }
+            for cle, entree in cache.entrees.items()
+        },
+        "tentatives": dict(cache.tentatives),
+    }
+
+
+def _ecrire_strict(cache: Cache, chemin: Path) -> None:
+    """Ecriture ATOMIQUE (fichier temporaire NOMME PAR PROCESSUS +
+    `os.replace`), comme `app/pipeline/quota_graph.py` : un `.tmp` fixe serait
+    ecrit a deux mains par le passage horaire et `scripts.marquer_doublon_manuel`
+    lance pendant ce passage. Leve sur toute panne -- c'est le comportement
+    voulu pour `marquer_manuel` (voir plus bas) ; `ecrire_cache` l'attrape."""
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    descripteur, temporaire = tempfile.mkstemp(dir=chemin.parent, prefix=chemin.name + ".")
+    try:
+        with os.fdopen(descripteur, "w", encoding="utf-8") as fichier:
+            json.dump(_contenu_json(cache), fichier, ensure_ascii=False)
+        os.replace(temporaire, chemin)
+    except Exception:
+        Path(temporaire).unlink(missing_ok=True)
+        raise
+
+
 def ecrire_cache(cache: Cache, chemin: Path | None = None) -> None:
-    """Ecriture ATOMIQUE (fichier temporaire + `os.replace`), comme les autres
-    caches du projet : un passage interrompu ne laisse pas un JSON tronque."""
+    """Ecriture au mieux : un echec est journalise, jamais leve -- le
+    prochain passage redemandera. Utilisee pour les decisions AUTOMATIQUES
+    (`fusionner_et_ecrire`) ; `marquer_manuel` a besoin d'une garantie plus
+    forte et n'appelle pas cette fonction."""
     chemin = chemin or _chemin_cache()
     try:
-        chemin.parent.mkdir(parents=True, exist_ok=True)
-        contenu = {
-            "version": CACHE_VERSION,
-            "verdicts": {
-                cle: {
-                    "meme_actu": entree.meme_actu,
-                    "raison": entree.raison,
-                    "manuel": entree.manuel,
-                }
-                for cle, entree in cache.entrees.items()
-            },
-        }
-        temporaire = chemin.with_suffix(chemin.suffix + ".tmp")
-        temporaire.write_text(json.dumps(contenu, ensure_ascii=False), encoding="utf-8")
-        os.replace(temporaire, chemin)
+        _ecrire_strict(cache, chemin)
     except Exception as exc:  # noqa: BLE001 -- ne jamais faire echouer un run pour ca
         logger.warning(
             "verdict d'arbitrage de doublons non memorise (%s) : le prochain passage redemandera",
             type(exc).__name__,
         )
+
+
+def fusionner_et_ecrire(
+    nouveaux_verdicts: dict[str, EntreeArbitrage],
+    nouvelles_tentatives: dict[str, int],
+    chemin: Path | None = None,
+) -> None:
+    """Fusionne les decisions prises PENDANT un passage de `link_duplicates`
+    avec l'etat ACTUEL du disque, juste avant d'ecrire -- jamais l'inverse.
+
+    Un `link_duplicates` peut passer plusieurs minutes a arbitrer (jusqu'a
+    `cluster_arbitrage_max_par_passage` appels). Si `scripts.
+    marquer_doublon_manuel` pose un verdict manuel sur une paire PENDANT cette
+    fenetre, une reecriture en bloc a la fin du passage l'effacerait purement
+    et simplement (reproduit en revue). Cette fonction relit le disque a
+    l'instant de l'ecriture : un verdict manuel qui y figure GAGNE toujours,
+    que ce passage ait ou non une decision concurrente pour la meme paire.
+    """
+    chemin = chemin or _chemin_cache()
+    disque = lire_cache(chemin)
+    entrees = dict(disque.entrees)
+    for cle, entree in nouveaux_verdicts.items():
+        existante = entrees.get(cle)
+        if existante is not None and existante.manuel:
+            continue  # le verdict manuel prime, meme pose pendant ce passage
+        entrees[cle] = entree
+    tentatives = dict(disque.tentatives)
+    for cle, valeur in nouvelles_tentatives.items():
+        existante = disque.entrees.get(cle)
+        if existante is not None and existante.manuel:
+            continue  # un verdict manuel rend le compteur d'echecs obsolete
+        tentatives[cle] = valeur
+    ecrire_cache(Cache(entrees, tentatives), chemin)
 
 
 def marquer_manuel(
@@ -180,10 +304,26 @@ def marquer_manuel(
     positif d'archive, ou confirmation d'un lien qu'on veut garder quoi qu'il
     arrive. Prime sur tout rapprochement automatique ulterieur, y compris la
     bande "certaine" de `link_duplicates`. Utilise par
-    `scripts.marquer_doublon_manuel`."""
+    `scripts.marquer_doublon_manuel`.
+
+    LEVE si l'ecriture n'est pas confirmee par une relecture : l'appelant (le
+    script) ne doit jamais delier un article en base sur la foi d'un verdict
+    qui n'a pas ete durablement pose -- c'est exactement de cette facon
+    silencieuse que l'ancienne procedure (effacer deux champs sans rien
+    memoriser) echouait.
+    """
+    chemin = chemin or _chemin_cache()
     cache = lire_cache(chemin)
-    cache.entrees[cle_paire(id_a, id_b)] = EntreeArbitrage(meme_actu, raison, manuel=True)
-    ecrire_cache(cache, chemin)
+    cle = cle_paire(id_a, id_b)
+    cache.entrees[cle] = EntreeArbitrage(meme_actu, raison, manuel=True)
+    # Un verdict manuel efface aussi un compteur d'echecs perime sur la meme
+    # paire : `link_duplicates` ne doit plus jamais retenter une paire que
+    # l'utilisateur vient de trancher.
+    cache.tentatives.pop(cle, None)
+    _ecrire_strict(cache, chemin)
+    relu = lire_cache(chemin).entrees.get(cle)
+    if relu is None or not relu.manuel or relu.meme_actu != meme_actu:
+        raise RuntimeError(f"verdict manuel non confirme apres ecriture ({chemin})")
 
 
 def make_claude_arbitre(client: anthropic.Anthropic | None = None):
@@ -191,9 +331,9 @@ def make_claude_arbitre(client: anthropic.Anthropic | None = None):
     structuree validee -- meme motif que `scoring.make_claude_scorer`.
 
     Rend `(meme_actu, raison)` sur une reponse conforme au schema, `None` sur
-    TOUTE panne (cle absente, credits epuises, reseau mort, JSON hors schema) :
-    le doute favorise la publication, jamais un lien par defaut, et une panne
-    n'est jamais memorisee par l'appelant.
+    TOUTE panne (cle absente, credits epuises, reseau mort, JSON hors schema,
+    max_tokens, refus) : le doute favorise la publication, jamais un lien par
+    defaut, et une panne n'est jamais memorisee par l'appelant.
     """
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)

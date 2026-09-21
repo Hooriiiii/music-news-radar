@@ -24,7 +24,12 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ArticleStatus
-from app.pipeline.cluster_arbitrage import EntreeArbitrage, cle_paire, ecrire_cache, lire_cache
+from app.pipeline.cluster_arbitrage import (
+    EntreeArbitrage,
+    cle_paire,
+    fusionner_et_ecrire,
+    lire_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +147,7 @@ def link_duplicates(
     archive_threshold: float | None = None,
     arbitre: Arbitre | None = None,
     arbitrage_max: int | None = None,
+    tentatives_max: int | None = None,
     cache_chemin: Path | None = None,
 ) -> ClusterStats:
     """Pointe chaque doublon vers son représentant et renvoie le compte des liens créés.
@@ -184,7 +190,23 @@ def link_duplicates(
     mémorisé dans `cluster_arbitrage_cache_path`, relu à chaque passage avant
     d'appeler l'API. Un verdict MANUEL (posé par
     `scripts.marquer_doublon_manuel`) est vérifié AVANT toute mesure et prime
-    sur tout, y compris sur la bande certaine.
+    sur tout, y compris sur la bande certaine -- et vaut aussi pour une paire
+    de deux articles FRAIS (tour de correction 1/5) : l'utilisateur a le droit
+    de défaire n'importe quel lien, pas seulement un lien d'archive.
+
+    **Deux passes pour ne pas geler l'arbitrage sur une paire qui échoue**
+    (tour de correction 1/5, revue sur le vrai SDK). Une réponse Claude qui ne
+    passe pas la validation (JSON hors schéma) est une PANNE : rien n'est
+    mémorisé, donc rien n'empêche de la redemander -- mais un article dont
+    l'UNIQUE candidat douteux échoue systématiquement consommerait alors une
+    part du budget à CHAQUE passage, au détriment des paires jamais tentées
+    (elles sont vues plus tard si les articles en échec sont plus anciens).
+    Chaque paire garde un compteur de TENTATIVES distinct des verdicts
+    (`Cache.tentatives`) ; passé `cluster_arbitrage_tentatives_max`, elle
+    n'est plus jamais retentée (sans qu'aucun verdict ne soit mémorisé pour
+    autant). Et le budget d'un passage sert d'abord les paires JAMAIS tentées
+    (passe 1) avant de rejouer celles déjà en échec, sous le plafond (passe 2)
+    -- un article n'est promu nouveau représentant qu'après ces deux passes.
     """
     archive_days = settings.cluster_archive_jours if archive_days is None else archive_days
     archive_threshold = (
@@ -192,6 +214,9 @@ def link_duplicates(
     )
     arbitrage_max = (
         settings.cluster_arbitrage_max_par_passage if arbitrage_max is None else arbitrage_max
+    )
+    tentatives_max = (
+        settings.cluster_arbitrage_tentatives_max if tentatives_max is None else tentatives_max
     )
     seen_at = func.coalesce(Article.published_at, Article.fetched_at)
     now = dt.datetime.now(dt.timezone.utc)
@@ -222,38 +247,39 @@ def link_duplicates(
     # un verdict manuel ou déjà arbitré doit valoir même quand `arbitre` est
     # absent (c'est le cas de `run_veille`), sans jamais coûter un appel.
     cache = lire_cache(cache_chemin)
-    cache_modifie = False
+    # Etat de travail pour ce passage SEULEMENT : jamais écrit tel quel, fusionné
+    # avec une relecture du disque juste avant l'écriture (voir `fusionner_et_
+    # ecrire`) pour ne jamais effacer un verdict manuel posé pendant ce passage.
+    tentatives_travail = dict(cache.tentatives)
+    nouveaux_verdicts: dict[str, EntreeArbitrage] = {}
     appels_restants = arbitrage_max
+    # Différée : le seul candidat douteux d'un article est une paire déjà en
+    # échec (tentatives > 0), mais sous le plafond -- retentée en passe 2
+    # seulement si une paire jamais tentée n'a pas déjà tout consommé.
+    DIFFERE = object()
 
-    for article in articles:
-        tokens = significant_tokens(article.title)
-        if article.duplicate_of_id is not None:
-            continue
-        # (représentant, score, origine, raison) -- `raison` n'est renseignée
-        # que pour un lien tranché par arbitrage (Claude ou manuel).
-        match: tuple[Article, float, str, str | None] | None = None
+    def resoudre(article: Article, tokens: set[str], *, autoriser_retentatives: bool):
+        nonlocal appels_restants
+        differe = False
         for rep_article, rep_tokens, rep_archive in representatives:
-            if not rep_archive:
-                score = title_similarity_from_tokens(tokens, rep_tokens)
-                if score >= threshold:
-                    match = (rep_article, score, "frais", None)
-                    break
-                continue
-
             cle = cle_paire(article.id, rep_article.id)
             entree = cache.entrees.get(cle)
             if entree is not None and entree.manuel:
                 # Le verdict humain prime sur tout, y compris sur un score qui
-                # atteindrait la bande certaine ci-dessous.
+                # atteindrait la bande certaine ci-dessous -- FRAIS ou ARCHIVE.
                 if entree.meme_actu:
-                    match = (rep_article, 1.0, "manuel", entree.raison)
-                    break
+                    return (rep_article, 1.0, "manuel", entree.raison)
+                continue
+
+            if not rep_archive:
+                score = title_similarity_from_tokens(tokens, rep_tokens)
+                if score >= threshold:
+                    return (rep_article, score, "frais", None)
                 continue
 
             score_certain = archive_similarity_from_tokens(tokens, rep_tokens)
             if score_certain >= archive_threshold:
-                match = (rep_article, score_certain, "certain", None)
-                break
+                return (rep_article, score_certain, "certain", None)
 
             score_doute = title_similarity_from_tokens(tokens, rep_tokens)
             if score_doute < threshold:
@@ -263,8 +289,17 @@ def link_duplicates(
             # nouvel appel -- "une paire n'est jamais redemandée".
             if entree is not None:
                 if entree.meme_actu:
-                    match = (rep_article, score_doute, "arbitre", entree.raison)
-                    break
+                    return (rep_article, score_doute, "arbitre", entree.raison)
+                continue
+
+            deja_tentee = tentatives_travail.get(cle, 0)
+            if deja_tentee >= tentatives_max:
+                continue  # abandon définitif : jamais retentée, jamais mémorisée
+
+            if deja_tentee > 0 and not autoriser_retentatives:
+                # Une paire déjà en échec ne doit pas consommer le budget avant
+                # les paires jamais tentées de CE passage -- déférée en passe 2.
+                differe = True
                 continue
 
             if arbitre is None or appels_restants <= 0:
@@ -274,25 +309,27 @@ def link_duplicates(
             appels_restants -= 1
             if verdict is None:
                 # Une panne n'est JAMAIS un verdict : rien n'est mémorisé, la
-                # paire sera redemandée au prochain passage.
+                # paire sera redemandée (jusqu'au plafond de tentatives).
                 stats.arbitrage_pannes += 1
+                tentatives_travail[cle] = deja_tentee + 1
                 continue
             meme_actu, raison = verdict
-            cache.entrees[cle] = EntreeArbitrage(meme_actu, raison, manuel=False)
-            cache_modifie = True
+            nouveaux_verdicts[cle] = EntreeArbitrage(meme_actu, raison, manuel=False)
             if meme_actu:
-                match = (rep_article, score_doute, "arbitre", raison)
-                break
+                return (rep_article, score_doute, "arbitre", raison)
             continue
 
-        if match is None:
+        return DIFFERE if differe else None
+
+    def appliquer(article: Article, tokens: set[str], resultat) -> None:
+        if resultat is None:
             representatives.append((article, tokens, False))
-            continue
-        rep_article, score, origine, raison = match
+            return
+        rep_article, score, origine, raison = resultat
         article.duplicate_of_id = rep_article.id
         if origine == "frais":
             stats.frais += 1
-            continue
+            return
         stats.archive += 1
         if origine == "arbitre":
             stats.arbitres += 1
@@ -318,9 +355,33 @@ def link_duplicates(
             "doublon d'archive : « %s » (%s) rattache a « %s » (%s), %s",
             article.title, article.id, rep_article.title, rep_article.id, detail,
         )
+
+    # Passe 1 : sert les paires jamais tentées en priorité. Un article dont le
+    # SEUL candidat pertinent est une paire déjà en échec est différé, pas
+    # promu représentant tout de suite -- sa véritable issue attend la passe 2.
+    differes: list[tuple[Article, set[str]]] = []
+    for article in articles:
+        if article.duplicate_of_id is not None:
+            continue
+        tokens = significant_tokens(article.title)
+        resultat = resoudre(article, tokens, autoriser_retentatives=False)
+        if resultat is DIFFERE:
+            differes.append((article, tokens))
+            continue
+        appliquer(article, tokens, resultat)
+
+    # Passe 2 : ce qui reste du budget rejoue les paires déjà en échec, dans
+    # le même ordre. Aucune paire jamais tentée n'attend plus à ce stade.
+    for article, tokens in differes:
+        resultat = resoudre(article, tokens, autoriser_retentatives=True)
+        appliquer(article, tokens, resultat)
+
     db.commit()
-    if cache_modifie:
-        ecrire_cache(cache, cache_chemin)
+    tentatives_modifiees = {
+        cle: valeur for cle, valeur in tentatives_travail.items() if cache.tentatives.get(cle) != valeur
+    }
+    if nouveaux_verdicts or tentatives_modifiees:
+        fusionner_et_ecrire(nouveaux_verdicts, tentatives_modifiees, cache_chemin)
     return stats
 
 
