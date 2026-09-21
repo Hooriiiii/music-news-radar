@@ -8,7 +8,10 @@ Un tweet video etait jusqu'ici indistinguable d'un tweet photo : l'API X ne renv
 types, dont ce module est le consommateur principal.
 """
 
-from urllib.parse import urlsplit
+import base64
+import binascii
+import json
+from urllib.parse import parse_qs, urlsplit
 
 from app.content.urls import url_propre
 
@@ -39,7 +42,46 @@ def entree(type_: str, url: str | None, **extras) -> dict:
     valeurs = {"type": type_, "url": url_propre(url), **{c: extras.get(c) for c in CLES[2:]}}
     # Reassignation d'une cle existante : l'ordre des six cles est conserve.
     valeurs["preview_url"] = url_propre(valeurs["preview_url"])
+    if type_ == VIDEO and valeurs["duration_ms"] is None:
+        # Dernier recours seulement : une duree donnee par la source (sonde
+        # ffprobe, API X) est mesuree, celle de l'URL est declarative.
+        valeurs["duration_ms"] = duree_depuis_url(valeurs["url"])
     return valeurs
+
+
+def duree_depuis_url(url: str | None) -> int | None:
+    """La duree en millisecondes qu'une URL du CDN Instagram porte elle-meme.
+
+    Graph ne rend AUCUNE duree pour une video (`media_url` et `thumbnail_url`, et
+    c'est tout) : les 642 videos Instagram de la base avaient `duration_ms` a
+    None le 2026-09-21. Or leur URL signee porte un parametre `efg` en base64 qui
+    decrit l'encodage, `duration_s` compris -- les 642 le portaient.
+
+    Ce que ce trou a coute, ce jour-la : `videos_exploitables` laisse passer une
+    duree INCONNUE (le choix assume de proposer le reel plutot que de griser un
+    bouton sur une donnee absente), donc une video de 190 s est restee eligible,
+    a fait composer un post (Claude paye) et n'a echoue qu'au gel, apres
+    telechargement -- en excluant au passage un article Billboard qui n'avait
+    aucune video a lui (la video etait empruntee a un compte d'artiste).
+
+    Jamais d'exception : le champ reste None des que quoi que ce soit cloche
+    (parametre absent, base64 ou JSON invalide, valeur non numerique ou absurde),
+    et on retombe alors exactement sur le comportement d'avant.
+    """
+    if not url:
+        return None
+    efg = parse_qs(urlsplit(url).query).get("efg", [None])[0]
+    if not efg:
+        return None
+    try:
+        # base64 urlsafe, rembourre : le parametre voyage sans ses `=`.
+        charge = json.loads(base64.urlsafe_b64decode(efg + "=" * (-len(efg) % 4)))
+        duree = charge["duration_s"]
+    except (binascii.Error, ValueError, TypeError, KeyError, AttributeError):
+        return None
+    if not isinstance(duree, (int, float)) or isinstance(duree, bool) or not 0 < duree < 86_400:
+        return None
+    return int(duree * 1000)
 
 
 def videos_exploitables(media: list[dict] | None, duree_max_ms: int = DUREE_MAX_REEL_MS):
