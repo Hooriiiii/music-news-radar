@@ -204,9 +204,15 @@ def make_claude_juge(client: anthropic.Anthropic | None = None):
 
 @dataclass(frozen=True)
 class Cache:
-    """Les verdicts connus, indexes par URL nettoyee."""
+    """Les verdicts connus, indexes par URL nettoyee, et les TAILLES REELES
+    (largeur, hauteur) mesurees au meme moment que le juge decode l'image pour
+    la reduire (`reduire`). Un champ separe et non un ajout a `Verdict` : ce
+    dernier est aussi le SCHEMA envoye a Claude (`output_format=Verdicts`), et
+    lui ajouter largeur/hauteur ferait deviner ces valeurs au modele au lieu de
+    les mesurer nous-memes."""
 
     verdicts: dict[str, Verdict]
+    tailles: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
 def _chemin_cache() -> Path:
@@ -214,8 +220,8 @@ def _chemin_cache() -> Path:
 
 
 def lire_cache(maintenant: dt.datetime, chemin: Path | None = None) -> Cache:
-    """Les verdicts encore valides. Jamais d'exception : un fichier corrompu ou
-    absent vaut un cache vide, pas une composition perdue."""
+    """Les verdicts et tailles encore valides. Jamais d'exception : un fichier
+    corrompu ou absent vaut un cache vide, pas une composition perdue."""
     chemin = chemin or _chemin_cache()
     try:
         brut = json.loads(chemin.read_text(encoding="utf-8"))
@@ -229,7 +235,12 @@ def lire_cache(maintenant: dt.datetime, chemin: Path | None = None) -> Cache:
                 verdicts[url] = Verdict.model_validate(
                     {cle: ligne[cle] for cle in ("affiche", "sujet", "note")}
                 )
-        return Cache(verdicts)
+        tailles = {}
+        for url, ligne in (brut.get("tailles") or {}).items():
+            pose = dt.datetime.fromisoformat(ligne["le"])
+            if pose >= limite:
+                tailles[url] = (int(ligne["largeur"]), int(ligne["hauteur"]))
+        return Cache(verdicts, tailles)
     except Exception as exc:  # noqa: BLE001 -- un cache illisible n'est qu'un cache vide
         logger.info("cache des verdicts d'illustration illisible (%s)", type(exc).__name__)
         return Cache({})
@@ -247,6 +258,10 @@ def ecrire_cache(cache: Cache, maintenant: dt.datetime, chemin: Path | None = No
             "verdicts": {
                 url: {**verdict.model_dump(), "le": maintenant.isoformat()}
                 for url, verdict in cache.verdicts.items()
+            },
+            "tailles": {
+                url: {"largeur": largeur, "hauteur": hauteur, "le": maintenant.isoformat()}
+                for url, (largeur, hauteur) in cache.tailles.items()
             },
         }
         temporaire = chemin.with_suffix(chemin.suffix + ".tmp")
@@ -333,9 +348,17 @@ def verdicts_de(
     Extrait de `_choisir` pour servir aussi le fond de secours
     (`eviter_l_affiche`), qui a besoin du verdict lui-meme et pas seulement du
     classement. Un verdict deja memorise ne repaie donc rien, quel que soit
-    l'appelant."""
+    l'appelant.
+
+    Mesure au passage les dimensions REELLES de chaque image telechargee
+    (`_dimensions`) et les memorise dans le meme cache (`Cache.tailles`) : c'est
+    exactement le decodage que `reduire` fait deja pour la vignette envoyee au
+    juge, donc le plancher de resolution du fond (`resolution_suffisante`) ne
+    coute pas une requete de plus."""
     maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
-    connus = dict(lire_cache(maintenant, chemin_cache).verdicts)
+    cache = lire_cache(maintenant, chemin_cache)
+    connus = dict(cache.verdicts)
+    tailles = dict(cache.tailles)
     inconnus = [url for url in urls if url not in connus]
     if not inconnus:
         return {url: connus[url] for url in urls if url in connus}
@@ -351,6 +374,9 @@ def verdicts_de(
         if octets is None:
             logger.info("candidat de fond inaccessible : %s", url)
             continue
+        taille = _dimensions(octets)
+        if taille is not None:
+            tailles[url] = taille
         try:
             images.append(reduire(octets))
         except Exception as exc:  # noqa: BLE001 -- une image illisible est sautee
@@ -360,8 +386,69 @@ def verdicts_de(
     if images:
         for url, verdict in zip(juges, juge(images), strict=True):
             connus[url] = verdict
-        ecrire_cache(Cache(connus), maintenant, chemin_cache)
+        ecrire_cache(Cache(connus, tailles), maintenant, chemin_cache)
+    elif tailles != cache.tailles:
+        # Aucune image n'a pu etre jugee (toutes illisibles) mais au moins une
+        # taille a ete mesuree avant l'echec du decodage complet -- la garder
+        # evite de retelecharger cette URL au prochain passage.
+        ecrire_cache(Cache(connus, tailles), maintenant, chemin_cache)
     return {url: connus[url] for url in urls if url in connus}
+
+
+def _dimensions(octets: bytes) -> tuple[int, int] | None:
+    """Les dimensions REELLES (largeur, hauteur) d'une image telechargee, ou
+    None si elle est illisible. Mesurees sur les octets bruts, AVANT la
+    reduction a `illustration_taille_px` que `reduire` applique pour le juge --
+    la vignette n'a plus la taille d'origine."""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(octets)) as image:
+            return image.size
+    except Exception:  # noqa: BLE001 -- une taille non mesurable vaut "inconnue"
+        return None
+
+
+def tailles_de(
+    urls: list[str],
+    *,
+    maintenant: dt.datetime | None = None,
+    chemin_cache: Path | None = None,
+) -> dict[str, tuple[int, int]]:
+    """Les tailles DEJA mesurees, lues du cache seul -- jamais de requete ni de
+    decodage de plus. Miroir de `verdicts_memorises` : sert au plancher de
+    resolution du fond (`eviter_l_affiche`), qui lit une mesure prise par le
+    meme telechargement que le juge d'affiches, jamais un second."""
+    maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
+    connues = lire_cache(maintenant, chemin_cache).tailles
+    return {url: connues[url] for url in urls if url in connues}
+
+
+def resolution_suffisante(
+    taille: tuple[int, int] | None, cible: tuple[int, int], seuil: float | None = None
+) -> bool:
+    """Vrai si une taille CONNUE suffit a remplir le gabarit `cible` sans depasser
+    `seuil` (`cover_fond_upscale_max`) d'agrandissement.
+
+    Mesure du 2026-09-21 (CLAUDE.md, 6 derniers posts publies) : nets a 1,05x et
+    0,89x d'agrandissement, flous a partir de 2,13x. `seuil` doit se situer entre
+    les deux -- voir le commentaire de `cover_fond_upscale_max` dans
+    `app/config.py` pour la valeur retenue et sa justification.
+
+    Taille inconnue -> True : meme regle du doute que le juge d'affiches, une
+    image ecartee par erreur appauvrit le post, et l'alternative ici est soit
+    une reserve, soit le fond Kinda, jamais une meilleure information."""
+    if taille is None:
+        return True
+    largeur, hauteur = taille
+    if largeur <= 0 or hauteur <= 0:
+        # Decodage aberrant : ne pas rejeter sur une valeur qui ne peut pas etre
+        # vraie plutot que de la traiter comme un verdict fiable.
+        return True
+    cible_largeur, cible_hauteur = cible
+    seuil = settings.cover_fond_upscale_max if seuil is None else seuil
+    agrandissement = max(cible_largeur / largeur, cible_hauteur / hauteur)
+    return agrandissement <= seuil
 
 
 def _choisir(candidats, juge, maintenant, chemin_cache) -> str | None:
@@ -433,9 +520,12 @@ def eviter_l_affiche(
     *lots: Lot | None,
     origine: str = ORIGINE_ARTICLE,
     verdicts=None,
+    cible: tuple[int, int] | None = None,
+    tailles=None,
     **options,
 ) -> Fond:
-    """JAMAIS une affiche en fond de cover. Chercher ailleurs, sinon l'aplat Kinda.
+    """JAMAIS une affiche en fond de cover, ni un fond trop petit pour le gabarit.
+    Chercher ailleurs, sinon l'aplat Kinda.
 
     Demande de l'utilisateur, 2026-09-18, sur le post des Transmusicales : « pour
     le post des Trans c'est toujours une affiche en background sur la premiere
@@ -452,36 +542,83 @@ def eviter_l_affiche(
     lui preferer parmi les medias de l'actu. On n'arrive ici que lorsqu'il n'y en
     a pas : le compte du festival a publie un carrousel d'affiches de line-up.
 
+    **Le plancher de resolution (2026-09-21)** recoit exactement le meme
+    traitement qu'une affiche : mesure sur les 6 derniers posts publies
+    (CLAUDE.md), un post dont le fond n'avait qu'une og:image de 564x345 est
+    parti agrandi 3,91x, flou a l'oeil nu. `cible` (la taille du gabarit --
+    1080x1350 en post, 1080x1920 en reel) est fourni par l'appelant, qui seul
+    connait le format publie ; a `None` (defaut, compositions anterieures a
+    cette regle), aucune verification de resolution n'a lieu.
+
     Les `lots` sont ouverts DANS L'ORDRE, et seulement tant qu'aucun n'a donne :
     le compte de l'actu d'abord (c'est son actu), les artistes suivis cites
-    ensuite. On s'arrete au premier lot qui contient une vraie photo.
+    ensuite. On s'arrete au premier lot qui offre une photo NI affiche NI trop
+    petite.
 
-    Quatre issues : le fond d'origine (ce n'est pas une affiche, ou on n'a pas pu
-    le juger -- ne pas savoir n'est pas savoir) ; la meilleure photo du premier
-    lot qui en offre une ; le fond Kinda ; et jamais d'exception -- une panne du
-    juge laisse le fond d'origine, une panne d'un lot laisse le fond Kinda,
-    puisque l'affiche, elle, est averee.
+    Quatre issues : le fond d'origine (ni affiche ni trop petit, ou l'un des
+    deux n'a pas pu etre etabli -- ne pas savoir n'est pas savoir) ; la
+    meilleure photo assez grande du premier lot qui en offre une ; le fond
+    Kinda ; et jamais d'exception -- une panne du juge laisse le fond
+    d'origine, une panne d'un lot laisse le fond Kinda, puisque le defaut du
+    fond, lui, est avere.
     """
     if not fond:
         return Fond(fond, origine)
     rendre = verdicts or (lambda urls: verdicts_de(urls, **options))
+    mesurer = tailles or (lambda urls: tailles_de(urls, **options))
     try:
         verdict = rendre([fond]).get(fond)
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning("fond non juge (%s) : fond d'origine conserve", type(exc).__name__)
         return Fond(fond, origine)
-    if verdict is None or not verdict.affiche:
-        # Une photo, ou un verdict qu'on n'a pas pu rendre. Ne pas savoir n'est
-        # pas savoir que c'est une affiche : on ne depense rien et le fond reste.
-        # C'est aussi le comportement quand la vision est coupee.
+    est_affiche = verdict is not None and verdict.affiche
+    trop_petit = cible is not None and not _assez_grand(fond, cible, mesurer)
+    if not est_affiche and not trop_petit:
+        # Une photo assez grande, ou un defaut qu'on n'a pas pu etablir. Ne pas
+        # savoir n'est pas savoir que le fond est mauvais : on ne depense rien
+        # et le fond reste. C'est aussi le comportement quand la vision est
+        # coupee ou que `cible` n'est pas fourni.
         return Fond(fond, origine)
     for lot in lots:
-        photos = _photos_du_lot(lot, rendre)
-        if photos:
-            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, photos[0])
-            return Fond(photos[0], lot.origine, photos)
-    logger.info("aucune photo trouvee, tout est une affiche : cover sur le fond Kinda")
+        candidat = _meilleur_du_lot(lot, rendre, cible, mesurer)
+        if candidat is not None:
+            image, photos = candidat
+            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, image)
+            return Fond(image, lot.origine, photos)
+    raison = "une affiche" if est_affiche else "trop petit pour le gabarit"
+    logger.info("aucune photo trouvee, le fond retenu est %s : cover sur le fond Kinda", raison)
     return Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def _assez_grand(url: str, cible: tuple[int, int], mesurer) -> bool:
+    """`resolution_suffisante`, mais qui ne leve jamais : une panne de mesure
+    (fonction injectee cassee) vaut « on ne sait pas », jamais un rejet."""
+    try:
+        taille = mesurer([url]).get(url)
+    except Exception:  # noqa: BLE001 -- ne pas savoir vaut mieux que rejeter a tort
+        return True
+    return resolution_suffisante(taille, cible)
+
+
+def _meilleur_du_lot(lot, rendre, cible, mesurer) -> tuple[str, tuple[str, ...]] | None:
+    """La photo du lot a la fois NI affiche NI trop petite, ou None. Les autres
+    photos du lot (`Fond.photos`, pour les slides) restent dans leur ordre de
+    classement, la retenue simplement placee en tete -- l'invariant de `Fond`
+    (« `url` y figure en premier »)."""
+    photos = _photos_du_lot(lot, rendre)
+    if not photos:
+        return None
+    if cible is None:
+        return photos[0], photos
+    try:
+        connues = mesurer(list(photos))
+    except Exception:  # noqa: BLE001 -- ne pas savoir vaut mieux que rejeter a tort
+        connues = {}
+    for candidat in photos:
+        if resolution_suffisante(connues.get(candidat), cible):
+            reste = tuple(p for p in photos if p != candidat)
+            return candidat, (candidat, *reste)
+    return None
 
 
 def classer_photos(candidats: list[str], rendre, *, garder_inconnues: bool = False) -> tuple[str, ...]:

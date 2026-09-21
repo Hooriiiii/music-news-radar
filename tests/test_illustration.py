@@ -15,12 +15,19 @@ from PIL import Image
 from app.config import settings
 from app.content import illustration
 from app.content.illustration import (
+    Fond,
+    Lot,
     Verdict,
     choisir_illustration,
+    eviter_l_affiche,
     lire_cache,
     make_claude_juge,
     reduire,
+    resolution_suffisante,
+    tailles_de,
+    verdicts_de,
 )
+from app.content.visuels import FOND_KINDA, ORIGINE_ARTICLE, ORIGINE_COMPTE, ORIGINE_KINDA
 
 MAINTENANT = dt.datetime(2026, 9, 18, 12, 0, tzinfo=dt.timezone.utc)
 
@@ -274,3 +281,257 @@ def test_le_juge_envoie_une_image_par_candidat():
     assert [bloc["type"] for bloc in contenu] == ["text", "image", "text", "image"]
     assert envoyes["model"] == settings.visuels_model
     assert [v.sujet for v in verdicts] == ["scene", "autre"]
+
+
+# --- Plancher de resolution du fond (2026-09-21) ----------------------------
+# Mesure sur les 6 derniers posts publies (CLAUDE.md) : nets a 1,05x et 0,89x
+# d'agrandissement, flous a partir de 2,13x. `cover_fond_upscale_max` (1,5x par
+# defaut) separe les deux.
+
+CIBLE_POST = (1080, 1350)
+CIBLE_REEL = (1080, 1920)
+
+
+def test_resolution_suffisante_sur_les_cas_reellement_mesures():
+    """564x345 agrandi 3,91x (post 71, flou averred) ; 1920x1280 agrandi 1,05x
+    (post 65, net)."""
+    assert resolution_suffisante((564, 345), CIBLE_POST) is False
+    assert resolution_suffisante((1920, 1280), CIBLE_POST) is True
+
+
+def test_resolution_suffisante_est_indifferente_a_une_taille_inconnue():
+    """Ne pas savoir vaut mieux que rejeter a tort : l'alternative est parfois
+    le fond Kinda, jamais une meilleure information."""
+    assert resolution_suffisante(None, CIBLE_POST) is True
+
+
+def test_resolution_suffisante_ignore_une_taille_aberrante():
+    assert resolution_suffisante((0, 0), CIBLE_POST) is True
+
+
+def test_verdicts_de_memorise_la_taille_reelle_sans_requete_de_plus(tmp_path):
+    """La taille est mesuree AU MEME MOMENT que le juge decode l'image pour la
+    reduire (`reduire`) -- aucun telechargement de plus."""
+    chemin = tmp_path / "c.json"
+
+    def juge(images):
+        return [Verdict(affiche=False, sujet="scene", note=80)]
+
+    verdicts_de([SCENE], juge=juge, maintenant=MAINTENANT, chemin_cache=chemin)
+
+    assert tailles_de([SCENE], maintenant=MAINTENANT, chemin_cache=chemin) == {SCENE: (40, 50)}
+
+
+def test_une_taille_deja_en_cache_ne_repaie_rien(tmp_path):
+    chemin = tmp_path / "c.json"
+
+    def juge(images):
+        return [Verdict(affiche=False, sujet="scene", note=80)]
+
+    verdicts_de([SCENE], juge=juge, maintenant=MAINTENANT, chemin_cache=chemin)
+
+    def juge_interdit(images):  # pragma: no cover
+        raise AssertionError("le juge a ete rappele alors que le cache repondait")
+
+    verdicts_de([SCENE], juge=juge_interdit, maintenant=MAINTENANT, chemin_cache=chemin)
+    assert tailles_de([SCENE], maintenant=MAINTENANT, chemin_cache=chemin) == {SCENE: (40, 50)}
+
+
+def _verdicts_fixes(table: dict, cible_appels: list | None = None):
+    def rendre(urls):
+        if cible_appels is not None:
+            cible_appels.append(list(urls))
+        return {url: table[url] for url in urls if url in table}
+
+    return rendre
+
+
+def _tailles_fixes(table: dict):
+    def mesurer(urls):
+        return {url: table[url] for url in urls if url in table}
+
+    return mesurer
+
+
+def test_un_fond_trop_petit_part_sur_le_fond_kinda_sans_reserve():
+    """Le cas mesure du post 71 : une seule og:image, trop petite pour remplir
+    le gabarit -- et aucune reserve pour la remplacer."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({"https://cdn.test/petite.jpg": Verdict(
+            affiche=False, sujet="scene", note=70
+        )}),
+        tailles=_tailles_fixes({"https://cdn.test/petite.jpg": (564, 345)}),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_un_fond_trop_petit_descend_d_un_barreau_vers_la_reserve():
+    """Exactement le meme traitement qu'une affiche averee : on cherche une
+    photo plus grande dans la reserve avant de se rabattre sur le fond Kinda."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        Lot(ORIGINE_COMPTE, lambda: ["file:///cache/grande.jpg"]),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+            "file:///cache/grande.jpg": Verdict(affiche=False, sujet="scene", note=80),
+        }),
+        tailles=_tailles_fixes({
+            "https://cdn.test/petite.jpg": (564, 345),
+            "file:///cache/grande.jpg": (1920, 1280),
+        }),
+    )
+
+    assert fond == Fond("file:///cache/grande.jpg", ORIGINE_COMPTE, ("file:///cache/grande.jpg",))
+
+
+def test_une_reserve_dont_toutes_les_photos_sont_trop_petites_ne_donne_rien():
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        Lot(ORIGINE_COMPTE, lambda: ["file:///cache/aussi-petite.jpg"]),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+            "file:///cache/aussi-petite.jpg": Verdict(affiche=False, sujet="scene", note=80),
+        }),
+        tailles=_tailles_fixes({
+            "https://cdn.test/petite.jpg": (564, 345),
+            "file:///cache/aussi-petite.jpg": (600, 400),
+        }),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_la_reserve_choisit_la_premiere_photo_assez_grande_et_la_place_en_tete():
+    """La reserve classe d'abord par affiche/sujet/note ; le plancher de
+    resolution ne fait que sauter les candidats trop petits, sans changer le
+    classement des autres. La photo retenue reste EN TETE de `Fond.photos`."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        Lot(ORIGINE_COMPTE, lambda: [
+            "file:///cache/petite2.jpg", "file:///cache/grande.jpg", "file:///cache/autre.jpg",
+        ]),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+            "file:///cache/petite2.jpg": Verdict(affiche=False, sujet="scene", note=95),
+            "file:///cache/grande.jpg": Verdict(affiche=False, sujet="scene", note=80),
+            "file:///cache/autre.jpg": Verdict(affiche=False, sujet="scene", note=60),
+        }),
+        tailles=_tailles_fixes({
+            "https://cdn.test/petite.jpg": (564, 345),
+            "file:///cache/petite2.jpg": (600, 400),
+            "file:///cache/grande.jpg": (1920, 1280),
+            "file:///cache/autre.jpg": (1920, 1280),
+        }),
+    )
+
+    assert fond.url == "file:///cache/grande.jpg"
+    assert fond.photos[0] == "file:///cache/grande.jpg"
+    assert set(fond.photos) == {
+        "file:///cache/petite2.jpg", "file:///cache/grande.jpg", "file:///cache/autre.jpg",
+    }
+
+
+def test_une_taille_de_fond_inconnue_est_gardee():
+    """Meme regle du doute que le juge d'affiches : ne pas savoir mesurer n'est
+    pas savoir que le fond est trop petit."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/inconnue.jpg",
+        Lot(ORIGINE_COMPTE, lambda: ["file:///cache/grande.jpg"]),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/inconnue.jpg": Verdict(affiche=False, sujet="scene", note=70),
+        }),
+        tailles=_tailles_fixes({}),
+    )
+
+    assert fond == Fond("https://cdn.test/inconnue.jpg", ORIGINE_ARTICLE)
+
+
+def test_une_bonne_resolution_n_ouvre_aucune_reserve():
+    ouverts = []
+
+    def photos():
+        ouverts.append(ORIGINE_COMPTE)
+        return ["file:///cache/grande.jpg"]
+
+    fond = eviter_l_affiche(
+        "https://cdn.test/grande.jpg",
+        Lot(ORIGINE_COMPTE, photos),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/grande.jpg": Verdict(affiche=False, sujet="scene", note=70),
+        }),
+        tailles=_tailles_fixes({"https://cdn.test/grande.jpg": (1920, 1280)}),
+    )
+
+    assert fond == Fond("https://cdn.test/grande.jpg", ORIGINE_ARTICLE)
+    assert ouverts == []
+
+
+def test_sans_cible_le_plancher_de_resolution_est_desactive():
+    """Comportement d'avant cette regle : les appelants qui ne fournissent pas
+    `cible` (compositions anterieures) ne subissent aucune verification de
+    resolution."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+        }),
+        tailles=_tailles_fixes({"https://cdn.test/petite.jpg": (10, 10)}),
+    )
+
+    assert fond == Fond("https://cdn.test/petite.jpg", ORIGINE_ARTICLE)
+
+
+def test_une_affiche_averee_reste_rejetee_meme_assez_grande():
+    """Les deux defauts sont independants : une grande affiche reste une
+    affiche."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/grande-affiche.jpg",
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/grande-affiche.jpg": Verdict(affiche=True, sujet="autre", note=10),
+        }),
+        tailles=_tailles_fixes({"https://cdn.test/grande-affiche.jpg": (1920, 1280)}),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_le_reel_est_plus_exigeant_que_le_post_sur_la_meme_photo():
+    """1215x2160 (post 64) est net pour un post (0,89x) mais reste net pour un
+    reel aussi (0,89x) -- en revanche 1080x1200 suffit pour un post (1,125x)
+    et manque pour un reel (1,6x)."""
+    verdicts = _verdicts_fixes({
+        "https://cdn.test/x.jpg": Verdict(affiche=False, sujet="scene", note=70),
+    })
+    tailles = _tailles_fixes({"https://cdn.test/x.jpg": (1080, 1200)})
+
+    assert eviter_l_affiche(
+        "https://cdn.test/x.jpg", cible=CIBLE_POST, verdicts=verdicts, tailles=tailles,
+    ) == Fond("https://cdn.test/x.jpg", ORIGINE_ARTICLE)
+    assert eviter_l_affiche(
+        "https://cdn.test/x.jpg", cible=CIBLE_REEL, verdicts=verdicts, tailles=tailles,
+    ) == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_une_panne_de_mesure_ne_leve_pas_et_garde_le_fond():
+    def mesurer_casse(urls):
+        raise RuntimeError("disque plein")
+
+    fond = eviter_l_affiche(
+        "https://cdn.test/x.jpg",
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/x.jpg": Verdict(affiche=False, sujet="scene", note=70),
+        }),
+        tailles=mesurer_casse,
+    )
+
+    assert fond == Fond("https://cdn.test/x.jpg", ORIGINE_ARTICLE)

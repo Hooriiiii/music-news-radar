@@ -162,6 +162,18 @@ class Settings(BaseSettings):
     # Borne le coût réseau d'un run -- surtout au premier passage, où l'arriéré
     # se compte en centaines d'articles.
     illustration_max_par_run: int = 40
+    # Variante PLEINE RESOLUTION de l'og:image (2026-09-21). Certains CDN
+    # d'editeurs (WordPress) recopient dans og:image le parametre de
+    # redimensionnement de la page -- mesure sur le post 71 (CLAUDE.md) :
+    # `?w=564` rendait 564x345 (50 Ko) la ou la meme image sans ce parametre
+    # pese 386 Ko en 2156x1320. Le resultat (variante retenue) est memorise par
+    # URL, meme mecanique que `illustration_cache_path`, pour ne pas repayer la
+    # requete de verification a chaque passage tant que l'og:image de
+    # l'article ne change pas.
+    illustration_variante_cache_path: Path = (
+        Path.home() / "Library/Application Support/Kinda/illustrations_variantes.json"
+    )
+    illustration_variante_cache_jours: int = 7
 
     # --- Regroupement des doublons et cascade (2026-09-17) ---
     # Une actu couverte par au moins N sources DISTINCTES passe toujours chez
@@ -222,6 +234,17 @@ class Settings(BaseSettings):
     # concert d'il y a trois semaines fait parfaitement l'affaire.
     fond_secours_max_photos: int = 6
     fond_secours_fenetre_jours: int = 30
+    # Plancher de resolution du FOND de cover (2026-09-21). Distinct de
+    # `publication_crop_upscale_max` : ce dernier borne le cadrage des SLIDES du
+    # carrousel (toujours 1080x1350), alors que le fond peut remplir le gabarit
+    # REEL, plus grand (1080x1920) -- pas la meme cible, donc pas le meme reglage.
+    # Mesure sur les 6 derniers posts REELLEMENT publies (CLAUDE.md, releve du
+    # 2026-09-21) : nets a 1,05x et 0,89x d'agrandissement (aucun agrandissement
+    # notable), flous des 2,13x (2,13x / 2,39x / 3,52x / 3,91x, dont un visage
+    # baveux a l'oeil nu sur le post 71). Le seuil est pose a 1,5x, au milieu de
+    # cet ecart mesure, avec de la marge des deux cotes plutot qu'au plus pres
+    # d'une des deux bornes.
+    cover_fond_upscale_max: float = 1.5
     # DERNIER recours, apres le compte source et les artistes cites : une image
     # du WEB (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en
     # dernier recours »). Une seule recherche par composition, memorisee par

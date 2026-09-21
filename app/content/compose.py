@@ -35,6 +35,7 @@ from app.content.illustration import (
     plafonner_affiches,
     prejuger,
 )
+from app.content.layout import gabarit as gabarit_de
 from app.content.teinte import teinte_de_article
 from app.content.media import PHOTO
 from app.content.visuels import (
@@ -505,6 +506,18 @@ def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     return image_de_fond(visuels_autorises(article), selecteur)
 
 
+def _cible_gabarit(template: str) -> tuple[int, int] | None:
+    """La taille (largeur, hauteur) du gabarit publie, ou None si le nom est
+    inconnu -- jamais d'exception pour un plancher de resolution qui est un
+    confort, pas une garantie."""
+    try:
+        gabarit_ = gabarit_de(template)
+    except KeyError:
+        logger.warning("gabarit inconnu (%s) : plancher de resolution du fond desactive", template)
+        return None
+    return gabarit_.width, gabarit_.height
+
+
 def actifs_de_secours(choisi, actifs: list[dict]) -> list[dict]:
     """Les photos de la reserve retenue, en ACTIFS -- donc en slides du carrousel.
 
@@ -599,6 +612,10 @@ def create_post(
             *(getattr(visuels, "secours", None) or []),
             origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
             verdicts=verdicts_fond,
+            # Le plancher de resolution (2026-09-21) : la cible depend du
+            # gabarit publie, jamais fixe -- un reel (1080x1920) est plus
+            # exigeant qu'un post (1080x1350) sur la meme photo.
+            cible=_cible_gabarit(template),
         )
         fond, origine_fond = choisi.url, choisi.origine
         # Le fond retenu vient d'une reserve : ses photos deviennent aussi des

@@ -557,6 +557,35 @@ derrière une photo reconnue : ne pas savoir vaut mieux que savoir que c'est une
 affiche. Le juge n'est payé qu'à UN endroit, `create_post`, donc la cover reel
 suit la même règle sans code en double.
 
+**Le fond doit aussi être ASSEZ GRAND, pas seulement pas une affiche**
+(2026-09-21). Relevé en ouvrant le compte : 4 des 6 derniers posts publiés
+avaient un fond flou (post 71, visage baveux à l'œil nu) — l'`og:image`
+retenue mesurait 564×345, agrandie 3,91× pour remplir 1080×1350. Rien ne
+mesurait jamais la résolution avant de rendre. `illustration.eviter_l_affiche`
+reçoit désormais `cible` (la taille du gabarit publié, fournie par
+`create_post` depuis `template` — 1080×1350 en post, 1080×1920 en reel, un
+reel étant plus exigeant sur la même photo) et traite un fond trop petit
+EXACTEMENT comme une affiche avérée : il descend d'un barreau vers les mêmes
+réserves, et à défaut part sur `FOND_KINDA`. Seuil : `cover_fond_upscale_max`
+(1,5×, `app/config.py`), posé entre les agrandissements mesurés nets (1,05× et
+0,89×) et flous (dès 2,13×). Une taille non mesurable est GARDÉE — même règle
+du doute que le juge d'affiches. La mesure ne coûte rien de plus : les
+dimensions réelles sont lues au moment où le juge visuel décode déjà l'image
+pour la réduire à 512 px, et mémorisées dans le même `illustration_cache_path`
+(`Cache.tailles`, à côté des verdicts).
+
+Et l'`og:image` elle-même peut être en cause : certains CDN d'éditeurs
+(WordPress) recopient le paramètre de redimensionnement de la page dans
+`og:image` — mesuré sur le post 71, `?w=564` rendait 564×345 (50 Ko) là où la
+même image sans ce paramètre pèse 386 Ko en 2156×1320. `app/pipeline/
+illustrations.py::image_de_partage` retente donc, quand l'URL porte un
+paramètre connu (`w`, `width`, `h`, `height`, `resize`, `fit`, `s`), la
+variante sans ce paramètre — et ne la retient que si elle est RÉELLEMENT plus
+grande une fois téléchargée et décodée (jamais déduit de l'URL, un éditeur
+peut ignorer le paramètre). Mémorisé par URL dans
+`illustration_variante_cache_path` : un article dont l'`og:image` ne change
+pas ne repaie pas cette vérification à chaque passage.
+
 **Et si tout est une affiche, on cherche ailleurs — et à défaut, mieux vaut le
 fond Kinda qu'une affiche** (2026-09-18, `illustration.eviter_l_affiche` +
 `choix_visuels.{photos_du_compte,photos_des_artistes_cites}`). Post 40 puis 41

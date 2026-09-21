@@ -572,6 +572,89 @@ def test_la_cover_reel_suit_la_meme_regle(db_session):
     assert post.slides[0]["image_url"] == "https://cdn/live.jpg"
 
 
+def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):
+    """Post 71 (CLAUDE.md) : une seule og:image, 564x345, agrandie 3,91x pour
+    remplir 1080x1350 -- trop petite, elle doit descendre d'un barreau vers le
+    fond Kinda plutot que d'etre publiee floue."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn/petite.jpg": (564, 345)}
+    )
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+    )
+
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+        },
+    )
+
+    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert post.variants["fond"] == {"origine": ORIGINE_KINDA}
+
+
+def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, monkeypatch):
+    """Le reel (1080x1920) est plus exigeant que le post (1080x1350) sur la MEME
+    photo : la cible depend du gabarit publie, jamais fixe."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    monkeypatch.setattr(
+        illustration,
+        "tailles_de",
+        lambda urls, **k: {"https://cdn/moyenne.jpg": (1080, 1200)},
+    )
+    article = _article(db_session)
+
+    def _choix():
+        return ChoixVisuels(
+            [actif(entree("photo", "https://cdn/moyenne.jpg"), origine="article")], "@source",
+        )
+
+    verdicts = lambda urls: {  # noqa: E731
+        "https://cdn/moyenne.jpg": Verdict(affiche=False, sujet="scene", note=70)
+    }
+
+    post_carrousel = create_post(
+        db_session, article, _draft(), visuels=_choix(),
+        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+    )
+    assert post_carrousel.slides[0]["image_url"] == "https://cdn/moyenne.jpg"
+
+    post_reel = create_post(
+        db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
+        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+    )
+    assert post_reel.slides[0]["image_url"] == FOND_KINDA
+
+
+def test_un_gabarit_inconnu_desactive_le_plancher_sans_lever(db_session, caplog):
+    """Un plancher de resolution est un confort, jamais une garantie : un nom de
+    gabarit qu'on ne connait pas ne doit pas faire echouer la composition."""
+    from app.content.illustration import Verdict
+
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+    )
+
+    post = create_post(
+        db_session, article, _draft(), template="gabarit-fantome", visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+        },
+    )
+
+    assert post.slides[0]["image_url"] == "https://cdn/petite.jpg"
+
+
 def test_un_juge_muet_garde_le_premier_candidat(db_session):
     """Degradation : None veut dire « je n'ai rien a dire », pas « pas de fond »."""
     article = _article(db_session)
