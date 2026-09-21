@@ -1,6 +1,9 @@
 """L'illustration des articles : l'image que l'editeur designe pour le partage."""
 
+import io
+
 import httpx
+from PIL import Image
 
 from app.config import settings
 from app.models import Article, Source, SourceType
@@ -18,6 +21,19 @@ PAGE = '''<html><head>
 def _reponse(texte="", code=200, content_type="text/html"):
     return httpx.Response(
         code, text=texte, headers={"content-type": content_type},
+        request=httpx.Request("GET", "https://x"),
+    )
+
+
+def _jpeg(largeur: int, hauteur: int) -> bytes:
+    tampon = io.BytesIO()
+    Image.new("RGB", (largeur, hauteur), (10, 20, 30)).save(tampon, format="JPEG")
+    return tampon.getvalue()
+
+
+def _reponse_image(octets: bytes, code: int = 200) -> httpx.Response:
+    return httpx.Response(
+        code, content=octets, headers={"content-type": "image/jpeg"},
         request=httpx.Request("GET", "https://x"),
     )
 
@@ -166,3 +182,97 @@ def test_une_url_google_news_est_ignoree_sans_requete(db_session):
     assert vus == [], "aucune requete ne doit partir"
     assert stats.ignores == 1
     assert stats.echecs == 0, "ce n'est pas un echec mais une impossibilite connue"
+
+
+# --- Variante pleine resolution (2026-09-21) --------------------------------
+# Mesure sur le post 71 (CLAUDE.md) : `?w=564` rendait 564x345 (50 Ko) une
+# image dont la vraie taille, sans ce parametre, est 2156x1320 (386 Ko).
+
+PAGE_REDIMENSIONNEE = '''<html><head>
+<meta property="og:image"
+  content="https://lede-admin.stereogum.com/wp-content/uploads/photo.png?w=564">
+</head><body>x</body></html>'''
+
+URL_PETITE = "https://lede-admin.stereogum.com/wp-content/uploads/photo.png?w=564"
+URL_PLEINE = "https://lede-admin.stereogum.com/wp-content/uploads/photo.png"
+
+
+def test_une_og_image_redimensionnee_demande_la_variante_pleine_resolution(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    demandes = []
+
+    def get(url, **kwargs):
+        demandes.append(url)
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        return _reponse_image(_jpeg(2156, 1320))
+
+    entree = image_de_partage("https://t.fr/a", get=get)
+
+    assert entree["url"] == URL_PLEINE
+    assert demandes == ["https://t.fr/a", URL_PLEINE]
+
+
+def test_la_variante_est_gardee_seulement_si_reellement_plus_grande(tmp_path, monkeypatch):
+    """Un editeur peut ignorer le parametre et servir la MEME image quel que
+    soit `w` : la comparaison doit etre reelle, pas deduite de l'URL."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+
+    def get(url, **kwargs):
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        return _reponse_image(_jpeg(564, 345))  # meme taille que celle declaree
+
+    entree = image_de_partage("https://t.fr/a", get=get)
+
+    assert entree["url"] == URL_PETITE
+
+
+def test_une_variante_injoignable_garde_l_url_d_origine(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+
+    def get(url, **kwargs):
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        return _reponse(code=404)
+
+    entree = image_de_partage("https://t.fr/a", get=get)
+
+    assert entree["url"] == URL_PETITE
+
+
+def test_une_og_image_sans_parametre_ne_declenche_aucune_requete_de_plus(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    demandes = []
+
+    def get(url, **kwargs):
+        demandes.append(url)
+        return _reponse(PAGE)
+
+    entree = image_de_partage("https://t.fr/a", get=get)
+
+    assert entree["url"] == "https://cdn.tsugi.fr/photo.jpg"
+    assert demandes == ["https://t.fr/a"], "une seule requete : la page elle-meme"
+
+
+def test_la_variante_retenue_est_memorisee(tmp_path, monkeypatch):
+    """Un second passage sur le meme og:image ne repaie pas la requete de
+    verification tant que le cache n'a pas expire."""
+    monkeypatch.setattr(settings, "illustration_variante_cache_path", tmp_path / "v.json")
+    demandes = []
+
+    def get(url, **kwargs):
+        demandes.append(url)
+        if url == "https://t.fr/a":
+            return _reponse(PAGE_REDIMENSIONNEE)
+        return _reponse_image(_jpeg(2156, 1320))
+
+    image_de_partage("https://t.fr/a", get=get)
+    assert demandes == ["https://t.fr/a", URL_PLEINE]
+
+    entree = image_de_partage("https://t.fr/a", get=get)
+
+    assert entree["url"] == URL_PLEINE
+    assert demandes == ["https://t.fr/a", URL_PLEINE, "https://t.fr/a"], (
+        "la page est relue (og:image peut avoir change), mais pas la variante"
+    )
