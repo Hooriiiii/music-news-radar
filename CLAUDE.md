@@ -320,6 +320,10 @@ jamais touchés.
   réellement dépensé est affiché par phase à la fin.
 - Lier une fiche artiste à son compte suivi quand le nom ne suffit pas :
   `PATCH /artists/{id}` avec `{"source_instagram_id": <id de la source>}`
+- Réparer un faux positif (ou confirmer un lien) de doublon d'archive :
+  `uv run python -m scripts.marquer_doublon_manuel --article-a ID --article-b ID
+  (--different|--meme-actu) --raison "..."` — voir « Dédup à deux étages » pour
+  pourquoi effacer `duplicate_of_id`/`file_exclu_raison` seul ne suffit pas.
 
 ## Veille rapide (`app/pipeline/veille.py`, `scripts/run_veille.py`)
 
@@ -1435,7 +1439,10 @@ cover part sur l'image de secours du gabarit.
    `/articles` masque les doublons par défaut (`include_duplicates=true` pour les
    voir).
 
-   **Une actu déjà publiée ne ressort jamais** (2026-09-21). La fenêtre de 48 h
+   **Une actu déjà publiée ne ressort presque jamais** (2026-09-21 ; titre
+   ajusté le même jour après l'arbitrage Claude ci-dessous — la bande
+   « différente » et une panne d'arbitrage laissent volontairement passer une
+   reprise plutôt que de risquer d'enterrer une actu neuve). La fenêtre de 48 h
    ne comparait que des articles frais entre eux : une reprise plus tardive de
    la même actu par une autre source n'était rapprochée de rien, alors que les
    articles `USED` ne sont jamais purgés (« Rétention » ci-dessous) précisément
@@ -1474,8 +1481,53 @@ cover part sur l'image de secours du gabarit.
    de `run_pipeline` et de `run_veille`), journalisé en WARNING avec les deux
    titres et la similarité, et tracé sur l'article lié dans `file_exclu_raison`
    (« doublon d'une actu deja publiee (article N, similarite 0.80) »).
-   **Réparer un faux positif, c'est effacer les DEUX champs**
-   (`duplicate_of_id` et `file_exclu_raison`), sinon l'article reste hors file.
+
+   **Claude tranche la bande douteuse, entre les deux seuils** (Task 7,
+   2026-09-21). `archive_similarity_from_tokens` et `title_similarity_from_tokens`
+   se contredisent sur toute une bande de scores : une re-revue a mesuré 15
+   reprises plausibles d'une même actu, 11 passaient entre les mailles du seuil
+   de 0.8, et aucun seuil ne peut à la fois les attraper et épargner les actus
+   neuves (voir la démonstration mathématique dans
+   `archive_similarity_from_tokens`). `link_duplicates` classe donc chaque
+   rapprochement contre l'archive en TROIS bandes :
+   - **certaine** — `archive_similarity_from_tokens` ≥ `cluster_archive_seuil`
+     (0.8) → lié sans rien demander, comme avant ;
+   - **douteuse** — sous ce seuil, mais `title_similarity_from_tokens` (le
+     recouvrement) ≥ 0.65 → **Claude tranche** (`app/pipeline/
+     cluster_arbitrage.py`), avec les DEUX titres et leurs résumés
+     (`Article.summary`, réécrit en français par le scoring) ; motif
+     `messages.parse()` identique à `scoring.make_claude_scorer`, modèle
+     `settings.scoring_model` (Haiku, ~800 jetons d'entrée / ~35 de sortie
+     mesurés, ~0,001 $/appel) ;
+   - **différente** — sous les deux seuils → aucun lien, aucun appel.
+
+   Chaque paire (les deux ids d'article, ordre indifférent) n'est arbitrée
+   qu'UNE FOIS : le verdict est mémorisé dans `cluster_arbitrage_cache_path`
+   (JSON à côté du jeton, écriture atomique — même mécanique que
+   `illustration_cache_path`), et relu avant tout appel. Une PANNE (clé
+   absente, crédits épuisés, réseau mort, réponse hors schéma) n'est JAMAIS
+   mémorisée comme un verdict et ne pose aucun lien : le doute favorise
+   toujours la publication, la paire sera réarbitrée au passage suivant.
+   Coût borné par passage (`cluster_arbitrage_max_par_passage`, 20). **Seul le
+   passage horaire (`run_pipeline`, via `dedupliquer_avec_arbitrage`) arbitre**
+   — `run_veille` (toutes les 5 min) appelle `link_duplicates` sans argument
+   `arbitre`, distinction par PARAMÈTRE et non en devinant l'appelant. Mesuré
+   en production le 2026-09-21 (352 articles frais, 14 dans l'archive) :
+   1 seule paire douteuse, 0 certaine — le volume réel est loin du plafond.
+   Coupe-circuit : `cluster_arbitrage_enabled` (`.env`).
+
+   **Réparer un faux positif exige un verdict MANUEL, pas seulement d'effacer
+   les deux champs.** La procédure posée le 2026-09-21 (« effacer
+   `duplicate_of_id` et `file_exclu_raison` ») s'est révélée FAUSSE dans la
+   même revue qui a amené l'arbitrage : le passage suivant de `link_duplicates`
+   relie l'article à nouveau tant qu'il reste dans la fenêtre de 48 h de sa vie
+   publiable, c'est-à-dire pendant toute sa vie publiable. La réparation qui
+   tient : `uv run python -m scripts.marquer_doublon_manuel --article-a ID
+   --article-b ID --different --raison "..."` défait le lien existant ET pose
+   un verdict manuel qui prime sur tout rapprochement automatique ultérieur —
+   y compris sur la bande CERTAINE, vérifié avant toute mesure de score. Le
+   même script avec `--meme-actu` confirme au contraire un lien qu'on veut
+   garder quoi qu'il arrive (`app/pipeline/cluster_arbitrage.marquer_manuel`).
 
 ## Rétention
 

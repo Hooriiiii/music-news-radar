@@ -3,6 +3,7 @@ import datetime as dt
 from app.config import settings
 from app.models import Article, ArticleStatus, Source, SourceType
 from app.pipeline.cluster import link_duplicates, title_similarity
+from app.pipeline.cluster_arbitrage import lire_cache, marquer_manuel
 
 UTC = dt.timezone.utc
 
@@ -336,3 +337,207 @@ def test_un_lien_frais_ne_pose_aucune_trace_d_exclusion(db_session):
 
     db_session.refresh(second)
     assert second.file_exclu_raison is None
+
+
+# -- Task 7 : Claude tranche les reprises douteuses ------------------------
+# Paire "ratee" reelle (archive 0.40, recouvrement 0.80) : sous le seuil
+# certain (0.8) mais dans la bande douteuse (>= 0.65). C'est exactement le cas
+# que la Task 7 corrige -- une vraie reprise qu'aucun seuil ne pouvait a la
+# fois attraper et epargner des faux positifs.
+TITRE_PUBLIE_DOUTEUX = "Boris Brejcha annonce son premier album"
+TITRE_REPRISE_DOUTEUSE = (
+    "Boris Brejcha devoile son premier album Apex attendu en decembre chez KNTXT"
+)
+
+
+def _paire_douteuse(db_session, *, hours_ago_publie=5 * 24, hours_ago_reprise=1):
+    old_src = _src(db_session, "media-publie")
+    new_src = _src(db_session, "media-reprise")
+    publie = _art(db_session, old_src, n=201, title=TITRE_PUBLIE_DOUTEUX,
+                  hours_ago=hours_ago_publie, status=ArticleStatus.USED)
+    reprise = _art(db_session, new_src, n=202, title=TITRE_REPRISE_DOUTEUSE,
+                   hours_ago=hours_ago_reprise)
+    return publie, reprise
+
+
+def _arbitre_fixe(verdicts: dict):
+    """Un faux arbitre : verdicts indexes par paire d'ids (ordre indifferent),
+    valeur `(meme_actu, raison)` ou `None` (panne). Garde la liste des paires
+    reellement appelees, pour verifier qu'une paire n'est jamais redemandee."""
+    appels = []
+
+    def arbitre(publie, nouveau):
+        appels.append(tuple(sorted((publie.id, nouveau.id))))
+        return verdicts.get(tuple(sorted((publie.id, nouveau.id))))
+
+    arbitre.appels = appels
+    return arbitre
+
+
+def test_la_bande_douteuse_sans_arbitre_ne_lie_rien_et_n_appelle_personne(db_session):
+    """Le defaut de `run_veille` : `arbitre=None` -- le doute favorise la
+    publication, jamais un lien par defaut."""
+    publie, reprise = _paire_douteuse(db_session)
+
+    stats = link_duplicates(db_session)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+    assert stats.arbitres == 0
+    assert stats.arbitrage_pannes == 0
+
+
+def test_la_bande_certaine_ne_declenche_jamais_l_arbitre(db_session):
+    """Un score au-dessus du seuil certain se lie sans demander -- l'arbitre
+    n'est reserve qu'a la bande ou les deux mesures se contredisent."""
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    publie = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                  hours_ago=5 * 24, status=ArticleStatus.USED)
+    reprise = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                   hours_ago=1)
+    arbitre = _arbitre_fixe({})
+
+    link_duplicates(db_session, arbitre=arbitre)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id == publie.id
+    assert arbitre.appels == []
+
+
+def test_l_arbitre_dit_meme_actu_et_relie(db_session):
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({(publie.id, reprise.id): (True, "meme sortie, deux sources")})
+
+    stats = link_duplicates(db_session, arbitre=arbitre)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id == publie.id
+    assert stats.arbitres == 1
+    assert reprise.file_exclu_raison is not None
+    assert "Claude" in reprise.file_exclu_raison
+    assert "meme sortie, deux sources" in reprise.file_exclu_raison
+
+
+def test_l_arbitre_dit_actus_differentes_et_ne_relie_jamais(db_session):
+    """Les faux positifs mesures (Task 7) : quand Claude tranche "different",
+    la paire n'est jamais liee, quel que soit le score de recouvrement."""
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({(publie.id, reprise.id): (False, "deux annonces distinctes")})
+
+    stats = link_duplicates(db_session, arbitre=arbitre)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+    assert stats.arbitres == 0
+    assert stats.archive == 0
+
+
+def test_une_paire_arbitree_n_est_jamais_redemandee(db_session):
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({(publie.id, reprise.id): (False, "deux annonces distinctes")})
+
+    link_duplicates(db_session, arbitre=arbitre)
+    link_duplicates(db_session, arbitre=arbitre)
+
+    assert arbitre.appels == [tuple(sorted((publie.id, reprise.id)))]  # un seul appel
+
+
+def test_une_panne_de_l_arbitre_ne_cree_aucun_lien_et_n_est_pas_memorisee(db_session):
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({})  # rend None : aucun verdict connu -> panne simulee
+
+    stats = link_duplicates(db_session, arbitre=arbitre)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+    assert stats.arbitrage_pannes == 1
+    # Rien de memorise : le passage suivant redemande.
+    stats2 = link_duplicates(db_session, arbitre=arbitre)
+    assert stats2.arbitrage_pannes == 1
+    assert len(arbitre.appels) == 2
+
+
+def test_le_plafond_d_appels_par_passage_est_respecte(db_session):
+    """Un deuxieme article douteux, sans budget restant, n'appelle pas
+    l'arbitre : le doute gagne, comme si `arbitre` etait absent."""
+    publie, reprise = _paire_douteuse(db_session)
+    autre_src = _src(db_session, "media-reprise-2")
+    autre_reprise = _art(
+        db_session, autre_src, n=203,
+        title="Boris Brejcha devoile une tournee mondiale autour de son premier album",
+        hours_ago=1,
+    )
+    arbitre = _arbitre_fixe(
+        {
+            (publie.id, reprise.id): (True, "meme sortie"),
+            (publie.id, autre_reprise.id): (True, "ne devrait jamais etre lu"),
+        }
+    )
+
+    stats = link_duplicates(db_session, arbitre=arbitre, arbitrage_max=1)
+
+    db_session.refresh(reprise)
+    db_session.refresh(autre_reprise)
+    assert reprise.duplicate_of_id == publie.id
+    assert autre_reprise.duplicate_of_id is None
+    assert stats.arbitres == 1
+    assert len(arbitre.appels) == 1
+
+
+def test_un_verdict_manuel_different_prime_sur_la_bande_certaine(db_session):
+    """Le coeur de la reparation : un verdict manuel "different" survit meme
+    a un score qui atteindrait le seuil certain. L'ancienne procedure
+    (effacer `duplicate_of_id`/`file_exclu_raison`) ne suffisait pas -- le
+    passage suivant reliait a nouveau tant que l'article restait publiable."""
+    old_src = _src(db_session, "mixmag")
+    new_src = _src(db_session, "tsugi")
+    publie = _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
+                  hours_ago=5 * 24, status=ArticleStatus.USED)
+    reprise = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
+                   hours_ago=1)
+    marquer_manuel(publie.id, reprise.id, False, "deux festivals distincts, homonymes")
+
+    link_duplicates(db_session)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+
+
+def test_un_verdict_manuel_meme_actu_relie_sans_appeler_l_arbitre(db_session):
+    publie, reprise = _paire_douteuse(db_session)
+    marquer_manuel(publie.id, reprise.id, True, "confirme a la main")
+    arbitre = _arbitre_fixe({})
+
+    stats = link_duplicates(db_session, arbitre=arbitre)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id == publie.id
+    assert arbitre.appels == []
+    assert stats.archive == 1
+    assert "manuel" in reprise.file_exclu_raison
+
+
+def test_le_verdict_manuel_est_relu_independamment_de_l_ordre_des_ids(db_session):
+    """La cle de paire est independante de l'ordre : marquer (a, b) protege
+    aussi la paire vue comme (b, a)."""
+    publie, reprise = _paire_douteuse(db_session)
+    marquer_manuel(reprise.id, publie.id, False, "ordre inverse")
+
+    link_duplicates(db_session)
+
+    db_session.refresh(reprise)
+    assert reprise.duplicate_of_id is None
+
+
+def test_le_cache_d_arbitrage_persiste_sur_disque(db_session, tmp_path):
+    chemin = tmp_path / "cluster_arbitrage.json"
+    publie, reprise = _paire_douteuse(db_session)
+    arbitre = _arbitre_fixe({(publie.id, reprise.id): (True, "meme sortie")})
+
+    link_duplicates(db_session, arbitre=arbitre, cache_chemin=chemin)
+
+    cache = lire_cache(chemin)
+    entree = cache.entrees[f"{min(publie.id, reprise.id)}:{max(publie.id, reprise.id)}"]
+    assert entree.meme_actu is True
+    assert entree.manuel is False

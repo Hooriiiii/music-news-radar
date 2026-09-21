@@ -8,7 +8,8 @@ from app.config import settings
 from app.delivery.discord import send_hot_alerts
 from app.delivery.notify import notifier
 from app.pipeline.artists import record_mentions
-from app.pipeline.cluster import link_duplicates
+from app.pipeline.cluster import ClusterStats, link_duplicates
+from app.pipeline.cluster_arbitrage import make_claude_arbitre
 from app.pipeline.comptes_artistes import construire_index, lier_artistes_comptes
 from app.pipeline.election import ElectionStats, elire_representants
 from app.pipeline.health import diagnostiquer
@@ -50,10 +51,23 @@ def reevaluer_clusters(db: Session) -> ElectionStats:
     return elire_representants(db, construire_index(db))
 
 
+def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
+    """Le cluster PAR DEFAUT du passage horaire, seul a arbitrer (Task 7,
+    2026-09-21) : `run_veille` (toutes les 5 min) appelle `link_duplicates`
+    sans argument, donc sans jamais construire cet arbitre -- distinction par
+    PARAMETRE, pas par le nom de l'appelant. Construit un client Claude a
+    chaque appel (jamais au chargement du module) : un `.env` de test peut
+    ainsi neutraliser `cluster_arbitrage_enabled` ou `anthropic_api_key` sans
+    qu'un client fantome ait deja ete cree avec une mauvaise cle."""
+    if not settings.cluster_arbitrage_enabled or not settings.anthropic_api_key:
+        return link_duplicates(db)
+    return link_duplicates(db, arbitre=make_claude_arbitre())
+
+
 def run_pipeline(
     db: Session,
     ingest=run_ingest,
-    cluster=link_duplicates,
+    cluster=dedupliquer_avec_arbitrage,
     elire=reevaluer_clusters,
     score=score_pending,
     record=record_mentions,

@@ -16,14 +16,21 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ArticleStatus
+from app.pipeline.cluster_arbitrage import EntreeArbitrage, cle_paire, ecrire_cache, lire_cache
 
 logger = logging.getLogger(__name__)
+
+# Un arbitre rend (meme_actu, raison) sur une vraie reponse, None sur toute
+# panne -- jamais memorise dans ce dernier cas (voir `cluster_arbitrage.py`).
+Arbitre = Callable[[Article, Article], tuple[bool, str] | None]
 
 # Mots vides FR + EN : trop fréquents pour porter le sens d'un titre
 _STOPWORDS = {
@@ -114,6 +121,13 @@ class ClusterStats:
 
     frais: int = 0
     archive: int = 0
+    # Sous-ensemble de `archive` : lien pose par Claude (bande douteuse, appel
+    # frais ou verdict deja en cache) plutot que par le seuil "certain" -- une
+    # observabilite a part, demandee au chantier Task 7.
+    arbitres: int = 0
+    # Appels a l'arbitre qui n'ont rendu aucune reponse exploitable : jamais
+    # memorises, jamais un lien, mais utile a voir dans la supervision.
+    arbitrage_pannes: int = 0
 
     @property
     def total(self) -> int:
@@ -126,6 +140,9 @@ def link_duplicates(
     threshold: float = DEFAULT_THRESHOLD,
     archive_days: int | None = None,
     archive_threshold: float | None = None,
+    arbitre: Arbitre | None = None,
+    arbitrage_max: int | None = None,
+    cache_chemin: Path | None = None,
 ) -> ClusterStats:
     """Pointe chaque doublon vers son représentant et renvoie le compte des liens créés.
 
@@ -155,10 +172,26 @@ def link_duplicates(
     file, le représentant publié est verrouillé par `elire_representants`, et
     rien ne remonte au dashboard -- d'où la trace posée sur l'article lié et le
     compteur séparé.
+
+    **Arbitrage Claude de la bande douteuse** (Task 7, 2026-09-21). Entre le
+    seuil certain (`archive_threshold`) et le seuil de recouvrement
+    (`threshold`, 0.65), les deux mesures se contredisent -- ni assez sûres
+    pour lier sans demander, ni assez sûres pour écarter. `arbitre`, s'il est
+    fourni, tranche cette bande (voir `app/pipeline/cluster_arbitrage.py`) ;
+    resté à `None` (le défaut, et le cas de `run_veille`), cette bande ne
+    produit jamais de lien et jamais d'appel -- le doute favorise la
+    publication. Chaque paire n'est arbitrée QU'UNE FOIS : le verdict est
+    mémorisé dans `cluster_arbitrage_cache_path`, relu à chaque passage avant
+    d'appeler l'API. Un verdict MANUEL (posé par
+    `scripts.marquer_doublon_manuel`) est vérifié AVANT toute mesure et prime
+    sur tout, y compris sur la bande certaine.
     """
     archive_days = settings.cluster_archive_jours if archive_days is None else archive_days
     archive_threshold = (
         settings.cluster_archive_seuil if archive_threshold is None else archive_threshold
+    )
+    arbitrage_max = (
+        settings.cluster_arbitrage_max_par_passage if arbitrage_max is None else arbitrage_max
     )
     seen_at = func.coalesce(Article.published_at, Article.fetched_at)
     now = dt.datetime.now(dt.timezone.utc)
@@ -177,57 +210,117 @@ def link_duplicates(
         ).order_by(seen_at, Article.id)
     ).all()
 
-    # (id, jetons, titre, vient de l'archive) : l'origine du représentant décide
+    # (article, jetons, vient de l'archive) : l'origine du représentant décide
     # de la mesure, du seuil, du compteur et de la trace -- elle ne se déduit
-    # plus de rien une fois le lien posé.
-    representatives: list[tuple[int, set[str], str, bool]] = [
-        (article.id, significant_tokens(article.title), article.title, True)
-        for article in archived
+    # plus de rien une fois le lien posé. L'objet ARTICLE (pas seulement son id
+    # et son titre) est gardé : l'arbitrage a aussi besoin de `summary`.
+    representatives: list[tuple[Article, set[str], bool]] = [
+        (article, significant_tokens(article.title), True) for article in archived
     ]
     stats = ClusterStats()
+    # Le cache est TOUJOURS lu (lecture de fichier, jamais d'appel réseau) :
+    # un verdict manuel ou déjà arbitré doit valoir même quand `arbitre` est
+    # absent (c'est le cas de `run_veille`), sans jamais coûter un appel.
+    cache = lire_cache(cache_chemin)
+    cache_modifie = False
+    appels_restants = arbitrage_max
+
     for article in articles:
         tokens = significant_tokens(article.title)
         if article.duplicate_of_id is not None:
             continue
-        match = next(
-            (
-                (rep_id, rep_titre, rep_archive, score)
-                for rep_id, rep_tokens, rep_titre, rep_archive in representatives
-                if (
-                    score := (
-                        archive_similarity_from_tokens(tokens, rep_tokens)
-                        if rep_archive
-                        else title_similarity_from_tokens(tokens, rep_tokens)
-                    )
-                )
-                >= (archive_threshold if rep_archive else threshold)
-            ),
-            None,
-        )
-        if match is None:
-            representatives.append((article.id, tokens, article.title, False))
+        # (représentant, score, origine, raison) -- `raison` n'est renseignée
+        # que pour un lien tranché par arbitrage (Claude ou manuel).
+        match: tuple[Article, float, str, str | None] | None = None
+        for rep_article, rep_tokens, rep_archive in representatives:
+            if not rep_archive:
+                score = title_similarity_from_tokens(tokens, rep_tokens)
+                if score >= threshold:
+                    match = (rep_article, score, "frais", None)
+                    break
+                continue
+
+            cle = cle_paire(article.id, rep_article.id)
+            entree = cache.entrees.get(cle)
+            if entree is not None and entree.manuel:
+                # Le verdict humain prime sur tout, y compris sur un score qui
+                # atteindrait la bande certaine ci-dessous.
+                if entree.meme_actu:
+                    match = (rep_article, 1.0, "manuel", entree.raison)
+                    break
+                continue
+
+            score_certain = archive_similarity_from_tokens(tokens, rep_tokens)
+            if score_certain >= archive_threshold:
+                match = (rep_article, score_certain, "certain", None)
+                break
+
+            score_doute = title_similarity_from_tokens(tokens, rep_tokens)
+            if score_doute < threshold:
+                continue  # bande "différent" : aucune mesure ne rapproche, aucun appel
+
+            # Bande douteuse : un verdict Claude déjà mémorisé fait foi sans
+            # nouvel appel -- "une paire n'est jamais redemandée".
+            if entree is not None:
+                if entree.meme_actu:
+                    match = (rep_article, score_doute, "arbitre", entree.raison)
+                    break
+                continue
+
+            if arbitre is None or appels_restants <= 0:
+                continue  # pas d'arbitre (run_veille) ou budget épuisé -> le doute gagne
+
+            verdict = arbitre(rep_article, article)
+            appels_restants -= 1
+            if verdict is None:
+                # Une panne n'est JAMAIS un verdict : rien n'est mémorisé, la
+                # paire sera redemandée au prochain passage.
+                stats.arbitrage_pannes += 1
+                continue
+            meme_actu, raison = verdict
+            cache.entrees[cle] = EntreeArbitrage(meme_actu, raison, manuel=False)
+            cache_modifie = True
+            if meme_actu:
+                match = (rep_article, score_doute, "arbitre", raison)
+                break
             continue
-        rep_id, rep_titre, rep_archive, score = match
-        article.duplicate_of_id = rep_id
-        if not rep_archive:
+
+        if match is None:
+            representatives.append((article, tokens, False))
+            continue
+        rep_article, score, origine, raison = match
+        article.duplicate_of_id = rep_article.id
+        if origine == "frais":
             stats.frais += 1
             continue
         stats.archive += 1
+        if origine == "arbitre":
+            stats.arbitres += 1
         # La trace, sur l'article lié lui-même. Sans elle, un faux positif
         # disparaît en silence : l'article sort de la file par le filtre
         # `duplicate_of_id IS NULL` et plus rien ne dit pourquoi.
         # `file_exclu_raison` est le champ que le projet utilise déjà pour
         # « pourquoi cet article ne sera pas publié » -- réparer un faux
-        # positif, c'est effacer les deux champs.
+        # positif suppose désormais un verdict manuel « différent »
+        # (`scripts.marquer_doublon_manuel`), pas seulement effacer ce champ :
+        # sinon le passage suivant relie l'article tant qu'il reste dans la
+        # fenêtre de sa vie publiable (voir CLAUDE.md, « Dédup à deux étages »).
+        if origine == "certain":
+            detail = f"similarite {score:.2f}"
+        elif origine == "arbitre":
+            detail = f"tranche par Claude : {raison}"
+        else:
+            detail = "verdict manuel"
         article.file_exclu_raison = (
-            f"doublon d'une actu deja publiee (article {rep_id}, "
-            f"similarite {score:.2f})"
+            f"doublon d'une actu deja publiee (article {rep_article.id}, {detail})"
         )[:500]
         logger.warning(
-            "doublon d'archive : « %s » (%s) rattache a « %s » (%s), similarite %.2f",
-            article.title, article.id, rep_titre, rep_id, score,
+            "doublon d'archive : « %s » (%s) rattache a « %s » (%s), %s",
+            article.title, article.id, rep_article.title, rep_article.id, detail,
         )
     db.commit()
+    if cache_modifie:
+        ecrire_cache(cache, cache_chemin)
     return stats
 
 

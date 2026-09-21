@@ -207,6 +207,23 @@ class Settings(BaseSettings):
     # Festival devoile son line-up 2027 ») reste a 0,80, donc attrapee.
     cluster_archive_seuil: float = 0.8
 
+    # --- Arbitrage Claude des reprises douteuses contre l'archive (Task 7,
+    # 2026-09-21). La bande entre `cluster_archive_seuil` (certain) et
+    # `DEFAULT_THRESHOLD` (0.65, "different" en dessous) est celle ou les deux
+    # mesures se contredisent -- voir `app/pipeline/cluster_arbitrage.py`.
+    cluster_arbitrage_enabled: bool = True
+    # Borne le cout par PASSAGE de `link_duplicates` : ~0,001 $ par appel
+    # (Haiku, quelques centaines de jetons d'entree et de sortie mesures --
+    # voir le rapport de la tache), donc 20 appels/passage horaire reste
+    # negligeable meme a 24 passages/jour. `run_veille` (toutes les 5 min) ne
+    # passe jamais d'arbitre : seul le passage horaire (`run_pipeline`) paie.
+    cluster_arbitrage_max_par_passage: int = 20
+    # Verdicts memorises par PAIRE d'articles : une paire n'est jamais
+    # redemandee. A cote du jeton, meme mecanique que `illustration_cache_path`.
+    cluster_arbitrage_cache_path: Path = (
+        Path.home() / "Library/Application Support/Kinda/cluster_arbitrage.json"
+    )
+
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
     # BORNE PAR LA PURGE : ces posts sont lus dans la table `articles`, que
