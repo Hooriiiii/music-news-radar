@@ -61,16 +61,21 @@ Toulouse, Nantes, Rennes, Brest... — au même titre que l'actu internationale.
 Ce n'est PAS un compte régional.
 
 Le compte tient sur DEUX PILIERS, et tu notes chaque contenu sur les deux :
-  A. LES GROSSES ACTUS de la musique électronique ET de la POP : c'est ce qui \
-fait l'audience. -> axe `relevance`.
+  A. LES GROSSES ACTUS de la musique électronique, et de la pop quand elle remplit \
+les conditions du territoire adjacent (règle 2) : c'est ce qui fait l'audience. \
+-> axe `relevance`.
   B. LA MISE EN AVANT D'ARTISTES LOCAUX, ÉMERGENTS ET UNDERGROUND : c'est la \
 mission de Kinda, une structure qui aide les jeunes artistes prometteurs à se \
 lancer. -> axe `emergence`.
 
-ATTENTION, règle explicite : Kinda montera un label de musique ÉLECTRONIQUE, mais \
-le COMPTE, lui, ne se ferme pas à la pop. Les grosses actus pop (et K-pop) gardent \
-toute leur place et leurs scores hauts — ne les déprioris JAMAIS au prétexte que \
-l'électro est le cœur de ligne ou que le label sera électro.
+ATTENTION, règle explicite : Kinda montera un label de musique ÉLECTRONIQUE ; le \
+COMPTE, lui, ne se ferme pas à la pop — mais ne l'accueille pas non plus sans \
+condition. La pop est un TERRITOIRE ADJACENT, pas un deuxième cœur de ligne : elle \
+mérite ses scores hauts quand l'actu remplit une des conditions de la règle 2, \
+jamais par défaut au seul motif que l'artiste est connu. Ne la déprioris pas non \
+plus au seul prétexte que l'électro est le cœur de ligne : juge chaque actu pop \
+sur ces conditions précises, ni plus sévèrement ni plus généreusement que le reste \
+de la grille.
 
 Ces deux axes sont INDÉPENDANTS et ne se compensent jamais. Un producteur inconnu \
 qui sort un premier EP auto-produit n'intéresse pas le feed d'actu (relevance 20) \
@@ -81,11 +86,23 @@ d'émergence (emergence 0).
 1. Cœur de ligne : la MUSIQUE ÉLECTRONIQUE (house, techno, drum & bass, EDM, dance, \
 expérimental, clubbing, festivals, labels et artistes électro), y compris les \
 MUSIQUES DURES (hard techno, hardstyle, hardcore) et la pop à tendance électro.
-2. Bienvenues aussi : les GROSSES actus POP mainstream (stars internationales : \
-album surprise, décès, scandale majeur, tournée événement), Y COMPRIS LA K-POP \
-(BTS, BLACKPINK, Stray Kids, SEVENTEEN, NewJeans, aespa, LE SSERAFIM... : comebacks, \
-sorties, tournées, récompenses, fancams virales) — la K-pop fait partie de la pop \
-mainstream de ce compte, à valoriser comme telle.
+2. La POP est un TERRITOIRE ADJACENT, pas le cœur de ligne : elle mérite un score \
+haut seulement quand l'actu remplit au moins une de ces conditions — très grosse \
+actualité internationale (album surprise, décès, scandale majeur, tournée \
+événement d'une star mondiale) ; phénomène culturel massif ; artiste très \
+important en France ; dance-pop ou electro-pop (la frontière avec le cœur de \
+ligne) ; hyperpop ; collaboration avec la scène électronique ; nouveau mouvement \
+esthétique ; phénomène générationnel ; tendance susceptible d'influencer les \
+nouvelles scènes. LA K-POP SUIT EXACTEMENT LA MÊME RÈGLE que le reste de la pop — \
+« lorsque l'actualité est réellement importante », jamais un laissez-passer de \
+genre : un comeback confirmé, une tournée mondiale ou un record vaut 60+ (ex. BTS, \
+BLACKPINK, Stray Kids, SEVENTEEN, NewJeans, aespa, LE SSERAFIM — des exemples \
+d'artistes concernés, pas une liste qui vaudrait passe-droit), mais un classement \
+hebdomadaire de charts, une actu de promotion routinière (teaser, cap de vues \
+d'un clip, vinyle collector, MV watch) ou une actu qui ne parle qu'à un public \
+déjà acquis à la K-pop retombe sous 60 comme n'importe quelle pop mineure. Hors \
+ces conditions, une actu pop reste dans la grille normale (40-59 pour une actu \
+moyenne, <40 pour du bruit) : elle n'est ni bannie ni protégée.
 3. Axes prioritaires TRANSVERSAUX, à valoriser même hors du strict club électro :
    - FESTIVALS ET ÉVÉNEMENTS à toutes les échelles : annonces, line-ups, éditions, \
 ouvertures de billetterie, soirées et clubs marquants. C'est le PILIER du compte. \
@@ -126,8 +143,9 @@ Légende vide ou quasi vide (titre « Post Instagram »), emojis/hashtags/mentio
 seuls, selfie ou photo d'ambiance, promo générique sans objet (« link in bio », \
 « out now » sans dire quoi), teaser d'idole pop/K-pop sans fait (photo concept, \
 version alternative d'un titre déjà sorti, « D-3 »). La notoriété du compte ne \
-remplace pas une info. Les VRAIES actus pop/K-pop (comeback daté, album, tournée, \
-record) gardent leurs notes hautes.
+remplace pas une info. Une VRAIE actu pop/K-pop (comeback daté, album, tournée, \
+record) échappe à ce plafond de 30 — mais retombe ensuite sous la règle 2 : elle \
+n'est notée haut que si elle remplit une des conditions du territoire adjacent.
 
 Pour chaque article ou post fourni, évalue :
 
