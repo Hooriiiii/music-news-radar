@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -91,6 +92,20 @@ class EtatCreneau(str, enum.Enum):
     MANQUE = "manque"
 
 
+class SourceRole(str, enum.Enum):
+    """Le role d'une source dans une observation d'evenement (Phase 2A).
+
+    Calcule au moment de l'observation depuis `sources.categorie` : PRIMARY si le
+    compte est artiste/festival/label/club (l'annonce vient de la source du fait),
+    SECONDARY si c'est un media (repackaging), UNKNOWN sinon (categorie NULL, ou
+    source X/Reddit non classee).
+    """
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    UNKNOWN = "unknown"
+
+
 class FormatCreneau(str, enum.Enum):
     """Ce qu'un creneau publie : un carrousel d'images ou un reel video.
 
@@ -127,6 +142,13 @@ class Source(Base):
     # État propre à l'adapter (ex. X/Apify : since, last_run_at) -- réassigner un
     # dict complet pour que SQLAlchemy détecte le changement, pas de mutation in place
     state: Mapped[dict | None] = mapped_column(JSONVariant)
+    # Phase 2A (evenements) : deux sources qui partagent ce groupe comptent pour
+    # UNE seule source independante dans `independent_source_count` -- l'exemple
+    # du blueprint est une depeche AFP reprise par trois sites. Nullable et vide
+    # pour l'instant : personne ne la remplit encore, seule la structure existe.
+    # Pas de FK : ce n'est pas une reference a une autre source, juste une cle de
+    # regroupement partagee entre plusieurs lignes de `sources`.
+    source_group_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
     articles: Mapped[list["Article"]] = relationship(back_populates="source")
 
@@ -246,6 +268,85 @@ class ArtistMention(Base):
     url: Mapped[str] = mapped_column(String(2000))
 
     artist: Mapped[Artist] = relationship(back_populates="mentions")
+
+
+class Event(Base):
+    """Une actualite reelle, telle que racontee par plusieurs preuves (Phase 2A).
+
+    Le systeme raisonnait POST par POST : la meme annonce vue chez l'artiste, chez
+    son label, dans la presse et sur Reddit produisait des doublons jetes par la
+    dedup. `Event` est la couche qui rend ce regroupement explicite et mesurable --
+    voir `docs/superpowers/plans/2026-09-23-phase-2a-evenements.md`. Cette table
+    n'est encore alimentee par rien (Task 2) : la structure existe seule ici.
+
+    Les compteurs sont DENORMALISES mais toujours RECALCULABLES depuis les
+    `EventObservation` -- jamais une valeur devinee ou incrementee a l'aveugle.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    titre: Mapped[str] = mapped_column(Text)
+    # Taxonomie a part (release_announcement, line_up...) -- NULL tant qu'elle
+    # n'est pas ecrite, voir la note du plan Phase 2A.
+    event_type: Mapped[str | None] = mapped_column(String(100))
+    first_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    platform_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Respecte `sources.source_group_id` : deux sources du meme groupe ne comptent
+    # que pour une seule source independante (depeche AFP reprise trois fois).
+    independent_source_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    observations: Mapped[list["EventObservation"]] = relationship(back_populates="event")
+
+
+class EventObservation(Base):
+    """Une preuve : un article rattache a un `Event` (Phase 2A).
+
+    Meme philosophie qu'`ArtistMention` : les champs utiles aux features sont
+    DENORMALISES (titre, url, nom de source) et le FK vers l'article est
+    `ON DELETE SET NULL`, pour que la purge (2 jours, par date de post) casse le
+    lien vers l'article sans detruire la preuve elle-meme -- c'est cette archive
+    qui rend l'evenement mesurable au-dela de la fenetre de retention.
+    """
+
+    __tablename__ = "event_observations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    article_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), index=True
+    )
+    # `sources.type` fige au moment de l'observation (pas relu depuis `sources`,
+    # qui peut changer ou disparaitre) -- meme enum que `SourceType`.
+    platform: Mapped[SourceType] = mapped_column(
+        Enum(SourceType, name="event_observation_platform", native_enum=False, length=20, values_callable=_values)
+    )
+    source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="SET NULL"), index=True
+    )
+    # PRIMARY si la source est artiste/festival/label/club, SECONDARY si media,
+    # UNKNOWN sinon (categorie NULL, ou source X/Reddit non classee).
+    source_role: Mapped[SourceRole] = mapped_column(
+        Enum(SourceRole, name="event_observation_source_role", native_enum=False, length=20, values_callable=_values)
+    )
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    observed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Denormalise : l'article peut etre purge, la preuve doit rester lisible.
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(String(2000))
+    source_name: Mapped[str] = mapped_column(String(200))
+
+    event: Mapped[Event] = relationship(back_populates="observations")
+
+    __table_args__ = (
+        # Idempotence du rattachement (Task 2) : rejouer un passage ne doit
+        # jamais dupliquer l'observation d'un meme article sur un meme evenement.
+        UniqueConstraint("event_id", "article_id", name="uq_event_observations_event_id_article_id"),
+    )
 
 
 class Digest(Base):
