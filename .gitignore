@@ -7,3 +7,6 @@ __pycache__/
 
 # Worktrees Claude Code (espaces de travail isoles, jamais versionnes)
 .claude/worktrees/
+
+# Espace de travail des revues (brouillons, rapports, paquets de diff) : jamais versionne.
+.superpowers/
