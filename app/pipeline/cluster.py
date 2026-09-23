@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ArticleStatus
+from app.pipeline import events
 from app.pipeline.cluster_arbitrage import (
     EntreeArbitrage,
     cle_paire,
@@ -416,7 +417,12 @@ def link_duplicates(
 
         Rend les articles REPOINTÉS : la mécanique est la même quelle que soit
         l'origine du lien, mais ce qu'il faut en ENREGISTRER (trace, compteur)
-        dépend de l'origine, que seul `appliquer` connaît."""
+        dépend de l'origine, que seul `appliquer` connaît.
+
+        Phase 2A (Task 2, `app/pipeline/events.py`) : SEUL point d'où
+        `events.attacher` est appelé -- le rattachement à un `Event` suit
+        exactement les mêmes décisions que le lien de doublon, pour le même
+        représentant et les mêmes repointés, jamais recalculées séparément."""
         article.duplicate_of_id = representant.id
         db.flush()
         repointes = list(
@@ -424,6 +430,7 @@ def link_duplicates(
         )
         for pointeur in repointes:
             pointeur.duplicate_of_id = representant.id
+        events.attacher(db, article, representant, repointes)
         return repointes
 
     def appliquer(article: Article, tokens: set[str], resultat) -> None:
