@@ -34,6 +34,6 @@ def test_une_seule_tete_et_des_revisions_uniques():
     assert len(prefixes) == len(set(prefixes)), sorted(prefixes)
 
 
-def test_la_tete_est_visuels_artistes():
+def test_la_tete_est_evenements():
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
-    assert script.get_current_head() == "0018"
+    assert script.get_current_head() == "0019"

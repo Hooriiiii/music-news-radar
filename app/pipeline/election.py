@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.content.visuels import origine_interdite
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, ScoredBy, SourceCategorie
+from app.pipeline import events
 from app.pipeline.cluster import DEFAULT_WINDOW_HOURS, significant_tokens
 from app.pipeline.comptes_artistes import IndexComptes
 from app.sources.instagram import TITRE_PAR_DEFAUT
@@ -161,6 +162,12 @@ def elire_representants(
                     for membre in membres:
                         if membre.id != meilleur.id:
                             membre.duplicate_of_id = meilleur.id
+                    # Phase 2A : le titre de l'evenement suit son representant
+                    # elu. Ne cree ni ne fusionne jamais rien -- l'evenement du
+                    # groupe existe deja (`events.attacher`, appele depuis
+                    # `cluster.lier`), il ne bouge pas quand le representant
+                    # change, seul son titre affiche est mis a jour.
+                    events.retitrer(db, meilleur)
         sources = len({membre.source_id for membre in membres})
         # Un representant engage garde ses notes : les effacer le ferait passer sous
         # le seuil de la file, et un creneau programme ou epingle perdrait son article.
