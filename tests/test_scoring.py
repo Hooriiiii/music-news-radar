@@ -277,14 +277,18 @@ def test_system_prompt_asks_for_emergence_and_local_artists():
     assert "local" in lowered
 
 
-def test_system_prompt_keeps_pop_despite_electronic_label():
-    """Le label sera électro, le compte reste ouvert à la pop : la règle doit être
-    écrite noir sur blanc, sinon le modèle déprioris la pop tout seul."""
+def test_system_prompt_keeps_pop_as_conditional_adjacent_territory():
+    """Resserrement du 2026-09-23 (contexte-produit §2.4) : la pop n'est plus un
+    deuxième cœur de ligne protégé sans condition -- c'est un territoire ADJACENT,
+    valorisé seulement quand l'actu remplit une des conditions listées. La règle
+    doit rester écrite noir sur blanc dans les deux sens (ni bannie, ni protégée),
+    sinon le modèle déprioris ou surnote la pop tout seul, comme mesuré avant
+    l'écriture de la règle inconditionnelle qu'elle remplace."""
     from app.pipeline.scoring import SYSTEM_PROMPT
 
     lowered = SYSTEM_PROMPT.lower()
-    assert "ne se ferme pas à la pop" in lowered
-    assert "jamais" in lowered
+    assert "territoire adjacent" in lowered
+    assert "ni bannie, ni protégée" in lowered or "elle n'est ni bannie ni protégée" in lowered
 
 
 # --- Cascade à deux étages : le modèle local videur, Claude juge ---
@@ -444,8 +448,8 @@ def test_system_prompt_priorise_les_comptes_d_artistes():
     # posts vides : le titre par défaut de l'adapter Instagram est cité
     assert "post instagram" in lowered
     assert "hard techno" in lowered
-    # la règle pop/K-pop reste en place
-    assert "ne les déprioris jamais" in lowered
+    # la règle pop/K-pop reste en place, sous sa forme conditionnelle (2026-09-23)
+    assert "territoire adjacent" in lowered
 
 
 def test_la_categorie_ecologie_existe_et_est_expliquee_au_modele():
