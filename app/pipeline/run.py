@@ -32,8 +32,7 @@ class PipelineReport:
     duplicates_archive: int = 0
     # Sous-ensemble de `duplicates_archive` : liens tranches par Claude (bande
     # douteuse), et pannes d'arbitrage (jamais un lien, mais des credits
-    # epuises ne se voyaient sinon que par des WARNING repetes dans les logs --
-    # Minor M2 de la revue du tour de correction 1/5).
+    # epuises ne se voyaient sinon que par des WARNING repetes dans les logs).
     duplicates_arbitres: int = 0
     duplicates_arbitrage_pannes: int = 0
     election: ElectionStats | None = None

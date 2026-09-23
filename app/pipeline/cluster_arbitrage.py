@@ -104,7 +104,7 @@ logger = logging.getLogger(__name__)
 # - en LECTURE, `lire_cache` rend un cache VIDE : les verdicts manuels
 #   « different » existants cessent de proteger, et les liens qu'ils
 #   interdisaient se reforment au passage suivant -- c'est la consequence qui
-#   compte pour l'utilisateur (tour de correction 4/5) ;
+#   compte pour l'utilisateur ;
 # - en ECRITURE, `_lire_pour_ecriture` leve et plus rien ne s'ecrit (ni
 #   verdict ni tentative) : les memes paires sont repayees a chaque passage.
 # Supprimer le fichier « pour debloquer » efface les verdicts manuels pour de
@@ -224,10 +224,9 @@ def _chemin_cache() -> Path:
 def _lire_brut(chemin: Path) -> dict | None:
     """`None` si le fichier n'EXISTE pas -- le cas normal du tout premier
     passage. LEVE si le fichier existe mais ne se laisse pas lire ou parser :
-    distinguer les deux est le coeur du residu ferme au tour de correction
-    2/5 -- une fonction qui va ENSUITE ECRIRE ne doit jamais confondre
-    « rien encore » et « corrompu », sous peine d'ecraser silencieusement
-    tous les verdicts existants, manuels compris."""
+    distinguer les deux est essentiel -- une fonction qui va ENSUITE ECRIRE ne
+    doit jamais confondre « rien encore » et « corrompu », sous peine
+    d'ecraser silencieusement tous les verdicts existants, manuels compris."""
     if not chemin.exists():
         return None
     return json.loads(chemin.read_text(encoding="utf-8"))
@@ -344,8 +343,8 @@ def fusionner_et_ecrire(
 
     Si le disque est PRESENT mais illisible a cet instant (corruption, panne
     disque), l'ecriture est ANNULEE entierement -- jamais un ecrasement par
-    un cache vide, qui perdrait tous les verdicts existants, manuels compris
-    (residu ferme au tour de correction 2/5). Le passage suivant retentera.
+    un cache vide, qui perdrait tous les verdicts existants, manuels compris.
+    Le passage suivant retentera.
     """
     chemin = chemin or _chemin_cache()
     try:
@@ -390,7 +389,7 @@ def marquer_manuel(
     silencieuse que l'ancienne procedure (effacer deux champs sans rien
     memoriser) echouait. LEVE de la meme facon si le cache existant est
     PRESENT mais illisible : y ecrire quand meme effacerait tous les verdicts
-    deja poses, manuels compris (residu ferme au tour de correction 2/5).
+    deja poses, manuels compris.
     """
     chemin = chemin or _chemin_cache()
     try:
