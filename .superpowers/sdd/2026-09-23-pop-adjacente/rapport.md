@@ -128,3 +128,126 @@ règle conditionnelle plutôt que supprimés :
 toujours citée en exemples dans le prompt.
 
 `CLAUDE.md` n'a pas été touché (demande explicite).
+
+## Tour de correction 1 (revue)
+
+Trois points relevés par la revue, traités.
+
+### 1. Pré-filtre local : ajout d'une phrase, pas de logique déterministe
+
+`prefilter.py` importe `SYSTEM_PROMPT` sans copie et `CONSIGNE_PREFILTRE`
+autorise explicitement à descendre sous 45 pour « l'actu hors ligne qui ne
+relève d'aucun axe prioritaire ». Avant le resserrement, la pop était nommée
+dans le pilier A et protégée par « ne les déprioris JAMAIS » : un 4B ne
+pouvait pas l'y ranger. Après, le pilier A la conditionne et la règle 1 ne la
+cite plus qu'en electro-pop — l'enchaînement « pop ≠ cœur de ligne, pop ∉
+axes prioritaires → hors ligne → sous 45 » devient possible, et un article
+que Claude aurait gardé à 75 ne lui serait alors **jamais envoyé** : perte
+silencieuse, invisible dans toute métrique de production (le champ
+`scored_by = local` ne dit pas ce que Claude aurait décidé).
+
+Corrigé dans `CONSIGNE_PREFILTRE` (`app/pipeline/prefilter.py`), une phrase
+ajoutée : « La POP et la K-POP (règle 2) ne sont PAS une actu hors ligne : ne
+les range jamais sous 45 pour ce seul motif. […] juger si une actu pop
+remplit une des conditions du territoire adjacent est un jugement fin,
+réservé au juge d'après, pas à ce premier tri. » Le module reste sans accès à
+LM Studio dans cet environnement — non testé sur le modèle local réel, ce qui
+reste une limite assumée du tour précédent et de celui-ci.
+
+### 2. Zone-frontière : mesurée séparément
+
+L'échantillon « pop » du premier tour était construit par recherche de noms
+de groupes K-pop et de sources taggées « K-pop » : 15 des 17 cas qui basculent
+sous 60 sont des classements Soompi hebdomadaires ou des teasers routiniers —
+une conclusion facile. The Weeknd, Carly Rae Jepsen et Chvrches, écartés du
+témoin comme « pop-adjacents ambigus », n'étaient dans AUCUN des deux
+échantillons : les cas qui décident si le resserrement est juste n'avaient
+donc jamais été mesurés.
+
+10 articles re-scorés (ancien vs nouveau prompt, `claude-haiku-4-5`,
+20 appels, ~0,02 $) : les trois cas nommés par la revue, plus tout ce que j'ai
+trouvé en dance-pop/electro-pop/hyperpop/pop occidentale majeure au-dessus de
+60 dans la base (recherche élargie par nom d'artiste — Dua Lipa, Troye Sivan,
+Lady Gaga, Rina Sawayama, 100 gecs, Chappell Roan, PinkPantheress, etc. ; seuls
+PinkPantheress et les Madonna/Charli XCX déjà mesurés au premier tour avaient
+des articles >= 60 en base).
+
+| id | titre | source | rel. avant | rel. après | ém. avant | ém. après |
+|---|---|---|---|---|---|---|
+| 18742 | The Weeknd, "Tokyo" (tournée asiatique) | Stereogum | 72 | **45** | 0 | 0 |
+| 18454 | Carly Rae Jepsen, double album | Billboard (RSS) | 75 | 65 | 0 | 0 |
+| 19388 | Chvrches, "Roses" | Stereogum | 72 | 72 | 0 | 5 |
+| 19376 | Chvrches, retour après 3 ans | Pitchfork News | 72 | **55** | 0 | 5 |
+| 19578 | Fred again../PinkPantheress, GTA6 | Mixmag | 75 | 72 | 15 | 15 |
+| 18060 | PinkPantheress (électro, Guettapen) | Guettapen (IG) | 75 | 75 | 25 | 15 |
+| 18822 | Ed Sheeran, Israël/Palestine | Stereogum | 35 | 35 | 0 | 0 |
+| 19174 | Madonna & Charli XCX, "Danceteria Afterhours" | Billboard (RSS) | 85 | 75 | 0 | 0 |
+| 19149 | Madonna teste un remix Charli XCX | DJ Mag | 75 | 72 | 0 | 0 |
+| 19339 | Taylor Swift, compte à rebours (teaser) | Billboard (IG) | 45 | 35 | 0 | 0 |
+
+Moyenne relevance : 68.1 → 60.1 (delta -8.0). Au-dessus de 60 : 8/10 avant,
+6/10 après. Deux cas franchissent le seuil vers le bas : **The Weeknd (72→45)**
+et **Chvrches/Pitchfork (72→55)**. Les huit autres ne changent pas de côté du
+seuil (Carly Rae Jepsen, Chvrches/Roses, PinkPantheress ×2, Madonna ×2 restent
+au-dessus ; Ed Sheeran et Taylor Swift/teaser restaient déjà en dessous à
+l'ancien prompt).
+
+**Le point qui compte** : le resserrement produit un effet réel et mesurable
+sur cette zone (-8 points en moyenne, contre -0.4 sur le témoin électro pur),
+mais nettement moins violent que sur l'échantillon K-pop routinier (-18.8) —
+et il ne fait basculer que 2 cas sur 10, tous deux défendables : une nouvelle
+chanson en ouverture de tournée asiatique (Weeknd) et un retour de single
+après trois ans (Chvrches/Pitchfork) sont des actus pop/synth-pop réelles
+mais pas nécessairement « très grosses actus internationales » ou
+« phénomènes culturels massifs » au sens strict du §2.4 — c'est un jugement
+éditorial plausible, pas un effondrement.
+
+**Axe émergence** : quasi inchangé sur toute la zone-frontière (0→0 pour
+7 des 10 lignes ; 0→5 sur les deux Chvrches ; 25→15 sur PinkPantheress/
+Guettapen, seul mouvement notable et probablement du bruit de mesure plutôt
+qu'un effet du changement de règle pop — l'axe emergence n'a reçu aucune
+modification de prompt). Pas de biais systématique détecté sur cet axe.
+
+**Limite assumée de cette mesure** : ré-interroger Ed Sheeran (id 18822) a
+donné 35→35 ce tour-ci, contre 55→65 au premier tour, sur le MÊME article et
+le MÊME couple de prompts. C'est du bruit stochastique du modèle (température
+non nulle, pas de seed fixé), pas un artefact du changement de prompt — mais
+ça veut dire que les valeurs individuelles de ce tableau ne sont pas exactes
+au point près ; c'est la tendance agrégée (delta moyen, nombre de
+franchissements de seuil) qui est le signal fiable, comme au premier tour.
+
+Coût cumulé des deux tours de mesure : 86 + 20 = 106 appels
+`claude-haiku-4-5`, ≈ 0,11 $. Scripts temporaires supprimés après usage,
+aucune écriture en base.
+
+### 3. Commit et rapport : correction de la description des tests
+
+Le test `test_system_prompt_keeps_pop_despite_electronic_label` n'était **pas
+cassé** par le changement de prompt : il vérifiait `"ne se ferme pas à la
+pop"` et `"jamais"`, deux chaînes encore présentes ailleurs dans le nouveau
+prompt (le nouveau paragraphe ATTENTION contient toujours « ne se ferme pas à
+la pop » et « Ne la déprioris pas non plus »/« jamais par défaut ») — il
+serait passé sans aucune modification. Sa réécriture était un choix délibéré
+de repositionnement (verrouiller la nouvelle règle conditionnelle plutôt que
+l'ancienne formule, désormais trop faible pour capter un retour en arrière),
+pas une réparation d'un test rouge. Le commit 94e2d73 et mon rapport initial
+ne le disaient pas explicitement et pouvaient laisser croire le contraire :
+correction ci-dessus et dans ce paragraphe.
+
+Le test renommé porte maintenant quatre assertions au lieu de deux :
+« territoire adjacent », « ni bannie ni protégée » (déjà présent), plus les
+deux verrous demandés par la revue — « ne la déprioris pas non » (sens 1 :
+ne pas sous-noter la pop au prétexte électro) et « la k-pop suit exactement
+la même règle » (sens 2 : pas de laissez-passer de genre). Ce sont les deux
+phrases qui gardent le prompt du défaut historique dans un sens comme dans
+l'autre.
+
+### Jugements éditoriaux signalés, non traités ici
+
+Portés à l'utilisateur par le coordinateur, pas corrigés dans ce tour : la
+chute d'« aespa tournée annoncée » (65→45, échantillon du premier tour)
+semble contredire l'exemple du prompt lui-même (« une tournée mondiale
+vaut 60+ ») ; et Ed Sheeran/Israël-Palestine n'a, pour la revue, rien à faire
+au-dessus du seuil de publication. Aucun des deux n'est un bug du prompt ou
+du code — ce sont des désaccords sur où placer le curseur éditorial, à
+trancher par l'utilisateur.

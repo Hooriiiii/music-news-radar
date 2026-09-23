@@ -39,13 +39,26 @@ SUFFIXE_SANS_REFLEXION = "\n\n/no_think"
 # écarter ce que Claude garderait à 60+. Appliquée avec la brutalité d'un 4B, la
 # règle 6 (posts sans information) ferait passer sous le seuil (45) des contenus
 # qui portent un fait. On la réserve donc aux posts réellement vides.
+#
+# Ajout du 2026-09-23 (resserrement de la règle 2, pop = territoire adjacent
+# conditionnel) : depuis que le pilier A et la règle 1 du prompt ne citent plus
+# la pop comme cœur de ligne inconditionnel, un 4B brutal peut enchaîner
+# « pop ≠ cœur de ligne, pop ∉ axes prioritaires -> hors ligne » et faire
+# tomber sous 45 un article que Claude aurait gardé à 75 -- sans jamais l'y
+# envoyer, donc sans que rien ne le rattrape. La pop n'est PAS une actu hors
+# ligne : elle reste dans la grille normale, et la question « remplit-elle une
+# condition de la règle 2 ? » est un jugement fin réservé au juge d'après.
 CONSIGNE_PREFILTRE = """
 
 CONSIGNE PROPRE AU PRÉ-FILTRE. Tu fais un premier tri avant un juge plus fin. \
 Ne descends sous 45 que pour le bruit évident, l'actu hors ligne qui ne relève \
 d'aucun axe prioritaire et les posts réellement vides (règle 6 : légende absente, \
 emojis ou hashtags seuls). Un contenu qui porte un fait (nom connu, date, sortie, \
-événement, chiffre) vaut 45 ou plus, quel que soit le type de compte.\
+événement, chiffre) vaut 45 ou plus, quel que soit le type de compte. La POP et la \
+K-POP (règle 2) ne sont PAS une actu hors ligne : ne les range jamais sous 45 pour \
+ce seul motif. Elles restent dans la grille normale -- juger si une actu pop \
+remplit une des conditions du territoire adjacent est un jugement fin, réservé au \
+juge d'après, pas à ce premier tri.\
 """
 
 

@@ -281,14 +281,19 @@ def test_system_prompt_keeps_pop_as_conditional_adjacent_territory():
     """Resserrement du 2026-09-23 (contexte-produit §2.4) : la pop n'est plus un
     deuxième cœur de ligne protégé sans condition -- c'est un territoire ADJACENT,
     valorisé seulement quand l'actu remplit une des conditions listées. La règle
-    doit rester écrite noir sur blanc dans les deux sens (ni bannie, ni protégée),
-    sinon le modèle déprioris ou surnote la pop tout seul, comme mesuré avant
-    l'écriture de la règle inconditionnelle qu'elle remplace."""
+    doit rester écrite noir sur blanc dans les DEUX sens (ni bannie, ni protégée),
+    sinon le modèle déprioris ou surnote la pop tout seul -- c'est le défaut
+    mesuré à l'origine de l'ancienne règle inconditionnelle qu'elle remplace, et
+    que ce resserrement ne doit pas reproduire à l'envers."""
     from app.pipeline.scoring import SYSTEM_PROMPT
 
     lowered = SYSTEM_PROMPT.lower()
     assert "territoire adjacent" in lowered
-    assert "ni bannie, ni protégée" in lowered or "elle n'est ni bannie ni protégée" in lowered
+    assert "ni bannie ni protégée" in lowered
+    # sens 1 : ne pas la déprioriser au seul prétexte que l'électro est le cœur de ligne
+    assert "ne la déprioris pas non" in lowered
+    # sens 2 : la k-pop ne garde aucun laissez-passer de genre, même règle que le reste de la pop
+    assert "la k-pop suit exactement la même règle" in lowered
 
 
 # --- Cascade à deux étages : le modèle local videur, Claude juge ---
