@@ -4,22 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
-**KINDA est une structure d'accompagnement de jeunes artistes**, pas seulement un
-média. Trois briques, dans cet ordre de construction :
-1. des **plugins** accessibles aux jeunes créateurs (outils de production) ;
-2. le **compte d'actu** (cette app) : grosses actus électro ET pop d'un côté,
-   mise en avant d'artistes locaux/émergents de l'autre — sur le même compte ;
-3. une fois 1 et 2 installés, un **label de lancement** d'artistes, avec interviews
-   croisées sur le compte, création de covers, push playlist.
+**KINDA est une structure d'accompagnement de jeunes artistes**, pas un média qui
+aiderait des artistes à l'occasion. L'ambition est de lancer des carrières : donner
+à de jeunes artistes une visibilité qui tienne dans la durée, et une place dans
+l'industrie.
+
+Formulation de l'utilisateur (2026-09-23), qui fait foi : **« un incubateur complet
+qui cherche à valoriser de nouvelles sonorités et de nouvelles personnes, pour
+grandir avec elles »**. Kinda agit sur TOUS les aspects de l'industrie **à la
+fois** — un média, un label, des plugins. Ce n'est pas une progression en trois
+étapes : un artiste qui démarre bute en même temps sur les outils, sur la
+visibilité et sur l'accès au marché, et chacun de ces murs rend les autres plus
+hauts.
+
+Ce dépôt ne contient que la brique MÉDIA : le compte d'actu `@kindanewsfrance`.
+Les plugins et le label existent dans le projet, pas dans le code.
 
 Conséquence architecturale majeure : le compte d'actu est à la fois l'organe de
 DISTRIBUTION (il fait connaître plugins et label) et l'organe de DÉTECTION (le flux
 scoré est le deal-flow du label). D'où l'axe `emergence` et les tables `artists` /
 `artist_mentions` — voir « Deux axes de scoring » et « Mémoire A&R » plus bas.
 
-Le label sera électro, mais **le compte ne se ferme PAS à la pop** : les grosses
-actus pop et K-pop gardent leurs scores hauts (règle écrite explicitement dans le
-prompt, sinon le modèle les déprioris tout seul vu le poids de l'électro ailleurs).
+**Référence produit : `docs/contexte-produit.md`.** Il dit CE QU'ON VEUT
+(positionnement éditorial, trajectoire vers une architecture par ÉVÉNEMENT plutôt
+que par post) ; ce document-ci dit ce que le code FAIT et POURQUOI. Quand les deux
+divergent, l'intention se lit là-bas, la réalité ici — et les écarts connus sont
+listés à la fin de `contexte-produit.md` plutôt que laissés à découvrir.
 
 Positionnement du compte arrêté avec l'utilisateur (2026-07-22) :
 compte Instagram **français NATIONAL** (toute la scène FR : Paris, Lyon, Marseille,
