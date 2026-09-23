@@ -29,8 +29,13 @@ Trois regles de cout : une seule recherche par requete, memorisee quelques jours
 et rien du tout tant qu'un autre barreau de l'echelle a donne.
 
 Et la regle de robustesse de tout ce qui touche aux visuels : ce module ne LEVE
-JAMAIS. Cle absente, quota, reseau coupe, page illisible -> liste vide, et la
-cover part sur le fond Kinda.
+JAMAIS -- SAUF `app.content.visuels.VisuelDiffere` (tour de correction 1/5,
+2026-09-21, I-1), quand le RESEAU coupe la recherche elle-meme AVANT qu'elle
+ait pu tourner. Cle absente, quota du modele de vision, page illisible ->
+liste vide comme avant : ce sont des jugements ou des reglages, jamais des
+pannes de transport. La distinction existe parce que le fond Kinda n'est plus
+une issue publiable (Tache 5) : une reserve qui n'a pas pu regarder doit faire
+REPORTER le creneau, pas conclure a l'absence d'image.
 """
 
 import datetime as dt
@@ -47,6 +52,7 @@ import anthropic
 
 from app.config import settings
 from app.content.urls import url_propre
+from app.content.visuels import VisuelDiffere
 from app.models import SourceCategorie
 # Les mots vides FR + EN du rapprochement de titres : meme besoin ici, et une
 # seconde liste finirait par diverger de celle-la.
@@ -359,8 +365,14 @@ def candidats_du_web(
     requetes), et tout le choix des visuels fait deja circuler la sienne -- une
     horloge implicite ferait diverger le TTL d'un passage a l'autre.
 
-    Jamais d'exception : une liste vide veut dire « le web non plus n'a rien »,
-    et l'appelant part sur le fond Kinda.
+    Ne leve jamais, SAUF `app.content.visuels.VisuelDiffere` (tour de
+    correction 1/5, 2026-09-21, I-1) : quand la recherche elle-meme n'a pas pu
+    etre TENTEE (reseau, quota), ce n'est pas la meme chose qu'une recherche
+    qui a tourne et n'a rien trouve -- confondre les deux faisait sauter un
+    article sur une simple coupure reseau, avec une raison fausse. Cle absente,
+    requete introuvable, page illisible : toujours une liste vide, jamais cette
+    exception -- ce sont des conditions PERMANENTES ou des jugements, pas des
+    pannes de transport.
     """
     if not settings.visuels_web_enabled:
         return []
@@ -369,6 +381,8 @@ def candidats_du_web(
         # la definition, elle rendrait le module intestable sans reseau.
         return _candidats(article, maintenant, chercheur, extraire or image_de_partage,
                           chemin_cache or _chemin_cache())
+    except VisuelDiffere:
+        raise
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour une image
         logger.warning("recherche web abandonnee (%s)", type(exc).__name__)
         return []
@@ -393,8 +407,13 @@ def _candidats(article, maintenant, chercheur, extraire, chemin) -> list[Candida
     try:
         pages = chercheur(requete)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("recherche web en panne (%s) : aucun candidat", type(exc).__name__)
-        return []
+        # La recherche n'a PAS PU etre tentee (reseau, quota de l'outil) : un
+        # signal DIFFERENT d'une recherche qui tourne et ne trouve rien (I-1).
+        logger.warning(
+            "recherche web en panne (%s) : nouvelle tentative au prochain passage",
+            type(exc).__name__,
+        )
+        raise VisuelDiffere(f"recherche web impossible ({type(exc).__name__})") from exc
 
     trouves: list[Candidat] = []
     vues: set[str] = set()

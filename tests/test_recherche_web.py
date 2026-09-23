@@ -25,7 +25,7 @@ from app.content.recherche_web import (
     nom_de_source,
     requete_pour,
 )
-from app.content.visuels import chemin_cache
+from app.content.visuels import VisuelDiffere, chemin_cache
 from app.models import Article, Source, SourceCategorie, SourceType
 
 UTC = dt.timezone.utc
@@ -241,14 +241,20 @@ def test_une_page_sans_og_image_est_sautee(db_session, cache):
     assert [c.page for c in trouves] == ["https://ra.co/news/1"]
 
 
-def test_une_recherche_en_panne_ne_leve_jamais(db_session, cache):
-    """Degradation silencieuse : la cover partira sur le fond Kinda, la
-    composition n'est jamais perdue pour une question d'image."""
+def test_une_recherche_en_panne_leve_visuel_differe(db_session, cache):
+    """Tour de correction 1/5 (I-1) : la recherche n'a PAS PU etre tentee
+    (reseau, quota de l'outil) -- ce n'est pas la meme chose qu'une recherche
+    qui tourne et ne trouve rien. Depuis la Tache 5, confondre les deux
+    faisait sauter un article sur une simple coupure reseau, avec une raison
+    fausse (« aucune image... ni sur le web » alors que le web n'avait jamais
+    repondu). `candidats_du_web` leve donc `VisuelDiffere`, la SEULE exception
+    deliberee de ce module (voir son docstring)."""
     article = _article(db_session, "Charlotte de Witte", artistes=["Charlotte de Witte"])
 
-    assert candidats_du_web(article, maintenant=MAINTENANT,
-                            chercheur=Chercheur(erreur=RuntimeError("429")),
-                            extraire=Extraction()) == []
+    with pytest.raises(VisuelDiffere):
+        candidats_du_web(article, maintenant=MAINTENANT,
+                         chercheur=Chercheur(erreur=RuntimeError("429")),
+                         extraire=Extraction())
 
 
 def test_le_coupe_circuit_eteint_la_recherche(db_session, cache, monkeypatch):
@@ -260,6 +266,18 @@ def test_le_coupe_circuit_eteint_la_recherche(db_session, cache, monkeypatch):
     assert candidats_du_web(article, maintenant=MAINTENANT, chercheur=chercheur,
                             extraire=Extraction()) == []
     assert chercheur.requetes == []
+
+
+def test_i1_sans_cle_api_jamais_de_visuel_differe(db_session, cache, monkeypatch):
+    """Tour de correction 1/5 (I-1), deuxieme contrainte : l'absence de cle
+    Anthropic est un REGLAGE (comme `ILLUSTRATION_VISION_ENABLED=false`),
+    jamais une panne de transport -- elle ne doit donc jamais lever
+    `VisuelDiffere` et donc jamais faire REPORTER un creneau indefiniment.
+    Confondre les deux ferait taire le compte aussi surement qu'un saut."""
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    article = _article(db_session, "Charlotte de Witte", artistes=["Charlotte de Witte"])
+
+    assert candidats_du_web(article, maintenant=MAINTENANT, extraire=Extraction()) == []
 
 
 # --- Le cache par requete --------------------------------------------------

@@ -53,6 +53,7 @@ from app.content.visuels import (
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
     ORIGINE_WEB,
+    VisuelDiffere,
     actif,
     chemin_cache,
     credit_des_actifs,
@@ -382,10 +383,17 @@ def _reel(
                 )
             # Dernier recours : le web. JAMAIS pour la video du reel -- seulement
             # pour le fond de sa cover, qui est une image rendue par Chromium.
-            copies = _actifs_du_web(
-                article, maintenant=maintenant, telecharger=telecharger,
-                chercheur=chercheur_web, maximum=1,
-            )
+            try:
+                copies = _actifs_du_web(
+                    article, maintenant=maintenant, telecharger=telecharger,
+                    chercheur=chercheur_web, maximum=1,
+                )
+            except VisuelDiffere as exc:
+                # I-1 : la recherche web n'a pas pu etre TENTEE (reseau, quota) --
+                # un report, jamais un saut ni une exclusion de l'article.
+                raise VisuelsDifferes(
+                    "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
+                ) from exc
             if not copies:
                 raise AucunVisuel(RAISON_SANS_FOND)
         actifs += copies
@@ -404,8 +412,14 @@ def _avec_fond_du_web(
     """Un reel qui a sa video mais aucun fond, et aucun artiste suivi cite pour
     en donner un : le web fournit le FOND, jamais la video."""
     actifs = list(propres.actifs) if propres is not None else []
-    fond = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
-                          chercheur=chercheur_web, maximum=1)
+    try:
+        fond = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                              chercheur=chercheur_web, maximum=1)
+    except VisuelDiffere as exc:
+        # I-1 : reseau/quota, pas une absence d'image -- un report.
+        raise VisuelsDifferes(
+            "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
+        ) from exc
     if not fond:
         raise AucunVisuel(raison)
     actifs += fond
@@ -464,15 +478,19 @@ def photos_du_compte(
     posts = posts_en_base(db, [compte], maintenant, fenetres["fenetre_jours"])
     retenus = classer(article, posts, format_=FormatCreneau.CARROUSEL, maintenant=maintenant,
                       **fenetres)
+    # I-1 (tour de correction 1/5) : une lecture en direct qui echoue pour une
+    # raison de TRANSPORT (quota, budget, reseau) n'a pas le meme sens qu'une
+    # lecture reussie qui ne trouve rien -- seule la premiere doit empecher de
+    # conclure « cette reserve n'a rien ». Le doute ne se leve qu'A LA FIN, si
+    # le resultat entier reste vide : une base deja suffisante ne doit jamais
+    # etre eclipsee par l'echec d'une lecture devenue superflue.
+    differe = False
     if len(retenus) < plafond and lecteur is not None:
         try:
             lus = lecteur(compte, maintenant, ignorer_fraicheur=True)
         except LectureDifferee as exc:
-            # Budget, quota Graph, reseau : le fond de secours est un CONFORT.
-            # Il n'a pas le droit de faire echouer ni de differer une
-            # composition -- l'appelant partira sur le fond Kinda.
             logger.info("Lecture du compte source differee : %s", exc)
-            lus = []
+            lus, differe = [], True
         connus = {post.permalink for post in posts}
         nouveaux = [post for post in lus if post.permalink not in connus]
         if nouveaux:
@@ -484,8 +502,15 @@ def photos_du_compte(
     deja = urls_interdites(article) | {
         url for m in (article.media or []) for url in (m.get("url"), m.get("preview_url")) if url
     }
-    copies, _ = _copier_images(retenus, telecharger, deja, maximum=plafond)
-    return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+    copies, panne_transport = _copier_images(retenus, telecharger, deja, maximum=plafond)
+    resultat = [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+    if not resultat and (differe or panne_transport):
+        # Rien a offrir, et ce n'est PAS parce qu'on a regarde et rien trouve :
+        # la lecture en direct ou le telechargement d'un candidat connu a
+        # echoue pour une raison passagere. `eviter_l_affiche` doit le savoir
+        # pour reporter au lieu de sauter (Tache 5, I-1).
+        raise VisuelDiffere("lecture ou copie du compte source impossible (reseau/quota)")
+    return resultat
 
 
 def photos_des_artistes_cites(
@@ -527,13 +552,18 @@ def photos_des_artistes_cites(
         maintenant=maintenant,
         **fenetres,
     )
-    copies, _ = _copier_images(
+    copies, panne_transport = _copier_images(
         retenus,
         telecharger,
         urls_interdites(article),
         maximum=settings.fond_secours_max_photos if maximum is None else maximum,
     )
-    return [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+    resultat = [actif_["fichier"] for actif_ in copies if actif_.get("fichier")]
+    if not resultat and panne_transport:
+        # Meme raisonnement que `photos_du_compte` (I-1) : un candidat existait,
+        # seul son telechargement a echoue pour une raison passagere.
+        raise VisuelDiffere("copie des photos d'artistes cites impossible (reseau)")
+    return resultat
 
 
 def photos_du_web(
@@ -695,8 +725,14 @@ def _choisir_visuels(
                 raise AucunVisuel(raison_reel_propre(article))
             return _avec_fond_du_web(article, propres, maintenant, telecharger,
                                      RAISON_SANS_FOND, chercheur_web)
-        actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
-                                chercheur=chercheur_web)
+        try:
+            actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                                    chercheur=chercheur_web)
+        except VisuelDiffere as exc:
+            # I-1 : reseau/quota, pas une absence d'image -- un report.
+            raise VisuelsDifferes(
+                "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
+            ) from exc
         if actifs:
             return ChoixVisuels(actifs, credit_des_actifs(actifs))
         raise AucunVisuel(raison_sans_artiste(article))
@@ -729,8 +765,14 @@ def _choisir_visuels(
         raise VisuelsDifferes(str(differe)) from differe
     # Les artistes suivis cites n'ont rien de recent : le web, en dernier recours,
     # plutot que de sauter l'actu.
-    actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
-                            chercheur=chercheur_web)
+    try:
+        actifs = _actifs_du_web(article, maintenant=maintenant, telecharger=telecharger,
+                                chercheur=chercheur_web)
+    except VisuelDiffere as exc:
+        # I-1 : reseau/quota, pas une absence d'image -- un report.
+        raise VisuelsDifferes(
+            "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
+        ) from exc
     if actifs:
         return ChoixVisuels(actifs, credit_des_actifs(actifs))
     if panne_transport:

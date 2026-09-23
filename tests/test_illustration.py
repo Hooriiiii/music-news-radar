@@ -27,7 +27,14 @@ from app.content.illustration import (
     tailles_de,
     verdicts_de,
 )
-from app.content.visuels import FOND_KINDA, ORIGINE_ARTICLE, ORIGINE_COMPTE, ORIGINE_KINDA
+from app.content.visuels import (
+    FOND_KINDA,
+    ORIGINE_ARTICLE,
+    ORIGINE_COMPTE,
+    ORIGINE_KINDA,
+    ORIGINE_WEB,
+    VisuelDiffere,
+)
 
 MAINTENANT = dt.datetime(2026, 9, 18, 12, 0, tzinfo=dt.timezone.utc)
 
@@ -426,6 +433,59 @@ def test_une_reserve_dont_toutes_les_photos_sont_trop_petites_ne_donne_rien():
     )
 
     assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+# --- I-1 (tour de correction 1/5) : panne de transport != rien trouve ------
+
+
+def test_une_reserve_en_panne_de_transport_reporte_au_lieu_de_conclure():
+    """Une reserve qui n'a PAS PU regarder (quota, reseau) ne doit jamais etre
+    confondue avec une reserve qui a regarde et n'a rien trouve : la premiere
+    doit faire REPORTER (`Fond.differe`), la seconde fait descendre vers
+    `FOND_KINDA`. Avant cette distinction, les deux donnaient le meme aplat --
+    sur, tant qu'il restait publiable ; devenu un saut (Tache 5), la panne
+    aurait fait sauter l'article a tort."""
+    def panne():
+        raise VisuelDiffere("quota Graph atteint")
+
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        Lot(ORIGINE_COMPTE, panne),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+        }),
+        tailles=_tailles_fixes({"https://cdn.test/petite.jpg": (564, 345)}),
+    )
+
+    assert fond.differe is True
+    assert fond.url != FOND_KINDA and fond.origine != ORIGINE_KINDA
+
+
+def test_un_lot_plus_loin_qui_reussit_efface_la_panne_d_un_lot_precedent():
+    """Si le PREMIER lot ne peut pas regarder mais qu'un lot SUIVANT donne une
+    vraie photo, la panne n'a aucune consequence -- le premier qui reussit
+    gagne, exactement comme sans aucune panne."""
+    def panne():
+        raise VisuelDiffere("quota Graph atteint")
+
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        Lot(ORIGINE_COMPTE, panne),
+        Lot(ORIGINE_WEB, lambda: ["file:///cache/grande.jpg"]),
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({
+            "https://cdn.test/petite.jpg": Verdict(affiche=False, sujet="scene", note=70),
+            "file:///cache/grande.jpg": Verdict(affiche=False, sujet="scene", note=80),
+        }),
+        tailles=_tailles_fixes({
+            "https://cdn.test/petite.jpg": (564, 345),
+            "file:///cache/grande.jpg": (1920, 1280),
+        }),
+    )
+
+    assert fond == Fond("file:///cache/grande.jpg", ORIGINE_WEB, ("file:///cache/grande.jpg",))
+    assert fond.differe is False
 
 
 def test_la_reserve_choisit_la_premiere_photo_assez_grande_et_la_place_en_tete():

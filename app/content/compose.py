@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.content.choix_visuels import VisuelIntrouvable, actif_du_web
+from app.content.choix_visuels import VisuelIntrouvable, VisuelsDifferes, actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import validate_headline
@@ -610,6 +610,15 @@ def resoudre_fond(
     l'echelle -- actu, compte, artiste, web -- sans rien trouver d'assez net :
     `FOND_KINDA` n'est plus une issue publiable (Tache 5), seulement le signal
     interne d'echec que cette fonction traduit en saut.
+
+    Leve `VisuelsDifferes` (tour de correction 1/5, I-1) quand `choisi.differe`
+    dit qu'au moins une reserve n'a PAS PU etre consultee (panne de transport :
+    quota Graph, reseau, budget de lecture). C'est un REPORT, pas un saut : la
+    distinction existe pour ne pas confondre une reserve qui a regarde et n'a
+    rien trouve avec une reserve qui n'a pas pu regarder -- avant cette
+    distinction, une simple coupure reseau faisait sauter un article avec une
+    raison fausse (« aucune image... ni sur le web » alors que le web n'avait
+    jamais repondu).
     """
     actifs = list(visuels.actifs)
     connus = prejuger(actifs, verdicts=verdicts_fond)
@@ -624,6 +633,11 @@ def resoudre_fond(
         candidats=candidats_de_fond(actifs),
         origine_de=lambda url: origine_du_fond(actifs, url),
     )
+    if choisi.differe:
+        raise VisuelsDifferes(
+            "au moins une reserve (compte, artiste ou web) n'a pas pu etre "
+            "consultee : nouvelle tentative au prochain passage"
+        )
     if choisi.origine == ORIGINE_KINDA:
         raise VisuelIntrouvable(RAISON_VISUEL_INTROUVABLE)
     return actifs, choisi, connus

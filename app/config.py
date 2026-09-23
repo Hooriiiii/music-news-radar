@@ -340,6 +340,20 @@ class Settings(BaseSettings):
     # Court : la « photo recente » d'un artiste ne l'est plus une semaine apres.
     visuels_web_cache_jours: int = 3
 
+    # Mise a l'ecart TEMPORAIRE d'un article saute faute de visuel de qualite
+    # (Tache 5, tour de correction 1/5, C-1 -- app/schedule/pause_visuels.py).
+    # Mesure : sans cette pause, un article au meilleur score revenait sur le
+    # creneau libere par son propre saut a CHAQUE passage de 10 min, jusqu'a
+    # MANQUE, et faisait taire le compte toute une journee. Le defaut (180 min
+    # = 3 h) est la MOITIE du cache du lecteur de comptes Instagram
+    # (`visuels_cache_lectures_heures`, 6 h) : retenter avant ce cache relit
+    # les memes donnees pour rien, mais retenter deux fois par cycle de cache
+    # laisse une chance des qu'une nouvelle publication du compte source ou
+    # d'un artiste cite peut avoir change la donne -- sans laisser le compte
+    # silencieux une demi-journee. Reste tres court face a `retention_days`
+    # (2 j) : un article peut retenter une quinzaine de fois avant sa purge.
+    visuel_saute_pause_minutes: int = 180
+
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
     # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant

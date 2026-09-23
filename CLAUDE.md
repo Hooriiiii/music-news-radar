@@ -570,7 +570,8 @@ reçoit désormais `cible` (la taille du gabarit publié, fournie par
 `create_post` depuis `template` — 1080×1350 en post, 1080×1920 en reel, un
 reel étant plus exigeant sur la même photo) et traite un fond trop petit
 EXACTEMENT comme une affiche avérée : il descend d'un barreau vers les mêmes
-réserves — **web compris** —, et à défaut part sur `FOND_KINDA`. Mais AVANT de
+réserves — **web compris** —, et à défaut (depuis la Tâche 5, voir plus bas)
+**le créneau saute** plutôt que de partir sur `FOND_KINDA`. Mais AVANT de
 descendre, le premier barreau **balaye ses propres candidats par taille**
 (`candidats`, tout le groupe de doublons) : `choisir_illustration` ne classe
 que sur le verdict affiche/photo, et sans ce balayage la photo de presse 2 156 px
@@ -604,16 +605,18 @@ peut ignorer le paramètre). Mémorisé par URL dans
 `illustration_variante_cache_path` : un article dont l'`og:image` ne change
 pas ne repaie pas cette vérification à chaque passage.
 
-**Et si tout est une affiche, on cherche ailleurs — et à défaut, mieux vaut le
-fond Kinda qu'une affiche** (2026-09-18, `illustration.eviter_l_affiche` +
+**Et si tout est une affiche, on cherche ailleurs** (2026-09-18,
+`illustration.eviter_l_affiche` +
 `choix_visuels.{photos_du_compte,photos_des_artistes_cites}`). Post 40 puis 41
 (Transmusicales) : cinq visuels, cinq affiches de line-up, et le compte ne
 publiait que des programmes. La première version gardait « la moins mauvaise des
 affiches » quand rien de mieux ne se trouvait, ce qui a donné trois
 republications du même défaut (« ya toujours l'affiche en fond !! »). La règle
-est donc **absolue** : une affiche avérée n'est jamais publiée en fond. À défaut
-de photo, la cover part sur `FOND_KINDA` — l'aplat sombre du gabarit
-(`assets/fallback.jpg`), celui pour lequel la typo a été dessinée, donc lisible.
+est donc **absolue** : une affiche avérée n'est jamais publiée en fond. À
+l'époque (avant la Tâche 5, 2026-09-21), à défaut de photo, la cover partait sur
+`FOND_KINDA` — l'aplat sombre du gabarit (`assets/fallback.jpg`), celui pour
+lequel la typo a été dessinée, donc lisible. **Ce n'est plus le cas : à défaut
+de photo, désormais, le créneau SAUTE** (voir le paragraphe suivant).
 
 `FOND_KINDA` (`kinda:fond`, dans `app/content/visuels.py`) est une **sentinelle,
 pas une URL** : un fond `None` veut dire « ce post n'a pas de visuel », et
@@ -645,6 +648,46 @@ Le gel (`app/publish/preparation.py::verifier_fond`) continue d'accepter
 `FOND_KINDA` sur un tel brouillon ancien — filet de compatibilité, jamais un
 chemin qu'une composition neuve peut encore emprunter.
 
+**Tour de correction 1/5 (2026-09-21), trois défauts mesurés en exécutant le
+planificateur sur 120 passages simulés.**
+
+- **C-1 : un article sans bonne image faisait taire le compte TOUTE LA
+  JOURNÉE.** Le saut libère le créneau et relance l'arbitrage, mais
+  l'arbitrage classe par score et l'article reste éligible : s'il a le
+  meilleur score, il revenait sur le créneau le plus proche, sautait encore,
+  jusqu'à MANQUE, puis glissait au créneau suivant — mesuré : 3 créneaux du
+  jour en MANQUE, zéro publication, pour un seul article de 95 de pertinence
+  sans visuel face à quatre bons articles à 67-70. `app/schedule/pause_
+  visuels.py::marquer_saute` met donc l'article sauté À L'ÉCART
+  TEMPORAIREMENT (`visuel_saute_pause_minutes`, 180 = 3 h par défaut — la
+  moitié du cache du lecteur de comptes, 6 h, pour retenter dès qu'une
+  chance raisonnable existe sans laisser le compte silencieux une demi-
+  journée ; ni une exclusion — la spec l'interdit, l'article peut avoir une
+  photo demain — ni un délai trop long — la rétention est à 2 jours). Fichier
+  d'état à côté du jeton (`visuel_saute.json`), même motif que
+  `quota_graph.json` : écriture atomique, temporaire nommé par processus,
+  purge des entrées échues à chaque écriture, aucune écriture en LECTURE.
+  `store._articles_publiables` (le socle commun à `candidats_eligibles`,
+  `appliquer_arbitrage` et `offre_reels`) exclut les articles en pause. Le
+  point d'entrée est unique (`marquer_saute`) : la Task 6, qui déplacera une
+  partie des sauts au GEL, l'appelle de la même façon.
+- **I-1 : une panne de transport dans une RÉSERVE (compte, artiste, web) était
+  confondue avec « rien trouvé ».** Avant la Tâche 5, les deux donnaient
+  l'aplat Kinda — une issue sûre. Devenues un SAUT, cette confusion faisait
+  sauter un article sur une simple coupure réseau, avec une raison fausse.
+  Détail dans le paragraphe qui suit (« Une réserve EN PANNE… »).
+- **Ceinture de mise en service** : un créneau déjà GELÉ avant le déploiement
+  de cette tâche peut porter un post composé avec `FOND_KINDA` en fond — la
+  publication (`runner._publier`) le détecte désormais et REFUSE de publier :
+  le créneau se libère (`_liberer`, pas d'exclusion), l'article se met en
+  pause comme un saut normal, dossier figé effacé. Sans cette ceinture, la
+  fusion aurait exigé une opération manuelle sur les créneaux déjà gelés en
+  base.
+- **M-1** : un créneau réattribué à un NOUVEL article gardait l'ancienne
+  `erreur` (« visuel introuvable : … ») jusqu'à ce qu'une composition
+  réussisse — trompeur au dashboard. `appliquer_arbitrage` l'efface dès que
+  `article_id` change.
+
 Deux **réserves**, ouvertes dans l'ordre et seulement tant qu'aucune n'a donné :
 1. le compte qui a publié l'actu (jamais un `categorie=media`) ;
 2. les artistes suivis **cités** par l'actu — un line-up cite des artistes qu'on
@@ -673,11 +716,32 @@ Les photos sont COPIÉES en local (les URL signées du CDN expirent avant le gel
 passent devant le **même juge, avec le même cache par URL**. Un candidat qu'on n'a
 pas su juger n'est jamais retenu : contrairement au classement de
 `choisir_illustration`, où l'inconnu passe devant une affiche avérée, ici
-l'alternative (le fond Kinda) est sûre — on ne lui préfère qu'une image dont le
-juge a dit qu'elle n'est PAS une affiche. Une réserve en panne ne fait pas
-publier l'affiche pour autant ; seul un juge muet **sur le fond lui-même** rend le
-comportement d'avant (on ne sait rien, donc on ne touche à rien) — c'est aussi ce
-qui se passe avec `ILLUSTRATION_VISION_ENABLED=false`.
+l'alternative est sûre (depuis la Tâche 5, un SAUT plutôt que l'aplat Kinda) —
+on ne lui préfère qu'une image dont le juge a dit qu'elle n'est PAS une
+affiche. Seul un juge muet **sur le fond lui-même** rend le comportement
+d'avant (on ne sait rien, donc on ne touche à rien) — c'est aussi ce qui se
+passe avec `ILLUSTRATION_VISION_ENABLED=false` : cette coupure est un RÉGLAGE
+délibéré, jamais une panne, et ne doit jamais faire sauter ni reporter un
+créneau à elle seule.
+
+**Une réserve EN PANNE de transport (quota Graph, réseau, budget épuisé) n'est
+plus confondue avec une réserve qui a réellement regardé et n'a rien trouvé**
+(tour de correction 1/5, 2026-09-21 — I-1). Avant cette correction, `eviter_
+l_affiche` retombait sur `FOND_KINDA` dans les deux cas, ce qui était sûr tant
+que l'aplat restait publiable ; devenu un SAUT (Tâche 5), la confusion faisait
+sauter un article sur une simple coupure réseau, avec une raison fausse
+(« aucune image… ni sur le web » quand le web n'avait jamais répondu). Les
+lots (`Lot.photos`) et `recherche_web.candidats_du_web` lèvent désormais
+`app.content.visuels.VisuelDiffere` quand ils n'ont PAS PU regarder ;
+`eviter_l_affiche` la capture par barreau (elle reste dans son invariant « ne
+lève jamais » : c'est `Fond.differe`, pas une exception, qui en sort) et,
+si aucun barreau qui a pu regarder n'a rien donné, rend `Fond(fond, origine,
+differe=True)` au lieu de l'aplat. `compose.resoudre_fond` traduit ce
+`differe` en `VisuelsDifferes` (un REPORT, comme une panne de lecture
+Instagram) plutôt qu'en `VisuelIntrouvable` (un SAUT) — le créneau retente au
+passage suivant, sans se mettre en pause. Si un barreau plus loin réussit
+malgré la panne d'un barreau précédent, la panne n'a aucune conséquence : le
+premier qui donne une vraie photo gagne, comme avant.
 
 Coût : ce chemin **ne coûte rien** tant que le fond retenu n'est pas une affiche
 avérée — ni lecture de compte, ni téléchargement, ni jeton. Les réserves voyagent
@@ -1354,9 +1418,11 @@ legende.py`).
 **Le dernier recours : une image du WEB** (2026-09-18, `app/content/
 recherche_web.py`). Après un post publié sur l'aplat Kinda parce que chaque
 candidat était une affiche de line-up : « ne saute pas l'actu, cherche une image
-sur le web en dernier recours. » L'échelle a donc un barreau de plus, et c'est
-le dernier : médias de l'actu → compte source → artistes suivis cités → **web**
-→ fond Kinda. Il ne s'ouvre jamais tant qu'un barreau au-dessus a donné.
+sur le web en dernier recours. » L'échelle a donc un barreau de plus. Depuis
+la Tâche 5 (2026-09-21), ce n'est plus le dernier : médias de l'actu → compte
+source → artistes suivis cités → **web** → **on saute le créneau** (plus de
+fond Kinda en bout d'échelle, voir plus haut « Génération de posts »). Le web
+ne s'ouvre jamais tant qu'un barreau au-dessus a donné.
 
 Mécanique : l'outil **`web_search`** de l'API Anthropic (server tool, variante de
 base `web_search_20250305` — `visuels_model` est Haiku 4.5) rend des PAGES, dont
@@ -1382,8 +1448,9 @@ premières reprises échouaient (titre commençant par un verbe, aucun artiste
 cité), la requête valait None, et le dernier recours ne partait JAMAIS — sur le
 cas même pour lequel il a été écrit. La requête produite est désormais
 « Transmusicales festival photo ». Verrouillé par un test de bout en bout
-(`tests/test_visuels_web.py`) qui prouve que l'aplat Kinda n'est atteint
-qu'APRÈS une recherche web restée bredouille.
+(`tests/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
+(le saut depuis la Tâche 5, l'aplat Kinda avant elle) n'est atteinte qu'APRÈS
+une recherche web restée bredouille.
 
 **Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
 c'est un projet perso donc c'est ok »). **Le site n'est en revanche plus cité**
@@ -1410,10 +1477,18 @@ visuels des comptes Instagram média). **Jamais pour la VIDÉO d'un reel** — u
 reel sans vidéo n'existe pas ; le web peut en revanche fournir le FOND de sa
 cover, qui est une image rendue par Chromium. Le juge visuel y est INDULGENT
 (`illustration.meilleures_photos(garder_inconnues=True)`) : pour une réserve de
-fond l'alternative est l'aplat Kinda, qui est sûr, mais ici l'alternative est de
-sauter l'actu — une image non jugée (vision coupée, quota) vaut mieux que rien.
-Une affiche avérée reste écartée. Le module ne lève JAMAIS : toute panne rend une
-liste vide et la cover part sur le fond Kinda.
+fond l'alternative est désormais un SAUT (avant la Tâche 5 : l'aplat Kinda, sûr
+lui aussi), mais ici l'alternative est de sauter l'ARTICLE tout entier (pas de
+visuel du tout, `AucunVisuel`) — une image non jugée (vision coupée, quota) vaut
+mieux que rien. Une affiche avérée reste écartée. Le module ne lève JAMAIS pour
+un défaut de JUGEMENT (image illisible, quota du juge) : toute panne de ce genre
+rend une liste vide. Il lève en revanche délibérément `app.content.visuels.
+VisuelDiffere` (tour de correction 1/5, 2026-09-21) quand la recherche elle-même
+n'a PAS PU être tentée (réseau, quota) — pour que l'appelant sache qu'il doit
+REPORTER (`VisuelsDifferes`) plutôt que conclure à l'absence d'image : sans
+cette distinction, une simple coupure réseau faisait sauter un créneau avec la
+raison fausse « aucune image… ni sur le web » alors que le web n'avait jamais
+répondu.
 
 Sans visuel autorisé, l'article reste au dashboard (pastille « 🚫 sans visuel »,
 raison via `store.raison_sans_visuel`, sans appel réseau — un artiste suivi cité

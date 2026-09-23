@@ -82,6 +82,7 @@ from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCrene
 from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.publish.preparation_reel import ReelInadapte
+from app.schedule.pause_visuels import marquer_saute
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -430,10 +431,25 @@ def _composer(
             # toute facon -- ce n'est pas un appel de plus, seulement plus tot.
             try:
                 fond_precalcule = resoudre_fond(visuels, template)
+            except VisuelsDifferes as exc:
+                # I-1 (tour de correction 1/5) : au moins une reserve n'a pas
+                # pu etre CONSULTEE (reseau, quota) -- un report, jamais un
+                # saut : sans cette distinction, une simple coupure reseau
+                # mettait l'article en pause pour rien.
+                erreur = f"composition differee : {exc}"[:1000]
+                if creneau.erreur != erreur:
+                    _ecrire_si(db, creneau, attendu, erreur=erreur)
+                continue
             except VisuelIntrouvable as exc:
                 # SAUT, pas exclusion : l'article peut avoir une photo demain
                 # (nouveau post du compte, recherche web qui sort du cache). Le
                 # creneau se libere et prend le candidat suivant tout de suite.
+                # C-1 (tour de correction 1/5) : sans mise a l'ecart, l'article
+                # revenait sur ce meme creneau libere a CHAQUE passage (le
+                # meilleur score gagne l'arbitrage), sautait encore, jusqu'a
+                # MANQUE -- une seule mauvaise image pouvait ainsi faire taire
+                # tout le compte une journee entiere.
+                marquer_saute(article.id, maintenant)
                 _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
                 rapport.sautes += 1
                 exclusions = True
@@ -728,6 +744,25 @@ def _publier(
                 rapport.echecs += 1
                 _effacer_dossier(creneau)
                 _prevenir(notifier, f"publication de {_heure_locale(creneau.publier_a)} en echec : {refus}")
+            continue
+
+        if fond_de_cover(post) == FOND_KINDA:
+            # Ceinture de mise en service (tour de correction 1/5) : un
+            # creneau deja GELE avant le deploiement de la Tache 5 peut porter
+            # un post compose quand l'aplat Kinda etait encore une issue
+            # publiable. Ce n'est plus le cas -- refuser de publier plutot que
+            # de laisser cette fusion exiger une operation manuelle sur les
+            # creneaux deja geles en base. Pas d'exclusion (l'article n'y est
+            # pour rien) ; mise en pause comme un saut normal (C-1), sinon
+            # l'arbitrage relancerait le meme article sur ce meme creneau.
+            if article is not None:
+                marquer_saute(article.id, maintenant)
+            if _liberer(
+                db, creneau, attendu,
+                "aplat Kinda en fond : publication refusee, nouvelle composition",
+            ):
+                rapport.sautes += 1
+                _effacer_dossier(creneau)
             continue
 
         # Le mode RELU juste avant la reclamation : un passage peut durer bien plus

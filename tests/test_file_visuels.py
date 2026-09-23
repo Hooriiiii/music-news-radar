@@ -619,3 +619,117 @@ def test_un_brouillon_anterieur_a_la_tache_5_sur_l_aplat_kinda_est_recompose(db_
 
     assert outils.composes == [article.id]
     assert creneau.post_id not in (None, ancien.id)
+
+
+# --- Tour de correction 1/5 (2026-09-21) ------------------------------------
+
+
+def _article_score(db, source, titre, relevance, media, heures=2):
+    n = next(_numeros)
+    article = Article(
+        source_id=source.id, url=f"https://www.instagram.com/p/S{n}/", title=titre,
+        raw_hash=f"s{n:063d}", relevance_score=relevance, hotness_score=30,
+        published_at=BASE - dt.timedelta(hours=heures), media=media,
+    )
+    db.add(article)
+    db.commit()
+    return article
+
+
+def test_c1_un_article_sans_visuel_ne_fait_plus_taire_le_compte_toute_la_journee(
+    db_session, fred, monkeypatch
+):
+    """C-1 (tour de correction 1/5), mesure sur 120 passages simules par la
+    revue : sans mise a l'ecart, un article au MEILLEUR score sans visuel de
+    qualite revient sur le creneau qu'il vient de liberer a CHAQUE passage --
+    le score gagne toujours l'arbitrage -- jusqu'a MANQUE. Mesure de la revue :
+    3 creneaux du jour en MANQUE, ZERO publication, quatre bons articles
+    jamais atteints.
+
+    Reproduit ici avec des fenetres COMPRESSEES (35 minutes au lieu d'une
+    journee) pour couvrir un jour de publication en une poignee de passages
+    de 10 min plutot que 144 ; `db_session.autoflush = False` (le reglage de
+    PRODUCTION, `app/db.py`) ; et SANS epingler l'article fautif -- c'est
+    l'arbitrage, pas un test truque, qui doit le laisser de cote."""
+    from app.content import illustration
+
+    db_session.autoflush = False
+    # Trois creneaux dans la meme demi-heure plutot que repartis sur le jour :
+    # meme dynamique d'arbitrage (le meilleur score gagne le creneau le plus
+    # proche), sans avoir besoin de 144 passages pour couvrir 24 h.
+    monkeypatch.setattr(settings, "publication_fenetres", "08:30-08:35,08:45-08:50,09:00-09:05")
+    # Pause courte : observer le retour de l'article sans rejouer 3 h de passages.
+    monkeypatch.setattr(settings, "visuel_saute_pause_minutes", 20)
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+
+    petit = _article_score(db_session, fred, "Petite photo, gros score", 95,
+                           [entree("photo", "https://cdn.ig/petite.jpg")])
+    bons = [
+        _article_score(db_session, fred, f"Bonne actu {n}", 70 - n,
+                       [entree("photo", f"https://cdn.ig/bonne{n}.jpg")])
+        for n in range(4)
+    ]
+
+    def choisir(db, article, format_, maintenant):
+        # Jamais de reserve : la petite photo ne peut etre sauvee par rien --
+        # c'est le cas exact que la Tache 5 doit sauter.
+        return ChoixVisuels(
+            [actif(entree("photo", article.media[0]["url"]), origine="article",
+                  compte="@fred", article_id=article.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    # Demarre une heure avant l'ouverture de la premiere fenetre (08:30 Paris) :
+    # BASE (04:00 UTC = 06:00 Paris) - 1h = 05:00 Paris.
+    debut = BASE - dt.timedelta(hours=1)
+    apercus_totaux, sautes_totaux = 0, 0
+    for pas in range(40):  # 40 x 10 min = 6h40 : couvre les trois creneaux jusqu'a leur publication
+        rapport = outils.tourner(db_session, maintenant=debut + dt.timedelta(minutes=10 * pas),
+                                 choisir=choisir)
+        apercus_totaux += rapport.apercus
+        sautes_totaux += rapport.sautes
+
+    db_session.expire_all()
+    # Mode apercu : le conteneur est cree chez Meta mais `media_publish` n'est
+    # jamais appele (`Post.status` reste DRAFT expres) -- l'etat du CRENEAU
+    # (`APERCU`) est ce qui fait avancer la file (`candidats_eligibles`), donc
+    # ce qu'il faut lire ici pour dire qu'un article « est parti ».
+    partis = {
+        c.article_id for c in db_session.query(Creneau).filter(Creneau.etat == EtatCreneau.APERCU)
+    }
+    petit_frais = db_session.get(Article, petit.id)
+    assert petit.id not in partis, "l'article sans visuel ne doit jamais partir"
+    assert partis & {b.id for b in bons}, "au moins un bon article doit avoir ete publie"
+    assert apercus_totaux >= 1
+    assert sautes_totaux >= 1
+    # LE creneau que « petit » libere a repetition (le plus proche, celui que
+    # l'arbitrage lui donne en premier a chaque passage) est celui que le
+    # defaut mesure par la revue vide completement (MANQUE, zero publication).
+    # Sans la mise a l'ecart, l'article fautif le reprend a CHAQUE passage --
+    # avec elle, un bon article le prend et part.
+    premier = (
+        db_session.query(Creneau).order_by(Creneau.publier_a).first()
+    )
+    assert premier.etat == EtatCreneau.APERCU, (
+        f"le premier creneau ne doit pas finir MANQUE : {premier.etat} / {premier.erreur}"
+    )
+    assert premier.article_id in {b.id for b in bons}
+    # Jamais exclu, meme apres plusieurs sauts : il reste eligible pour demain.
+    assert petit_frais.file_exclu_raison is None
+
+
+def test_c1_un_article_revient_apres_sa_pause(db_session, fred):
+    """La mise a l'ecart est TEMPORAIRE : passe la duree de la pause,
+    l'article redevient un candidat normal -- ce n'est pas une exclusion."""
+    from app.schedule.pause_visuels import articles_en_pause, marquer_saute
+
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    fin = marquer_saute(article.id, BASE, duree=dt.timedelta(minutes=30))
+
+    assert article.id in articles_en_pause(BASE + dt.timedelta(minutes=10))
+    assert article.id in articles_en_pause(fin - dt.timedelta(seconds=1))
+    assert article.id not in articles_en_pause(fin)
+    assert article.id not in articles_en_pause(fin + dt.timedelta(hours=1))

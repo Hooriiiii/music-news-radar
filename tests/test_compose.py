@@ -17,14 +17,16 @@ from app.content.compose import (
     probleme_accents,
     probleme_cloture_question,
     probleme_emojis,
+    resoudre_fond,
 )
-from app.content.choix_visuels import ChoixVisuels, VisuelIntrouvable
-from app.content.illustration import Lot
+from app.content.choix_visuels import ChoixVisuels, VisuelIntrouvable, VisuelsDifferes
+from app.content.illustration import Lot, Verdict
 from app.content.media import entree
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
+    VisuelDiffere,
     actif,
 )
 from app.models import Article, Source, SourceType
@@ -568,6 +570,33 @@ def test_la_cover_reel_suit_la_meme_regle(db_session):
     )
 
     assert post.slides[0]["image_url"] == "https://cdn/live.jpg"
+
+
+def test_resoudre_fond_reporte_au_lieu_de_sauter_sur_une_panne_de_reserve(db_session, monkeypatch):
+    """Tour de correction 1/5 (I-1) : quand `eviter_l_affiche` rend
+    `Fond.differe=True` (au moins une reserve n'a pas pu etre consultee),
+    `resoudre_fond` doit REPORTER (`VisuelsDifferes`), jamais sauter
+    (`VisuelIntrouvable`) -- les deux issues ont des consequences tres
+    differentes au planificateur (report : le creneau garde l'article ; saut :
+    l'article se met en pause)."""
+    from app.content import illustration
+
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn/petite.jpg": (564, 345)}
+    )
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+        secours=[Lot(ORIGINE_COMPTE, lambda: (_ for _ in ()).throw(VisuelDiffere("quota")))],
+    )
+
+    with pytest.raises(VisuelsDifferes):
+        resoudre_fond(
+            choix, "kinda_post",
+            selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+            verdicts_fond=lambda urls: {
+                "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+            },
+        )
 
 
 def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):

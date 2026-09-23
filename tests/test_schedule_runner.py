@@ -105,6 +105,39 @@ def _jusqu_a_publication(outils, db, heure, mode="reel"):
         outils.tourner(db, heure + dt.timedelta(minutes=decalage), mode=mode)
 
 
+def test_c1_ceinture_refuse_de_publier_un_creneau_gele_sur_l_aplat_kinda(db_session, article):
+    """Ceinture de mise en service (tour de correction 1/5) : un creneau deja
+    GELE avant la Tache 5 peut porter un post compose quand l'aplat Kinda
+    etait encore une issue publiable. Ce n'est plus le cas -- la publication
+    le detecte et REFUSE : le creneau se libere (pas d'exclusion, l'article
+    n'y est pour rien), et se met en pause comme un saut normal (sinon
+    l'arbitrage lui redonnerait aussitot le meme creneau)."""
+    from app.content.visuels import FOND_KINDA
+    from app.schedule.pause_visuels import articles_en_pause
+
+    post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
+                caption="L", slides=[{"kind": "cover", "image_url": FOND_KINDA}],
+                template="kinda_post", assets=[])
+    db_session.add(post)
+    db_session.commit()
+    creneau = Creneau(publier_a=H0, article_id=article.id, post_id=post.id,
+                      etat=EtatCreneau.GELE, fichiers=["p_01.jpg"])
+    db_session.add(creneau)
+    db_session.commit()
+
+    outils = Outils()
+    maintenant = H0 + dt.timedelta(minutes=20)
+    rapport = outils.tourner(db_session, maintenant)
+
+    db_session.refresh(creneau)
+    db_session.refresh(article)
+    assert outils.publies == []  # jamais envoye a Meta
+    assert (creneau.article_id, creneau.etat) == (None, EtatCreneau.LIBRE)
+    assert article.file_exclu_raison is None
+    assert rapport.sautes == 1
+    assert article.id in articles_en_pause(maintenant)
+
+
 def test_en_arret_l_agent_ne_fait_rien(db_session, article):
     outils = Outils()
     outils.tourner(db_session, H0 - dt.timedelta(hours=3), mode="arret")

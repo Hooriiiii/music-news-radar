@@ -160,6 +160,11 @@ def main() -> None:
     compteurs = {
         "composes": rapport.composes, "geles": rapport.geles, "publies": rapport.publies,
         "apercus": rapport.apercus, "manques": rapport.manques, "echecs": rapport.echecs,
+        # Tache 5, I-2 (tour de correction 1/5) : le saut faute de visuel de
+        # bonne qualite doit etre VISIBLE au meme titre que les autres
+        # compteurs -- un feed qui se tait sans rien dire est le pire des deux
+        # mondes (CLAUDE.md).
+        "sautes": rapport.sautes,
     }
     # Silence quand rien ne se passe : le log ne grossit pas de 144 lignes vides par jour.
     if any(compteurs.values()) or rapport.erreurs:
