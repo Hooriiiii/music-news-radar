@@ -57,10 +57,10 @@ DEFAULT_WINDOW_HOURS = 48
 
 # Prefixe des raisons d'exclusion posees PAR CE MODULE (`appliquer`, plus bas) :
 # seule une raison qui COMMENCE PAR CECI peut etre effacee par l'auto-reparation
-# du verdict manuel (tour de correction 3/5). Sans ce filtre, l'auto-reparation
-# effacait AUSSI une exclusion posee ailleurs (gel ou composition impossibles),
-# remettant dans la file un article que la publication avait ecarte pour une
-# raison sans rapport avec un doublon.
+# du verdict manuel. Sans ce filtre, l'auto-reparation effacerait AUSSI une
+# exclusion posee ailleurs (gel ou composition impossibles), remettant dans la
+# file un article que la publication avait ecarte pour une raison sans rapport
+# avec un doublon.
 RAISON_DOUBLON_PREFIXE = "doublon d'une actu deja publiee"
 
 
@@ -199,12 +199,12 @@ def link_duplicates(
     d'appeler l'API. Un verdict MANUEL (posé par
     `scripts.marquer_doublon_manuel`) est vérifié AVANT toute mesure et prime
     sur tout, y compris sur la bande certaine -- et vaut aussi pour une paire
-    de deux articles FRAIS (tour de correction 1/5) : l'utilisateur a le droit
-    de défaire n'importe quel lien, pas seulement un lien d'archive.
+    de deux articles FRAIS : l'utilisateur a le droit de défaire n'importe
+    quel lien, pas seulement un lien d'archive.
 
     **Deux passes pour ne pas geler l'arbitrage sur une paire qui échoue**
-    (tour de correction 1/5, revue sur le vrai SDK). Une réponse Claude qui ne
-    passe pas la validation (JSON hors schéma) est une PANNE : rien n'est
+    (mesuré sur le vrai SDK). Une réponse Claude qui ne passe pas la
+    validation (JSON hors schéma) est une PANNE : rien n'est
     mémorisé, donc rien n'empêche de la redemander -- mais un article dont
     l'UNIQUE candidat douteux échoue systématiquement consommerait alors une
     part du budget à CHAQUE passage, au détriment des paires jamais tentées
@@ -216,8 +216,8 @@ def link_duplicates(
     (passe 1) avant de rejouer celles déjà en échec, sous le plafond (passe 2)
     -- un article n'est promu nouveau représentant qu'après ces deux passes.
     Un article DIFFÉRÉ en passe 1 reste néanmoins un représentant POSSIBLE
-    dès cette passe (tour de correction 2/5) : sinon un article frais plus
-    RÉCENT qui le reprend usurpe sa place, et le plus ancien finit par se lier
+    dès cette passe : sinon un article frais plus RÉCENT qui le reprend
+    usurpe sa place, et le plus ancien finit par se lier
     au plus récent -- l'inverse de la règle ci-dessus. S'il résout finalement
     vers l'archive en passe 2, tout article qui l'avait pris pour
     représentant entre-temps est REPOINTÉ directement vers la vraie cible :
@@ -254,9 +254,9 @@ def link_duplicates(
     # absent (c'est le cas de `run_veille`), sans jamais coûter un appel.
     cache = lire_cache(cache_chemin)
 
-    # AUTO-RÉPARATION, à CHAQUE passage, AVANT toute lecture des candidats
-    # (tour de correction 2/5) : un lien déjà posé EN BASE dont la paire porte
-    # un verdict manuel "différent" est défait ici, quelle que soit la façon
+    # AUTO-RÉPARATION, à CHAQUE passage, AVANT toute lecture des candidats :
+    # un lien déjà posé EN BASE dont la paire porte un verdict manuel
+    # "différent" est défait ici, quelle que soit la façon
     # dont il est apparu -- une course non prévue entre l'arbitre et
     # `scripts.marquer_doublon_manuel` (l'utilisateur corrige PENDANT que
     # Claude répond "même actu" dans le même passage), un crash entre deux
@@ -322,9 +322,9 @@ def link_duplicates(
         differe = False
         for rep_article, rep_tokens, rep_archive in representatives:
             if rep_article is article:
-                # Un article différé (tour de correction 2/5) est ajouté à
-                # `representatives` en passe 1 pour rester un représentant
-                # POSSIBLE pour d'autres articles frais -- jamais pour
+                # Un article différé est ajouté à `representatives` en passe 1
+                # pour rester un représentant POSSIBLE pour d'autres articles
+                # frais -- jamais pour
                 # lui-même : sans ce garde-fou, sa propre entrée matcherait à
                 # coup sûr (mêmes jetons) et le lierait à... lui-même.
                 continue
@@ -394,7 +394,7 @@ def link_duplicates(
 
     def lier(article: Article, representant: Article) -> list[Article]:
         """SEUL point d'écriture de `duplicate_of_id` VERS un autre article
-        dans ce module (tour de correction 3/5) : pose le lien ET aplatit
+        dans ce module : pose le lien ET aplatit
         IMMÉDIATEMENT toute chaîne qui en découlerait, en repointant vers
         `representant` tout article qui pointait déjà vers `article`. La
         garantie « jamais de chaîne, un seul saut suffit toujours » doit
@@ -416,8 +416,7 @@ def link_duplicates(
 
         Rend les articles REPOINTÉS : la mécanique est la même quelle que soit
         l'origine du lien, mais ce qu'il faut en ENREGISTRER (trace, compteur)
-        dépend de l'origine, que seul `appliquer` connaît (tour de correction
-        4/5)."""
+        dépend de l'origine, que seul `appliquer` connaît."""
         article.duplicate_of_id = representant.id
         db.flush()
         repointes = list(
@@ -502,9 +501,9 @@ def link_duplicates(
     # Passe 1 : sert les paires jamais tentées en priorité. Un article dont le
     # SEUL candidat pertinent est une paire déjà en échec est différé, mais
     # reste un REPRÉSENTANT POSSIBLE pour les articles frais traités plus tard
-    # dans CETTE passe (mineur trouvé en revue, tour de correction 2/5) :
-    # sans ça, un article plus récent usurperait la place du plus ancien dans
-    # la docstring ("le représentant est l'article vu le PLUS TÔT"), puisque
+    # dans CETTE passe : sans ça, un article plus récent usurperait la place
+    # du plus ancien dans la docstring ("le représentant est l'article vu le
+    # PLUS TÔT"), puisque
     # l'ancien n'aurait alors jamais figuré parmi les candidats.
     differes: list[tuple[Article, set[str]]] = []
     for article in articles:
@@ -523,7 +522,7 @@ def link_duplicates(
     # L'aplatissement anti-chaîne (un article différé qui servait déjà de
     # représentant possible depuis la passe 1 peut lui-même devenir un
     # doublon ici) est géré à la SOURCE par `lier()`, pas ici -- voir sa
-    # docstring (tour de correction 3/5).
+    # docstring.
     for article, tokens in differes:
         resultat = resoudre(article, tokens, autoriser_retentatives=True)
         appliquer(article, tokens, resultat)
