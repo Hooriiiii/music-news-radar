@@ -37,6 +37,47 @@ Bordeaux, Lille, Toulouse, Nantes, Rennes, Brest), cœur électro + festivals, a
 **Bretagne en bonus de départage** — un angle récurrent, jamais le sujet principal.
 Ne pas dériver vers un compte régional.
 
+**La pop est un territoire ADJACENT, ni banni ni protégé** (2026-09-23, section 2.4
+de `docs/contexte-produit.md`). Elle est valorisée quand elle remplit une des onze
+conditions écrites dans le prompt — grosse actu internationale, phénomène culturel
+massif, artiste important en France, dance-pop, electro-pop, hyperpop, K-pop
+réellement importante, collaboration électro, nouveau mouvement esthétique,
+phénomène générationnel, tendance influente — et suit la grille ordinaire sinon
+(40-59 pour une actu moyenne). **La K-pop suit exactement la même règle** : les noms
+de groupes cités dans le prompt sont des exemples, pas un passe-droit.
+
+La règle remplacée disait « ne les déprioris JAMAIS » et **n'était pas arbitraire** :
+elle existait parce que le modèle déprioris la pop tout seul, vu le poids de
+l'électro partout ailleurs dans le prompt. Le resserrement a donc été MESURÉ dans
+les deux sens, sur 53 articles réels re-scorés avec l'ancien et le nouveau prompt
+(106 appels Haiku, 0,11 $) :
+
+| échantillon | avant | après | delta moyen |
+|---|---|---|---|
+| K-pop de promotion routinière (n=21) | 17 au-dessus de 60 | 3 | −18,8 |
+| zone frontière pop/électro (n=10) | — | 8 restent du même côté | −8,0 |
+| témoin électro et festivals (n=22) | 21 | 21, zéro franchissement | −0,4 |
+
+Ce gradient est le résultat voulu : le resserrement mord sur la promotion
+routinière, effleure la frontière, et ne touche pas au cœur de ligne.
+
+**Le pré-filtre local partage ce prompt** (`prefilter.py` importe `SYSTEM_PROMPT`).
+Une phrase de `CONSIGNE_PREFILTRE` lui interdit de ranger la pop en « actu hors
+ligne » : sans elle, le resserrement rendait possible l'enchaînement « pop ∉ cœur de
+ligne → pop ∉ axes prioritaires → hors ligne → sous 45 → jamais envoyée à Claude »,
+qui aurait écarté en silence des actus que Claude aurait gardées à 75.
+
+**Aucun garde-fou déterministe** n'accompagne cette règle, et c'est délibéré : la
+différence entre une actu K-pop réellement importante et un classement hebdomadaire
+est sémantique. Ni le nom de la source (Soompi peut porter une vraie grosse actu) ni
+un motif de titre ne la capturent sans casser des cas légitimes.
+
+**Ce que cette règle NE fait PAS** : elle baisse des notes, elle ne garantit aucune
+proportion. Le mix éditorial visé par `docs/contexte-produit.md` (~10-15 % de pop
+mainstream) demanderait un ordonnanceur à quotas dans la file de publication —
+il n'existe pas. Et il ne devra PAS être mis dans `relevance` : une note répond à
+« cette information est-elle bonne ? », pas à « en ai-je assez publié cette semaine ? ».
+
 Concurrents directs identifiés (médias électro FR natifs-Instagram, centrés
 événements) : Electro News (~166K abonnés IG, existe depuis 2009, organise ses
 soirées, label EN records), Guettapen (~117K, app mobile, affiliation billetterie
@@ -48,8 +89,9 @@ la pub display ni les bonus Instagram (largement arrêtés). Leurs flux RSS sont
 ingérés comme sources de veille (ils sortent les annonces FR en premier) ; Kinda ne
 les reposte pas, il remonte à la source.
 
-Ligne éditoriale (prompt scoring `app/pipeline/scoring.py`) : cœur électro + grosses
-actus pop, PLUS quatre axes transversaux valorisés — festivals à toutes les échelles
+Ligne éditoriale (prompt scoring `app/pipeline/scoring.py`) : cœur électro, pop en
+**territoire ADJACENT et CONDITIONNEL** (2026-09-23, voir ci-dessous), PLUS quatre
+axes transversaux valorisés — festivals à toutes les échelles
 (local Bretagne, national FR, international), infos positives/feel-good, musique ×
 écologie/environnement, grosses actus musicales générales. Sources FR pour la
 couverture locale : Tsugi (RSS) + Google News ciblés (festivals Bretagne, festivals
