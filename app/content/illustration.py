@@ -648,12 +648,18 @@ def eviter_l_affiche(
     # `origine_par_candidat`/`photos_par_candidat` (revue, tour de correction
     # 1/5) : sans eux, un candidat agrandissable venu d'une RESERVE retombait
     # sur l'origine par DEFAUT (`origine_de` ne connait que les `actifs`, pas
-    # les lots) et sans aucune `photos` -- trois degats en cascade dans
-    # `create_post` : le credit de compte disparaissait de la legende, le
-    # dashboard mentait sous « Image de fond », et `actifs_de_secours` ne
-    # rendait aucune slide (« jamais un post qui ne montre rien » ne
-    # s'appliquait plus). Chaque candidat garde ici l'origine et le cortege
-    # qu'il aurait recus s'IL avait ete le gagnant normal du barreau.
+    # les lots) et sans aucune `photos` -- deux degats reels dans
+    # `create_post` : `variants["fond"]["origine"]` mentait sous « Image de
+    # fond » au dashboard (`article` au lieu de `compte`/`artiste`), et
+    # `actifs_de_secours` ne rendait aucune slide (« jamais un post qui ne
+    # montre rien » ne s'appliquait plus). Le credit `@compte`, lui, restait
+    # correct dans les deux cas : `actifs_de_secours` pose `compte=None` sur
+    # ses actifs, donc `credit_des_actifs` rend `None` et `create_post`
+    # retombe sur `or credit` (celui de `visuels`) -- meme repli que le
+    # chemin nominal (revue, tour de correction 2/5 : signale a tort comme un
+    # troisieme degat au tour precedent). Chaque candidat garde ici
+    # l'origine et le cortege qu'il aurait recus s'IL avait ete le gagnant
+    # normal du barreau.
     differe = False
     tentes: list[str] = [fond, *(u for u in (candidats or ()) if u and u != fond)]
     origine_par_candidat: dict[str, str] = {}
@@ -667,8 +673,14 @@ def eviter_l_affiche(
             continue
         tentes.extend(photos)
         for photo in photos:
-            origine_par_candidat[photo] = lot.origine
-            photos_par_candidat[photo] = (photo, *(p for p in photos if p != photo))
+            # `setdefault` (tour de correction 2/5, remarque cosmetique) :
+            # si la meme URL apparait dans deux lots (rare), le PREMIER lot
+            # parcouru gagne -- coherent avec la priorite de l'echelle,
+            # plutot que le dernier a s'ecrire silencieusement.
+            origine_par_candidat.setdefault(photo, lot.origine)
+            photos_par_candidat.setdefault(
+                photo, (photo, *(p for p in photos if p != photo))
+            )
         if candidat is not None:
             logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, candidat)
             return Fond(candidat, lot.origine, photos)

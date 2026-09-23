@@ -927,18 +927,22 @@ résultat repasse le plancher, `post.slides` est RÉASSIGNÉ (jamais muté en
 place, colonne JSON) sur la copie locale nette, que `render_post` lira
 ensuite.
 
-**Le candidat agrandissable garde son crédit et ses photos de slides, même
-venu d'une RÉSERVE** (revue, tour de correction 1/5 — le défaut le plus
-grave signalé). Le premier jet ne rendait `Fond(agrandissable, origine,
-a_agrandir=True)` qu'avec l'origine par défaut (`origine_de` ne connaît que
-les médias de l'article, jamais les lots compte/artiste/web) et sans
-`photos` : un candidat venu de la réserve « compte » partait donc en fond
-SANS le crédit `📸 @compte` — règle dure que l'utilisateur a maintenue à
-chaque itération de ce chantier, « jamais coupé » —, le dashboard affichait
-une origine fausse sous « Image de fond », et `actifs_de_secours` ne
-produisait aucune slide, rouvrant la faille « jamais un post qui ne montre
-rien » (post Noisia, 2026-09-18). `eviter_l_affiche` associe désormais à
-CHAQUE candidat de réserve, pendant le parcours de l'échelle, l'origine du
+**Le candidat agrandissable garde son origine réelle et ses photos de
+slides, même venu d'une RÉSERVE** (revue, tour de correction 1/5). Le
+premier jet ne rendait `Fond(agrandissable, origine, a_agrandir=True)`
+qu'avec l'origine par défaut (`origine_de` ne connaît que les médias de
+l'article, jamais les lots compte/artiste/web) et sans `photos` : un
+candidat venu de la réserve « compte » faisait alors mentir le dashboard
+sous « Image de fond » (`variants["fond"]["origine"]` valait `article` au
+lieu de `compte`), et `actifs_de_secours` ne produisait aucune slide,
+rouvrant la faille « jamais un post qui ne montre rien » (post Noisia,
+2026-09-18). Le crédit `📸 @compte`, lui, n'était PAS perdu ni avant ni
+après ce correctif — `actifs_de_secours` pose `compte=None` sur ses actifs,
+donc `credit_des_actifs` rend `None` et `create_post` retombe sur `or
+credit` (celui de `visuels`), exactement comme le chemin nominal ; annoncé
+à tort comme un troisième dégât au tour de correction 1/5, corrigé au tour
+2/5. `eviter_l_affiche` associe désormais à CHAQUE candidat de réserve,
+pendant le parcours de l'échelle, l'origine du
 lot et le cortège de photos qu'il aurait reçu s'il avait gagné normalement
 — sans coût, cette information est déjà là au moment où le candidat est
 examiné.

@@ -401,6 +401,10 @@ def test_un_fond_trop_petit_part_agrandissable_sans_reserve():
     assert fond == Fond(
         "https://cdn.test/petite.jpg", ORIGINE_ARTICLE, a_agrandir=True
     )
+    # `a_agrandir` est `compare=False` sur `Fond` (bagage, comme `photos`) :
+    # le `==` ci-dessus ne le verifie PAS, d'ou cette assertion explicite
+    # (revue, tour de correction 2/5).
+    assert fond.a_agrandir is True
 
 
 def test_un_fond_trop_petit_pour_meme_etre_agrandi_part_sur_le_fond_kinda():
@@ -434,6 +438,10 @@ def test_le_seuil_de_230px_sauve_des_sources_qu_un_seuil_de_300_aurait_ecartees(
     )
 
     assert fond == Fond("https://cdn.test/moyenne.jpg", ORIGINE_ARTICLE, a_agrandir=True)
+    # `a_agrandir` est `compare=False` : assertion explicite (tour de
+    # correction 2/5), voir `test_un_fond_trop_petit_part_agrandissable_
+    # sans_reserve`.
+    assert fond.a_agrandir is True
 
 
 def test_un_candidat_de_taille_inconnue_n_est_jamais_retenu_pour_l_agrandissement():
