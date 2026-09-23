@@ -63,7 +63,14 @@ def _sans_fuseau(moment: dt.datetime) -> dt.datetime:
 # -- creation et extension ---------------------------------------------------
 
 
-def test_fresh_link_creates_one_event_with_both_observations(db_session):
+def test_fresh_link_creates_one_event_with_both_observations(db_session, monkeypatch):
+    db_session.autoflush = False
+    # `_TABLES_PRESENTES` est un cache PROCESS-ENTIER (`app/pipeline/events.py`) :
+    # sans le reinitialiser, ce test ne repasserait par l'introspection de
+    # table (`_tables_disponibles`) que s'il est le tout premier a s'executer
+    # dans la suite -- exactement le chemin que le bug de persistance (tour de
+    # correction 1) empruntait.
+    monkeypatch.setattr("app.pipeline.events._TABLES_PRESENTES", None)
     mixmag = _src(db_session, "mixmag")
     tsugi = _src(db_session, "tsugi")
     first = _art(db_session, mixmag, n=1, title="Dour Festival unveils its 2027 lineup",
@@ -72,6 +79,16 @@ def test_fresh_link_creates_one_event_with_both_observations(db_session):
                   hours_ago=2)
 
     link_duplicates(db_session)
+
+    # Persistance REELLE (commit + refresh, pas seulement l'etat en memoire
+    # d'objets qu'`expire_on_commit=False` ne rafraichit jamais tout seul) :
+    # `attacher` a fait une introspection de table entre le flush de
+    # `duplicate_of_id` et le commit final -- une regression qui la ferait
+    # a nouveau passer par une connexion A PART romprait CETTE assertion sans
+    # toucher aux autres, qui ne lisent que des objets fraichement crees.
+    db_session.commit()
+    db_session.refresh(second)
+    assert second.duplicate_of_id == first.id
 
     evenements = _events(db_session)
     assert len(evenements) == 1
@@ -87,6 +104,7 @@ def test_fresh_link_creates_one_event_with_both_observations(db_session):
 
 
 def test_third_member_extends_the_same_event_and_recomputes_counts(db_session):
+    db_session.autoflush = False
     a = _src(db_session, "media-a")
     b = _src(db_session, "media-b")
     c = _src(db_session, "media-c")
@@ -113,6 +131,7 @@ def test_third_member_extends_the_same_event_and_recomputes_counts(db_session):
 
 
 def test_leaves_distinct_stories_without_any_event(db_session):
+    db_session.autoflush = False
     src = _src(db_session, "feed")
     _art(db_session, src, n=1, title="Boris Brejcha annonce une date aux Arenes de Frejus")
     _art(db_session, src, n=2, title="Les sorties electro de la semaine")
@@ -126,6 +145,7 @@ def test_leaves_distinct_stories_without_any_event(db_session):
 
 
 def test_replaying_a_pass_does_not_duplicate_observations(db_session):
+    db_session.autoflush = False
     mixmag = _src(db_session, "mixmag")
     tsugi = _src(db_session, "tsugi")
     _art(db_session, mixmag, n=1, title="Dour Festival unveils its 2027 lineup", hours_ago=5)
@@ -153,6 +173,7 @@ def test_replaying_a_pass_does_not_duplicate_observations(db_session):
 def test_archive_link_adds_an_observation_to_the_published_event(db_session):
     """Un article frais relie a une actu deja PUBLIEE (donc potentiellement
     deja purgee ailleurs) est une observation de plus sur le meme evenement."""
+    db_session.autoflush = False
     ancien_src = _src(db_session, "media-ancien")
     publie = _art(
         db_session, ancien_src, n=1, title="Dour Festival annonce son line-up 2027",
@@ -177,6 +198,7 @@ def test_observation_survives_article_purge_with_denormalized_fields(db_session)
     l'article supprime. SQLite n'applique pas ON DELETE (voir
     tests/test_retention.py), donc on verifie la SURVIE de la ligne et
     l'integrite des champs denormalises, pas la mise a NULL en elle-meme."""
+    db_session.autoflush = False
     src = _src(db_session, "tsugi")
     article = _art(db_session, src, n=1, title="Astropolis 2027 devoile sa premiere vague",
                    hours_ago=3)
@@ -202,6 +224,7 @@ def test_observation_survives_article_purge_with_denormalized_fields(db_session)
 def test_independent_source_count_respects_source_group_id(db_session):
     """Deux sources qui partagent un groupe (depeche reprise) comptent pour UNE
     seule source independante -- l'exemple du blueprint."""
+    db_session.autoflush = False
     afp_1 = _src(db_session, "site-un", source_group_id=42)
     afp_2 = _src(db_session, "site-deux", source_group_id=42)
     autre = _src(db_session, "site-trois")
@@ -217,6 +240,41 @@ def test_independent_source_count_respects_source_group_id(db_session):
     (event,) = _events(db_session)
     assert event.source_count == 3
     assert event.independent_source_count == 2  # {groupe 42, autre.id}
+
+
+# -- membre deja lie AVANT la mise en service de ce module (tour de correction 1, point 2) --
+
+
+def test_previously_linked_member_becomes_an_observation_when_a_third_joins(db_session):
+    """Reproduit la mesure de production : R et M sont deja lies (comme les
+    550 groupes existants au moment de la mise en service, tous crees par
+    l'ancien code, donc sans aucune observation), un troisieme article N
+    rejoint le groupe. `attacher` ne doit pas se limiter aux deux articles que
+    CET appel a `lier()` touche (N et R) -- il doit relire le groupe ENTIER et
+    donner a M, invisible de cet appel, l'observation qu'il n'a jamais eue."""
+    db_session.autoflush = False
+    src_r = _src(db_session, "media-r")
+    src_m = _src(db_session, "media-m")
+    src_n = _src(db_session, "media-n")
+
+    r = _art(db_session, src_r, n=1, title="Boris Brejcha announces Arenes de Frejus show",
+             hours_ago=6)
+    # M est deja lie a R, mais AUCUN evenement n'existe : exactement l'etat
+    # d'un groupe forme avant que ce module n'existe.
+    m = _art(db_session, src_m, n=2, title="Boris Brejcha : concert deja annonce", hours_ago=5)
+    m.duplicate_of_id = r.id
+    db_session.commit()
+    assert _events(db_session) == []
+
+    n = _art(db_session, src_n, n=3, title="Boris Brejcha annonce un concert aux Arenes de Frejus",
+             hours_ago=1)
+
+    link_duplicates(db_session)
+
+    (event,) = _events(db_session)
+    observations = _observations(db_session, event.id)
+    assert {o.article_id for o in observations} == {r.id, m.id, n.id}
+    assert event.source_count == 3  # PAS 2 : M n'est jamais oublie
 
 
 # -- fusion d'evenements (le piege de l'aplatissement) --------------------------
@@ -275,6 +333,7 @@ def test_merging_a_pre_existing_group_into_an_archive_link_keeps_one_event(db_se
 
 
 def test_reelection_updates_the_event_title_without_creating_a_second_event(db_session):
+    db_session.autoflush = False
     mixmag = _src(db_session, "Mixmag", categorie=SourceCategorie.MEDIA)
     djmag = _src(db_session, "DJ Mag", categorie=SourceCategorie.MEDIA)
     vague = _art(

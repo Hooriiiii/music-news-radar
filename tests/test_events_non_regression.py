@@ -29,7 +29,9 @@ def _nouvelle_session():
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     Base.metadata.create_all(engine)
-    TestingSession = sessionmaker(bind=engine, expire_on_commit=False)
+    # autoflush=False : le reglage de production (`app/db.py`), une Global
+    # Constraint explicite du plan Task 2.
+    TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     return TestingSession()
 
 

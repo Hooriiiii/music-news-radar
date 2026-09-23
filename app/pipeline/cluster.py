@@ -420,9 +420,13 @@ def link_duplicates(
         dépend de l'origine, que seul `appliquer` connaît.
 
         Phase 2A (Task 2, `app/pipeline/events.py`) : SEUL point d'où
-        `events.attacher` est appelé -- le rattachement à un `Event` suit
-        exactement les mêmes décisions que le lien de doublon, pour le même
-        représentant et les mêmes repointés, jamais recalculées séparément."""
+        `events.attacher` est appelé. Elle relit elle-même le groupe ENTIER
+        de `representant` (pas seulement `article` et les repointés d'ICI),
+        donc un membre lié lors d'un passage antérieur à l'existence de ce
+        module devient une observation lui aussi -- voir le docstring de
+        `attacher`. Dégrade en no-op si la migration `0019` n'est pas encore
+        appliquée, jamais une exception : elle ne doit jamais faire échouer
+        ce module ni la transaction en cours."""
         article.duplicate_of_id = representant.id
         db.flush()
         repointes = list(
@@ -430,7 +434,7 @@ def link_duplicates(
         )
         for pointeur in repointes:
             pointeur.duplicate_of_id = representant.id
-        events.attacher(db, article, representant, repointes)
+        events.attacher(db, article, representant)
         return repointes
 
     def appliquer(article: Article, tokens: set[str], resultat) -> None:
