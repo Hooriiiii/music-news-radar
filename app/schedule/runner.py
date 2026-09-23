@@ -63,18 +63,26 @@ from sqlalchemy.exc import InterfaceError, InvalidRequestError, OperationalError
 from app.config import settings
 from app.content.choix_visuels import (
     AucunVisuel,
+    VisuelIntrouvable,
     VisuelsDifferes,
     choisir_visuels,
     compte_du_visuel,
 )
-from app.content.compose import CompositionError, appeler_compositeur, create_post
+from app.content.compose import CompositionError, appeler_compositeur, create_post, resoudre_fond
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
-from app.content.visuels import fond_de_cover, image_de_fond, origine_interdite, purger_cache
+from app.content.visuels import (
+    FOND_KINDA,
+    fond_de_cover,
+    image_de_fond,
+    origine_interdite,
+    purger_cache,
+)
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.publish.preparation_reel import ReelInadapte
+from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -105,6 +113,17 @@ class RapportPublication:
     # Parmi les manques : ceux d'un format sans outils (reels coupes au
     # dashboard). Ils ne doivent pas etre annonces comme un Mac en veille.
     manques_formats_coupes: int = 0
+    # Tache 5 (2026-09-21) : un creneau libere faute d'image de bonne qualite,
+    # PAS une exclusion -- l'article reste eligible et repartira des qu'un
+    # barreau de l'echelle (compte, artiste, web) donnera mieux. Compte a part
+    # des `manques`, pour que le saut reste VISIBLE au lieu de se confondre avec
+    # un Mac en veille ou un article vraiment en defaut.
+    sautes: int = 0
+    # Chaque REPORT (`VisuelsDifferes`), qu'il reste un simple report ou qu'il
+    # bascule en saut au-dela du seuil de reports consecutifs -- un feed qui
+    # se tait sans rien dire est le pire des deux mondes (CLAUDE.md), et un
+    # report qui se prolonge doit se VOIR avant de devenir un saut.
+    reportes: int = 0
     erreurs: list[str] = field(default_factory=list)
 
 
@@ -259,6 +278,40 @@ def _exclure(db, creneau: Creneau, attendu: tuple, raison: str, rapport: Rapport
     _liberer(db, creneau, attendu, raison)
 
 
+def _differer(
+    db, creneau: Creneau, attendu: tuple, article: Article, maintenant: dt.datetime,
+    rapport: RapportPublication, exc: Exception,
+) -> bool:
+    """Un REPORT (`VisuelsDifferes`) : retenter au passage suivant reste le bon
+    geste, mais pas eternellement. Compte les reports CONSECUTIFS
+    (`signaler_report`) ; au-dela du seuil, bascule dans la MEME mise a
+    l'ecart qu'un saut -- sans elle, un report qui ne guerit jamais fait
+    camper l'article sur son creneau jusqu'a MANQUE (mesure : 1 publication
+    sur 4, 3 MANQUE, 0 mise a l'ecart).
+
+    MEME INVARIANT D'ORDRE que la ceinture de `_publier` : `_liberer` est une
+    ecriture CONDITIONNELLE qui peut echouer si le dashboard est passe
+    entre-temps ; l'article n'est mis a l'ecart, et le report ne compte comme
+    converti, QUE SI cette liberation reussit -- sinon il prendrait une pause
+    de plusieurs heures pour un creneau qu'on n'a meme pas reussi a lui
+    retirer.
+
+    Rend True si l'article vient de basculer en pause (le creneau a ete
+    libere, l'appelant doit relancer l'arbitrage), False s'il reste un simple
+    report (le creneau garde l'article)."""
+    rapport.reportes += 1
+    if signaler_report(article.id, maintenant) and _liberer(
+        db, creneau, attendu, f"visuel introuvable (reports repetes) : {exc}"
+    ):
+        marquer_saute(article.id, maintenant)
+        rapport.sautes += 1
+        return True
+    erreur = f"composition differee : {exc}"[:1000]
+    if creneau.erreur != erreur:
+        _ecrire_si(db, creneau, attendu, erreur=erreur)
+    return False
+
+
 def _compter_manque(creneau: Creneau, attendu: tuple, formats_actifs: set, rapport: RapportPublication) -> None:
     if attendu[1] is None:
         return
@@ -309,6 +362,12 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
         # jamais un article a exclure -- ses actifs sont peut-etre intacts, et la
         # composition suivante reposera un fond. Les DEUX gabarits : la cover d'un
         # reel est rendue comme celle d'un carrousel et sert de `cover_url`.
+        return True
+    if fond_de_cover(post) == FOND_KINDA:
+        # Brouillon compose AVANT la Tache 5 (2026-09-21) : l'aplat Kinda etait
+        # alors un fond valable. Il ne l'est plus -- la composition suivante
+        # refait tourner l'echelle au complet (compte, artiste, web) et, si elle
+        # ne trouve toujours rien, le creneau saute au lieu de geler ce fond.
         return True
     if post.assets is None:
         return origine_interdite(getattr(article, "source", None))
@@ -396,14 +455,47 @@ def _composer(
             try:
                 visuels = choisir(db, article, creneau.format, maintenant)
             except VisuelsDifferes as exc:
-                erreur = f"composition differee : {exc}"[:1000]
-                if creneau.erreur != erreur:
-                    _ecrire_si(db, creneau, attendu, erreur=erreur)
+                if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
+                    exclusions = True
                 continue
             except AucunVisuel as exc:
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
                 exclusions = True
                 continue
+            # Le fond AVANT l'appel paye (Sonnet) : Tache 5, decider du saut se
+            # fait la ou les visuels sont deja choisis, jamais apres avoir paye
+            # la composition. `resoudre_fond` ouvre les MEMES reserves reseau
+            # (compte, artiste, web) que `create_post` en aurait ouvertes de
+            # toute facon -- ce n'est pas un appel de plus, seulement plus tot.
+            try:
+                fond_precalcule = resoudre_fond(visuels, template)
+            except VisuelsDifferes as exc:
+                # Au moins une reserve n'a pas pu etre CONSULTEE (reseau,
+                # quota) -- un report, jamais un saut : sans cette distinction,
+                # une simple coupure reseau mettait l'article en pause pour
+                # rien. `_differer` borne neanmoins la SUITE de reports.
+                if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
+                    exclusions = True
+                continue
+            except VisuelIntrouvable as exc:
+                # SAUT, pas exclusion : l'article peut avoir une photo demain
+                # (nouveau post du compte, recherche web qui sort du cache). Le
+                # creneau se libere et prend le candidat suivant tout de suite.
+                # Sans mise a l'ecart, l'article revenait sur ce meme creneau
+                # libere a CHAQUE passage (le meilleur score gagne
+                # l'arbitrage), sautait encore, jusqu'a MANQUE -- une seule
+                # mauvaise image pouvait ainsi faire taire tout le compte une
+                # journee entiere.
+                marquer_saute(article.id, maintenant)
+                _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
+                rapport.sautes += 1
+                exclusions = True
+                continue
+            # Les visuels ont fini par se resoudre pour cet article : une
+            # SUITE de reports vient de se casser, le compteur ne doit pas
+            # survivre -- sinon un futur report isole repartirait avec un
+            # compte deja proche du seuil.
+            reinitialiser_report(article.id, maintenant)
             try:
                 # Le compte du visuel part avec l'article : le compositeur ne
                 # sait pas, sinon, de qui est la video qu'il titre (le reel « BTS »
@@ -422,7 +514,10 @@ def _composer(
                 _prevenir(notifier, erreur)
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
-            post_id = create_post(db, article, draft, template=template, visuels=visuels).id
+            post_id = create_post(
+                db, article, draft, template=template, visuels=visuels,
+                fond_precalcule=fond_precalcule,
+            ).id
             rapport.composes += 1
         # Si le dashboard a change le creneau pendant la composition, son choix
         # prime : le post reste un brouillon, repris plus tard si l'article revient.
@@ -691,6 +786,29 @@ def _publier(
                 rapport.echecs += 1
                 _effacer_dossier(creneau)
                 _prevenir(notifier, f"publication de {_heure_locale(creneau.publier_a)} en echec : {refus}")
+            continue
+
+        if fond_de_cover(post) == FOND_KINDA:
+            # Ceinture : un creneau deja GELE avant que l'aplat Kinda cesse
+            # d'etre une issue publiable peut porter un post compose sur ce
+            # fond. Refuser de publier plutot que d'exiger une operation
+            # manuelle sur les creneaux deja geles en base. Pas d'exclusion
+            # (l'article n'y est pour rien) ; mise en pause comme un article
+            # sans visuel, sinon l'arbitrage relancerait le meme article sur
+            # ce meme creneau.
+            # ORDRE : `_liberer` D'ABORD -- c'est une ecriture CONDITIONNELLE
+            # (`_ecrire_si`) qui peut echouer si le dashboard est passe
+            # entre-temps ; mettre l'article en pause AVANT de le savoir lui
+            # infligerait 3 h d'ecart pour rien sur un creneau qu'on n'a meme
+            # pas reussi a liberer. Meme invariant que `_differer`.
+            if _liberer(
+                db, creneau, attendu,
+                "aplat Kinda en fond : publication refusee, nouvelle composition",
+            ):
+                if article is not None:
+                    marquer_saute(article.id, maintenant)
+                rapport.sautes += 1
+                _effacer_dossier(creneau)
             continue
 
         # Le mode RELU juste avant la reclamation : un passage peut durer bien plus

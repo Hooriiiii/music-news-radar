@@ -17,6 +17,7 @@ import datetime as dt
 import io
 import itertools
 
+import pytest
 from PIL import Image
 
 from app.config import settings
@@ -36,6 +37,7 @@ from app.content.visuels import (
     ORIGINE_COMPTE,
     ORIGINE_KINDA,
     ORIGINE_WEB,
+    VisuelDiffere,
 )
 from app.models import Article, Source, SourceCategorie, SourceType
 from app.pipeline.comptes_artistes import CompteArtiste
@@ -200,15 +202,36 @@ def test_le_compte_est_lu_en_direct_quand_la_base_n_a_rien(db_session):
     assert len(urls) == 1 and urls[0].startswith("file://")
 
 
-def test_une_lecture_differee_ne_fait_pas_echouer_la_composition(db_session):
-    """Budget epuise, quota Graph, reseau : le secours est un CONFORT. Il rend
-    une liste vide et l'appelant garde l'affiche -- jamais une exception, qui
-    ferait perdre le creneau pour une question de gout."""
+def test_une_lecture_differee_sans_rien_d_autre_leve_visuel_differe(db_session):
+    """Tour de correction 1/5 (I-1) : budget epuise, quota Graph, reseau ET
+    aucune base a proposer -- ce n'est pas la meme chose que « regarde, rien
+    trouve ». Avant cette distinction, le secours rendait silencieusement une
+    liste vide, confondue en aval avec une reserve authentiquement vide -- et,
+    depuis la Tache 5, cette confusion faisait SAUTER l'article sur une simple
+    coupure reseau au lieu de reporter le creneau."""
     trans = _source(db_session)
     article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
     lecteur = Lecteur(erreur=LectureDifferee("budget du passage epuise"))
 
-    assert _secours(db_session, article, lecteur=lecteur) == []
+    with pytest.raises(VisuelDiffere):
+        _secours(db_session, article, lecteur=lecteur)
+
+
+def test_une_lecture_differee_n_empeche_pas_un_resultat_deja_donne_par_la_base(db_session):
+    """La base a DEJA une photo utilisable : la lecture en direct qui echoue
+    n'etait qu'un complement, jamais annoncee comme necessaire. Le secours
+    rend cette photo normalement, sans lever -- une panne devenue SUPERFLUE ne
+    doit pas empecher un resultat par ailleurs valable."""
+    trans = _source(db_session)
+    article = _article(db_session, trans, media=[entree("photo", "https://cdn.ig/affiche.jpg")])
+    _article(db_session, trans, "Retour en images sur les Transmusicales",
+             media=[entree("photo", "https://cdn.ig/live.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+    lecteur = Lecteur(erreur=LectureDifferee("budget du passage epuise"))
+
+    urls = _secours(db_session, article, lecteur=lecteur)
+
+    assert len(urls) == 1 and urls[0].startswith("file://")
 
 
 def test_jamais_le_compte_d_un_media(db_session):

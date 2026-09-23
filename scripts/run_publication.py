@@ -160,6 +160,13 @@ def main() -> None:
     compteurs = {
         "composes": rapport.composes, "geles": rapport.geles, "publies": rapport.publies,
         "apercus": rapport.apercus, "manques": rapport.manques, "echecs": rapport.echecs,
+        # Le saut faute de visuel de bonne qualite doit etre VISIBLE au meme
+        # titre que les autres compteurs -- un feed qui se tait sans rien dire
+        # est le pire des deux mondes (CLAUDE.md).
+        "sautes": rapport.sautes,
+        # Un report qui se prolonge doit se voir AVANT de basculer en saut,
+        # distinct de `sautes`.
+        "reportes": rapport.reportes,
     }
     # Silence quand rien ne se passe : le log ne grossit pas de 144 lignes vides par jour.
     if any(compteurs.values()) or rapport.erreurs:

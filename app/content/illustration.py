@@ -62,6 +62,7 @@ from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_KINDA,
+    VisuelDiffere,
     candidats_de_fond,
     image_de,
     lire_fichier_cache,
@@ -515,6 +516,14 @@ class Fond:
     # (post Noisia, 2026-09-18). Hors comparaison : deux fonds sont le meme
     # choix s'ils ont la meme URL et la meme origine, le reste est du bagage.
     photos: tuple[str, ...] = field(default=(), compare=False)
+    # Vrai si au moins une reserve N'A PAS PU etre consultee -- panne de
+    # transport (`VisuelDiffere`), jamais un jugement sur ce qu'elle contient.
+    # Cette fonction ne leve toujours pas : c'est ce champ que
+    # `compose.resoudre_fond` lit pour REPORTER (`VisuelsDifferes`) au lieu de
+    # conclure a l'absence d'image (`VisuelIntrouvable`) -- sauf si un AUTRE
+    # barreau, consulte avec succes, a quand meme donne une vraie photo : dans
+    # ce cas `differe` reste a False, la panne n'a eu aucune consequence.
+    differe: bool = False
 
 
 def eviter_l_affiche(
@@ -570,12 +579,17 @@ def eviter_l_affiche(
     pour le meme defaut, ne se composaient pas. `origine_de` relit l'origine du
     candidat retenu (un actif `artiste` peut voisiner avec l'actu).
 
-    Quatre issues : le fond d'origine (ni affiche ni trop petit, ou l'un des
-    deux n'a pas pu etre etabli -- ne pas savoir n'est pas savoir) ; la
-    meilleure photo assez grande du premier lot qui en offre une ; le fond
-    Kinda ; et jamais d'exception -- une panne du juge laisse le fond
-    d'origine, une panne d'un lot laisse le fond Kinda, puisque le defaut du
-    fond, lui, est avere.
+    Cinq issues : le fond
+    d'origine (ni affiche ni trop petit, ou l'un des deux n'a pas pu etre
+    etabli -- ne pas savoir n'est pas savoir) ; la meilleure photo assez
+    grande du premier lot qui en offre une ; un REPORT (`Fond(None, ...,
+    differe=True)`) quand au moins un lot n'a pas pu etre consulte (panne de
+    transport) et qu'aucun n'a donne de remplacant -- `url` y est toujours
+    `None`, jamais l'image fautive, par construction ; le fond Kinda quand
+    tous les lots ont ete consultes et n'ont RIEN donne ; et jamais
+    d'exception -- une panne du juge laisse le fond d'origine, une panne d'UN
+    lot (au sens classement, `_meilleur_candidat`) laisse le fond Kinda,
+    puisque le defaut du fond, lui, est avere.
     """
     if not fond:
         return Fond(fond, origine)
@@ -598,13 +612,38 @@ def eviter_l_affiche(
     if remplacant is not None:
         logger.info("fond de cover remplace par un autre visuel de l'actu : %s", remplacant)
         return Fond(remplacant, (origine_de(remplacant) if origine_de else None) or origine)
+    # Un lot qui n'a PAS PU regarder (panne de transport) ne doit pas etre
+    # confondu avec un lot qui a regarde et n'a rien trouve. On continue quand
+    # meme les barreaux suivants -- un lot plus loin peut reussir malgre la
+    # panne d'un autre -- et on ne se souvient de la panne que si AUCUN lot
+    # n'a rien donne au final.
+    differe = False
     for lot in lots:
-        candidat = _meilleur_du_lot(lot, rendre, cible, mesurer)
+        try:
+            candidat = _meilleur_du_lot(lot, rendre, cible, mesurer)
+        except VisuelDiffere as exc:
+            logger.info("reserve « %s » non consultee (panne de transport) : %s", lot.origine, exc)
+            differe = True
+            continue
         if candidat is not None:
             image, photos = candidat
             logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, image)
             return Fond(image, lot.origine, photos)
     raison = "une affiche" if est_affiche else "trop petit pour le gabarit"
+    if differe:
+        # Ne PAS conclure a l'absence d'image : au moins une reserve n'a pas pu
+        # etre consultee, `compose.resoudre_fond` doit reporter, pas sauter.
+        # `url=None`, JAMAIS `fond` : `fond` est ici precisement l'image jugee
+        # AFFICHE ou TROP PETITE -- la publier serait le defaut meme que ce
+        # module existe pour eviter. `resoudre_fond` teste `differe` avant
+        # `ORIGINE_KINDA` et ne lit jamais `.url` dans ce cas, mais un futur
+        # lecteur qui oublierait `.differe` ne doit trouver ICI aucune URL
+        # publiable -- surete par CONSTRUCTION plutot que par discipline
+        # d'appelant.
+        logger.info(
+            "fond retenu %s, et au moins une reserve n'a pas pu etre consultee : report", raison
+        )
+        return Fond(None, origine, differe=True)
     logger.info("aucune photo trouvee, le fond retenu est %s : cover sur le fond Kinda", raison)
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
@@ -737,10 +776,12 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
         candidats = [url for url in (lot.photos() or []) if url][
             : max(1, settings.fond_secours_max_photos)
         ]
-        photos = classer_photos(candidats, rendre)
-        if candidats and not photos:
-            logger.info("la reserve « %s » n'offre que des affiches", lot.origine)
-        return photos
+    except VisuelDiffere:
+        # I-1 : le lot n'a PAS PU regarder (panne de transport) -- a
+        # distinguer d'un lot qui a regarde et n'a rien trouve. Propage vers
+        # `eviter_l_affiche`, qui la capture PAR BARREAU (son propre invariant
+        # « ne leve jamais » n'est donc pas rompu a la sortie de la fonction).
+        raise
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning(
             "reserve « %s » abandonnee (%s)",
@@ -748,6 +789,18 @@ def _photos_du_lot(lot: Lot | None, rendre) -> tuple[str, ...]:
             type(exc).__name__,
         )
         return ()
+    try:
+        photos = classer_photos(candidats, rendre)
+    except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        logger.warning(
+            "reserve « %s » abandonnee (%s)",
+            getattr(lot, "origine", "?"),
+            type(exc).__name__,
+        )
+        return ()
+    if candidats and not photos:
+        logger.info("la reserve « %s » n'offre que des affiches", lot.origine)
+    return photos
 
 
 # --- Une carte d'annonce dans le carrousel, jamais sept --------------------

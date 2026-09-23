@@ -17,16 +17,16 @@ from app.content.compose import (
     probleme_accents,
     probleme_cloture_question,
     probleme_emojis,
+    resoudre_fond,
 )
-from app.content.choix_visuels import ChoixVisuels
-from app.content.illustration import Lot
+from app.content.choix_visuels import ChoixVisuels, VisuelIntrouvable, VisuelsDifferes
+from app.content.illustration import Lot, Verdict
 from app.content.media import entree
 from app.content.visuels import (
-    FOND_KINDA,
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
     ORIGINE_COMPTE,
-    ORIGINE_KINDA,
+    VisuelDiffere,
     actif,
 )
 from app.models import Article, Source, SourceType
@@ -572,10 +572,37 @@ def test_la_cover_reel_suit_la_meme_regle(db_session):
     assert post.slides[0]["image_url"] == "https://cdn/live.jpg"
 
 
+def test_resoudre_fond_reporte_au_lieu_de_sauter_sur_une_panne_de_reserve(db_session, monkeypatch):
+    """Tour de correction 1/5 (I-1) : quand `eviter_l_affiche` rend
+    `Fond.differe=True` (au moins une reserve n'a pas pu etre consultee),
+    `resoudre_fond` doit REPORTER (`VisuelsDifferes`), jamais sauter
+    (`VisuelIntrouvable`) -- les deux issues ont des consequences tres
+    differentes au planificateur (report : le creneau garde l'article ; saut :
+    l'article se met en pause)."""
+    from app.content import illustration
+
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn/petite.jpg": (564, 345)}
+    )
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
+        secours=[Lot(ORIGINE_COMPTE, lambda: (_ for _ in ()).throw(VisuelDiffere("quota")))],
+    )
+
+    with pytest.raises(VisuelsDifferes):
+        resoudre_fond(
+            choix, "kinda_post",
+            selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+            verdicts_fond=lambda urls: {
+                "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+            },
+        )
+
+
 def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):
     """Post 71 (CLAUDE.md) : une seule og:image, 564x345, agrandie 3,91x pour
-    remplir 1080x1350 -- trop petite, elle doit descendre d'un barreau vers le
-    fond Kinda plutot que d'etre publiee floue."""
+    remplir 1080x1350 -- trop petite, et sans reserve (Tache 5, 2026-09-21) le
+    post SAUTE plutot que d'etre publie floue sur le fond Kinda."""
     from app.content import illustration
     from app.content.illustration import Verdict
 
@@ -587,16 +614,14 @@ def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatc
         [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
     )
 
-    post = create_post(
-        db_session, article, _draft(), visuels=choix,
-        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
-        verdicts_fond=lambda urls: {
-            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
-        },
-    )
-
-    assert post.slides[0]["image_url"] == FOND_KINDA
-    assert post.variants["fond"] == {"origine": ORIGINE_KINDA}
+    with pytest.raises(VisuelIntrouvable):
+        create_post(
+            db_session, article, _draft(), visuels=choix,
+            selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+            verdicts_fond=lambda urls: {
+                "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+            },
+        )
 
 
 def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, monkeypatch):
@@ -627,11 +652,13 @@ def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, m
     )
     assert post_carrousel.slides[0]["image_url"] == "https://cdn/moyenne.jpg"
 
-    post_reel = create_post(
-        db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
-        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
-    )
-    assert post_reel.slides[0]["image_url"] == FOND_KINDA
+    # Sans reserve, un fond trop petit pour le reel fait sauter le post
+    # (Tache 5) plutot que de partir sur le fond Kinda.
+    with pytest.raises(VisuelIntrouvable):
+        create_post(
+            db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
+            selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+        )
 
 
 def test_un_gabarit_inconnu_desactive_le_plancher_sans_lever(db_session, caplog):
@@ -728,7 +755,8 @@ def test_les_autres_photos_de_la_reserve_deviennent_des_slides(db_session):
 
 def test_une_affiche_de_reserve_ne_devient_jamais_une_slide(db_session):
     """Une affiche de l'ACTU reste une slide honnete ; une affiche pechee dans
-    une reserve n'illustre rien -- on ne la publie ni en fond ni en slide."""
+    une reserve n'illustre rien -- on ne la publie ni en fond ni en slide. Toute
+    l'echelle donnant des affiches, le post SAUTE (Tache 5)."""
     from app.content.illustration import Verdict
 
     article = _article(db_session)
@@ -738,21 +766,21 @@ def test_une_affiche_de_reserve_ne_devient_jamais_une_slide(db_session):
         secours=[Lot(ORIGINE_COMPTE, lambda: ["file:///cache/flyer.jpg"])],
     )
 
-    post = create_post(
-        db_session, article, _draft(), visuels=choix,
-        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
-        verdicts_fond=lambda urls: dict.fromkeys(
-            urls, Verdict(affiche=True, sujet="autre", note=10)
-        ),
-    )
-
-    assert post.slides[0]["image_url"] == FOND_KINDA
-    assert [a["url"] for a in post.assets] == ["https://cdn/affiche.jpg"]
+    with pytest.raises(VisuelIntrouvable):
+        create_post(
+            db_session, article, _draft(), visuels=choix,
+            selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+            verdicts_fond=lambda urls: dict.fromkeys(
+                urls, Verdict(affiche=True, sujet="autre", note=10)
+            ),
+        )
 
 
-def test_une_affiche_sans_remplacante_part_sur_le_fond_kinda(db_session):
-    """« ya toujours l'affiche en fond !! » : plutot l'aplat sombre du gabarit,
-    sur lequel l'accroche reste lisible, qu'une affiche de line-up."""
+def test_une_affiche_sans_remplacante_fait_sauter_le_post(db_session):
+    """Avant la Tache 5 (2026-09-21) : « ya toujours l'affiche en fond !! »
+    faisait partir la cover sur l'aplat Kinda. Desormais l'aplat n'est plus une
+    issue publiable : sans aucune reserve pour remplacer l'affiche, le post
+    SAUTE -- l'article reste eligible, il n'est pas exclu."""
     from app.content.illustration import Verdict
 
     article = _article(db_session)
@@ -760,16 +788,14 @@ def test_une_affiche_sans_remplacante_part_sur_le_fond_kinda(db_session):
         [actif(entree("photo", "https://cdn/affiche.jpg"), origine="article")], "@x"
     )
 
-    post = create_post(
-        db_session, article, _draft(), visuels=choix,
-        selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
-        verdicts_fond=lambda urls: dict.fromkeys(
-            urls, Verdict(affiche=True, sujet="autre", note=10)
-        ),
-    )
-
-    assert post.slides[0]["image_url"] == FOND_KINDA
-    assert post.variants["fond"] == {"origine": ORIGINE_KINDA}
+    with pytest.raises(VisuelIntrouvable):
+        create_post(
+            db_session, article, _draft(), visuels=choix,
+            selecteur_fond=lambda candidats: "https://cdn/affiche.jpg",
+            verdicts_fond=lambda urls: dict.fromkeys(
+                urls, Verdict(affiche=True, sujet="autre", note=10)
+            ),
+        )
 
 
 def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
@@ -797,11 +823,17 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
 # Le post devenait leur carrousel avec une cover Kinda posee devant.
 
 
-def _affiches(*urls, autres=()):
-    """Un `ChoixVisuels` dont les `urls` sont des affiches, `autres` des photos."""
+def _affiches(*urls, autres=(), secours=()):
+    """Un `ChoixVisuels` dont les `urls` sont des affiches, `autres` des photos.
+
+    `secours` (Tache 5, 2026-09-21) : sans reserve valide, un post dont TOUS les
+    candidats sont des affiches SAUTE desormais au lieu de partir sur le fond
+    Kinda -- voir `test_une_affiche_sans_remplacante_fait_sauter_le_post`. Les
+    tests d'ici qui persistent bel et bien un post en fournissent une."""
     return ChoixVisuels(
         [actif(entree("photo", url), origine="article") for url in (*urls, *autres)],
         "@transmusicales",
+        secours=list(secours),
     )
 
 
@@ -824,17 +856,26 @@ def _urls(post):
 
 def test_sept_cartes_d_annonce_n_en_laissent_qu_une(db_session):
     cartes = [f"https://cdn/prog-{n}.jpg" for n in range(7)]
+    # Tache 5 : sans reserve, sept affiches et rien d'autre feraient sauter le
+    # post -- une photo de compte le sauve, et devient le fond a la place de
+    # l'aplat Kinda (`_juge` la juge non-affiche : elle n'est pas dans `cartes`).
+    secours = [Lot(ORIGINE_COMPTE, lambda: ["file:///cache/live.jpg"])]
     post = create_post(
-        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes),
+        db_session, _article(db_session), _draft(),
+        visuels=_affiches(*cartes, secours=secours),
         selecteur_fond=lambda candidats: cartes[0],
         verdicts_fond=_juge(set(cartes)),
     )
 
-    # La premiere dans l'ordre des candidats : sur un carrousel d'annonce, la
-    # carte de tete porte le message principal (« TOUTE LA PROG REVELEE »).
-    assert _urls(post) == [cartes[0]]
-    # Le fond, lui, n'est jamais une affiche : tout etait une carte, donc l'aplat.
-    assert post.slides[0]["image_url"] == FOND_KINDA
+    # La premiere carte dans l'ordre des candidats reste en slide : sur un
+    # carrousel d'annonce, la carte de tete porte le message principal
+    # (« TOUTE LA PROG REVELEE »). La photo de la reserve devient AUSSI une
+    # slide (`compose.actifs_de_secours`), en plus de faire le fond.
+    assert _urls(post) == [cartes[0], "file:///cache/live.jpg"]
+    # Le fond, lui, n'est jamais une affiche : tout etait une carte, la reserve
+    # le remplace.
+    assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
 
 
 def test_les_photos_restent_toutes_seule_l_affiche_est_plafonnee(db_session):
@@ -873,47 +914,84 @@ def test_les_sept_cartes_des_trans_ne_laissent_qu_une_slide(db_session, monkeypa
     c'est le lot qui s'elargit, pas un second juge --, et une seule survit.
 
     C'est ce test qui separe « defaut eteint » de « defaut attenue » : avec un
-    lot borne a trois, quatre cartes restaient inconnues, donc gardees."""
+    lot borne a trois, quatre cartes restaient inconnues, donc gardees.
+
+    Tache 5 (2026-09-21) : sept affiches sans reserve feraient desormais SAUTER
+    le post -- une reserve (compte source) est donc ajoutee, et son vrai contenu
+    doit ETRE distingue des cartes par le juge mocke (via `_octets`, qui encode
+    l'URL) pour que le test verifie encore le bon comportement : une SEULE carte
+    survit en slide, et la photo de reserve devient le fond a la place de
+    l'aplat Kinda."""
     from app.config import settings
     from app.content import illustration
 
     monkeypatch.setattr(settings, "illustration_cache_path", tmp_path / "verdicts.json")
     monkeypatch.setattr(settings, "illustration_vision_enabled", True)
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
-    monkeypatch.setattr(illustration, "_octets", lambda url: b"jpeg")
+    monkeypatch.setattr(illustration, "_octets", lambda url: url.encode())
     monkeypatch.setattr(illustration, "reduire", lambda octets, taille=None: octets)
     lots = []
 
     def juge(images):
         lots.append(len(images))
-        return [illustration.Verdict(affiche=True, sujet="autre", note=10)] * len(images)
+        return [
+            illustration.Verdict(
+                affiche=b"trans-" in image,
+                sujet="autre" if b"trans-" in image else "scene",
+                note=10 if b"trans-" in image else 80,
+            )
+            for image in images
+        ]
 
     monkeypatch.setattr(illustration, "make_claude_juge", lambda: juge)
     cartes = [f"https://cdn/trans-{n}.jpg" for n in range(7)]
+    secours = [Lot(ORIGINE_COMPTE, lambda: ["file:///cache/live.jpg"])]
 
-    post = create_post(db_session, _article(db_session), _draft(), visuels=_affiches(*cartes))
+    post = create_post(
+        db_session, _article(db_session), _draft(), visuels=_affiches(*cartes, secours=secours)
+    )
 
-    assert lots == [7], "un seul appel, et il porte sur les sept cartes"
-    assert _urls(post) == [cartes[0]]
-    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert lots == [7, 1], "les sept cartes en un appel, la reserve dans un second"
+    assert _urls(post) == [cartes[0], "file:///cache/live.jpg"]
+    assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
 
 
-def test_l_unique_visuel_meme_affiche_garde_son_post_publiable(db_session):
+def test_l_unique_affiche_sans_secours_fait_desormais_sauter_le_post(db_session):
+    """Avant la Tache 5 (2026-09-21) : une seule carte, une seule affiche, la
+    cover partait sur le fond Kinda et le post restait publiable a deux
+    elements. L'aplat Kinda n'etant plus une issue publiable, ce cas SAUTE
+    desormais -- il n'y a ni reserve ni autre candidat pour le sauver."""
+    article = _article(db_session)
+    carte = "https://cdn/prog.jpg"
+
+    with pytest.raises(VisuelIntrouvable):
+        create_post(
+            db_session, article, _draft(), visuels=_affiches(carte),
+            selecteur_fond=lambda candidats: carte,
+            verdicts_fond=_juge({carte}),
+        )
+
+
+def test_l_unique_visuel_meme_affiche_garde_son_post_publiable_avec_secours(db_session):
     """« Jamais un post reduit a sa cover » : le plafond ne doit pas vider un
     carrousel qui n'avait qu'une carte -- elle reste, le post part a deux
-    elements (cf. `app/publish/preparation.py`)."""
+    elements (cf. `app/publish/preparation.py`). Depuis la Tache 5, ce n'est
+    publiable que parce qu'une reserve donne un fond de remplacement : sans
+    elle, ce cas sauterait desormais (cf. le test precedent)."""
     from app.publish.preparation import medias_du_carrousel
 
     article = _article(db_session)
     carte = "https://cdn/prog.jpg"
+    secours = [Lot(ORIGINE_COMPTE, lambda: ["file:///cache/live.jpg"])]
     post = create_post(
-        db_session, article, _draft(), visuels=_affiches(carte),
+        db_session, article, _draft(), visuels=_affiches(carte, secours=secours),
         selecteur_fond=lambda candidats: carte,
         verdicts_fond=_juge({carte}),
     )
 
-    assert _urls(post) == [carte]
-    assert post.slides[0]["image_url"] == FOND_KINDA
+    assert _urls(post) == [carte, "file:///cache/live.jpg"]
+    assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
     assert [m["url"] for m in medias_du_carrousel(post, article)] == [carte]
 
 

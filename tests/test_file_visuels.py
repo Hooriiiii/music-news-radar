@@ -12,7 +12,7 @@ from app.config import settings
 from app.content.choix_visuels import ChoixVisuels, VisuelsDifferes
 from app.content.compose import CoverVariante, PostDraft
 from app.content.media import entree
-from app.content.visuels import actif, chemin_cache
+from app.content.visuels import FOND_KINDA, actif, chemin_cache
 from app.models import (
     Article,
     Creneau,
@@ -280,6 +280,29 @@ def test_le_dashboard_signale_des_visuels_differes(client, db_session, fred, mon
     assert "quota" in reponse.json()["detail"]
 
 
+def test_2_5_le_dashboard_signale_aussi_les_visuels_differes_du_fond(
+    client, db_session, fred, monkeypatch
+):
+    """Tour de correction 2/5, point 2 : `resoudre_fond` peut lever la MEME
+    exception que `choisir_visuels` (I-1, une reserve n'a pas pu etre
+    consultee), mais `app/api/posts.py` ne rattrapait que `VisuelIntrouvable`
+    -- casse neuve introduite par le tour precedent, l'exception remontait en
+    500 non gere au lieu du 503 deja rendu pour le meme cas cote
+    `choisir_visuels`."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    choisi = actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article", compte="@fred")
+
+    def differer(*args, **kwargs):
+        raise VisuelsDifferes("quota Graph atteint")
+
+    monkeypatch.setattr("app.api.posts.choisir_visuels", lambda *a, **k: ChoixVisuels([choisi], "@fred"))
+    monkeypatch.setattr("app.api.posts.resoudre_fond", differer)
+    monkeypatch.setattr("app.api.posts.make_claude_composer", lambda: lambda a: _draft())
+    reponse = client.post(f"/articles/{article.id}/posts")
+    assert reponse.status_code == 503
+    assert "quota" in reponse.json()["detail"]
+
+
 def test_un_brouillon_sans_aucun_visuel_n_est_pas_gele(db_session, guettapen):
     """Compose a la main au dashboard sans visuel autorise (`assets == []`) :
     la file ne doit pas le publier avec le fond de secours."""
@@ -457,3 +480,318 @@ def test_un_membre_purge_est_retrouve_par_son_compte(db_session):
 
     assert len(actifs_interdits(db_session, post)) == 1
     assert source.categorie == SourceCategorie.MEDIA
+
+
+# --- Tache 5 (2026-09-21) : l'echelle du fond va jusqu'au bout, sinon on saute -
+
+
+def test_un_visuel_trop_petit_sans_secours_saute_le_creneau_sans_exclure(
+    db_session, fred, monkeypatch
+):
+    """L'echelle est allee jusqu'au bout (ici : rien que la photo de l'actu, pas
+    de reserve) sans rien trouver d'assez net : le creneau SAUTE -- il se libere
+    (`_liberer`) au lieu d'exclure (`_exclure`). L'article n'est PAS en defaut,
+    il peut avoir une photo demain ; c'est la retention de 2 jours qui conclura
+    s'il n'en trouve jamais. Compte a part dans `RapportPublication.sautes`, et
+    jamais l'appel paye a Sonnet pour lui (`outils.composes` ne le contient pas).
+
+    Le creneau libere est repris DANS LE MEME PASSAGE par le candidat suivant
+    (`exclusions=True` relance l'arbitrage) : ici, l'unique autre article
+    eligible du compte -- la preuve textuelle du « le creneau se libere et
+    prend le candidat suivant » du plan."""
+    from app.content import illustration
+
+    petit = _article(db_session, fred, "Petite photo",
+                     media=[entree("photo", "https://cdn.ig/petite.jpg")], heures=3)
+    bon = _article(db_session, fred, "Bonne photo",
+                   media=[entree("photo", "https://cdn.ig/bonne.jpg")], heures=2)
+    creneau = _epingler(db_session, petit)
+    # 200x150 -> 5,4x/9x d'agrandissement pour 1080x1350 : tres au-dela du
+    # plancher (`cover_fond_upscale_max`, 2,2x).
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+
+    def choisir(db, a, format_, maintenant):
+        if a.id == petit.id:
+            return ChoixVisuels(
+                [actif(entree("photo", "https://cdn.ig/petite.jpg"), origine="article",
+                       compte="@fred", article_id=petit.id)],
+                "@fred",
+            )  # aucune reserve pour remplacer
+        return ChoixVisuels(
+            [actif(entree("photo", "https://cdn.ig/bonne.jpg"), origine="article",
+                   compte="@fred", article_id=bon.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=choisir)
+    db_session.refresh(petit)
+    db_session.refresh(creneau)
+
+    # Seul "bon" est compose : "petit" a saute AVANT l'appel paye a Sonnet.
+    assert outils.composes == [bon.id]
+    (post,) = db_session.query(Post).all()
+    assert post.article_id == bon.id
+    assert petit.file_exclu_raison is None
+    assert rapport.sautes == 1
+    # Le creneau, libere par le saut, a ete repris par le candidat suivant --
+    # jamais laisse vide alors qu'un autre article pouvait le remplir.
+    assert creneau.article_id == bon.id
+
+
+def test_une_reserve_evite_le_saut_quand_le_fond_de_lactu_est_trop_petit(
+    db_session, fred, monkeypatch, tmp_path
+):
+    """Le plancher fait descendre d'un barreau (ici : la reserve du compte
+    source) au lieu de sauter directement -- l'echelle continue avant de
+    conclure. Bout en bout avec le vrai chemin du juge (comme les tests de la
+    Tache 2/4), pour prouver que la reserve est bien ce qui separe le saut de
+    la publication."""
+    from app.content import illustration
+    from app.content.illustration import Lot, Verdict
+    from app.content.visuels import ORIGINE_COMPTE
+
+    monkeypatch.setattr(settings, "illustration_cache_path", tmp_path / "verdicts.json")
+    monkeypatch.setattr(settings, "illustration_vision_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    monkeypatch.setattr(illustration, "_octets", lambda url: b"jpeg")
+    monkeypatch.setattr(illustration, "reduire", lambda octets, taille=None: octets)
+    monkeypatch.setattr(
+        illustration, "make_claude_juge",
+        lambda: (lambda images: [Verdict(affiche=False, sujet="scene", note=70)] * len(images)),
+    )
+    # Seule la photo de l'actu est petite ; la reserve, de taille inconnue,
+    # passe par la regle du doute (ne pas savoir n'est pas savoir que c'est trop
+    # petit).
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/petite.jpg")])
+    creneau = _epingler(db_session, article)
+    choisi = actif(entree("photo", "https://cdn.ig/petite.jpg"), origine="article",
+                   compte="@fred", article_id=article.id)
+
+    def choisir(db, a, format_, maintenant):
+        return ChoixVisuels(
+            [choisi], "@fred",
+            secours=[Lot(ORIGINE_COMPTE, lambda: ["file:///cache/grande.jpg"])],
+        )
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=choisir)
+    db_session.refresh(creneau)
+
+    assert rapport.sautes == 0
+    (post,) = db_session.query(Post).all()
+    assert post.slides[0]["image_url"] == "file:///cache/grande.jpg"
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert creneau.post_id == post.id
+
+
+def test_une_panne_de_transport_reste_un_report_jamais_un_saut(db_session, fred):
+    """`VisuelsDifferes` (choix des visuels : quota, reseau) est tranchee AVANT
+    que la Tache 5 n'entre en jeu -- une panne de transport ne doit jamais se
+    faire passer pour un saut faute d'image de qualite. Non-regression : le
+    comportement (deja garanti avant la Tache 5) doit survivre a l'ajout du
+    pre-controle du fond."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    creneau = _epingler(db_session, article)
+
+    def differer(db, article, format_, maintenant):
+        raise VisuelsDifferes("quota Graph atteint")
+
+    outils = Outils()
+    rapport = outils.tourner(db_session, choisir=differer)
+    db_session.refresh(article)
+    db_session.refresh(creneau)
+
+    assert outils.composes == [] and rapport.sautes == 0
+    assert article.file_exclu_raison is None
+    assert creneau.erreur == "composition differee : quota Graph atteint"
+    assert creneau.article_id == article.id  # le creneau garde l'article, il ne saute pas
+
+
+def test_un_brouillon_anterieur_a_la_tache_5_sur_l_aplat_kinda_est_recompose(db_session, fred):
+    """Brouillon compose AVANT la Tache 5 (2026-09-21), fond sur l'aplat Kinda --
+    c'etait alors une issue publiable. Elle ne l'est plus : la file le traite
+    comme perime (`runner._brouillon_perime`) et le recompose au lieu de le
+    reprendre tel quel (meme mecanique que `post_a_reprendre` -- un brouillon
+    existant pour l'article, jamais encore attache a ce creneau)."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    # `assets` porte une VRAIE image (comme le ferait `actifs_de_secours`) : ce
+    # brouillon n'est perime pour AUCUNE des raisons preexistantes (assets vide,
+    # aucun fond extractible) -- seule la Tache 5 (fond == FOND_KINDA) doit le
+    # faire recomposer.
+    ancien = Post(
+        article_id=article.id, article_title=article.title, article_url=article.url,
+        caption="L", slides=[{"kind": "cover", "image_url": FOND_KINDA}],
+        template="kinda_post",
+        assets=[actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article")],
+        variants={"fond": {"origine": "kinda"}},
+    )
+    db_session.add(ancien)
+    db_session.commit()
+    creneau = _epingler(db_session, article)
+
+    choisi = actif(entree("photo", "https://cdn.ig/fred.jpg"), origine="artiste", compte="@fredagain")
+    outils = Outils()
+    outils.tourner(db_session, choisir=lambda db, a, f, m: ChoixVisuels([choisi], "@fredagain"))
+    db_session.refresh(creneau)
+
+    assert outils.composes == [article.id]
+    assert creneau.post_id not in (None, ancien.id)
+
+
+# --- Tour de correction 1/5 (2026-09-21) ------------------------------------
+
+
+def _article_score(db, source, titre, relevance, media, heures=2):
+    n = next(_numeros)
+    article = Article(
+        source_id=source.id, url=f"https://www.instagram.com/p/S{n}/", title=titre,
+        raw_hash=f"s{n:063d}", relevance_score=relevance, hotness_score=30,
+        published_at=BASE - dt.timedelta(hours=heures), media=media,
+    )
+    db.add(article)
+    db.commit()
+    return article
+
+
+def test_c1_un_article_sans_visuel_ne_fait_plus_taire_le_compte_toute_la_journee(
+    db_session, fred, monkeypatch
+):
+    """C-1 (tour de correction 1/5), durci au tour de correction 2/5 : la
+    revue rejoue ce scenario avec les VRAIES fenetres de `PUBLICATION_
+    FENETRES` (pas de fenetres compressees) et 200 passages -- 4 publications
+    sur 4, contre 0 avant le correctif. Sous mutation (retrait de la mise a
+    l'ecart), seules les assertions les plus etroites mordaient ; celle qui
+    doit tomber a zero est le NOMBRE DE PUBLICATIONS, le defaut mesure a
+    l'origine.
+
+    `db_session.autoflush = False` (le reglage de PRODUCTION, `app/db.py`) ;
+    l'article fautif n'est JAMAIS epingle -- c'est l'arbitrage, pas un test
+    truque, qui doit le laisser de cote."""
+    from app.content import illustration
+
+    db_session.autoflush = False
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
+    )
+
+    petit = _article_score(db_session, fred, "Petite photo, gros score", 95,
+                           [entree("photo", "https://cdn.ig/petite.jpg")])
+    bons = [
+        _article_score(db_session, fred, f"Bonne actu {n}", 70 - n,
+                       [entree("photo", f"https://cdn.ig/bonne{n}.jpg")])
+        for n in range(4)
+    ]
+
+    def choisir(db, article, format_, maintenant):
+        # Jamais de reserve : la petite photo ne peut etre sauvee par rien --
+        # c'est le cas exact que la Tache 5 doit sauter.
+        return ChoixVisuels(
+            [actif(entree("photo", article.media[0]["url"]), origine="article",
+                  compte="@fred", article_id=article.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    # Demarre une heure avant l'ouverture de la premiere fenetre (08:30 Paris) :
+    # BASE (04:00 UTC = 06:00 Paris) - 1h = 05:00 Paris.
+    debut = BASE - dt.timedelta(hours=1)
+    apercus_totaux, sautes_totaux = 0, 0
+    for pas in range(260):  # 260 x 10 min = 43h20 : plus de deux jours de fenetres reelles
+        rapport = outils.tourner(db_session, maintenant=debut + dt.timedelta(minutes=10 * pas),
+                                 choisir=choisir)
+        apercus_totaux += rapport.apercus
+        sautes_totaux += rapport.sautes
+
+    db_session.expire_all()
+    # Mode apercu : le conteneur est cree chez Meta mais `media_publish` n'est
+    # jamais appele (`Post.status` reste DRAFT expres) -- l'etat du CRENEAU
+    # (`APERCU`) est ce qui fait avancer la file (`candidats_eligibles`), donc
+    # ce qu'il faut lire ici pour dire qu'un article « est parti ».
+    partis = {
+        c.article_id for c in db_session.query(Creneau).filter(Creneau.etat == EtatCreneau.APERCU)
+    }
+    petit_frais = db_session.get(Article, petit.id)
+    # LE chiffre que la revue mesure : les QUATRE bons articles doivent finir
+    # publies -- pas "au moins un", qui laissait passer une mutation partielle.
+    assert partis & {b.id for b in bons} == {b.id for b in bons}, (
+        f"les 4 bons articles doivent tous etre publies, {len(partis)} l'ont ete"
+    )
+    assert petit.id not in partis, "l'article sans visuel ne doit jamais partir"
+    assert apercus_totaux == 4
+    assert sautes_totaux >= 1
+    # Jamais exclu, meme apres plusieurs sauts : il reste eligible pour demain.
+    assert petit_frais.file_exclu_raison is None
+
+
+def test_2_5_un_report_persistant_ne_rejoue_pas_c1(db_session, fred):
+    """Tour de correction 2/5, point 1 -- mesure : le meme scenario que C-1
+    mais avec une reserve qui leve `VisuelDiffere` a CHAQUE passage (au lieu
+    d'un article sans image) donnait 1 publication, 3 MANQUE, 0 saute --
+    `runner._composer` faisait `continue` sur `VisuelsDifferes` sans jamais
+    liberer le creneau ni mettre l'article a l'ecart : il campait dessus
+    jusqu'a MANQUE. Meme correctif que C-1 (`signaler_report` bascule un
+    report qui ne guerit jamais dans la meme mise a l'ecart), meme scenario,
+    memes VRAIES fenetres : doit rendre les 4 publications, pas 1."""
+    db_session.autoflush = False
+
+    petit = _article_score(db_session, fred, "Toujours en panne de reserve", 95,
+                           [entree("photo", "https://cdn.ig/petite.jpg")])
+    bons = [
+        _article_score(db_session, fred, f"Bonne actu {n}", 70 - n,
+                       [entree("photo", f"https://cdn.ig/bonne{n}.jpg")])
+        for n in range(4)
+    ]
+
+    def choisir(db, article, format_, maintenant):
+        if article.id == petit.id:
+            raise VisuelsDifferes("quota Graph atteint")
+        return ChoixVisuels(
+            [actif(entree("photo", article.media[0]["url"]), origine="article",
+                  compte="@fred", article_id=article.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    debut = BASE - dt.timedelta(hours=1)
+    apercus_totaux, sautes_totaux, reportes_totaux = 0, 0, 0
+    for pas in range(260):
+        rapport = outils.tourner(db_session, maintenant=debut + dt.timedelta(minutes=10 * pas),
+                                 choisir=choisir)
+        apercus_totaux += rapport.apercus
+        sautes_totaux += rapport.sautes
+        reportes_totaux += rapport.reportes
+
+    db_session.expire_all()
+    partis = {
+        c.article_id for c in db_session.query(Creneau).filter(Creneau.etat == EtatCreneau.APERCU)
+    }
+    petit_frais = db_session.get(Article, petit.id)
+    assert partis & {b.id for b in bons} == {b.id for b in bons}, (
+        f"les 4 bons articles doivent tous etre publies, {len(partis)} l'ont ete"
+    )
+    assert petit.id not in partis
+    assert apercus_totaux == 4
+    assert reportes_totaux > 0  # le compteur distinct de `sautes` (I-2)
+    assert sautes_totaux >= 1  # le report a fini par basculer en pause
+    # Un report, meme devenu une pause, n'est jamais une exclusion.
+    assert petit_frais.file_exclu_raison is None
+
+
+def test_c1_un_article_revient_apres_sa_pause(db_session, fred):
+    """La mise a l'ecart est TEMPORAIRE : passe la duree de la pause,
+    l'article redevient un candidat normal -- ce n'est pas une exclusion."""
+    from app.schedule.pause_visuels import articles_en_pause, marquer_saute
+
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    fin = marquer_saute(article.id, BASE, duree=dt.timedelta(minutes=30))
+
+    assert article.id in articles_en_pause(BASE + dt.timedelta(minutes=10))
+    assert article.id in articles_en_pause(fin - dt.timedelta(seconds=1))
+    assert article.id not in articles_en_pause(fin)
+    assert article.id not in articles_en_pause(fin + dt.timedelta(hours=1))

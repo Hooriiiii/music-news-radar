@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.content.choix_visuels import (
     AucunVisuel,
     ChoixVisuels,
+    VisuelIntrouvable,
     VisuelsDifferes,
     choisir_visuels,
     compte_du_visuel,
@@ -17,6 +18,7 @@ from app.content.compose import (
     appeler_compositeur,
     create_post,
     make_claude_composer,
+    resoudre_fond,
 )
 from app.content.export import construire_zip
 from app.content.lecture_artistes import LecteurComptes
@@ -53,13 +55,29 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
         ) from exc
+    # Le fond AVANT l'appel paye (Sonnet), comme le planificateur (Tache 5,
+    # 2026-09-21) : `resoudre_fond` leve `VisuelIntrouvable` quand toute
+    # l'echelle (actu, compte, artiste, web) n'a rien donne d'assez net --
+    # l'aplat Kinda n'est plus une issue publiable. Son resultat est repasse a
+    # `create_post` pour ne jamais rouvrir une reserve reseau deux fois.
+    try:
+        fond_precalcule = resoudre_fond(visuels, "kinda_post")
+    except VisuelsDifferes as exc:
+        # `resoudre_fond` peut lever la MEME exception que `choisir_visuels`
+        # (une reserve n'a pas pu etre consultee) : meme 503 que celui rendu
+        # quelques lignes plus haut pour ce cas.
+        raise HTTPException(
+            status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
+        ) from exc
+    except VisuelIntrouvable as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     composer = make_claude_composer()
     try:
         draft = appeler_compositeur(composer, article, compte_du_visuel(visuels))
     except CompositionError as exc:
         # Erreur amont (Claude) : une reponse HTTP lisible, pas un 500 avec trace.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return create_post(db, article, draft, visuels=visuels)
+    return create_post(db, article, draft, visuels=visuels, fond_precalcule=fond_precalcule)
 
 
 @router.get("/posts", response_model=list[PostOut])

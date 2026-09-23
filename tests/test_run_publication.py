@@ -114,6 +114,34 @@ def test_un_passage_en_panne_sort_en_erreur_et_previent_une_fois_par_heure(tmp_p
     assert len(notifications) == 2
 
 
+def test_i2_le_compteur_sautes_est_visible_dans_le_log(tmp_path, monkeypatch, capsys):
+    """Tour de correction 1/5 (I-2) : le saut faute de visuel de qualite doit
+    etre visible au meme titre que les autres compteurs (composes, geles,
+    publies...) -- un feed qui se tait sans rien dire est le pire des deux
+    mondes (CLAUDE.md)."""
+    def passage(*args, **kwargs):
+        return script.RapportPublication(sautes=2)
+
+    _agent_en_panne(tmp_path, monkeypatch, passage=passage)
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+    script.main()
+
+    assert "2 sautes" in capsys.readouterr().out
+
+
+def test_2_5_le_compteur_reportes_est_visible_dans_le_log(tmp_path, monkeypatch, capsys):
+    """Tour de correction 2/5, point 1 : un report qui se prolonge doit se
+    voir AVANT de basculer en saut, distinct de `sautes`."""
+    def passage(*args, **kwargs):
+        return script.RapportPublication(reportes=3)
+
+    _agent_en_panne(tmp_path, monkeypatch, passage=passage)
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+    script.main()
+
+    assert "3 reportes" in capsys.readouterr().out
+
+
 def test_un_jeton_en_panne_n_empeche_pas_le_passage(tmp_path, monkeypatch):
     passages = []
 

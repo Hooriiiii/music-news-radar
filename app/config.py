@@ -340,6 +340,35 @@ class Settings(BaseSettings):
     # Court : la « photo recente » d'un artiste ne l'est plus une semaine apres.
     visuels_web_cache_jours: int = 3
 
+    # Mise a l'ecart TEMPORAIRE d'un article saute faute de visuel de qualite
+    # (app/schedule/pause_visuels.py). Mesure : sans cette pause, un article
+    # au meilleur score revenait sur le
+    # creneau libere par son propre saut a CHAQUE passage de 10 min, jusqu'a
+    # MANQUE, et faisait taire le compte toute une journee. Le defaut (180 min
+    # = 3 h) est la MOITIE du cache du lecteur de comptes Instagram
+    # (`visuels_cache_lectures_heures`, 6 h) : retenter avant ce cache relit
+    # les memes donnees pour rien, mais retenter deux fois par cycle de cache
+    # laisse une chance des qu'une nouvelle publication du compte source ou
+    # d'un artiste cite peut avoir change la donne -- sans laisser le compte
+    # silencieux une demi-journee. Reste tres court face a `retention_days`
+    # (2 j) : un article peut retenter une quinzaine de fois avant sa purge.
+    visuel_saute_pause_minutes: int = 180
+
+    # Un REPORT (`VisuelsDifferes`, panne de transport dans une reserve) qui
+    # ne guerit jamais rejoue exactement le defaut qu'une mise a l'ecart
+    # corrige -- mesure : sans borne, l'article campe sur son creneau jusqu'a
+    # MANQUE (1 publication sur 4, 3 MANQUE, 0 mise a l'ecart). Au-dela de ce
+    # nombre de reports CONSECUTIFS, l'article rejoint la mise a l'ecart
+    # normale (`marquer_saute`). Calibre sur la pause de quota Graph a la
+    # composition (`visuels_pause_quota_minutes`, 60 min) rapportee a la
+    # cadence de publication (10 min, `StartInterval` de l'agent) : le 1er
+    # report tombe des le 1er passage en panne, le 7e report tombe donc APRES
+    # 6 intervalles de 10 min, soit exactement les 60 min de la pause de
+    # quota -- assez pour la laisser se resorber TOUTE SEULE avant
+    # d'abandonner (un seuil a 6 aurait bascule des la 50e minute, avant la
+    # fin de la pause qu'on cherche justement a laisser passer).
+    visuel_differe_max_reports: int = 7
+
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
     # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant

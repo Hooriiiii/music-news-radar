@@ -123,6 +123,25 @@ def test_appliquer_remplit_dans_l_ordre_et_laisse_le_reste_libre(db_session):
     assert [c.etat for c in creneaux[:3]] == [EtatCreneau.PROGRAMME, EtatCreneau.PROGRAMME, EtatCreneau.LIBRE]
 
 
+def test_m1_un_nouvel_article_efface_l_erreur_perimee_du_creneau(db_session):
+    """Tour de correction 1/5 (M-1) : un creneau garde l'erreur du PRECEDENT
+    article (« visuel introuvable : ... », posee par un saut) tant qu'aucune
+    composition n'a encore eu lieu pour le nouvel occupant -- trompeur au
+    dashboard, qui l'afficherait comme si elle concernait le nouvel article."""
+    source = _source(db_session)
+    faible = _article(db_session, source, 1, relevance=50)
+    premier = synchroniser_creneaux(db_session, MAINTENANT)[0]
+    premier.article_id, premier.etat = faible.id, EtatCreneau.PROGRAMME
+    premier.erreur = "visuel introuvable : aucune image de bonne qualite pour cette actu"
+    db_session.commit()
+
+    meilleur = _article(db_session, source, 2, relevance=95)
+    creneaux = appliquer_arbitrage(db_session, MAINTENANT)
+
+    assert creneaux[0].article_id == meilleur.id
+    assert creneaux[0].erreur is None
+
+
 def test_appliquer_ne_touche_pas_un_creneau_gele(db_session):
     source = _source(db_session)
     ancien = _article(db_session, source, 1, relevance=60)

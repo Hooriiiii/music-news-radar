@@ -48,6 +48,26 @@ ORIGINE_KINDA = "kinda"
 FOND_KINDA = "kinda:fond"
 
 
+class VisuelDiffere(RuntimeError):
+    """Un barreau de l'echelle du fond (reserve compte, artiste ou web) n'a
+    PAS PU regarder -- panne de transport (quota Graph, reseau, budget de
+    lecture epuise), jamais un jugement sur ce qu'il a trouve.
+
+    Avant cette distinction, une panne de transport dans une reserve etait
+    confondue avec « la reserve a regarde et n'a rien trouve », et les deux
+    menaient au meme fond Kinda -- une issue SURE tant que l'aplat restait
+    publiable. Devenu un SAUT, la confusion faisait sauter un article sur une
+    simple coupure reseau, avec une raison fausse (« aucune image... ni sur le
+    web » alors que le web n'avait jamais repondu).
+
+    Cette exception reste interne a l'echelle du fond : `illustration.
+    eviter_l_affiche` la capture PAR BARREAU et la traduit dans `Fond.differe`
+    (jamais en la laissant sortir) -- son propre invariant « ne leve jamais »
+    tient donc. `compose.resoudre_fond` lit ce champ et leve
+    `choix_visuels.VisuelsDifferes` (un REPORT) au lieu de `VisuelIntrouvable`
+    (un SAUT)."""
+
+
 def origine_du_fond(actifs: list[dict] | None, fond: str | None) -> str | None:
     """L'origine de l'actif dont l'image sert de fond, ou None.
 
