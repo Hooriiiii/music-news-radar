@@ -354,6 +354,20 @@ class Settings(BaseSettings):
     # (2 j) : un article peut retenter une quinzaine de fois avant sa purge.
     visuel_saute_pause_minutes: int = 180
 
+    # Tour de correction 2/5 : un REPORT (`VisuelsDifferes`, panne de
+    # transport dans une reserve) qui ne guerit jamais rejoue exactement le
+    # defaut C-1 -- mesure, `runner._composer` faisait `continue` sans liberer
+    # le creneau ni mettre l'article a l'ecart, qui campait donc dessus
+    # jusqu'a MANQUE (1 publication, 3 MANQUE, 0 saute). Au-dela de ce nombre
+    # de reports CONSECUTIFS, l'article rejoint la mise a l'ecart normale
+    # (`marquer_saute`). Calibre sur la pause de quota Graph a la composition
+    # (`visuels_pause_quota_minutes`, 60 min) rapportee a la cadence de
+    # publication (10 min, `StartInterval` de l'agent) : 6 passages laissent a
+    # une panne de quota le temps de se resorber TOUTE SEULE avant
+    # d'abandonner -- assez pour ne pas punir une panne courante, pas assez
+    # pour camper une demi-journee sur le meme creneau.
+    visuel_differe_max_reports: int = 6
+
     # --- Instagram (connexion Instagram, sans Facebook) ---
     # App Meta « Kinda Radar », compte kindanewsfrance declare testeur. Le jeton
     # du .env n'est que la valeur INITIALE : une fois rafraichi, le jeton courant

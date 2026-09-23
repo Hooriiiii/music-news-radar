@@ -18,10 +18,36 @@ le cycle : l'article sort des candidats le temps que quelque chose ait une
 chance raisonnable d'avoir change (`visuel_saute_pause_minutes`, justifie dans
 `app/config.py`), puis redevient eligible comme n'importe quel autre.
 
+TOUR DE CORRECTION 2/5 -- le meme defaut existe pour un REPORT persistant.
+Mesure : le meme scenario (un article au meilleur score, mais dont une
+reserve leve `VisuelDiffere` a CHAQUE passage au lieu d'un saut) donne 1
+publication, 3 MANQUE -- `runner._composer` fait `continue` sur
+`VisuelsDifferes` sans jamais liberer le creneau ni mettre l'article a
+l'ecart, donc il campe dessus jusqu'a MANQUE. Un report reste le bon geste
+(retenter EST la reponse a une panne de transport), mais il ne peut pas etre
+ETERNEL : `signaler_report` compte les reports CONSECUTIFS et, au-dela de
+`visuel_differe_max_reports` (6 par defaut), convertit en la MEME mise a
+l'ecart qu'un saut -- ce nombre est cale sur la pause de quota Graph (60 min,
+`veille_pause_quota_minutes`) rapportee a la cadence de publication (10 min) :
+6 passages laissent a une panne de quota le temps de se resorber TOUTE SEULE
+avant d'abandonner. `reinitialiser_report` efface le compteur des qu'une
+composition reussit pour l'article : seule une SUITE ininterrompue de reports
+compte.
+
 MEME MOTIF que `app/pipeline/quota_graph.py` (fichier d'etat a cote du jeton,
 ecriture atomique, temporaire nomme par processus) : plusieurs entrees, une
-par article en pause, purgees des qu'elles sont echues -- l'archive ne grossit
-jamais. Aucune migration : rien de ce fichier ne vit en base.
+par article en pause ou en report, purgees des qu'elles sont echues --
+l'archive ne grossit jamais. Aucune migration : rien de ce fichier ne vit en
+base.
+
+ECRITURES CONCURRENTES (tour de correction 2/5, point 5) : mesure par la
+revue -- A lit l'etat, B ecrit la pause de l'article 2, A ecrit la sienne (sur
+l'article 1) a partir de son instantane PERIME (sans l'article 2), qui
+disparait. `_fusionner_et_ecrire` relit le disque A L'INSTANT DE L'ECRITURE et
+fusionne, exactement comme `app.pipeline.cluster_arbitrage.fusionner_et_ecrire`
+(Tache 7) : un second agent (aujourd'hui, seul `run_publication` ecrit ici ;
+demain, un autre point d'entree) ne doit jamais voir sa pause effacee par une
+reecriture a partir d'un instantane pris plus tot dans l'appel.
 
 POINT D'ENTREE UNIQUE (`marquer_saute`) : la Tache 6 deplacera une partie des
 sauts au GEL (T-2h, apres l'echec de la super-resolution) et devra pouvoir
@@ -34,6 +60,7 @@ import json
 import logging
 import os
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import settings
@@ -49,41 +76,72 @@ def chemin_etat() -> Path:
     return settings.meta_token_path.parent / FICHIER_ETAT
 
 
-def _lire(chemin: Path) -> dict[int, dt.datetime]:
-    """Les pauses connues, indexees par id d'article. Jamais d'exception : un
-    fichier absent, tronque ou hors schema vaut « aucune pause connue » --
-    comme `quota_graph._lire`, on prefere un article retente de trop a un
-    planificateur qui meurt faute de fichier."""
+@dataclass(frozen=True)
+class Etat:
+    """L'etat persiste : les pauses en cours, et les compteurs de reports
+    CONSECUTIFS (tour de correction 2/5) -- un seul fichier, une seule
+    fusion, sur le meme modele que `cluster_arbitrage.Cache` (entrees +
+    tentatives)."""
+
+    pauses: dict[int, dt.datetime] = field(default_factory=dict)
+    reports: dict[int, int] = field(default_factory=dict)
+
+
+def _pause_valide(maintenant: dt.datetime, jusqu_a: dt.datetime) -> bool:
+    """Vrai si la pause tient encore. Ne leve JAMAIS (tour de correction 2/5,
+    point 4) : un horodatage NAIF sur le disque (corruption, bug amont)
+    compare a un `maintenant` conscient du fuseau leve un `TypeError` --
+    inatteignable aujourd'hui, mais ce module est appele depuis
+    `store._articles_publiables`, donc depuis l'arbitrage, `candidats_
+    eligibles` ET `offre_reels` : une exception ici ferait tomber les trois.
+    Une comparaison ratee vaut « pause perimee » -- retenter un peu tot est
+    sans commune mesure avec un planificateur a l'arret."""
+    try:
+        return maintenant < jusqu_a
+    except TypeError:
+        logger.warning("horodatage de pause illisible (comparaison impossible) : ignoree")
+        return False
+
+
+def _lire(chemin: Path) -> Etat:
+    """L'etat connu. Jamais d'exception : un fichier absent, tronque ou hors
+    schema vaut « rien de connu » -- comme `quota_graph._lire`, on prefere un
+    article retente de trop a un planificateur qui meurt faute de fichier."""
     try:
         donnees = json.loads(chemin.read_text())
     except Exception:  # noqa: BLE001 -- absent, tronque, illisible
-        return {}
+        return Etat()
     if not isinstance(donnees, dict):
-        return {}
+        return Etat()
     pauses: dict[int, dt.datetime] = {}
     for article_id, valeur in (donnees.get("pauses") or {}).items():
         try:
             jusqu_a = dt.datetime.fromisoformat(valeur)
-        except (TypeError, ValueError):
-            continue
-        try:
             pauses[int(article_id)] = jusqu_a
         except (TypeError, ValueError):
             continue
-    return pauses
+    reports: dict[int, int] = {}
+    for article_id, valeur in (donnees.get("reports") or {}).items():
+        try:
+            reports[int(article_id)] = int(valeur)
+        except (TypeError, ValueError):
+            continue
+    return Etat(pauses, reports)
 
 
-def _ecrire(chemin: Path, pauses: dict[int, dt.datetime]) -> None:
+def _ecrire(chemin: Path, etat: Etat) -> None:
     """Ecriture ATOMIQUE, temporaire NOMME PAR PROCESSUS (`tempfile.mkstemp`) :
-    le pipeline et l'agent de publication peuvent tous deux poser une pause
-    dans la meme seconde, et un `.tmp` partage donnerait un JSON melange
-    (meme piege que `quota_graph.py`)."""
+    un `.tmp` partage entre deux ecrivains donnerait un JSON melange (meme
+    piege que `quota_graph.py`)."""
     chemin.parent.mkdir(parents=True, exist_ok=True)
     descripteur, temporaire = tempfile.mkstemp(dir=chemin.parent, prefix=chemin.name + ".")
     try:
         with os.fdopen(descripteur, "w") as fichier:
             json.dump(
-                {"pauses": {str(aid): jusqu_a.isoformat() for aid, jusqu_a in pauses.items()}},
+                {
+                    "pauses": {str(aid): t.isoformat() for aid, t in etat.pauses.items()},
+                    "reports": {str(aid): n for aid, n in etat.reports.items()},
+                },
                 fichier,
             )
         os.replace(temporaire, chemin)
@@ -92,11 +150,41 @@ def _ecrire(chemin: Path, pauses: dict[int, dt.datetime]) -> None:
         raise
 
 
+def _fusionner_et_ecrire(
+    chemin: Path,
+    maintenant: dt.datetime,
+    *,
+    nouvelle_pause: tuple[int, dt.datetime] | None = None,
+    nouveau_report: tuple[int, int | None] | None = None,
+) -> None:
+    """Relit le disque A L'INSTANT DE L'ECRITURE et fusionne -- jamais a partir
+    d'un instantane pris plus tot dans l'appel (voir le docstring du module,
+    tour de correction 2/5, point 5). `nouveau_report=(id, None)` efface le
+    compteur de cet article (`reinitialiser_report`)."""
+    etat = _lire(chemin)
+    pauses = {aid: t for aid, t in etat.pauses.items() if _pause_valide(maintenant, t)}
+    reports = dict(etat.reports)
+    if nouvelle_pause is not None:
+        article_id, fin = nouvelle_pause
+        pauses[article_id] = fin
+        reports.pop(article_id, None)  # une pause rend le compteur de reports obsolete
+    if nouveau_report is not None:
+        article_id, compte = nouveau_report
+        if compte is None:
+            reports.pop(article_id, None)
+        else:
+            reports[article_id] = compte
+    try:
+        _ecrire(chemin, Etat(pauses, reports))
+    except OSError:
+        logger.exception("etat de mise a l'ecart non enregistre (%s)", chemin)
+
+
 def articles_en_pause(maintenant: dt.datetime, chemin: Path | None = None) -> set[int]:
     """Les ids d'article encore mis a l'ecart a cet instant -- a exclure des
     candidats (`store._articles_publiables`)."""
-    pauses = _lire(chemin or chemin_etat())
-    return {article_id for article_id, jusqu_a in pauses.items() if maintenant < jusqu_a}
+    etat = _lire(chemin or chemin_etat())
+    return {article_id for article_id, jusqu_a in etat.pauses.items() if _pause_valide(maintenant, jusqu_a)}
 
 
 def marquer_saute(
@@ -117,11 +205,42 @@ def marquer_saute(
     """
     chemin = chemin or chemin_etat()
     duree = duree if duree is not None else dt.timedelta(minutes=max(1, settings.visuel_saute_pause_minutes))
-    pauses = {aid: jusqu_a for aid, jusqu_a in _lire(chemin).items() if maintenant < jusqu_a}
     fin = maintenant + duree
-    pauses[article_id] = fin
-    try:
-        _ecrire(chemin, pauses)
-    except OSError:
-        logger.exception("pause de l'article %s non enregistree (%s)", article_id, chemin)
+    _fusionner_et_ecrire(chemin, maintenant, nouvelle_pause=(article_id, fin))
     return fin
+
+
+def signaler_report(
+    article_id: int,
+    maintenant: dt.datetime,
+    *,
+    seuil: int | None = None,
+    chemin: Path | None = None,
+) -> bool:
+    """Compte un REPORT (`VisuelsDifferes`) de plus pour cet article. Au-dela
+    de `seuil` (defaut `visuel_differe_max_reports`) reports CONSECUTIFS,
+    convertit en la MEME mise a l'ecart temporaire qu'un saut -- un report qui
+    ne guerit jamais rejoue exactement le defaut C-1 (tour de correction 2/5,
+    point 1) : l'article campe sur son creneau jusqu'a MANQUE au lieu de le
+    liberer pour un autre.
+
+    Rend True si l'article vient de basculer en pause (l'appelant doit alors
+    LIBERER le creneau, comme pour un saut) ; False s'il reste un simple
+    report (le creneau garde l'article, il retentera au passage suivant).
+    """
+    chemin = chemin or chemin_etat()
+    seuil = seuil if seuil is not None else max(1, settings.visuel_differe_max_reports)
+    compte = _lire(chemin).reports.get(article_id, 0) + 1
+    if compte >= seuil:
+        marquer_saute(article_id, maintenant, chemin=chemin)
+        return True
+    _fusionner_et_ecrire(chemin, maintenant, nouveau_report=(article_id, compte))
+    return False
+
+
+def reinitialiser_report(article_id: int, maintenant: dt.datetime, *, chemin: Path | None = None) -> None:
+    """Efface le compteur de reports consecutifs : appele des qu'une
+    composition reussit pour cet article -- seule une SUITE ininterrompue de
+    reports doit compter, un succes la casse."""
+    chemin = chemin or chemin_etat()
+    _fusionner_et_ecrire(chemin, maintenant, nouveau_report=(article_id, None))

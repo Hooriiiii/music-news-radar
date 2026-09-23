@@ -82,7 +82,7 @@ from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCrene
 from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.publish.preparation_reel import ReelInadapte
-from app.schedule.pause_visuels import marquer_saute
+from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -119,6 +119,12 @@ class RapportPublication:
     # des `manques`, pour que le saut reste VISIBLE au lieu de se confondre avec
     # un Mac en veille ou un article vraiment en defaut.
     sautes: int = 0
+    # Tour de correction 2/5 : chaque REPORT (`VisuelsDifferes`), qu'il reste
+    # un simple report ou qu'il bascule en saut au-dela du seuil de reports
+    # consecutifs -- un feed qui se tait sans rien dire est le pire des deux
+    # mondes (CLAUDE.md), et un report qui se prolonge doit se VOIR avant de
+    # devenir un saut.
+    reportes: int = 0
     erreurs: list[str] = field(default_factory=list)
 
 
@@ -273,6 +279,31 @@ def _exclure(db, creneau: Creneau, attendu: tuple, raison: str, rapport: Rapport
     _liberer(db, creneau, attendu, raison)
 
 
+def _differer(
+    db, creneau: Creneau, attendu: tuple, article: Article, maintenant: dt.datetime,
+    rapport: RapportPublication, exc: Exception,
+) -> bool:
+    """Un REPORT (`VisuelsDifferes`) : retenter au passage suivant reste le bon
+    geste, mais pas eternellement (tour de correction 2/5, point 1). Compte
+    les reports CONSECUTIFS (`signaler_report`) ; au-dela du seuil, bascule
+    dans la MEME mise a l'ecart qu'un saut -- sans elle, un report qui ne
+    guerit jamais rejoue exactement le defaut C-1 (l'article campe sur le
+    creneau jusqu'a MANQUE, mesure : 1 publication, 3 MANQUE, 0 saute).
+
+    Rend True si l'article vient de basculer en pause (le creneau a ete
+    libere, l'appelant doit relancer l'arbitrage), False s'il reste un simple
+    report (le creneau garde l'article)."""
+    rapport.reportes += 1
+    if signaler_report(article.id, maintenant):
+        _liberer(db, creneau, attendu, f"visuel introuvable (reports repetes) : {exc}")
+        rapport.sautes += 1
+        return True
+    erreur = f"composition differee : {exc}"[:1000]
+    if creneau.erreur != erreur:
+        _ecrire_si(db, creneau, attendu, erreur=erreur)
+    return False
+
+
 def _compter_manque(creneau: Creneau, attendu: tuple, formats_actifs: set, rapport: RapportPublication) -> None:
     if attendu[1] is None:
         return
@@ -416,9 +447,8 @@ def _composer(
             try:
                 visuels = choisir(db, article, creneau.format, maintenant)
             except VisuelsDifferes as exc:
-                erreur = f"composition differee : {exc}"[:1000]
-                if creneau.erreur != erreur:
-                    _ecrire_si(db, creneau, attendu, erreur=erreur)
+                if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
+                    exclusions = True
                 continue
             except AucunVisuel as exc:
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
@@ -435,10 +465,10 @@ def _composer(
                 # I-1 (tour de correction 1/5) : au moins une reserve n'a pas
                 # pu etre CONSULTEE (reseau, quota) -- un report, jamais un
                 # saut : sans cette distinction, une simple coupure reseau
-                # mettait l'article en pause pour rien.
-                erreur = f"composition differee : {exc}"[:1000]
-                if creneau.erreur != erreur:
-                    _ecrire_si(db, creneau, attendu, erreur=erreur)
+                # mettait l'article en pause pour rien. `_differer` borne
+                # neanmoins la SUITE de reports (tour de correction 2/5).
+                if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
+                    exclusions = True
                 continue
             except VisuelIntrouvable as exc:
                 # SAUT, pas exclusion : l'article peut avoir une photo demain
@@ -454,6 +484,11 @@ def _composer(
                 rapport.sautes += 1
                 exclusions = True
                 continue
+            # Les visuels ont fini par se resoudre pour cet article : une
+            # SUITE de reports vient de se casser, le compteur ne doit pas
+            # survivre (tour de correction 2/5) -- sinon un futur report
+            # isole repartirait avec un compte deja proche du seuil.
+            reinitialiser_report(article.id, maintenant)
             try:
                 # Le compte du visuel part avec l'article : le compositeur ne
                 # sait pas, sinon, de qui est la video qu'il titre (le reel « BTS »
@@ -755,12 +790,17 @@ def _publier(
             # creneaux deja geles en base. Pas d'exclusion (l'article n'y est
             # pour rien) ; mise en pause comme un saut normal (C-1), sinon
             # l'arbitrage relancerait le meme article sur ce meme creneau.
-            if article is not None:
-                marquer_saute(article.id, maintenant)
+            # ORDRE (tour de correction 2/5, point 6) : `_liberer` D'ABORD --
+            # c'est une ecriture CONDITIONNELLE (`_ecrire_si`) qui peut
+            # echouer si le dashboard est passe entre-temps ; mettre l'article
+            # en pause AVANT de le savoir lui infligerait 3 h d'ecart pour
+            # rien sur un creneau qu'on n'a meme pas reussi a liberer.
             if _liberer(
                 db, creneau, attendu,
                 "aplat Kinda en fond : publication refusee, nouvelle composition",
             ):
+                if article is not None:
+                    marquer_saute(article.id, maintenant)
                 rapport.sautes += 1
                 _effacer_dossier(creneau)
             continue

@@ -280,6 +280,29 @@ def test_le_dashboard_signale_des_visuels_differes(client, db_session, fred, mon
     assert "quota" in reponse.json()["detail"]
 
 
+def test_2_5_le_dashboard_signale_aussi_les_visuels_differes_du_fond(
+    client, db_session, fred, monkeypatch
+):
+    """Tour de correction 2/5, point 2 : `resoudre_fond` peut lever la MEME
+    exception que `choisir_visuels` (I-1, une reserve n'a pas pu etre
+    consultee), mais `app/api/posts.py` ne rattrapait que `VisuelIntrouvable`
+    -- casse neuve introduite par le tour precedent, l'exception remontait en
+    500 non gere au lieu du 503 deja rendu pour le meme cas cote
+    `choisir_visuels`."""
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    choisi = actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article", compte="@fred")
+
+    def differer(*args, **kwargs):
+        raise VisuelsDifferes("quota Graph atteint")
+
+    monkeypatch.setattr("app.api.posts.choisir_visuels", lambda *a, **k: ChoixVisuels([choisi], "@fred"))
+    monkeypatch.setattr("app.api.posts.resoudre_fond", differer)
+    monkeypatch.setattr("app.api.posts.make_claude_composer", lambda: lambda a: _draft())
+    reponse = client.post(f"/articles/{article.id}/posts")
+    assert reponse.status_code == 503
+    assert "quota" in reponse.json()["detail"]
+
+
 def test_un_brouillon_sans_aucun_visuel_n_est_pas_gele(db_session, guettapen):
     """Compose a la main au dashboard sans visuel autorise (`assets == []`) :
     la file ne doit pas le publier avec le fond de secours."""
@@ -639,27 +662,20 @@ def _article_score(db, source, titre, relevance, media, heures=2):
 def test_c1_un_article_sans_visuel_ne_fait_plus_taire_le_compte_toute_la_journee(
     db_session, fred, monkeypatch
 ):
-    """C-1 (tour de correction 1/5), mesure sur 120 passages simules par la
-    revue : sans mise a l'ecart, un article au MEILLEUR score sans visuel de
-    qualite revient sur le creneau qu'il vient de liberer a CHAQUE passage --
-    le score gagne toujours l'arbitrage -- jusqu'a MANQUE. Mesure de la revue :
-    3 creneaux du jour en MANQUE, ZERO publication, quatre bons articles
-    jamais atteints.
+    """C-1 (tour de correction 1/5), durci au tour de correction 2/5 : la
+    revue rejoue ce scenario avec les VRAIES fenetres de `PUBLICATION_
+    FENETRES` (pas de fenetres compressees) et 200 passages -- 4 publications
+    sur 4, contre 0 avant le correctif. Sous mutation (retrait de la mise a
+    l'ecart), seules les assertions les plus etroites mordaient ; celle qui
+    doit tomber a zero est le NOMBRE DE PUBLICATIONS, le defaut mesure a
+    l'origine.
 
-    Reproduit ici avec des fenetres COMPRESSEES (35 minutes au lieu d'une
-    journee) pour couvrir un jour de publication en une poignee de passages
-    de 10 min plutot que 144 ; `db_session.autoflush = False` (le reglage de
-    PRODUCTION, `app/db.py`) ; et SANS epingler l'article fautif -- c'est
-    l'arbitrage, pas un test truque, qui doit le laisser de cote."""
+    `db_session.autoflush = False` (le reglage de PRODUCTION, `app/db.py`) ;
+    l'article fautif n'est JAMAIS epingle -- c'est l'arbitrage, pas un test
+    truque, qui doit le laisser de cote."""
     from app.content import illustration
 
     db_session.autoflush = False
-    # Trois creneaux dans la meme demi-heure plutot que repartis sur le jour :
-    # meme dynamique d'arbitrage (le meilleur score gagne le creneau le plus
-    # proche), sans avoir besoin de 144 passages pour couvrir 24 h.
-    monkeypatch.setattr(settings, "publication_fenetres", "08:30-08:35,08:45-08:50,09:00-09:05")
-    # Pause courte : observer le retour de l'article sans rejouer 3 h de passages.
-    monkeypatch.setattr(settings, "visuel_saute_pause_minutes", 20)
     monkeypatch.setattr(
         illustration, "tailles_de", lambda urls, **k: {"https://cdn.ig/petite.jpg": (200, 150)}
     )
@@ -686,7 +702,7 @@ def test_c1_un_article_sans_visuel_ne_fait_plus_taire_le_compte_toute_la_journee
     # BASE (04:00 UTC = 06:00 Paris) - 1h = 05:00 Paris.
     debut = BASE - dt.timedelta(hours=1)
     apercus_totaux, sautes_totaux = 0, 0
-    for pas in range(40):  # 40 x 10 min = 6h40 : couvre les trois creneaux jusqu'a leur publication
+    for pas in range(260):  # 260 x 10 min = 43h20 : plus de deux jours de fenetres reelles
         rapport = outils.tourner(db_session, maintenant=debut + dt.timedelta(minutes=10 * pas),
                                  choisir=choisir)
         apercus_totaux += rapport.apercus
@@ -701,23 +717,69 @@ def test_c1_un_article_sans_visuel_ne_fait_plus_taire_le_compte_toute_la_journee
         c.article_id for c in db_session.query(Creneau).filter(Creneau.etat == EtatCreneau.APERCU)
     }
     petit_frais = db_session.get(Article, petit.id)
+    # LE chiffre que la revue mesure : les QUATRE bons articles doivent finir
+    # publies -- pas "au moins un", qui laissait passer une mutation partielle.
+    assert partis & {b.id for b in bons} == {b.id for b in bons}, (
+        f"les 4 bons articles doivent tous etre publies, {len(partis)} l'ont ete"
+    )
     assert petit.id not in partis, "l'article sans visuel ne doit jamais partir"
-    assert partis & {b.id for b in bons}, "au moins un bon article doit avoir ete publie"
-    assert apercus_totaux >= 1
+    assert apercus_totaux == 4
     assert sautes_totaux >= 1
-    # LE creneau que « petit » libere a repetition (le plus proche, celui que
-    # l'arbitrage lui donne en premier a chaque passage) est celui que le
-    # defaut mesure par la revue vide completement (MANQUE, zero publication).
-    # Sans la mise a l'ecart, l'article fautif le reprend a CHAQUE passage --
-    # avec elle, un bon article le prend et part.
-    premier = (
-        db_session.query(Creneau).order_by(Creneau.publier_a).first()
-    )
-    assert premier.etat == EtatCreneau.APERCU, (
-        f"le premier creneau ne doit pas finir MANQUE : {premier.etat} / {premier.erreur}"
-    )
-    assert premier.article_id in {b.id for b in bons}
     # Jamais exclu, meme apres plusieurs sauts : il reste eligible pour demain.
+    assert petit_frais.file_exclu_raison is None
+
+
+def test_2_5_un_report_persistant_ne_rejoue_pas_c1(db_session, fred):
+    """Tour de correction 2/5, point 1 -- mesure : le meme scenario que C-1
+    mais avec une reserve qui leve `VisuelDiffere` a CHAQUE passage (au lieu
+    d'un article sans image) donnait 1 publication, 3 MANQUE, 0 saute --
+    `runner._composer` faisait `continue` sur `VisuelsDifferes` sans jamais
+    liberer le creneau ni mettre l'article a l'ecart : il campait dessus
+    jusqu'a MANQUE. Meme correctif que C-1 (`signaler_report` bascule un
+    report qui ne guerit jamais dans la meme mise a l'ecart), meme scenario,
+    memes VRAIES fenetres : doit rendre les 4 publications, pas 1."""
+    db_session.autoflush = False
+
+    petit = _article_score(db_session, fred, "Toujours en panne de reserve", 95,
+                           [entree("photo", "https://cdn.ig/petite.jpg")])
+    bons = [
+        _article_score(db_session, fred, f"Bonne actu {n}", 70 - n,
+                       [entree("photo", f"https://cdn.ig/bonne{n}.jpg")])
+        for n in range(4)
+    ]
+
+    def choisir(db, article, format_, maintenant):
+        if article.id == petit.id:
+            raise VisuelsDifferes("quota Graph atteint")
+        return ChoixVisuels(
+            [actif(entree("photo", article.media[0]["url"]), origine="article",
+                  compte="@fred", article_id=article.id)],
+            "@fred",
+        )
+
+    outils = Outils()
+    debut = BASE - dt.timedelta(hours=1)
+    apercus_totaux, sautes_totaux, reportes_totaux = 0, 0, 0
+    for pas in range(260):
+        rapport = outils.tourner(db_session, maintenant=debut + dt.timedelta(minutes=10 * pas),
+                                 choisir=choisir)
+        apercus_totaux += rapport.apercus
+        sautes_totaux += rapport.sautes
+        reportes_totaux += rapport.reportes
+
+    db_session.expire_all()
+    partis = {
+        c.article_id for c in db_session.query(Creneau).filter(Creneau.etat == EtatCreneau.APERCU)
+    }
+    petit_frais = db_session.get(Article, petit.id)
+    assert partis & {b.id for b in bons} == {b.id for b in bons}, (
+        f"les 4 bons articles doivent tous etre publies, {len(partis)} l'ont ete"
+    )
+    assert petit.id not in partis
+    assert apercus_totaux == 4
+    assert reportes_totaux > 0  # le compteur distinct de `sautes` (I-2)
+    assert sautes_totaux >= 1  # le report a fini par basculer en pause
+    # Un report, meme devenu une pause, n'est jamais une exclusion.
     assert petit_frais.file_exclu_raison is None
 
 

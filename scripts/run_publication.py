@@ -165,6 +165,9 @@ def main() -> None:
         # compteurs -- un feed qui se tait sans rien dire est le pire des deux
         # mondes (CLAUDE.md).
         "sautes": rapport.sautes,
+        # Tour de correction 2/5, point 1 : un report qui se prolonge doit se
+        # voir AVANT de basculer en saut, distinct de `sautes`.
+        "reportes": rapport.reportes,
     }
     # Silence quand rien ne se passe : le log ne grossit pas de 144 lignes vides par jour.
     if any(compteurs.values()) or rapport.erreurs:

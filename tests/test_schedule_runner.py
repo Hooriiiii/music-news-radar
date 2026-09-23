@@ -138,6 +138,42 @@ def test_c1_ceinture_refuse_de_publier_un_creneau_gele_sur_l_aplat_kinda(db_sess
     assert article.id in articles_en_pause(maintenant)
 
 
+def test_2_5_la_ceinture_ne_met_en_pause_que_si_la_liberation_reussit(
+    db_session, article, monkeypatch
+):
+    """Tour de correction 2/5, point 6 : `_liberer` est une ecriture
+    CONDITIONNELLE qui peut echouer si le dashboard est passe entre-temps.
+    Avant ce correctif, `marquer_saute` etait appelee AVANT de savoir si
+    `_liberer` avait reussi -- l'article prenait 3 h de pause pour un creneau
+    qu'on n'a meme pas reussi a liberer."""
+    from app.content.visuels import FOND_KINDA
+    from app.schedule.pause_visuels import articles_en_pause
+
+    post = Post(article_id=article.id, article_title=article.title, article_url=article.url,
+                caption="L", slides=[{"kind": "cover", "image_url": FOND_KINDA}],
+                template="kinda_post", assets=[])
+    db_session.add(post)
+    db_session.commit()
+    creneau = Creneau(publier_a=H0, article_id=article.id, post_id=post.id,
+                      etat=EtatCreneau.GELE, fichiers=["p_01.jpg"])
+    db_session.add(creneau)
+    db_session.commit()
+
+    # Simule le dashboard passe entre-temps : la reclamation conditionnelle
+    # echoue toujours.
+    monkeypatch.setattr(runner, "_liberer", lambda *a, **k: False)
+
+    outils = Outils()
+    maintenant = H0 + dt.timedelta(minutes=20)
+    rapport = outils.tourner(db_session, maintenant)
+
+    db_session.refresh(article)
+    assert rapport.sautes == 0
+    assert article.id not in articles_en_pause(maintenant), (
+        "aucune pause tant que le creneau n'a pas ete reellement libere"
+    )
+
+
 def test_en_arret_l_agent_ne_fait_rien(db_session, article):
     outils = Outils()
     outils.tourner(db_session, H0 - dt.timedelta(hours=3), mode="arret")

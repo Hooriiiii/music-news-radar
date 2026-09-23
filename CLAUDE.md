@@ -688,6 +688,50 @@ planificateur sur 120 passages simulés.**
   réussisse — trompeur au dashboard. `appliquer_arbitrage` l'efface dès que
   `article_id` change.
 
+**Tour de correction 2/5 (2026-09-22)**, la revue rejoue le scénario ci-dessus
+avec les VRAIES fenêtres de `PUBLICATION_FENETRES` et 200+ passages : **4
+publications sur 4** (contre 0 avant C-1), l'article fautif jamais exclu, qui
+retente toutes les 3 h. Six points restaient.
+
+1. **Le chemin REPORT rejouait EXACTEMENT le défaut C-1.** Une réserve qui
+   lève `VisuelDiffere` à chaque passage (au lieu d'un « rien trouvé ») faisait
+   `continue` sans jamais libérer le créneau ni mettre l'article à l'écart —
+   mesuré : 1 publication, 3 MANQUE, 0 sauté. Un report reste le bon geste
+   (retenter EST la réponse à une panne de transport), mais pas éternellement :
+   `pause_visuels.signaler_report` compte les reports CONSÉCUTIFS par article
+   et, au-delà de `visuel_differe_max_reports` (6 par défaut — calé sur la
+   pause de quota Graph à la composition, 60 min, rapportée à la cadence de
+   publication, 10 min : 6 passages laissent à une panne de quota le temps de
+   se résorber toute seule avant d'abandonner), bascule dans la MÊME mise à
+   l'écart qu'un saut. `reinitialiser_report` casse le compteur dès qu'une
+   composition réussit. Visible via `RapportPublication.reportes`, distinct de
+   `sautes`, dans le log de `run_publication`.
+2. **Le bouton « Générer un post » du dashboard renvoyait un 500** :
+   `resoudre_fond` peut lever la même `VisuelsDifferes` que `choisir_visuels`,
+   et `app/api/posts.py` ne rattrapait que `VisuelIntrouvable`. Rattrapée,
+   même 503 que pour `choisir_visuels`.
+3. **`Fond` ne transporte plus une affiche avérée (ou une image trop petite)
+   dans `url` quand `differe=True`** : `eviter_l_affiche` rend
+   `Fond(None, origine, differe=True)`, jamais l'URL fautive — sûr par
+   CONSTRUCTION, pas seulement parce que `compose.resoudre_fond` teste
+   `differe` avant `origine == ORIGINE_KINDA`.
+4. **Une horloge naïve ne fait plus tomber le planificateur.**
+   `pause_visuels._pause_valide` compare `maintenant < jusqu_a` dans un
+   `try/except TypeError` — un horodatage naïf sur le disque (corruption, bug
+   amont) vaut désormais « pause périmée », jamais une exception qui ferait
+   tomber `store._articles_publiables`, donc l'arbitrage, `candidats_
+   eligibles` ET `offre_reels`.
+5. **Écritures concurrentes : `pause_visuels._fusionner_et_ecrire` relit le
+   disque À L'INSTANT DE L'ÉCRITURE et fusionne**, exactement comme
+   `app.pipeline.cluster_arbitrage.fusionner_et_ecrire` (Tâche 7) — un second
+   agent qui pose sa propre pause entre notre lecture et notre écriture ne se
+   fait plus écraser.
+6. **`runner._publier` met l'article en pause SEULEMENT si `_liberer` a
+   réussi** (ordre inversé) : `_liberer` est une écriture conditionnelle qui
+   peut échouer si le dashboard est passé entre-temps ; l'appeler avant de le
+   savoir infligeait 3 h de pause pour un créneau qu'on n'a même pas réussi à
+   libérer.
+
 Deux **réserves**, ouvertes dans l'ordre et seulement tant qu'aucune n'a donné :
 1. le compte qui a publié l'actu (jamais un `categorie=media`) ;
 2. les artistes suivis **cités** par l'actu — un line-up cite des artistes qu'on

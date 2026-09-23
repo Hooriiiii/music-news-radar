@@ -459,7 +459,11 @@ def test_une_reserve_en_panne_de_transport_reporte_au_lieu_de_conclure():
     )
 
     assert fond.differe is True
-    assert fond.url != FOND_KINDA and fond.origine != ORIGINE_KINDA
+    # Tour de correction 2/5, point 3 : `url` ne doit JAMAIS porter l'image
+    # jugee affiche/trop petite -- surete par construction, pas seulement par
+    # le fait que `resoudre_fond` teste `differe` en premier.
+    assert fond.url is None
+    assert fond.origine != ORIGINE_KINDA
 
 
 def test_un_lot_plus_loin_qui_reussit_efface_la_panne_d_un_lot_precedent():

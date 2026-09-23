@@ -580,12 +580,18 @@ def eviter_l_affiche(
     pour le meme defaut, ne se composaient pas. `origine_de` relit l'origine du
     candidat retenu (un actif `artiste` peut voisiner avec l'actu).
 
-    Quatre issues : le fond d'origine (ni affiche ni trop petit, ou l'un des
-    deux n'a pas pu etre etabli -- ne pas savoir n'est pas savoir) ; la
-    meilleure photo assez grande du premier lot qui en offre une ; le fond
-    Kinda ; et jamais d'exception -- une panne du juge laisse le fond
-    d'origine, une panne d'un lot laisse le fond Kinda, puisque le defaut du
-    fond, lui, est avere.
+    Cinq issues (mis a jour au tour de correction 2/5, point 3 -- ce
+    paragraphe mentait depuis l'introduction de `Fond.differe`) : le fond
+    d'origine (ni affiche ni trop petit, ou l'un des deux n'a pas pu etre
+    etabli -- ne pas savoir n'est pas savoir) ; la meilleure photo assez
+    grande du premier lot qui en offre une ; un REPORT (`Fond(None, ...,
+    differe=True)`) quand au moins un lot n'a pas pu etre consulte (panne de
+    transport) et qu'aucun n'a donne de remplacant -- `url` y est toujours
+    `None`, jamais l'image fautive, par construction ; le fond Kinda quand
+    tous les lots ont ete consultes et n'ont RIEN donne ; et jamais
+    d'exception -- une panne du juge laisse le fond d'origine, une panne d'UN
+    lot (au sens classement, `_meilleur_candidat`) laisse le fond Kinda,
+    puisque le defaut du fond, lui, est avere.
     """
     if not fond:
         return Fond(fond, origine)
@@ -629,10 +635,17 @@ def eviter_l_affiche(
     if differe:
         # Ne PAS conclure a l'absence d'image : au moins une reserve n'a pas pu
         # etre consultee, `compose.resoudre_fond` doit reporter, pas sauter.
+        # `url=None`, JAMAIS `fond` (tour de correction 2/5, point 3) : `fond`
+        # est ici precisement l'image jugee AFFICHE ou TROP PETITE -- la
+        # publier serait le defaut meme que cette tache corrige. Aujourd'hui
+        # `resoudre_fond` teste `differe` avant `ORIGINE_KINDA` et ne lit
+        # jamais `.url` dans ce cas, mais un futur lecteur qui oublierait
+        # `.differe` ne doit trouver ICI aucune URL publiable -- surete par
+        # CONSTRUCTION plutot que par discipline d'appelant.
         logger.info(
             "fond retenu %s, et au moins une reserve n'a pas pu etre consultee : report", raison
         )
-        return Fond(fond, origine, differe=True)
+        return Fond(None, origine, differe=True)
     logger.info("aucune photo trouvee, le fond retenu est %s : cover sur le fond Kinda", raison)
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
