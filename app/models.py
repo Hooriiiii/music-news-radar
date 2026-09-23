@@ -321,7 +321,7 @@ class EventObservation(Base):
     # `sources.type` fige au moment de l'observation (pas relu depuis `sources`,
     # qui peut changer ou disparaitre) -- meme enum que `SourceType`.
     platform: Mapped[SourceType] = mapped_column(
-        Enum(SourceType, name="event_observation_platform", native_enum=False, length=20, values_callable=_values)
+        Enum(SourceType, name="platform", native_enum=False, length=20, values_callable=_values)
     )
     source_id: Mapped[int | None] = mapped_column(
         ForeignKey("sources.id", ondelete="SET NULL"), index=True
@@ -329,7 +329,7 @@ class EventObservation(Base):
     # PRIMARY si la source est artiste/festival/label/club, SECONDARY si media,
     # UNKNOWN sinon (categorie NULL, ou source X/Reddit non classee).
     source_role: Mapped[SourceRole] = mapped_column(
-        Enum(SourceRole, name="event_observation_source_role", native_enum=False, length=20, values_callable=_values)
+        Enum(SourceRole, name="source_role", native_enum=False, length=20, values_callable=_values)
     )
     published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     observed_at: Mapped[dt.datetime] = mapped_column(
