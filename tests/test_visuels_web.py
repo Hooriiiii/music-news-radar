@@ -366,7 +366,26 @@ def test_un_fond_trop_petit_sans_reserve_en_base_trouve_son_fond_sur_le_web(
 
 
 def test_un_fond_trop_petit_ne_part_sur_l_aplat_qu_apres_le_web(db_session, monkeypatch):
+    """Le web bredouille (`pages_ok=False`) : plus aucune reserve. Le fond de
+    depart (564x345, 345 px de cote mini) reste assez grand pour le barreau
+    d'agrandissement (Tache 6) -- il n'atteint donc l'aplat que si CE
+    barreau-la est lui aussi coupe."""
     chercheur = Chercheur()
+
+    fond = _fond_trop_petit(db_session, chercheur, monkeypatch, pages_ok=False)
+
+    assert fond == Fond(PETITE_18260, ORIGINE_ARTICLE, a_agrandir=True)
+    assert chercheur.requetes, "le web doit avoir ete interroge avant l'agrandissement"
+
+
+def test_un_fond_trop_petit_pour_etre_agrandi_part_sur_l_aplat_apres_le_web(
+    db_session, monkeypatch
+):
+    """Meme scenario, mais sous `visuels_upscale_source_min_px` : le barreau
+    d'agrandissement n'a plus rien a proposer non plus, l'aplat Kinda reste
+    donc la seule issue -- signal interne du saut de la Tache 5."""
+    chercheur = Chercheur()
+    monkeypatch.setattr(settings, "visuels_upscale_source_min_px", 1000)
 
     fond = _fond_trop_petit(db_session, chercheur, monkeypatch, pages_ok=False)
 

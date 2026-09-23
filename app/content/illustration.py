@@ -396,11 +396,16 @@ def verdicts_de(
     return {url: connus[url] for url in urls if url in connus}
 
 
-def _dimensions(octets: bytes) -> tuple[int, int] | None:
+def dimensions_de(octets: bytes) -> tuple[int, int] | None:
     """Les dimensions REELLES (largeur, hauteur) d'une image telechargee, ou
     None si elle est illisible. Mesurees sur les octets bruts, AVANT la
     reduction a `illustration_taille_px` que `reduire` applique pour le juge --
-    la vignette n'a plus la taille d'origine."""
+    la vignette n'a plus la taille d'origine.
+
+    Publique (Tache 6) : `app.publish.preparation` en a besoin pour mesurer
+    le fond avant et apres l'agrandissement au gel, sur le meme calcul que le
+    plancher de nettete -- une seconde implementation aurait fini par
+    diverger."""
     try:
         from PIL import Image
 
@@ -408,6 +413,11 @@ def _dimensions(octets: bytes) -> tuple[int, int] | None:
             return image.size
     except Exception:  # noqa: BLE001 -- une taille non mesurable vaut "inconnue"
         return None
+
+
+# Alias retro-compatible : le reste de ce module appelait la fonction en
+# prive avant qu'elle ne devienne un point d'entree partage.
+_dimensions = dimensions_de
 
 
 def tailles_de(
@@ -524,6 +534,18 @@ class Fond:
     # barreau, consulte avec succes, a quand meme donne une vraie photo : dans
     # ce cas `differe` reste a False, la panne n'a eu aucune consequence.
     differe: bool = False
+    # Tache 6 (2026-09-23) : vrai quand TOUTE l'echelle (actu, compte,
+    # artiste, web) a ete parcourue sans qu'aucun candidat ne passe le
+    # plancher de nettete, mais que `url` designe le MEILLEUR candidat
+    # REJETE POUR SA SEULE TAILLE (jamais une affiche) et assez grand pour
+    # etre agrandi (`visuels_upscale_source_min_px`). La composition ne
+    # saute alors PAS : elle procede avec ce fond tel quel, encore trop
+    # petit, et c'est le GEL (T-2h, `app/publish/preparation.py`) qui tente
+    # l'agrandissement puis repasse le plancher -- jamais la composition,
+    # qui n'en a pas besoin pour ecrire un brouillon. Hors comparaison, comme
+    # `photos` : c'est un signal pour l'appelant, pas une part de l'identite
+    # du fond.
+    a_agrandir: bool = field(default=False, compare=False)
 
 
 def eviter_l_affiche(
@@ -617,18 +639,51 @@ def eviter_l_affiche(
     # meme les barreaux suivants -- un lot plus loin peut reussir malgre la
     # panne d'un autre -- et on ne se souvient de la panne que si AUCUN lot
     # n'a rien donne au final.
+    #
+    # `tentes` (Tache 6) accumule TOUT ce que l'echelle a examine -- le fond
+    # d'origine, les autres medias de l'actu, les photos de chaque reserve,
+    # succes ou echec -- pour le barreau d'agrandissement plus bas : rien de
+    # plus a lire, juste ce que ce parcours a deja juge et mesure.
+    #
+    # `origine_par_candidat`/`photos_par_candidat` (revue, tour de correction
+    # 1/5) : sans eux, un candidat agrandissable venu d'une RESERVE retombait
+    # sur l'origine par DEFAUT (`origine_de` ne connait que les `actifs`, pas
+    # les lots) et sans aucune `photos` -- deux degats reels dans
+    # `create_post` : `variants["fond"]["origine"]` mentait sous « Image de
+    # fond » au dashboard (`article` au lieu de `compte`/`artiste`), et
+    # `actifs_de_secours` ne rendait aucune slide (« jamais un post qui ne
+    # montre rien » ne s'appliquait plus). Le credit `@compte`, lui, restait
+    # correct dans les deux cas : `actifs_de_secours` pose `compte=None` sur
+    # ses actifs, donc `credit_des_actifs` rend `None` et `create_post`
+    # retombe sur `or credit` (celui de `visuels`) -- meme repli que le
+    # chemin nominal (revue, tour de correction 2/5 : signale a tort comme un
+    # troisieme degat au tour precedent). Chaque candidat garde ici
+    # l'origine et le cortege qu'il aurait recus s'IL avait ete le gagnant
+    # normal du barreau.
     differe = False
+    tentes: list[str] = [fond, *(u for u in (candidats or ()) if u and u != fond)]
+    origine_par_candidat: dict[str, str] = {}
+    photos_par_candidat: dict[str, tuple[str, ...]] = {}
     for lot in lots:
         try:
-            candidat = _meilleur_du_lot(lot, rendre, cible, mesurer)
+            candidat, photos = _meilleur_du_lot(lot, rendre, cible, mesurer)
         except VisuelDiffere as exc:
             logger.info("reserve « %s » non consultee (panne de transport) : %s", lot.origine, exc)
             differe = True
             continue
+        tentes.extend(photos)
+        for photo in photos:
+            # `setdefault` (tour de correction 2/5, remarque cosmetique) :
+            # si la meme URL apparait dans deux lots (rare), le PREMIER lot
+            # parcouru gagne -- coherent avec la priorite de l'echelle,
+            # plutot que le dernier a s'ecrire silencieusement.
+            origine_par_candidat.setdefault(photo, lot.origine)
+            photos_par_candidat.setdefault(
+                photo, (photo, *(p for p in photos if p != photo))
+            )
         if candidat is not None:
-            image, photos = candidat
-            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, image)
-            return Fond(image, lot.origine, photos)
+            logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, candidat)
+            return Fond(candidat, lot.origine, photos)
     raison = "une affiche" if est_affiche else "trop petit pour le gabarit"
     if differe:
         # Ne PAS conclure a l'absence d'image : au moins une reserve n'a pas pu
@@ -644,6 +699,28 @@ def eviter_l_affiche(
             "fond retenu %s, et au moins une reserve n'a pas pu etre consultee : report", raison
         )
         return Fond(None, origine, differe=True)
+    if cible is not None and settings.visuels_upscale_enabled:
+        # Tache 6. Pas de garde `not est_affiche` ici (revue, tour de
+        # correction 1/5) : `_meilleur_agrandissable` filtre DEJA les
+        # affiches connues sur `tentes` -- une garde en plus ici n'ajoutait
+        # aucune protection et coupait le barreau des qu'un SEUL candidat
+        # affiche (le fond d'origine, le plus souvent) etait dans la course,
+        # meme quand un AUTRE candidat non-affiche restait eligible. C'est
+        # exactement le cas Transmusicales (affiche de line-up en fond,
+        # photo d'artiste 600x400 a cote) que l'echelle de secours existe
+        # pour resoudre.
+        agrandissable = _meilleur_agrandissable(tentes, rendre, cible, mesurer)
+        if agrandissable is not None:
+            logger.info(
+                "fond %s : candidat agrandissable retenu, resolu au gel : %s", raison, agrandissable
+            )
+            origine_agrandissable = origine_par_candidat.get(agrandissable)
+            if origine_agrandissable is None:
+                origine_agrandissable = (origine_de(agrandissable) if origine_de else None) or origine
+            photos_agrandissable = photos_par_candidat.get(agrandissable, ())
+            return Fond(
+                agrandissable, origine_agrandissable, photos_agrandissable, a_agrandir=True
+            )
     logger.info("aucune photo trouvee, le fond retenu est %s : cover sur le fond Kinda", raison)
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
@@ -694,14 +771,19 @@ def _meilleur_candidat(fond, candidats, rendre, cible, mesurer) -> str | None:
     return meilleur
 
 
-def _meilleur_du_lot(lot, rendre, cible, mesurer) -> tuple[str, tuple[str, ...]] | None:
-    """La photo du lot a la fois NI affiche NI trop petite, ou None. Les autres
-    photos du lot (`Fond.photos`, pour les slides) restent dans leur ordre de
+def _meilleur_du_lot(
+    lot, rendre, cible, mesurer
+) -> tuple[str | None, tuple[str, ...]]:
+    """La photo du lot a la fois NI affiche NI trop petite, et son cortege --
+    JAMAIS `None` pour le tuple entier, meme quand aucune photo ne convient
+    (Tache 6) : l'appelant a besoin des photos ESSAYEES pour le barreau
+    d'agrandissement, pas seulement de celle qui a gagne. Les autres photos
+    du lot (`Fond.photos`, pour les slides) restent dans leur ordre de
     classement, la retenue simplement placee en tete -- l'invariant de `Fond`
     (« `url` y figure en premier »)."""
     photos = _photos_du_lot(lot, rendre)
     if not photos:
-        return None
+        return None, ()
     if cible is None:
         return photos[0], photos
     try:
@@ -712,7 +794,54 @@ def _meilleur_du_lot(lot, rendre, cible, mesurer) -> tuple[str, tuple[str, ...]]
         if resolution_suffisante(connues.get(candidat), cible):
             reste = tuple(p for p in photos if p != candidat)
             return candidat, (candidat, *reste)
-    return None
+    return None, photos
+
+
+def _meilleur_agrandissable(
+    tentes: list[str | None], rendre, cible: tuple[int, int], mesurer
+) -> str | None:
+    """Tache 6 : parmi tout ce que l'echelle du fond vient d'examiner (le
+    fond d'origine, les autres medias de l'actu, les photos de chaque
+    reserve), le meilleur candidat rejete pour sa SEULE taille -- jamais une
+    affiche connue -- et dont la taille source CONNUE reste assez grande
+    pour valoir la peine d'etre agrandie (`visuels_upscale_source_min_px`).
+
+    Taille inconnue = NON retenu, a la difference de la regle du doute qui
+    gouverne le reste de ce module : on ne devine jamais si l'agrandissement
+    vaut le cout, l'alternative etant de le TENTER en vain au gel (~1 a 10 s
+    de calcul perdues) plutot que de sauter tout de suite.
+
+    Ne coute rien : tout ce qui figure dans `tentes` a deja ete juge et
+    mesure par le parcours de l'echelle qui precede cet appel -- `rendre` et
+    `mesurer` ne relisent que leur cache."""
+    uniques = list(dict.fromkeys(url for url in tentes if url))
+    if not uniques:
+        return None
+    try:
+        connus = rendre(uniques)
+    except Exception:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
+        connus = {}
+    try:
+        tailles = mesurer(uniques)
+    except Exception:  # noqa: BLE001 -- ne pas savoir vaut mieux que rejeter a tort
+        tailles = {}
+    minimum = settings.visuels_upscale_source_min_px
+    eligibles = []
+    for index, url in enumerate(uniques):
+        if url in connus and connus[url].affiche:
+            continue
+        taille = tailles.get(url)
+        if taille is None or min(taille) < minimum:
+            continue
+        if resolution_suffisante(taille, cible):
+            continue  # deja assez grand : ce n'est pas un rejet de taille
+        eligibles.append((index, url))
+    if not eligibles:
+        return None
+    _, meilleur = max(
+        eligibles, key=lambda paire: _rang(paire[0], connus.get(paire[1], VERDICT_INCONNU))
+    )
+    return meilleur
 
 
 def classer_photos(candidats: list[str], rendre, *, garder_inconnues: bool = False) -> tuple[str, ...]:

@@ -526,10 +526,15 @@ def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     return image_de_fond(visuels_autorises(article), selecteur)
 
 
-def _cible_gabarit(template: str) -> tuple[int, int] | None:
+def cible_gabarit(template: str) -> tuple[int, int] | None:
     """La taille (largeur, hauteur) du gabarit publie, ou None si le nom est
     inconnu -- jamais d'exception pour un plancher de resolution qui est un
-    confort, pas une garantie."""
+    confort, pas une garantie.
+
+    Publique (Tache 6, tour de correction 1/5) : `app.publish.preparation` en
+    a besoin pour la MEME cible au gel, quand il verifie si le fond agrandi
+    repasse le plancher -- une seconde implementation aurait fini par
+    diverger (meme motif que `illustration.dimensions_de`)."""
     try:
         gabarit_ = gabarit_de(template)
     except KeyError:
@@ -607,9 +612,17 @@ def resoudre_fond(
     les ouvre, et les ouvrir deux fois doublerait ce cout.
 
     Leve `VisuelIntrouvable` quand `eviter_l_affiche` a parcouru toute
-    l'echelle -- actu, compte, artiste, web -- sans rien trouver d'assez net :
-    `FOND_KINDA` n'est plus une issue publiable (Tache 5), seulement le signal
-    interne d'echec que cette fonction traduit en saut.
+    l'echelle -- actu, compte, artiste, web -- sans rien trouver d'assez net
+    NI d'assez grand pour etre AGRANDI : `FOND_KINDA` n'est plus une issue
+    publiable (Tache 5), seulement le signal interne d'echec que cette
+    fonction traduit en saut.
+
+    Ne leve PLUS (Tache 6, 2026-09-23) quand `choisi.a_agrandir` est vrai :
+    la composition n'a pas besoin d'un fond net, seulement d'un fond a
+    ecrire dans le brouillon -- c'est le GEL (T-2h,
+    `app/publish/preparation.py`) qui tente la super-resolution et repasse
+    le plancher, jamais la composition. `create_post` persiste ce marqueur
+    dans `variants["fond"]["a_agrandir"]`.
 
     Leve `VisuelsDifferes` quand `choisi.differe` dit qu'au moins une reserve
     n'a PAS PU etre consultee (panne de transport :
@@ -629,7 +642,7 @@ def resoudre_fond(
         *(getattr(visuels, "secours", None) or []),
         origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
         verdicts=verdicts_fond,
-        cible=_cible_gabarit(template),
+        cible=cible_gabarit(template),
         candidats=candidats_de_fond(actifs),
         origine_de=lambda url: origine_du_fond(actifs, url),
     )
@@ -712,6 +725,13 @@ def create_post(
                 visuels, template, selecteur_fond=selecteur_fond, verdicts_fond=verdicts_fond
             )
         fond, origine_fond = choisi.url, choisi.origine
+        # Tache 6 : ce fond est encore SOUS le plancher de nettete, retenu
+        # quand meme (`eviter_l_affiche` l'a marque plutot que de sauter) --
+        # c'est au GEL, pas ici, de tenter l'agrandissement et de repasser le
+        # plancher. Le marqueur voyage dans `variants["fond"]`, comme
+        # l'origine : le post est purge de son article avant le gel (2 j de
+        # retention), il doit rester decidable sans lui.
+        a_agrandir_fond = bool(getattr(choisi, "a_agrandir", False))
         # Le fond retenu vient d'une reserve : ses photos deviennent aussi des
         # SLIDES. Sans cela, un article dont l'unique image est une affiche part
         # avec la cover seule -- le post Noisia (cf. `actifs_de_secours`).
@@ -748,6 +768,7 @@ def create_post(
         credit = credit_video(article)
         fond = _fond_par_defaut(article, selecteur_fond)
         origine_fond = ORIGINE_ARTICLE
+        a_agrandir_fond = False
     post = Post(
         article_id=article.id,
         article_title=article.title,
@@ -784,7 +805,7 @@ def create_post(
             # kinda). Ici et non sur la slide : `slides[0]` est reecrite a chaque
             # choix de variante et editable au dashboard, alors que l'origine est
             # un fait de la composition -- fige au meme titre que la palette.
-            "fond": {"origine": origine_fond},
+            "fond": {"origine": origine_fond, "a_agrandir": a_agrandir_fond},
         },
     )
     db.add(post)

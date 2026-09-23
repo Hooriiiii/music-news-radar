@@ -80,7 +80,7 @@ from app.content.visuels import (
 )
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.hosting import HebergementIndisponible
-from app.publish.preparation import PreparationDifferee, PreparationImpossible
+from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
 from app.publish.preparation_reel import ReelInadapte
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.store import (
@@ -621,6 +621,19 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
                 continue
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : reel impossible : {exc}")
             _liberer(db, creneau, attendu, f"reel impossible : {exc}")
+            continue
+        except PreparationSautee as exc:
+            # Tache 6 : l'agrandissement au gel n'a pas suffi (outil
+            # indisponible, ou resultat encore sous le plancher). SAUT, pas
+            # exclusion -- meme mecanique que le saut de la Tache 5 a la
+            # composition (`VisuelIntrouvable`, plus haut dans ce fichier) :
+            # liberer le creneau D'ABORD, ne poser la mise a l'ecart que si
+            # la liberation a reussi.
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : visuel trop petit : {exc}")
+            if _liberer(db, creneau, attendu, f"visuel trop petit : {exc}"):
+                if article is not None:
+                    marquer_saute(article.id, maintenant)
+                rapport.sautes += 1
             continue
         except PreparationImpossible as exc:
             _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)

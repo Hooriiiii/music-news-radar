@@ -601,8 +601,9 @@ def test_resoudre_fond_reporte_au_lieu_de_sauter_sur_une_panne_de_reserve(db_ses
 
 def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):
     """Post 71 (CLAUDE.md) : une seule og:image, 564x345, agrandie 3,91x pour
-    remplir 1080x1350 -- trop petite, et sans reserve (Tache 5, 2026-09-21) le
-    post SAUTE plutot que d'etre publie floue sur le fond Kinda."""
+    remplir 1080x1350 -- trop petite pour partir telle quelle, mais assez
+    grande (Tache 6, 2026-09-23) pour que le GEL tente l'agrandissement : la
+    composition n'exclut plus ce candidat, elle le marque `a_agrandir`."""
     from app.content import illustration
     from app.content.illustration import Verdict
 
@@ -614,19 +615,48 @@ def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatc
         [actif(entree("photo", "https://cdn/petite.jpg"), origine="article")], "@source",
     )
 
+    post = create_post(
+        db_session, article, _draft(), visuels=choix,
+        selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+        verdicts_fond=lambda urls: {
+            "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+        },
+    )
+
+    assert post.slides[0]["image_url"] == "https://cdn/petite.jpg"
+    assert post.variants["fond"]["a_agrandir"] is True
+
+
+def test_un_fond_trop_petit_meme_pour_etre_agrandi_saute_toujours(db_session, monkeypatch):
+    """Sous `visuels_upscale_source_min_px` (300 px), l'agrandissement ne
+    sauverait de toute facon pas le post : la composition saute encore,
+    exactement comme la Tache 5."""
+    from app.content import illustration
+    from app.content.illustration import Verdict
+
+    monkeypatch.setattr(
+        illustration, "tailles_de", lambda urls, **k: {"https://cdn/minuscule.jpg": (200, 150)}
+    )
+    article = _article(db_session)
+    choix = ChoixVisuels(
+        [actif(entree("photo", "https://cdn/minuscule.jpg"), origine="article")], "@source",
+    )
+
     with pytest.raises(VisuelIntrouvable):
         create_post(
             db_session, article, _draft(), visuels=choix,
-            selecteur_fond=lambda candidats: "https://cdn/petite.jpg",
+            selecteur_fond=lambda candidats: "https://cdn/minuscule.jpg",
             verdicts_fond=lambda urls: {
-                "https://cdn/petite.jpg": Verdict(affiche=False, sujet="scene", note=70)
+                "https://cdn/minuscule.jpg": Verdict(affiche=False, sujet="scene", note=70)
             },
         )
 
 
 def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, monkeypatch):
     """Le reel (1080x1920) est plus exigeant que le post (1080x1350) sur la MEME
-    photo : la cible depend du gabarit publie, jamais fixe."""
+    photo : la cible depend du gabarit publie, jamais fixe. Assez grande pour
+    etre agrandie (Tache 6), la composition en reel ne saute plus non plus --
+    elle marque le brouillon, le gel tranchera."""
     from app.content import illustration
     from app.content.illustration import Verdict
 
@@ -651,14 +681,14 @@ def test_une_photo_assez_grande_pour_le_post_mais_pas_pour_le_reel(db_session, m
         selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
     )
     assert post_carrousel.slides[0]["image_url"] == "https://cdn/moyenne.jpg"
+    assert post_carrousel.variants["fond"]["a_agrandir"] is False
 
-    # Sans reserve, un fond trop petit pour le reel fait sauter le post
-    # (Tache 5) plutot que de partir sur le fond Kinda.
-    with pytest.raises(VisuelIntrouvable):
-        create_post(
-            db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
-            selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
-        )
+    post_reel = create_post(
+        db_session, article, _draft(), template="kinda_reel", visuels=_choix(),
+        selecteur_fond=lambda candidats: "https://cdn/moyenne.jpg", verdicts_fond=verdicts,
+    )
+    assert post_reel.slides[0]["image_url"] == "https://cdn/moyenne.jpg"
+    assert post_reel.variants["fond"]["a_agrandir"] is True
 
 
 def test_un_gabarit_inconnu_desactive_le_plancher_sans_lever(db_session, caplog):
@@ -713,7 +743,7 @@ def test_une_affiche_cede_la_place_a_une_photo_du_compte_source(db_session):
     )
 
     assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
-    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE, "a_agrandir": False}
     # La photo de la reserve devient AUSSI un actif (2026-09-18, post Noisia) :
     # un carrousel qui n'aurait que l'affiche ne montre jamais les artistes, et
     # une reserve deja payee (lecture, telechargement, jetons) n'a aucune raison
@@ -750,7 +780,7 @@ def test_les_autres_photos_de_la_reserve_deviennent_des_slides(db_session):
     assert [a.get("fichier") or a["url"] for a in post.assets] == [
         "https://cdn/affiche.jpg", "file:///cache/b.jpg", "file:///cache/a.jpg",
     ]
-    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE, "a_agrandir": False}
 
 
 def test_une_affiche_de_reserve_ne_devient_jamais_une_slide(db_session):
@@ -813,7 +843,7 @@ def test_sans_secours_le_fond_reste_celui_du_juge(db_session):
     )
 
     assert post.slides[0]["image_url"] == "https://cdn/affiche.jpg"
-    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE, "a_agrandir": False}
 
 
 # --- Une carte d'annonce par carrousel, jamais sept -----------------------
@@ -875,7 +905,7 @@ def test_sept_cartes_d_annonce_n_en_laissent_qu_une(db_session):
     # Le fond, lui, n'est jamais une affiche : tout etait une carte, la reserve
     # le remplace.
     assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
-    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE, "a_agrandir": False}
 
 
 def test_les_photos_restent_toutes_seule_l_affiche_est_plafonnee(db_session):
@@ -954,7 +984,7 @@ def test_les_sept_cartes_des_trans_ne_laissent_qu_une_slide(db_session, monkeypa
     assert lots == [7, 1], "les sept cartes en un appel, la reserve dans un second"
     assert _urls(post) == [cartes[0], "file:///cache/live.jpg"]
     assert post.slides[0]["image_url"] == "file:///cache/live.jpg"
-    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE, "a_agrandir": False}
 
 
 def test_l_unique_affiche_sans_secours_fait_desormais_sauter_le_post(db_session):
@@ -1204,7 +1234,7 @@ def test_la_grande_photo_d_un_doublon_devient_le_fond_quand_celle_de_l_actu_est_
     )
 
     assert post.slides[0]["image_url"] == grande
-    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE}
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTICLE, "a_agrandir": False}
     assert ouverts == []
 
 
