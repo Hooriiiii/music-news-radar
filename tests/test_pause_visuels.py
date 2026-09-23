@@ -101,7 +101,7 @@ def test_2_5_signaler_report_ne_perd_pas_une_pause_posee_entre_temps(tmp_path):
     signaler_report(1, MAINTENANT, seuil=10, chemin=chemin)
 
     assert 2 in articles_en_pause(MAINTENANT, chemin)
-    assert _lire(chemin).reports.get(1) == 1
+    assert _lire(chemin).reports.get(1)[0] == 1
 
 
 def test_2_5_reinitialiser_report_ne_perd_pas_une_pause_posee_entre_temps(tmp_path):
@@ -119,12 +119,17 @@ def test_2_5_reinitialiser_report_ne_perd_pas_une_pause_posee_entre_temps(tmp_pa
 # --- Le compteur de reports consecutifs
 
 
-def test_signaler_report_bascule_en_pause_au_seuil(tmp_path):
+def test_signaler_report_annonce_le_seuil_sans_poser_la_pause_elle_meme(tmp_path):
+    """`signaler_report` ne pose plus la pause : elle se contente de compter
+    et de repondre. C'est a l'appelant de liberer le creneau puis d'appeler
+    `marquer_saute` lui-meme (invariant d'ordre du module)."""
     chemin = tmp_path / "visuel_saute.json"
     for _ in range(2):
         assert signaler_report(1, MAINTENANT, seuil=3, chemin=chemin) is False
     assert signaler_report(1, MAINTENANT, seuil=3, chemin=chemin) is True
-    assert 1 in articles_en_pause(MAINTENANT, chemin)
+    # Le seuil est annonce, mais rien n'est encore en pause : l'appelant doit
+    # agir lui-meme.
+    assert 1 not in articles_en_pause(MAINTENANT, chemin)
 
 
 def test_reinitialiser_report_casse_la_suite(tmp_path):
@@ -137,3 +142,42 @@ def test_reinitialiser_report_casse_la_suite(tmp_path):
     assert signaler_report(1, MAINTENANT, seuil=3, chemin=chemin) is False
     assert signaler_report(1, MAINTENANT, seuil=3, chemin=chemin) is False
     assert 1 not in articles_en_pause(MAINTENANT, chemin)
+
+
+def test_les_compteurs_de_reports_abandonnes_sont_purges(tmp_path):
+    """Un compteur de reports sans nouvelle entree depuis longtemps n'est
+    plus une SUITE de quoi que ce soit -- mesure : sans purge, des dizaines
+    de compteurs abandonnes restaient sur le disque indefiniment. Purge a la
+    prochaine ecriture (meme mecanique que les pauses echues)."""
+    chemin = tmp_path / "visuel_saute.json"
+    vieux = MAINTENANT - dt.timedelta(days=3)
+    _ecrire(chemin, Etat({}, {n: (5, vieux) for n in range(50)}))
+
+    # N'importe quelle ecriture declenche la purge -- ici, une pause pour un
+    # article sans rapport.
+    marquer_saute(999, MAINTENANT, duree=dt.timedelta(minutes=10), chemin=chemin)
+
+    assert _lire(chemin).reports == {}
+
+
+def test_le_seuil_par_defaut_laisse_la_pause_de_quota_se_resorber(tmp_path):
+    """Calibration du seuil par defaut (`visuel_differe_max_reports`, 7) : une
+    panne de quota Graph dure 60 min (`visuels_pause_quota_minutes`) et le
+    planificateur passe toutes les 10 min. Avec `compte >= seuil` et un premier
+    report des le premier passage en panne, le Ne report tombe apres N-1
+    intervalles -- un seuil a 6 basculerait donc a la 50e minute, AVANT que la
+    panne de quota n'ait eu le temps de se resorber. A 7, les six premiers
+    reports (jusqu'a la 50e minute incluse) ne bascule JAMAIS ; seul le
+    septieme, a la 60e minute, le fait."""
+    from app.config import settings
+
+    chemin = tmp_path / "visuel_saute.json"
+    seuil = settings.visuel_differe_max_reports
+    for minute in range(0, 60, 10):  # 0, 10, 20, 30, 40, 50 : six reports
+        instant = MAINTENANT + dt.timedelta(minutes=minute)
+        assert signaler_report(1, instant, seuil=seuil, chemin=chemin) is False, (
+            f"le report a {minute} min ne doit pas encore basculer (seuil={seuil})"
+        )
+    # Le septieme report, a la 60e minute pile -- la duree de la pause de
+    # quota Graph -- doit enfin basculer.
+    assert signaler_report(1, MAINTENANT + dt.timedelta(minutes=60), seuil=seuil, chemin=chemin) is True

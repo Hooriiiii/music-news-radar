@@ -29,13 +29,12 @@ Trois regles de cout : une seule recherche par requete, memorisee quelques jours
 et rien du tout tant qu'un autre barreau de l'echelle a donne.
 
 Et la regle de robustesse de tout ce qui touche aux visuels : ce module ne LEVE
-JAMAIS -- SAUF `app.content.visuels.VisuelDiffere` (tour de correction 1/5,
-2026-09-21, I-1), quand le RESEAU coupe la recherche elle-meme AVANT qu'elle
-ait pu tourner. Cle absente, quota du modele de vision, page illisible ->
-liste vide comme avant : ce sont des jugements ou des reglages, jamais des
-pannes de transport. La distinction existe parce que le fond Kinda n'est plus
-une issue publiable (Tache 5) : une reserve qui n'a pas pu regarder doit faire
-REPORTER le creneau, pas conclure a l'absence d'image.
+JAMAIS -- SAUF `app.content.visuels.VisuelDiffere`, quand le RESEAU coupe la
+recherche elle-meme AVANT qu'elle ait pu tourner. Cle absente, quota du modele
+de vision, page illisible -> liste vide comme avant : ce sont des jugements ou
+des reglages, jamais des pannes de transport. La distinction existe parce que
+le fond Kinda n'est plus une issue publiable : une reserve qui n'a pas pu
+regarder doit faire REPORTER le creneau, pas conclure a l'absence d'image.
 """
 
 import datetime as dt

@@ -53,13 +53,12 @@ class VisuelDiffere(RuntimeError):
     PAS PU regarder -- panne de transport (quota Graph, reseau, budget de
     lecture epuise), jamais un jugement sur ce qu'il a trouve.
 
-    Tour de correction 1/5 sur la Tache 5 (2026-09-21, I-1) : avant cette
-    distinction, une panne de transport dans une reserve etait confondue avec
-    « la reserve a regarde et n'a rien trouve », et les deux menaient au meme
-    fond Kinda -- une issue SURE tant que l'aplat restait publiable. Devenu un
-    SAUT (Tache 5), la confusion faisait sauter un article sur une simple
-    coupure reseau, avec une raison fausse (« aucune image... ni sur le web »
-    alors que le web n'avait jamais repondu).
+    Avant cette distinction, une panne de transport dans une reserve etait
+    confondue avec « la reserve a regarde et n'a rien trouve », et les deux
+    menaient au meme fond Kinda -- une issue SURE tant que l'aplat restait
+    publiable. Devenu un SAUT, la confusion faisait sauter un article sur une
+    simple coupure reseau, avec une raison fausse (« aucune image... ni sur le
+    web » alors que le web n'avait jamais repondu).
 
     Cette exception reste interne a l'echelle du fond : `illustration.
     eviter_l_affiche` la capture PAR BARREAU et la traduit dans `Fond.differe`

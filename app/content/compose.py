@@ -611,8 +611,8 @@ def resoudre_fond(
     `FOND_KINDA` n'est plus une issue publiable (Tache 5), seulement le signal
     interne d'echec que cette fonction traduit en saut.
 
-    Leve `VisuelsDifferes` (tour de correction 1/5, I-1) quand `choisi.differe`
-    dit qu'au moins une reserve n'a PAS PU etre consultee (panne de transport :
+    Leve `VisuelsDifferes` quand `choisi.differe` dit qu'au moins une reserve
+    n'a PAS PU etre consultee (panne de transport :
     quota Graph, reseau, budget de lecture). C'est un REPORT, pas un saut : la
     distinction existe pour ne pas confondre une reserve qui a regarde et n'a
     rien trouve avec une reserve qui n'a pas pu regarder -- avant cette

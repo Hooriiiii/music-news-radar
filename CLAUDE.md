@@ -623,114 +623,114 @@ pas une URL** : un fond `None` veut dire « ce post n'a pas de visuel », et
 `FOND_KINDA` veut dire « on a cherché partout, rien ne convient ». Le schéma
 `kinda:` n'est ni http(s) ni `file://` : aucune requête, aucun fichier lu.
 
-**Depuis la Tâche 5 (2026-09-21), `FOND_KINDA` n'est plus une issue
-PUBLIABLE — seulement le signal interne que `eviter_l_affiche` a parcouru
-toute l'échelle sans rien trouver.** Demande de l'utilisateur : « Dans l'ordre.
-[…] Sinon skip le post/reels. » `compose.resoudre_fond` (appelé par
-`create_post` ET, en amont, par `app/schedule/runner.py::_composer` AVANT
-l'appel payé à Sonnet) lève `VisuelIntrouvable` quand `eviter_l_affiche` rend
-`FOND_KINDA` : **aucun post n'est plus jamais créé avec cet aplat en fond.**
-Dans le planificateur, cette exception SAUTE le créneau (`_liberer`, jamais
-`_exclure`) — l'article n'est PAS `file_exclu_raison`, il reste éligible et
-repartira dès qu'un barreau donnera mieux (nouveau post du compte source, ou
-la recherche web qui ressort du cache après `visuels_web_cache_jours`) ; c'est
-la purge à `retention_days` (2 j) qui conclut s'il ne trouve jamais rien,
-jamais une exclusion posée à la main. Compté à part dans
-`RapportPublication.sautes`, avec une raison lisible sur le créneau (« visuel
-introuvable : … »). `resoudre_fond` calcule le choix EXACTEMENT une fois par
-créneau (les réserves compte/artiste/web sont des lots paresseux qui lisent le
-réseau dès qu'on les ouvre) : son résultat voyage jusqu'à `create_post` par le
-paramètre `fond_precalcule`, pour ne jamais rouvrir une réserve deux fois. Un
-brouillon composé AVANT cette tâche et qui porte encore `FOND_KINDA` en fond
-est traité comme périmé (`runner._brouillon_perime`) : la composition
-suivante refait tourner l'échelle au complet plutôt que de le geler tel quel.
-Le gel (`app/publish/preparation.py::verifier_fond`) continue d'accepter
-`FOND_KINDA` sur un tel brouillon ancien — filet de compatibilité, jamais un
-chemin qu'une composition neuve peut encore emprunter.
+`FOND_KINDA` n'est plus une issue PUBLIABLE — seulement le signal interne que
+`eviter_l_affiche` a parcouru toute l'échelle sans rien trouver. Demande de
+l'utilisateur : « Dans l'ordre. […] Sinon skip le post/reels. »
+`compose.resoudre_fond` (appelé par `create_post` ET, en amont, par
+`app/schedule/runner.py::_composer` AVANT l'appel payé à Sonnet) lève
+`VisuelIntrouvable` quand `eviter_l_affiche` rend `FOND_KINDA` : **aucun post
+n'est plus jamais créé avec cet aplat en fond.** Dans le planificateur, cette
+exception SAUTE le créneau (`_liberer`, jamais `_exclure`) — l'article n'est
+PAS `file_exclu_raison`, il reste éligible et repartira dès qu'un barreau
+donnera mieux (nouveau post du compte source, ou la recherche web qui ressort
+du cache après `visuels_web_cache_jours`) ; c'est la purge à `retention_days`
+(2 j) qui conclut s'il ne trouve jamais rien, jamais une exclusion posée à la
+main. `resoudre_fond` calcule le choix EXACTEMENT une fois par créneau (les
+réserves compte/artiste/web sont des lots paresseux qui lisent le réseau dès
+qu'on les ouvre) : son résultat voyage jusqu'à `create_post` par le paramètre
+`fond_precalcule`, pour ne jamais rouvrir une réserve deux fois. Un brouillon
+composé quand l'aplat Kinda était encore une issue publiable et qui porte
+encore `FOND_KINDA` en fond est traité comme périmé
+(`runner._brouillon_perime`) : la composition suivante refait tourner
+l'échelle au complet plutôt que de le geler tel quel. Le gel
+(`app/publish/preparation.py::verifier_fond`) continue d'accepter `FOND_KINDA`
+sur un tel brouillon ancien — filet de compatibilité, jamais un chemin qu'une
+composition neuve peut encore emprunter. Même filet côté publication : un
+créneau déjà GELÉ dont le post porte encore `FOND_KINDA` en fond est REFUSÉ
+par `runner._publier` plutôt que publié — le créneau se libère (pas
+d'exclusion), l'article se met à l'écart, dossier figé effacé.
 
-**Tour de correction 1/5 (2026-09-21), trois défauts mesurés en exécutant le
-planificateur sur 120 passages simulés.**
+**Un article sans bonne image faisait taire le compte TOUTE LA JOURNÉE.** Le
+saut libère le créneau et relance l'arbitrage, mais l'arbitrage classe par
+score et l'article reste éligible : s'il a le meilleur score, il revenait sur
+le créneau le plus proche, sautait encore, jusqu'à MANQUE, puis glissait au
+créneau suivant — mesuré : 3 créneaux du jour en MANQUE, zéro publication,
+pour un seul article de 95 de pertinence sans visuel face à quatre bons
+articles à 67-70. `app/schedule/pause_visuels.py::marquer_saute` met donc
+l'article sauté À L'ÉCART TEMPORAIREMENT (`visuel_saute_pause_minutes`, 180 =
+3 h par défaut — la moitié du cache du lecteur de comptes, 6 h, pour retenter
+dès qu'une chance raisonnable existe sans laisser le compte silencieux une
+demi-journée ; ni une exclusion — la spec l'interdit, l'article peut avoir une
+photo demain — ni un délai trop long — la rétention est à 2 jours). Fichier
+d'état à côté du jeton (`visuel_saute.json`), même motif que
+`quota_graph.json` : écriture atomique, temporaire nommé par processus, purge
+des entrées échues à chaque écriture, aucune écriture en LECTURE.
+`store._articles_publiables` (le socle commun à `candidats_eligibles`,
+`appliquer_arbitrage` et `offre_reels`) exclut les articles en pause. Le point
+d'entrée est unique (`marquer_saute`) : la Task 6, qui déplacera une partie
+des sauts au GEL, l'appelle de la même façon.
 
-- **C-1 : un article sans bonne image faisait taire le compte TOUTE LA
-  JOURNÉE.** Le saut libère le créneau et relance l'arbitrage, mais
-  l'arbitrage classe par score et l'article reste éligible : s'il a le
-  meilleur score, il revenait sur le créneau le plus proche, sautait encore,
-  jusqu'à MANQUE, puis glissait au créneau suivant — mesuré : 3 créneaux du
-  jour en MANQUE, zéro publication, pour un seul article de 95 de pertinence
-  sans visuel face à quatre bons articles à 67-70. `app/schedule/pause_
-  visuels.py::marquer_saute` met donc l'article sauté À L'ÉCART
-  TEMPORAIREMENT (`visuel_saute_pause_minutes`, 180 = 3 h par défaut — la
-  moitié du cache du lecteur de comptes, 6 h, pour retenter dès qu'une
-  chance raisonnable existe sans laisser le compte silencieux une demi-
-  journée ; ni une exclusion — la spec l'interdit, l'article peut avoir une
-  photo demain — ni un délai trop long — la rétention est à 2 jours). Fichier
-  d'état à côté du jeton (`visuel_saute.json`), même motif que
-  `quota_graph.json` : écriture atomique, temporaire nommé par processus,
-  purge des entrées échues à chaque écriture, aucune écriture en LECTURE.
-  `store._articles_publiables` (le socle commun à `candidats_eligibles`,
-  `appliquer_arbitrage` et `offre_reels`) exclut les articles en pause. Le
-  point d'entrée est unique (`marquer_saute`) : la Task 6, qui déplacera une
-  partie des sauts au GEL, l'appelle de la même façon.
-- **I-1 : une panne de transport dans une RÉSERVE (compte, artiste, web) était
-  confondue avec « rien trouvé ».** Avant la Tâche 5, les deux donnaient
-  l'aplat Kinda — une issue sûre. Devenues un SAUT, cette confusion faisait
-  sauter un article sur une simple coupure réseau, avec une raison fausse.
-  Détail dans le paragraphe qui suit (« Une réserve EN PANNE… »).
-- **Ceinture de mise en service** : un créneau déjà GELÉ avant le déploiement
-  de cette tâche peut porter un post composé avec `FOND_KINDA` en fond — la
-  publication (`runner._publier`) le détecte désormais et REFUSE de publier :
-  le créneau se libère (`_liberer`, pas d'exclusion), l'article se met en
-  pause comme un saut normal, dossier figé effacé. Sans cette ceinture, la
-  fusion aurait exigé une opération manuelle sur les créneaux déjà gelés en
-  base.
-- **M-1** : un créneau réattribué à un NOUVEL article gardait l'ancienne
-  `erreur` (« visuel introuvable : … ») jusqu'à ce qu'une composition
-  réussisse — trompeur au dashboard. `appliquer_arbitrage` l'efface dès que
-  `article_id` change.
+Un créneau réattribué à un NOUVEL article gardait l'ancienne `erreur`
+(« visuel introuvable : … ») jusqu'à ce qu'une composition réussisse —
+trompeur au dashboard. `appliquer_arbitrage` l'efface dès que `article_id`
+change.
 
-**Tour de correction 2/5 (2026-09-22)**, la revue rejoue le scénario ci-dessus
-avec les VRAIES fenêtres de `PUBLICATION_FENETRES` et 200+ passages : **4
-publications sur 4** (contre 0 avant C-1), l'article fautif jamais exclu, qui
-retente toutes les 3 h. Six points restaient.
+**Une panne de transport dans une RÉSERVE (compte, artiste, web) ne doit
+jamais être confondue avec « rien trouvé ».** Avant que `FOND_KINDA` cesse
+d'être publiable, les deux donnaient l'aplat Kinda — une issue sûre. Une fois
+l'aplat devenu un SAUT, cette confusion faisait sauter un article sur une
+simple coupure réseau, avec une raison fausse. Détail dans le paragraphe qui
+suit (« Une réserve EN PANNE… »).
 
-1. **Le chemin REPORT rejouait EXACTEMENT le défaut C-1.** Une réserve qui
-   lève `VisuelDiffere` à chaque passage (au lieu d'un « rien trouvé ») faisait
-   `continue` sans jamais libérer le créneau ni mettre l'article à l'écart —
-   mesuré : 1 publication, 3 MANQUE, 0 sauté. Un report reste le bon geste
-   (retenter EST la réponse à une panne de transport), mais pas éternellement :
-   `pause_visuels.signaler_report` compte les reports CONSÉCUTIFS par article
-   et, au-delà de `visuel_differe_max_reports` (6 par défaut — calé sur la
-   pause de quota Graph à la composition, 60 min, rapportée à la cadence de
-   publication, 10 min : 6 passages laissent à une panne de quota le temps de
-   se résorber toute seule avant d'abandonner), bascule dans la MÊME mise à
-   l'écart qu'un saut. `reinitialiser_report` casse le compteur dès qu'une
-   composition réussit. Visible via `RapportPublication.reportes`, distinct de
-   `sautes`, dans le log de `run_publication`.
-2. **Le bouton « Générer un post » du dashboard renvoyait un 500** :
-   `resoudre_fond` peut lever la même `VisuelsDifferes` que `choisir_visuels`,
-   et `app/api/posts.py` ne rattrapait que `VisuelIntrouvable`. Rattrapée,
-   même 503 que pour `choisir_visuels`.
-3. **`Fond` ne transporte plus une affiche avérée (ou une image trop petite)
-   dans `url` quand `differe=True`** : `eviter_l_affiche` rend
-   `Fond(None, origine, differe=True)`, jamais l'URL fautive — sûr par
-   CONSTRUCTION, pas seulement parce que `compose.resoudre_fond` teste
-   `differe` avant `origine == ORIGINE_KINDA`.
-4. **Une horloge naïve ne fait plus tomber le planificateur.**
-   `pause_visuels._pause_valide` compare `maintenant < jusqu_a` dans un
-   `try/except TypeError` — un horodatage naïf sur le disque (corruption, bug
-   amont) vaut désormais « pause périmée », jamais une exception qui ferait
-   tomber `store._articles_publiables`, donc l'arbitrage, `candidats_
-   eligibles` ET `offre_reels`.
-5. **Écritures concurrentes : `pause_visuels._fusionner_et_ecrire` relit le
-   disque À L'INSTANT DE L'ÉCRITURE et fusionne**, exactement comme
-   `app.pipeline.cluster_arbitrage.fusionner_et_ecrire` (Tâche 7) — un second
-   agent qui pose sa propre pause entre notre lecture et notre écriture ne se
-   fait plus écraser.
-6. **`runner._publier` met l'article en pause SEULEMENT si `_liberer` a
-   réussi** (ordre inversé) : `_liberer` est une écriture conditionnelle qui
-   peut échouer si le dashboard est passé entre-temps ; l'appeler avant de le
-   savoir infligeait 3 h de pause pour un créneau qu'on n'a même pas réussi à
-   libérer.
+Le même défaut existe pour un REPORT (`VisuelsDifferes`) qui ne guérit
+jamais : sans borne, le créneau n'est ni libéré ni l'article mis à l'écart, et
+l'article campe dessus jusqu'à MANQUE au lieu qu'un autre en profite — mesuré
+sur le même scénario (une réserve qui lève `VisuelDiffere` à chaque passage
+au lieu d'un « rien trouvé ») : **1 publication sur 4, 3 MANQUE, 0 mise à
+l'écart.** Un report reste le bon geste (retenter EST la réponse à une panne
+de transport), mais pas éternellement : `pause_visuels.signaler_report`
+compte les reports CONSÉCUTIFS par article et annonce le franchissement de
+`visuel_differe_max_reports` (7 par défaut — calé sur la pause de quota Graph
+à la composition, 60 min, rapportée à la cadence de publication, 10 min : le
+1er report tombe au 1er passage en panne, le 7e tombe donc après 6
+intervalles de 10 min, soit exactement les 60 min de la pause de quota,
+assez pour la laisser se résorber TOUTE SEULE avant d'abandonner).
+`reinitialiser_report` casse le compteur dès qu'une composition réussit :
+seule une SUITE ininterrompue de reports compte. Visible via
+`RapportPublication.reportes`, distinct de `sautes`, dans le log de
+`run_publication`, même quand il reste sous le seuil.
+
+`signaler_report` ne pose PAS elle-même la mise à l'écart : c'est à
+l'appelant (`runner._differer`) de LIBÉRER le créneau d'abord, et de
+n'appeler `marquer_saute` (et de ne compter le report comme converti) QUE SI
+cette libération réussit — le même invariant d'ordre que la ceinture de
+`_publier` : `_liberer` est une écriture CONDITIONNELLE qui peut échouer si le
+dashboard est passé entre-temps, et poser la mise à l'écart avant de le savoir
+infligerait une pause de plusieurs heures pour un créneau qu'on n'a même pas
+réussi à retirer à l'article.
+
+`Fond` ne transporte jamais une affiche avérée (ou une image trop petite)
+dans `url` quand `differe=True` : `eviter_l_affiche` rend
+`Fond(None, origine, differe=True)`, jamais l'URL fautive — sûr par
+CONSTRUCTION, pas seulement parce que `compose.resoudre_fond` teste `differe`
+avant `origine == ORIGINE_KINDA`.
+
+Une horloge naïve ne fait plus tomber le planificateur : `pause_visuels.
+_pause_valide` compare `maintenant < jusqu_a` dans un `try/except TypeError`
+— un horodatage naïf sur le disque (corruption, bug amont) vaut désormais
+« pause périmée », jamais une exception qui ferait tomber
+`store._articles_publiables`, donc l'arbitrage, `candidats_eligibles` ET
+`offre_reels`. Les compteurs de reports, eux, sont purgés par ANCIENNETÉ (un
+compteur sans nouvelle entrée depuis plus longtemps que `visuel_saute_
+pause_minutes` n'est plus une suite consécutive de quoi que ce soit) — sans
+cette purge, des dizaines de compteurs abandonnés restaient sur le disque
+indéfiniment.
+
+`pause_visuels._fusionner_et_ecrire` relit le disque À L'INSTANT DE
+L'ÉCRITURE et fusionne, exactement comme
+`app.pipeline.cluster_arbitrage.fusionner_et_ecrire` (Tâche 7) — c'est
+l'invariant du fichier d'état : un second agent qui pose sa propre pause
+entre notre lecture et notre écriture ne doit jamais se faire écraser.
 
 Deux **réserves**, ouvertes dans l'ordre et seulement tant qu'aucune n'a donné :
 1. le compte qui a publié l'actu (jamais un `categorie=media`) ;
@@ -769,19 +769,20 @@ délibéré, jamais une panne, et ne doit jamais faire sauter ni reporter un
 créneau à elle seule.
 
 **Une réserve EN PANNE de transport (quota Graph, réseau, budget épuisé) n'est
-plus confondue avec une réserve qui a réellement regardé et n'a rien trouvé**
-(tour de correction 1/5, 2026-09-21 — I-1). Avant cette correction, `eviter_
-l_affiche` retombait sur `FOND_KINDA` dans les deux cas, ce qui était sûr tant
-que l'aplat restait publiable ; devenu un SAUT (Tâche 5), la confusion faisait
-sauter un article sur une simple coupure réseau, avec une raison fausse
-(« aucune image… ni sur le web » quand le web n'avait jamais répondu). Les
-lots (`Lot.photos`) et `recherche_web.candidats_du_web` lèvent désormais
-`app.content.visuels.VisuelDiffere` quand ils n'ont PAS PU regarder ;
-`eviter_l_affiche` la capture par barreau (elle reste dans son invariant « ne
-lève jamais » : c'est `Fond.differe`, pas une exception, qui en sort) et,
-si aucun barreau qui a pu regarder n'a rien donné, rend `Fond(fond, origine,
-differe=True)` au lieu de l'aplat. `compose.resoudre_fond` traduit ce
-`differe` en `VisuelsDifferes` (un REPORT, comme une panne de lecture
+plus confondue avec une réserve qui a réellement regardé et n'a rien trouvé.**
+Avant cette distinction, `eviter_l_affiche` retombait sur `FOND_KINDA` dans
+les deux cas, ce qui était sûr tant que l'aplat restait publiable ; devenu un
+SAUT, la confusion faisait sauter un article sur une simple coupure réseau,
+avec une raison fausse (« aucune image… ni sur le web » quand le web n'avait
+jamais répondu). Les lots (`Lot.photos`) et `recherche_web.candidats_du_web`
+lèvent désormais `app.content.visuels.VisuelDiffere` quand ils n'ont PAS PU
+regarder ; `eviter_l_affiche` la capture par barreau (elle reste dans son
+invariant « ne lève jamais » : c'est `Fond.differe`, pas une exception, qui en
+sort) et, si aucun barreau qui a pu regarder n'a rien donné, rend
+`Fond(None, origine, differe=True)` au lieu de l'aplat — `url` ne porte jamais
+l'image fautive (affiche ou trop petite), sûr par CONSTRUCTION.
+`compose.resoudre_fond` traduit ce `differe` en `VisuelsDifferes` (un REPORT,
+comme une panne de lecture
 Instagram) plutôt qu'en `VisuelIntrouvable` (un SAUT) — le créneau retente au
 passage suivant, sans se mettre en pause. Si un barreau plus loin réussit
 malgré la panne d'un barreau précédent, la panne n'a aucune conséquence : le
@@ -1527,7 +1528,7 @@ visuel du tout, `AucunVisuel`) — une image non jugée (vision coupée, quota) 
 mieux que rien. Une affiche avérée reste écartée. Le module ne lève JAMAIS pour
 un défaut de JUGEMENT (image illisible, quota du juge) : toute panne de ce genre
 rend une liste vide. Il lève en revanche délibérément `app.content.visuels.
-VisuelDiffere` (tour de correction 1/5, 2026-09-21) quand la recherche elle-même
+VisuelDiffere` quand la recherche elle-même
 n'a PAS PU être tentée (réseau, quota) — pour que l'appelant sache qu'il doit
 REPORTER (`VisuelsDifferes`) plutôt que conclure à l'absence d'image : sans
 cette distinction, une simple coupure réseau faisait sauter un créneau avec la

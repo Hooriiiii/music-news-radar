@@ -160,13 +160,12 @@ def main() -> None:
     compteurs = {
         "composes": rapport.composes, "geles": rapport.geles, "publies": rapport.publies,
         "apercus": rapport.apercus, "manques": rapport.manques, "echecs": rapport.echecs,
-        # Tache 5, I-2 (tour de correction 1/5) : le saut faute de visuel de
-        # bonne qualite doit etre VISIBLE au meme titre que les autres
-        # compteurs -- un feed qui se tait sans rien dire est le pire des deux
-        # mondes (CLAUDE.md).
+        # Le saut faute de visuel de bonne qualite doit etre VISIBLE au meme
+        # titre que les autres compteurs -- un feed qui se tait sans rien dire
+        # est le pire des deux mondes (CLAUDE.md).
         "sautes": rapport.sautes,
-        # Tour de correction 2/5, point 1 : un report qui se prolonge doit se
-        # voir AVANT de basculer en saut, distinct de `sautes`.
+        # Un report qui se prolonge doit se voir AVANT de basculer en saut,
+        # distinct de `sautes`.
         "reportes": rapport.reportes,
     }
     # Silence quand rien ne se passe : le log ne grossit pas de 144 lignes vides par jour.

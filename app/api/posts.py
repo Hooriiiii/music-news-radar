@@ -63,11 +63,9 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
     try:
         fond_precalcule = resoudre_fond(visuels, "kinda_post")
     except VisuelsDifferes as exc:
-        # Tour de correction 2/5, point 2 : `resoudre_fond` peut lever la
-        # MEME exception que `choisir_visuels` (I-1, une reserve n'a pas pu
-        # etre consultee) -- avant ce correctif, elle remontait non geree
-        # (500) au lieu du 503 deja rendu quelques lignes plus haut pour le
-        # meme cas.
+        # `resoudre_fond` peut lever la MEME exception que `choisir_visuels`
+        # (une reserve n'a pas pu etre consultee) : meme 503 que celui rendu
+        # quelques lignes plus haut pour ce cas.
         raise HTTPException(
             status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
         ) from exc

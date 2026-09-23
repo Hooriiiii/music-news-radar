@@ -517,13 +517,12 @@ class Fond:
     # choix s'ils ont la meme URL et la meme origine, le reste est du bagage.
     photos: tuple[str, ...] = field(default=(), compare=False)
     # Vrai si au moins une reserve N'A PAS PU etre consultee -- panne de
-    # transport (`VisuelDiffere`), jamais un jugement sur ce qu'elle contient
-    # (tour de correction 1/5, 2026-09-21, I-1). Cette fonction ne leve
-    # toujours pas : c'est ce champ que `compose.resoudre_fond` lit pour
-    # REPORTER (`VisuelsDifferes`) au lieu de conclure a l'absence d'image
-    # (`VisuelIntrouvable`, Tache 5) -- sauf si un AUTRE barreau, consulte avec
-    # succes, a quand meme donne une vraie photo : dans ce cas `differe` reste
-    # a False, la panne n'a eu aucune consequence.
+    # transport (`VisuelDiffere`), jamais un jugement sur ce qu'elle contient.
+    # Cette fonction ne leve toujours pas : c'est ce champ que
+    # `compose.resoudre_fond` lit pour REPORTER (`VisuelsDifferes`) au lieu de
+    # conclure a l'absence d'image (`VisuelIntrouvable`) -- sauf si un AUTRE
+    # barreau, consulte avec succes, a quand meme donne une vraie photo : dans
+    # ce cas `differe` reste a False, la panne n'a eu aucune consequence.
     differe: bool = False
 
 
@@ -580,8 +579,7 @@ def eviter_l_affiche(
     pour le meme defaut, ne se composaient pas. `origine_de` relit l'origine du
     candidat retenu (un actif `artiste` peut voisiner avec l'actu).
 
-    Cinq issues (mis a jour au tour de correction 2/5, point 3 -- ce
-    paragraphe mentait depuis l'introduction de `Fond.differe`) : le fond
+    Cinq issues : le fond
     d'origine (ni affiche ni trop petit, ou l'un des deux n'a pas pu etre
     etabli -- ne pas savoir n'est pas savoir) ; la meilleure photo assez
     grande du premier lot qui en offre une ; un REPORT (`Fond(None, ...,
@@ -614,11 +612,11 @@ def eviter_l_affiche(
     if remplacant is not None:
         logger.info("fond de cover remplace par un autre visuel de l'actu : %s", remplacant)
         return Fond(remplacant, (origine_de(remplacant) if origine_de else None) or origine)
-    # I-1 (tour de correction 1/5) : un lot qui n'a PAS PU regarder (panne de
-    # transport) ne doit pas etre confondu avec un lot qui a regarde et n'a
-    # rien trouve. On continue quand meme les barreaux suivants -- un lot plus
-    # loin peut reussir malgre la panne d'un autre -- et on ne se souvient de
-    # la panne que si AUCUN lot n'a rien donne au final.
+    # Un lot qui n'a PAS PU regarder (panne de transport) ne doit pas etre
+    # confondu avec un lot qui a regarde et n'a rien trouve. On continue quand
+    # meme les barreaux suivants -- un lot plus loin peut reussir malgre la
+    # panne d'un autre -- et on ne se souvient de la panne que si AUCUN lot
+    # n'a rien donne au final.
     differe = False
     for lot in lots:
         try:
@@ -635,13 +633,13 @@ def eviter_l_affiche(
     if differe:
         # Ne PAS conclure a l'absence d'image : au moins une reserve n'a pas pu
         # etre consultee, `compose.resoudre_fond` doit reporter, pas sauter.
-        # `url=None`, JAMAIS `fond` (tour de correction 2/5, point 3) : `fond`
-        # est ici precisement l'image jugee AFFICHE ou TROP PETITE -- la
-        # publier serait le defaut meme que cette tache corrige. Aujourd'hui
-        # `resoudre_fond` teste `differe` avant `ORIGINE_KINDA` et ne lit
-        # jamais `.url` dans ce cas, mais un futur lecteur qui oublierait
-        # `.differe` ne doit trouver ICI aucune URL publiable -- surete par
-        # CONSTRUCTION plutot que par discipline d'appelant.
+        # `url=None`, JAMAIS `fond` : `fond` est ici precisement l'image jugee
+        # AFFICHE ou TROP PETITE -- la publier serait le defaut meme que ce
+        # module existe pour eviter. `resoudre_fond` teste `differe` avant
+        # `ORIGINE_KINDA` et ne lit jamais `.url` dans ce cas, mais un futur
+        # lecteur qui oublierait `.differe` ne doit trouver ICI aucune URL
+        # publiable -- surete par CONSTRUCTION plutot que par discipline
+        # d'appelant.
         logger.info(
             "fond retenu %s, et au moins une reserve n'a pas pu etre consultee : report", raison
         )

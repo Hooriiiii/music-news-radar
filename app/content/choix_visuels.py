@@ -478,12 +478,12 @@ def photos_du_compte(
     posts = posts_en_base(db, [compte], maintenant, fenetres["fenetre_jours"])
     retenus = classer(article, posts, format_=FormatCreneau.CARROUSEL, maintenant=maintenant,
                       **fenetres)
-    # I-1 (tour de correction 1/5) : une lecture en direct qui echoue pour une
-    # raison de TRANSPORT (quota, budget, reseau) n'a pas le meme sens qu'une
-    # lecture reussie qui ne trouve rien -- seule la premiere doit empecher de
-    # conclure « cette reserve n'a rien ». Le doute ne se leve qu'A LA FIN, si
-    # le resultat entier reste vide : une base deja suffisante ne doit jamais
-    # etre eclipsee par l'echec d'une lecture devenue superflue.
+    # Une lecture en direct qui echoue pour une raison de TRANSPORT (quota,
+    # budget, reseau) n'a pas le meme sens qu'une lecture reussie qui ne
+    # trouve rien -- seule la premiere doit empecher de conclure « cette
+    # reserve n'a rien ». Le doute ne se leve qu'A LA FIN, si le resultat
+    # entier reste vide : une base deja suffisante ne doit jamais etre
+    # eclipsee par l'echec d'une lecture devenue superflue.
     differe = False
     if len(retenus) < plafond and lecteur is not None:
         try:

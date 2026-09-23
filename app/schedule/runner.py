@@ -119,11 +119,10 @@ class RapportPublication:
     # des `manques`, pour que le saut reste VISIBLE au lieu de se confondre avec
     # un Mac en veille ou un article vraiment en defaut.
     sautes: int = 0
-    # Tour de correction 2/5 : chaque REPORT (`VisuelsDifferes`), qu'il reste
-    # un simple report ou qu'il bascule en saut au-dela du seuil de reports
-    # consecutifs -- un feed qui se tait sans rien dire est le pire des deux
-    # mondes (CLAUDE.md), et un report qui se prolonge doit se VOIR avant de
-    # devenir un saut.
+    # Chaque REPORT (`VisuelsDifferes`), qu'il reste un simple report ou qu'il
+    # bascule en saut au-dela du seuil de reports consecutifs -- un feed qui
+    # se tait sans rien dire est le pire des deux mondes (CLAUDE.md), et un
+    # report qui se prolonge doit se VOIR avant de devenir un saut.
     reportes: int = 0
     erreurs: list[str] = field(default_factory=list)
 
@@ -284,18 +283,27 @@ def _differer(
     rapport: RapportPublication, exc: Exception,
 ) -> bool:
     """Un REPORT (`VisuelsDifferes`) : retenter au passage suivant reste le bon
-    geste, mais pas eternellement (tour de correction 2/5, point 1). Compte
-    les reports CONSECUTIFS (`signaler_report`) ; au-dela du seuil, bascule
-    dans la MEME mise a l'ecart qu'un saut -- sans elle, un report qui ne
-    guerit jamais rejoue exactement le defaut C-1 (l'article campe sur le
-    creneau jusqu'a MANQUE, mesure : 1 publication, 3 MANQUE, 0 saute).
+    geste, mais pas eternellement. Compte les reports CONSECUTIFS
+    (`signaler_report`) ; au-dela du seuil, bascule dans la MEME mise a
+    l'ecart qu'un saut -- sans elle, un report qui ne guerit jamais fait
+    camper l'article sur son creneau jusqu'a MANQUE (mesure : 1 publication
+    sur 4, 3 MANQUE, 0 mise a l'ecart).
+
+    MEME INVARIANT D'ORDRE que la ceinture de `_publier` : `_liberer` est une
+    ecriture CONDITIONNELLE qui peut echouer si le dashboard est passe
+    entre-temps ; l'article n'est mis a l'ecart, et le report ne compte comme
+    converti, QUE SI cette liberation reussit -- sinon il prendrait une pause
+    de plusieurs heures pour un creneau qu'on n'a meme pas reussi a lui
+    retirer.
 
     Rend True si l'article vient de basculer en pause (le creneau a ete
     libere, l'appelant doit relancer l'arbitrage), False s'il reste un simple
     report (le creneau garde l'article)."""
     rapport.reportes += 1
-    if signaler_report(article.id, maintenant):
-        _liberer(db, creneau, attendu, f"visuel introuvable (reports repetes) : {exc}")
+    if signaler_report(article.id, maintenant) and _liberer(
+        db, creneau, attendu, f"visuel introuvable (reports repetes) : {exc}"
+    ):
+        marquer_saute(article.id, maintenant)
         rapport.sautes += 1
         return True
     erreur = f"composition differee : {exc}"[:1000]
@@ -462,11 +470,10 @@ def _composer(
             try:
                 fond_precalcule = resoudre_fond(visuels, template)
             except VisuelsDifferes as exc:
-                # I-1 (tour de correction 1/5) : au moins une reserve n'a pas
-                # pu etre CONSULTEE (reseau, quota) -- un report, jamais un
-                # saut : sans cette distinction, une simple coupure reseau
-                # mettait l'article en pause pour rien. `_differer` borne
-                # neanmoins la SUITE de reports (tour de correction 2/5).
+                # Au moins une reserve n'a pas pu etre CONSULTEE (reseau,
+                # quota) -- un report, jamais un saut : sans cette distinction,
+                # une simple coupure reseau mettait l'article en pause pour
+                # rien. `_differer` borne neanmoins la SUITE de reports.
                 if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
                     exclusions = True
                 continue
@@ -474,11 +481,11 @@ def _composer(
                 # SAUT, pas exclusion : l'article peut avoir une photo demain
                 # (nouveau post du compte, recherche web qui sort du cache). Le
                 # creneau se libere et prend le candidat suivant tout de suite.
-                # C-1 (tour de correction 1/5) : sans mise a l'ecart, l'article
-                # revenait sur ce meme creneau libere a CHAQUE passage (le
-                # meilleur score gagne l'arbitrage), sautait encore, jusqu'a
-                # MANQUE -- une seule mauvaise image pouvait ainsi faire taire
-                # tout le compte une journee entiere.
+                # Sans mise a l'ecart, l'article revenait sur ce meme creneau
+                # libere a CHAQUE passage (le meilleur score gagne
+                # l'arbitrage), sautait encore, jusqu'a MANQUE -- une seule
+                # mauvaise image pouvait ainsi faire taire tout le compte une
+                # journee entiere.
                 marquer_saute(article.id, maintenant)
                 _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
                 rapport.sautes += 1
@@ -486,8 +493,8 @@ def _composer(
                 continue
             # Les visuels ont fini par se resoudre pour cet article : une
             # SUITE de reports vient de se casser, le compteur ne doit pas
-            # survivre (tour de correction 2/5) -- sinon un futur report
-            # isole repartirait avec un compte deja proche du seuil.
+            # survivre -- sinon un futur report isole repartirait avec un
+            # compte deja proche du seuil.
             reinitialiser_report(article.id, maintenant)
             try:
                 # Le compte du visuel part avec l'article : le compositeur ne
@@ -782,19 +789,18 @@ def _publier(
             continue
 
         if fond_de_cover(post) == FOND_KINDA:
-            # Ceinture de mise en service (tour de correction 1/5) : un
-            # creneau deja GELE avant le deploiement de la Tache 5 peut porter
-            # un post compose quand l'aplat Kinda etait encore une issue
-            # publiable. Ce n'est plus le cas -- refuser de publier plutot que
-            # de laisser cette fusion exiger une operation manuelle sur les
-            # creneaux deja geles en base. Pas d'exclusion (l'article n'y est
-            # pour rien) ; mise en pause comme un saut normal (C-1), sinon
-            # l'arbitrage relancerait le meme article sur ce meme creneau.
-            # ORDRE (tour de correction 2/5, point 6) : `_liberer` D'ABORD --
-            # c'est une ecriture CONDITIONNELLE (`_ecrire_si`) qui peut
-            # echouer si le dashboard est passe entre-temps ; mettre l'article
-            # en pause AVANT de le savoir lui infligerait 3 h d'ecart pour
-            # rien sur un creneau qu'on n'a meme pas reussi a liberer.
+            # Ceinture : un creneau deja GELE avant que l'aplat Kinda cesse
+            # d'etre une issue publiable peut porter un post compose sur ce
+            # fond. Refuser de publier plutot que d'exiger une operation
+            # manuelle sur les creneaux deja geles en base. Pas d'exclusion
+            # (l'article n'y est pour rien) ; mise en pause comme un article
+            # sans visuel, sinon l'arbitrage relancerait le meme article sur
+            # ce meme creneau.
+            # ORDRE : `_liberer` D'ABORD -- c'est une ecriture CONDITIONNELLE
+            # (`_ecrire_si`) qui peut echouer si le dashboard est passe
+            # entre-temps ; mettre l'article en pause AVANT de le savoir lui
+            # infligerait 3 h d'ecart pour rien sur un creneau qu'on n'a meme
+            # pas reussi a liberer. Meme invariant que `_differer`.
             if _liberer(
                 db, creneau, attendu,
                 "aplat Kinda en fond : publication refusee, nouvelle composition",

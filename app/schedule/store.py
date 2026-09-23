@@ -304,12 +304,12 @@ def _articles_publiables(db: Session, maintenant: dt.datetime, limite: int) -> l
         )
         .where(func.coalesce(Article.published_at, Article.fetched_at) >= depuis)
     )
-    # C-1 (tour de correction 1/5) : un article saute faute de visuel de bonne
-    # qualite est mis a l'ecart TEMPORAIREMENT (`pause_visuels.marquer_saute`) --
-    # sans ce filtre, un article au meilleur score reprenait le creneau qu'il
-    # venait de liberer a CHAQUE passage, jusqu'a MANQUE, et faisait taire le
-    # compte toute une journee. `notin_` sur un ensemble VIDE reste correct en
-    # SQL (aucune ligne exclue) : pas besoin de le conditionner.
+    # Un article saute faute de visuel de bonne qualite est mis a l'ecart
+    # TEMPORAIREMENT (`pause_visuels.marquer_saute`) -- sans ce filtre, un
+    # article au meilleur score reprenait le creneau qu'il venait de liberer
+    # a CHAQUE passage, jusqu'a MANQUE, et faisait taire le compte toute une
+    # journee. `notin_` sur un ensemble VIDE reste correct en SQL (aucune
+    # ligne exclue) : pas besoin de le conditionner.
     en_pause = articles_en_pause(maintenant)
     if en_pause:
         requete = requete.where(Article.id.notin_(en_pause))
@@ -416,11 +416,11 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
                 creneau.article_id = article_id
                 creneau.post_id = post_a_reprendre(db, article_id, TEMPLATES[format_]) if article_id else None
                 if article_id is not None:
-                    # M-1 (tour de correction 1/5) : un NOUVEL article prend le
-                    # creneau -- l'ancienne erreur (« visuel introuvable :
-                    # ... », posee sur l'article precedent) ne le concerne plus
-                    # et resterait trompeuse au dashboard tant qu'aucune
-                    # composition n'a encore eu lieu pour celui-ci.
+                    # Un NOUVEL article prend le creneau -- l'ancienne erreur
+                    # (« visuel introuvable : ... », posee sur l'article
+                    # precedent) ne le concerne plus et resterait trompeuse au
+                    # dashboard tant qu'aucune composition n'a encore eu lieu
+                    # pour celui-ci.
                     creneau.erreur = None
             creneau.etat = EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE
         db.commit()
