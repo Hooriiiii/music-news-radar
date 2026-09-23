@@ -282,6 +282,9 @@ def preparer_reel(
     sonder=sonder,
     assembler=assembler_reel,
     verifier_outils=exiger_outils,
+    telecharger_image=None,
+    agrandir=None,
+    binaire_disponible=None,
 ) -> list[str]:
     if post.template != "kinda_reel":
         raise PreparationImpossible(f"le post est au gabarit {post.template}, pas kinda_reel")
@@ -307,8 +310,21 @@ def preparer_reel(
     # Le fond AVANT le rendu : la cover d'un reel est une image rendue par
     # Chromium comme celle d'un carrousel. Sans fond verifie, elle partirait sur
     # l'image de secours du gabarit -- et c'est elle que Meta affiche en
-    # couverture du reel (`cover_url`).
-    verifier_fond(post, article)
+    # couverture du reel (`cover_url`). `telecharger` ici est celui de la
+    # VIDEO (signature `(url, plafond)`), jamais celui du fond -- donc les
+    # trois crochets de la Tache 6 sont PROPRES a `preparer_reel`, passes
+    # seulement quand injectes (les valeurs par defaut de `verifier_fond`
+    # sinon).
+    kwargs_fond = {
+        cle: valeur
+        for cle, valeur in (
+            ("telecharger", telecharger_image),
+            ("agrandir", agrandir),
+            ("binaire_disponible", binaire_disponible),
+        )
+        if valeur is not None
+    }
+    verifier_fond(post, article, **kwargs_fond)
 
     # La cover AVANT la video : une cover fautive ne doit pas consommer le
     # telechargement yt-dlp du passage. RenduIndisponible (Chromium absent) remonte.

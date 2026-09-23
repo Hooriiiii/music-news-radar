@@ -328,6 +328,68 @@ class Settings(BaseSettings):
     # reel, 2,13x), a un centieme du seuil. Les trois autres fonds flous mesures
     # (2,39x, 3,52x, 3,91x) sont bien attrapes.
     cover_fond_upscale_max: float = 2.2
+
+    # Agrandissement du fond par super-resolution (Tache 6, 2026-09-23) : le
+    # dernier barreau AVANT le saut, quand aucun candidat (actu, compte,
+    # artiste, web) ne passe `cover_fond_upscale_max`. Outil : `upscayl-bin`,
+    # le backend headless d'Upscayl (github.com/upscayl/upscayl-ncnn) --
+    # meme famille de modeles Real-ESRGAN-ncnn-vulkan que celui cite par le
+    # plan, mais activement maintenu (derniere release 2025-12-07 contre 2022
+    # pour le depot officiel xinntao) et empaquete avec l'app GUI signee, donc
+    # sans probleme Gatekeeper au premier lancement.
+    #
+    # Verifie sur cette machine (utilisateur, 2026-09-23) : le binaire vit
+    # dans le bundle de l'app (`/Applications/Upscayl.app/Contents/Resources/
+    # bin/upscayl-bin`), PAS sur le PATH d'un terminal ni installe par
+    # Homebrew -- meme piege que ffmpeg et cloudflared pour launchd
+    # (`app/content/video.py::EMPLACEMENTS_CONNUS`), en pire : il n'existe
+    # meme pas d'emplacement Homebrew connu a essayer en repli, d'ou un
+    # chemin exact en reglage plutot qu'une recherche sur le PATH.
+    visuels_upscale_enabled: bool = True
+    visuels_upscale_binaire: Path = Path(
+        "/Applications/Upscayl.app/Contents/Resources/bin/upscayl-bin"
+    )
+    visuels_upscale_modeles: Path = Path(
+        "/Applications/Upscayl.app/Contents/Resources/models"
+    )
+    # `upscayl-lite-4x`, pas `upscayl-standard-4x` : mesure sur l'image du
+    # probleme reel (660x440, l'ADE et Shlomo, post 76) sur cette machine,
+    # 1,1 s contre 5,8 s -- environ 5x plus rapide. Le fond de cover est
+    # recouvert d'un voile sombre ET du texte de l'accroche (CLAUDE.md,
+    # « Agrandir le fond plutot que sauter le post ») : le detail que le
+    # modele standard rendrait en plus n'y est de toute facon pas visible,
+    # donc la difference de qualite ne justifie pas de payer 5x plus de
+    # temps, six fois par jour, pour un element decoratif. Reglable : si un
+    # fond agrandi a la vole a l'oeil trop degrade, repasser sur
+    # `upscayl-standard-4x` (verifie fonctionnel, mesure a 5,8-10,7 s selon
+    # la charge de la machine) est un changement de configuration, pas de code.
+    visuels_upscale_modele: str = "upscayl-lite-4x"
+    visuels_upscale_echelle: int = 4
+    # En dessous, meme le facteur 4 ne suffit STRUCTURELLEMENT pas a passer
+    # `cover_fond_upscale_max` sur le gabarit le plus exigeant (le reel,
+    # 1080x1920) : un cote source de 300 px donne 1200 px agrandi, donc
+    # 1920/1200 = 1,6x -- confortablement sous le plancher de 2,2x. Un cote
+    # source de 200 px (l'exemple du plan) donnerait 800 px, donc 1920/800 =
+    # 2,4x -- deja au-dela : agrandir n'aurait servi a rien, seulement chauffe
+    # le GPU pour publier quand meme sur l'aplat... sauf que l'aplat n'est
+    # plus une issue (Tache 5) : ce serait donc chauffer le GPU pour sauter
+    # quand meme. Le seuil isole ce cas AVANT de lancer l'outil.
+    visuels_upscale_source_min_px: int = 300
+    # Budget de temps par tentative, meme esprit que `video.DELAI_MAX_S` et
+    # `hosting.DELAI_JOIGNABLE_S` : mesure reelle 1,1-10,7 s selon le modele
+    # et la charge, marge large (x5 a x10) pour une machine chargee sans
+    # laisser un gel trainer indefiniment. Une seule tentative par post (le
+    # gel ne boucle pas), au GEL uniquement -- jamais a la composition ni a
+    # l'ingestion.
+    visuels_upscale_delai_max_s: float = 60.0
+    # Le resultat n'a pas besoin de rester a la taille brute du modele (4x
+    # sur 660x440 donne 2640x1760) : le fond n'a besoin que de remplir le
+    # plus grand gabarit publie (1080x1920, le reel). Redimensionne apres
+    # coup vers cette borne (avec une marge de cadrage) plutot que de faire
+    # porter une image deux fois plus grande que necessaire au reste du gel
+    # (rendu Chromium, cache disque).
+    visuels_upscale_sortie_max_px: int = 1920
+
     # DERNIER recours, apres le compte source et les artistes cites : une image
     # du WEB (2026-09-18, « ne saute pas l'actu, cherche une image sur le web en
     # dernier recours »). Une seule recherche par composition, memorisee par

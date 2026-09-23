@@ -46,8 +46,11 @@ import secrets
 from pathlib import Path
 
 from app.config import settings
+from app.content import upscale as upscale_mod
 from app.content import video as video_mod
 from app.content.export import echec_transitoire, telecharger as telecharger_media
+from app.content.illustration import dimensions_de, resolution_suffisante
+from app.content.layout import gabarit as gabarit_de
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.urls import url_propre
 from app.content.render import render_post
@@ -55,6 +58,7 @@ from app.content.teinte import palette_du_post
 from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
+    chemin_cache,
     fond_de_cover,
     lire_fichier_cache,
     origine_interdite,
@@ -78,6 +82,19 @@ class PreparationDifferee(RuntimeError):
     soient en defaut (pause de yt-dlp, un telechargement par passage deja fait).
     Le runner inscrit la raison sur le creneau, sans exclure ni notifier : le gel
     est retente au passage suivant. Message affichable."""
+
+
+class PreparationSautee(RuntimeError):
+    """Tache 6 (2026-09-23) : le fond marque `a_agrandir` a la composition ne
+    passe TOUJOURS PAS le plancher de nettete au gel -- soit l'outil de
+    super-resolution est indisponible (binaire ou modeles absents, panne
+    MACHINE), soit le resultat agrandi echoue encore
+    `cover_fond_upscale_max`. C'est un SAUT, exactement comme
+    `choix_visuels.VisuelIntrouvable` a la composition (Tache 5) : PAS une
+    exclusion. Le runner doit liberer le creneau et poser la mise a l'ecart
+    (`app.schedule.pause_visuels.marquer_saute`), jamais `file_exclu_raison`
+    -- l'article peut avoir un meilleur candidat au prochain passage (compte
+    source qui publie, cache web qui se renouvelle). Message affichable."""
 
 
 def _cadrer(octets: bytes) -> bytes:
@@ -143,7 +160,101 @@ def medias_du_carrousel(post, article) -> list[dict]:
     return medias
 
 
-def verifier_fond(post, article) -> str:
+def _cible_de(post) -> tuple[int, int] | None:
+    """La taille (largeur, hauteur) du gabarit publie par ce post, ou None si
+    le nom est inconnu -- meme regle que `compose._cible_gabarit` (un
+    plancher de resolution est un confort, jamais une garantie)."""
+    try:
+        gabarit_ = gabarit_de(post.template)
+    except KeyError:
+        return None
+    return gabarit_.width, gabarit_.height
+
+
+def _agrandir_fond_si_marque(
+    post, fond: str, *, telecharger, agrandir, binaire_disponible
+) -> str:
+    """Tache 6 : agrandit `fond` et reecrit `post.slides` sur la copie
+    agrandie s'il repasse le plancher -- rend `fond` INCHANGE si le
+    brouillon n'est pas marque `a_agrandir` (immense majorite des posts) ou
+    si le fond agrandi a deja disparu du cache local entre-temps (le gel
+    suivant retentera).
+
+    Leve `PreparationSautee` (jamais une exclusion) quand l'outil est
+    indisponible ou que le resultat ne suffit toujours pas -- c'est le SAUT
+    de la Tache 5, deplace ici parce que c'est ici, et seulement ici, qu'on
+    sait si l'agrandissement a reussi. Leve `PreparationDifferee` (retente
+    au passage suivant) sur un echec de TELECHARGEMENT du fond d'origine --
+    une panne de reseau n'est pas une panne de l'outil de super-resolution,
+    et ce n'est pas non plus une raison de sauter un candidat qui reste par
+    ailleurs valable.
+    """
+    # `getattr` : les tests (et un brouillon compose a la main) passent
+    # parfois un `Post`/objet partiel sans `variants` du tout -- absent vaut
+    # « non marque », comme pour tout brouillon anterieur a la Tache 6.
+    marque = bool((getattr(post, "variants", None) or {}).get("fond", {}).get("a_agrandir"))
+    if not marque:
+        return fond
+    cible = _cible_de(post)
+    if cible is None:
+        # Gabarit inconnu : le plancher est desactive partout ailleurs pour
+        # la meme raison (`compose._cible_gabarit`), donc rien a agrandir.
+        return fond
+    octets, raison = _octets_image(fond, telecharger)
+    if octets is None:
+        raise PreparationDifferee(
+            f"impossible de relire le fond a agrandir ({raison}) : nouvelle tentative au prochain passage"
+        )
+    if resolution_suffisante(dimensions_de(octets), cible):
+        # Le candidat a change entre la composition et le gel (recadrage
+        # d'un editeur, cache renouvele) : plus besoin d'agrandir.
+        return fond
+    if not binaire_disponible():
+        # PANNE MACHINE, jamais une exclusion ni un saut silencieux (decision
+        # de l'utilisateur, 2026-09-23) : on retombe sur le comportement
+        # d'avant la Tache 6, c'est-a-dire le saut de la Tache 5 -- le
+        # candidat echouait deja le plancher, agrandir etait la seule
+        # alternative au saut.
+        raise PreparationSautee(
+            "agrandissement indisponible (upscayl-bin ou ses modeles absents) : "
+            "fond trop petit pour le gabarit"
+        )
+    try:
+        agrandi = agrandir(octets, sortie_max_px=max(cible))
+    except upscale_mod.UpscaleIndisponible as exc:
+        # Meme famille que le binaire absent : la machine a echoue, pas
+        # l'article.
+        raise PreparationSautee(f"agrandissement en echec : {exc}") from None
+    if not resolution_suffisante(dimensions_de(agrandi), cible):
+        # Le plancher n'est jamais contourne : un resultat encore trop petit
+        # (source minuscule proche du seuil bas, ratio extreme) fait sauter
+        # exactement comme un echec de l'outil.
+        raise PreparationSautee(
+            "fond agrandi toujours sous le plancher de nettete pour ce gabarit"
+        )
+    chemin = chemin_cache("agrandi:" + fond, ".jpg")
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    chemin.write_bytes(agrandi)
+    nouveau = chemin.resolve().as_uri()
+    # Reassignation, jamais une mutation en place (une colonne JSON ne
+    # persisterait pas l'ecriture) : `render_post(post.slides, ...)`, appele
+    # juste apres par l'appelant, doit voir cette copie nette.
+    post.slides = [
+        {**post.slides[0], "image_url": nouveau},
+        *post.slides[1:],
+    ]
+    logger.info("fond de cover agrandi par super-resolution : %s -> %s", fond, nouveau)
+    return nouveau
+
+
+def verifier_fond(
+    post,
+    article,
+    *,
+    telecharger=telecharger_media,
+    agrandir=upscale_mod.agrandir_fond,
+    binaire_disponible=upscale_mod.binaire_disponible,
+) -> str:
     """Le fond de la cover, verifie, ou une erreur explicite. Commun aux deux
     gabarits : la cover d'un reel est rendue par Chromium exactement comme celle
     d'un carrousel, donc les trois memes fautes la guettent.
@@ -173,7 +284,10 @@ def verifier_fond(post, article) -> str:
         # REPORT, jamais une exclusion -- l'article n'y est pour rien, et rien ne
         # part sur le fond de secours.
         raise PreparationDifferee("la copie locale du fond de cover a disparu du cache")
-    return fond
+    return _agrandir_fond_si_marque(
+        post, fond,
+        telecharger=telecharger, agrandir=agrandir, binaire_disponible=binaire_disponible,
+    )
 
 
 def _octets_image(url: str, telecharger) -> tuple[bytes | None, str | None]:
@@ -229,6 +343,8 @@ def preparer_fichiers(
     telecharger_video=None,
     sonder=None,
     transcoder=None,
+    agrandir=upscale_mod.agrandir_fond,
+    binaire_disponible=upscale_mod.binaire_disponible,
 ) -> list[str]:
     if telecharger_video is None:
         # Import tardif : preparation_reel importe ce module.
@@ -239,7 +355,12 @@ def preparer_fichiers(
     for ancien in [*dossier.glob("*.jpg"), *dossier.glob("*.mp4")]:
         ancien.unlink()
 
-    fond = verifier_fond(post, article)
+    # `telecharger` est le MEME injecte pour le reste du carrousel (tests,
+    # DI) : le fond a agrandir ne doit pas repartir sur le telechargeur reel
+    # pendant qu'un faux sert tout le reste.
+    fond = verifier_fond(
+        post, article, telecharger=telecharger, agrandir=agrandir, binaire_disponible=binaire_disponible
+    )
     panne_transport = False
     # Les raisons d'ecartement, gardees pour le message d'exclusion : sinon un
     # article sortirait de la file sur un « aucun visuel publiable » muet.

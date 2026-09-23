@@ -845,14 +845,94 @@ posée là où l'information existe.
    `MANQUE` là où on aurait pu publier la cover seule ; le gel court 2 h avant
    l'heure, il a le temps de retenter.
 
-Ordre de préférence du fond, mis à jour par la Tâche 5 (2026-09-21) : photo de
+Ordre de préférence du fond, mis à jour par la Tâche 6 (2026-09-23) : photo de
 l'actu (non-affiche, assez grande) → photo du compte source → photo d'un
-artiste cité → recherche web → **on saute le créneau** (plus de fond Kinda en
-bout d'échelle, voir ci-dessus). Le plancher de résolution
+artiste cité → recherche web → **agrandissement par super-résolution du
+meilleur candidat** → **on saute le créneau** (plus de fond Kinda en bout
+d'échelle, voir ci-dessus). Le plancher de résolution
 (`cover_fond_upscale_max`) s'applique à CHAQUE barreau, pas seulement au
 premier : une photo de réserve trop petite ne sauve pas plus le post qu'une
 photo d'actu trop petite. Une affiche n'est refusée qu'en FOND ; en slide,
 c'est le visuel de l'actu.
+
+**L'agrandissement, barreau ajouté juste avant le saut** (Tâche 6,
+2026-09-23, `app/content/upscale.py`). Motivé par le post 76 (l'ADE et
+Shlømo, 2026-09-21) : fond de 660×440 (3,07× pour remplir le gabarit), et le
+CDN (URL signée) rend EXACTEMENT la même image avec ou sans ses paramètres de
+redimensionnement — aucune version plus grande n'existe à aller chercher,
+chez ce candidat ni ailleurs sur ce post ; sans ce barreau, un post par
+ailleurs illustrable saute pour rien.
+
+*L'outil* : `upscayl-bin`, le backend CLI headless d'Upscayl
+(github.com/upscayl/upscayl-ncnn) — PAS `Real-ESRGAN-ncnn-vulkan`, le dépôt
+officiel cité par le plan initial, figé à sa version de 2022 (aucune release
+depuis) ; `upscayl-ncnn` publie encore en 2025-12 et embarque les mêmes
+modèles ncnn Real-ESRGAN, avec la même interface CLI (`-i/-o/-s/-m/-n`).
+Vérifié sur la machine de l'utilisateur (2026-09-23) : le binaire vit dans le
+bundle de l'app GUI (`/Applications/Upscayl.app/Contents/Resources/bin/
+upscayl-bin`), pas sur le PATH d'un terminal ni posé par Homebrew — même
+piège que `ffmpeg`/`cloudflared` pour launchd
+(`app/content/video.py::EMPLACEMENTS_CONNUS`), en pire : pas d'emplacement
+Homebrew connu à essayer en repli, d'où un chemin en RÉGLAGE
+(`visuels_upscale_binaire`, `visuels_upscale_modeles`) plutôt qu'une
+recherche sur le PATH. Mesuré : 660×440 → 2640×1760 en 1,1 s
+(`upscayl-lite-4x`) à 5,8-10,7 s (`upscayl-standard-4x`, selon la charge de
+la machine), GPU sollicité via Vulkan/MoltenVK. Modèle par défaut
+`upscayl-lite-4x` (réglage `visuels_upscale_modele`) : le fond de cover est
+recouvert d'un voile sombre ET du texte de l'accroche, le détail que le
+modèle `standard` ajouterait en plus n'y est de toute façon pas visible — pas
+de raison de payer 5× le temps, six fois par jour, pour un élément décoratif.
+
+*La règle qui borne tout le reste : le FOND SEULEMENT, jamais une slide.* La
+super-résolution n'agrandit pas, elle INVENTE le détail manquant — sur une
+photo de presse, le modèle fabrique de la texture de peau et de cheveux qui
+n'était pas dans le fichier, visible d'abord sur les visages. Une slide est
+DOCUMENTAIRE (photo de presse, capture d'un artiste) : elle n'est jamais
+retouchée. `app/publish/preparation.py::_agrandir_fond_si_marque` est le SEUL
+point d'appel à `upscale.agrandir_fond`, et il ne lit/écrit que
+`slides[0].image_url` — un test-sentinelle
+(`tests/test_publish_preparation.py::
+test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel`)
+échoue si un media du carrousel ou la vidéo d'un reel passe par cette
+fonction.
+
+*Où la décision se prend, et pourquoi ce n'est PAS le même endroit que le
+saut de la Tâche 5.* `illustration.eviter_l_affiche` distingue désormais,
+pour le meilleur candidat rejeté par le plancher (jamais un rejeté pour
+affiche), s'il est assez grand pour être agrandi
+(`visuels_upscale_source_min_px`, 300 px de côté minimal — en dessous, même
+le facteur 4 ne repasserait pas le plancher du gabarit le plus exigeant, le
+reel à 1080×1920). Si oui, `Fond.a_agrandir` est posé à `True` et la
+COMPOSITION NE SAUTE PAS : `compose.resoudre_fond` ne lève plus
+`VisuelIntrouvable` pour ce cas, le brouillon est créé avec ce fond encore
+trop petit, et le marqueur est persisté dans
+`posts.variants["fond"]["a_agrandir"]` (l'article est purgé à 2 jours, le
+post doit rester décidable sans lui). **L'agrandissement lui-même a lieu au
+GEL (T-2h, jamais à la composition ni à l'ingestion)** : coût borné à une
+tentative par post, budget de temps `visuels_upscale_delai_max_s` (60 s,
+marge large sur les 1,1-10,7 s mesurés), et le fichier produit va dans
+`visuels_cache_dir` comme les autres copies locales — même purge. Si le
+résultat repasse le plancher, `post.slides` est RÉASSIGNÉ (jamais muté en
+place, colonne JSON) sur la copie locale nette, que `render_post` lira
+ensuite.
+
+*Trois issues au gel, jamais un contournement du plancher.* (1) Binaire ou
+modèles absents (`upscale.binaire_disponible`) : PANNE MACHINE, jamais une
+exclusion ni un saut silencieux — on retombe sur le comportement d'avant la
+Tâche 6, c'est-à-dire le saut de la Tâche 5, avec sa raison habituelle
+(`app.publish.preparation.PreparationSautee`). (2) Le résultat agrandi
+échoue ENCORE le plancher (source proche du seuil bas, ratio extrême) : même
+saut — l'outil ne devient jamais un moyen de publier flou. (3) Le
+téléchargement du fond d'origine échoue au gel (réseau) : ce n'est ni l'un
+ni l'autre, `PreparationDifferee` (retente au passage suivant), parce qu'une
+coupure réseau n'est pas une panne de l'outil de super-résolution. Dans tous
+les cas de saut, `runner._geler` suit l'INVARIANT D'ORDRE partagé avec la
+Tâche 5 (`app/schedule/pause_visuels.py`) : `_liberer` le créneau D'ABORD,
+`marquer_saute` seulement si la libération a réussi — jamais l'inverse.
+
+Aucun test n'invoque le vrai binaire (`agrandir`/`binaire_disponible`
+toujours injectés, comme `rendre`/`telecharger` le sont déjà pour Chromium et
+le réseau) : la suite passe sur une machine où Upscayl n'est pas installé.
 
 **Mais UNE SEULE affiche en slide, jamais sept** (2026-09-19, post du 18/09 13h10
 sur les Trans Musicales : les slides 2 à 8 étaient la carte d'annonce entière du

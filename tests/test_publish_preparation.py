@@ -7,9 +7,17 @@ import pytest
 from PIL import Image
 
 from app.content.render import RenduIndisponible, RenduSlide
+from app.content.upscale import UpscaleIndisponible
 from app.models import SourceCategorie, SourceType
 from app.content.visuels import ORIGINE_ARTICLE, actif
-from app.publish.preparation import PreparationImpossible, medias_du_carrousel, preparer_fichiers
+from app.publish.preparation import (
+    PreparationDifferee,
+    PreparationImpossible,
+    PreparationSautee,
+    medias_du_carrousel,
+    preparer_fichiers,
+    verifier_fond,
+)
 
 
 def _png(largeur, hauteur):
@@ -478,4 +486,185 @@ def test_une_vignette_trop_petite_est_sautee(tmp_path):
             "https://img/ok.jpg": (1600, 1600),
         }),
     )
+    assert len(noms) == 2
+
+
+# --- Tache 6 (2026-09-23) : agrandissement du fond au GEL -------------------
+# Aucun test de ce bloc n'invoque le vrai binaire upscayl-bin : `agrandir` et
+# `binaire_disponible` sont TOUJOURS injectes, comme `rendre` et `telecharger`
+# le sont deja pour Chromium et le reseau -- la suite doit passer sur une
+# machine sans Upscayl installe.
+
+
+def _post_a_agrandir(fond="https://img/petit-fond.jpg", *medias, template="kinda_post"):
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": fond}
+    return SimpleNamespace(
+        slides=[cover, *medias],
+        template=template,
+        variants={"fond": {"origine": "article", "a_agrandir": True}},
+    )
+
+
+def _post_sans_marqueur(fond="https://img/fond.jpg", template="kinda_post"):
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": fond}
+    return SimpleNamespace(
+        slides=[cover], template=template,
+        variants={"fond": {"origine": "article", "a_agrandir": False}},
+    )
+
+
+def _agrandisseur(sortie=None, *, appels=None):
+    """Un faux `agrandir` qui simule `upscale.agrandir_fond` en entier : rend
+    une image PNG de la taille demandee (par defaut 2640x1760, la sortie
+    mesuree reellement sur 660x440 en 4x), puis la borne a `sortie_max_px`
+    -- exactement ce que fait la vraie fonction apres l'appel a
+    `upscayl-bin`, jamais invoque ici."""
+    def agrandir(octets, *, sortie_max_px=None, **kwargs):
+        if appels is not None:
+            appels.append((octets, {"sortie_max_px": sortie_max_px, **kwargs}))
+        largeur, hauteur = sortie or (2640, 1760)
+        if sortie_max_px is not None and max(largeur, hauteur) > sortie_max_px:
+            echelle = sortie_max_px / max(largeur, hauteur)
+            largeur, hauteur = int(largeur * echelle), int(hauteur * echelle)
+        return _png(largeur, hauteur)
+
+    return agrandir
+
+
+def test_un_fond_non_marque_n_est_jamais_envoye_a_l_agrandissement(tmp_path):
+    """L'immense majorite des posts : pas de marqueur, le fond part tel quel,
+    sans toucher `agrandir` ni `binaire_disponible`."""
+    appels = []
+
+    def binaire_disponible():
+        appels.append("verifie")
+        return True
+
+    fond = verifier_fond(
+        _post_sans_marqueur(), None,
+        telecharger=_telecharger(), agrandir=_agrandisseur(), binaire_disponible=binaire_disponible,
+    )
+
+    assert fond == "https://img/fond.jpg"
+    assert appels == []
+
+
+def test_un_fond_deja_assez_grand_au_gel_n_est_pas_agrandi(tmp_path):
+    """Le candidat a change entre la composition et le gel (cache renouvele) :
+    s'il passe deja le plancher, `agrandir` n'est jamais appele."""
+    appels = []
+
+    fond = verifier_fond(
+        _post_a_agrandir(), None,
+        telecharger=_telecharger_formats({"https://img/petit-fond.jpg": (1600, 1600)}),
+        agrandir=_agrandisseur(appels=appels), binaire_disponible=lambda: True,
+    )
+
+    assert fond == "https://img/petit-fond.jpg"
+    assert appels == []
+
+
+def test_binaire_absent_saute_sans_exclure(tmp_path):
+    """PANNE MACHINE, jamais une exclusion : `PreparationSautee`, pas
+    `PreparationImpossible`."""
+    with pytest.raises(PreparationSautee, match="indisponible"):
+        verifier_fond(
+            _post_a_agrandir(), None,
+            telecharger=_telecharger_formats({"https://img/petit-fond.jpg": (564, 345)}),
+            agrandir=_agrandisseur(), binaire_disponible=lambda: False,
+        )
+
+
+def test_un_echec_de_l_outil_saute_sans_exclure(tmp_path):
+    """Binaire present mais l'appel echoue (timeout, code de retour non nul,
+    ...) : meme famille que le binaire absent, meme SAUT."""
+    def agrandir_casse(octets, **kwargs):
+        raise UpscaleIndisponible("agrandissement abandonne : delai de 60 s depasse")
+
+    with pytest.raises(PreparationSautee, match="agrandissement en echec"):
+        verifier_fond(
+            _post_a_agrandir(), None,
+            telecharger=_telecharger_formats({"https://img/petit-fond.jpg": (564, 345)}),
+            agrandir=agrandir_casse, binaire_disponible=lambda: True,
+        )
+
+
+def test_un_resultat_encore_trop_petit_saute_au_lieu_de_publier(tmp_path):
+    """Le plancher n'est JAMAIS contourne : un agrandissement qui ne suffit
+    toujours pas (source proche du seuil bas) fait sauter, pas publier flou."""
+    with pytest.raises(PreparationSautee, match="toujours sous le plancher"):
+        verifier_fond(
+            _post_a_agrandir(template="kinda_reel"), None,
+            telecharger=_telecharger_formats({"https://img/petit-fond.jpg": (400, 400)}),
+            # Le modele agrandit peu : 1920/600 = 3,2x, toujours au-dela du
+            # plancher du reel (2,2x).
+            agrandir=_agrandisseur(sortie=(600, 600)), binaire_disponible=lambda: True,
+        )
+
+
+def test_un_agrandissement_reussi_ecrit_le_cache_et_reecrit_les_slides(tmp_path):
+    """Le cas nominal : le fond agrandi est copie dans `visuels_cache_dir`
+    (meme purge que les autres copies locales), et `post.slides[0]` pointe
+    dessus -- c'est ce que `render_post` lira ensuite."""
+    from app.config import settings
+
+    post = _post_a_agrandir()
+    fond = verifier_fond(
+        post, None,
+        telecharger=_telecharger_formats({"https://img/petit-fond.jpg": (660, 440)}),
+        agrandir=_agrandisseur(), binaire_disponible=lambda: True,
+    )
+
+    assert fond.startswith("file://")
+    assert fond != "https://img/petit-fond.jpg"
+    chemin = settings.visuels_cache_dir
+    fichiers = list(chemin.glob("*.jpg"))
+    assert len(fichiers) == 1
+    assert post.slides[0]["image_url"] == fond
+    # Reassignation, pas mutation en place (JSON) : une NOUVELLE liste.
+    assert Image.open(fichiers[0]).size[0] <= settings.visuels_upscale_sortie_max_px
+
+
+def test_un_telechargement_en_echec_differe_au_lieu_de_sauter(tmp_path):
+    """Une panne de RESEAU sur le fond a agrandir n'est ni un saut ni une
+    exclusion : on retente au passage suivant, comme le reste du carrousel."""
+    with pytest.raises(PreparationDifferee):
+        verifier_fond(
+            _post_a_agrandir(), None,
+            telecharger=_telecharger(echecs=("https://img/petit-fond.jpg",)),
+            agrandir=_agrandisseur(), binaire_disponible=lambda: True,
+        )
+
+
+def test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel(tmp_path):
+    """Test-sentinelle exige par le plan : un post marque `a_agrandir` dont le
+    carrousel porte AUSSI un media minuscule ne doit agrandir QUE le fond
+    (`slides[0].image_url`) -- jamais les autres slides, qui sont
+    DOCUMENTAIRES (photo de presse ou capture de l'artiste), pas decoratives.
+    """
+    appels = []
+    # 900x900 passe deja le plancher du CARROUSEL (`publication_crop_upscale_max`,
+    # 2,2x sur 1080x1350 : 1350/900 = 1,5x) -- s'il finissait absent du
+    # carrousel, ce serait la preuve que le test ne prouve rien, pas que le
+    # sentinelle tient.
+    media_minuscule = {"kind": "media", "type": "photo", "url": "https://img/media-minuscule.jpg"}
+    post = _post_a_agrandir("https://img/petit-fond.jpg", media_minuscule)
+
+    noms = preparer_fichiers(
+        post, _article(), tmp_path,
+        rendre=_rendre(),
+        telecharger=_telecharger_formats({
+            "https://img/petit-fond.jpg": (660, 440),
+            "https://img/media-minuscule.jpg": (900, 900),
+        }),
+        agrandir=_agrandisseur(appels=appels), binaire_disponible=lambda: True,
+    )
+
+    # Un seul appel a l'agrandisseur : celui du fond. Le media minuscule du
+    # carrousel, lui, suit la regle EXISTANTE (cadrage, jamais de
+    # super-resolution) -- il est simplement carre/redimensionne par
+    # `cadrer_carrousel`, jamais passe a `agrandir`.
+    assert len(appels) == 1
     assert len(noms) == 2

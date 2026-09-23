@@ -382,9 +382,68 @@ def _tailles_fixes(table: dict):
     return mesurer
 
 
-def test_un_fond_trop_petit_part_sur_le_fond_kinda_sans_reserve():
+def test_un_fond_trop_petit_part_agrandissable_sans_reserve():
     """Le cas mesure du post 71 : une seule og:image, trop petite pour remplir
-    le gabarit -- et aucune reserve pour la remplacer."""
+    le gabarit, aucune reserve pour la remplacer -- mais assez grande
+    (345 px de cote mini >= `visuels_upscale_source_min_px`) pour que la
+    Tache 6 la retienne plutot que de sauter direct sur le fond Kinda : le
+    GEL tentera l'agrandissement."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/petite.jpg",
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({"https://cdn.test/petite.jpg": Verdict(
+            affiche=False, sujet="scene", note=70
+        )}),
+        tailles=_tailles_fixes({"https://cdn.test/petite.jpg": (564, 345)}),
+    )
+
+    assert fond == Fond(
+        "https://cdn.test/petite.jpg", ORIGINE_ARTICLE, a_agrandir=True
+    )
+
+
+def test_un_fond_trop_petit_pour_meme_etre_agrandi_part_sur_le_fond_kinda():
+    """Sous `visuels_upscale_source_min_px` (300), meme le facteur 4 ne
+    repasserait pas le plancher : agrandir ne servirait a rien, direct sur
+    le fond Kinda -- signal interne du saut de la Tache 5."""
+    fond = eviter_l_affiche(
+        "https://cdn.test/minuscule.jpg",
+        cible=CIBLE_POST,
+        verdicts=_verdicts_fixes({"https://cdn.test/minuscule.jpg": Verdict(
+            affiche=False, sujet="scene", note=70
+        )}),
+        tailles=_tailles_fixes({"https://cdn.test/minuscule.jpg": (200, 150)}),
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_un_candidat_de_taille_inconnue_n_est_jamais_retenu_pour_l_agrandissement():
+    """Regle du doute INVERSEE ici (a la difference du reste du module) : ne
+    pas savoir la taille source ne rend pas un candidat agrandissable --
+    l'appelant tenterait l'outil en vain sur un candidat qui a en realite
+    echoue a se faire mesurer. Teste `_meilleur_agrandissable` directement :
+    en passant par `eviter_l_affiche`, un candidat de taille INCONNUE est de
+    toute facon deja accepte plus tot par la regle du doute normale de ce
+    module (`resolution_suffisante(None, cible)` vaut True), donc ce chemin
+    n'est jamais atteint en pratique -- cette fonction reste un filet."""
+    meilleur = illustration._meilleur_agrandissable(
+        ["https://cdn.test/taille-inconnue.jpg"],
+        _verdicts_fixes({"https://cdn.test/taille-inconnue.jpg": Verdict(
+            affiche=False, sujet="scene", note=70
+        )}),
+        CIBLE_POST,
+        _tailles_fixes({}),
+    )
+
+    assert meilleur is None
+
+
+def test_le_coupe_circuit_desactive_le_barreau_d_agrandissement(monkeypatch):
+    """`visuels_upscale_enabled=False` retombe sur le comportement de la
+    Tache 5 (signal interne du saut), meme pour un candidat par ailleurs
+    agrandissable."""
+    monkeypatch.setattr(settings, "visuels_upscale_enabled", False)
     fond = eviter_l_affiche(
         "https://cdn.test/petite.jpg",
         cible=CIBLE_POST,
@@ -417,7 +476,10 @@ def test_un_fond_trop_petit_descend_d_un_barreau_vers_la_reserve():
     assert fond == Fond("file:///cache/grande.jpg", ORIGINE_COMPTE, ("file:///cache/grande.jpg",))
 
 
-def test_une_reserve_dont_toutes_les_photos_sont_trop_petites_ne_donne_rien():
+def test_une_reserve_dont_toutes_les_photos_sont_trop_petites_retient_la_mieux_notee():
+    """Aucune photo ne passe le plancher, mais les deux restent assez grandes
+    pour l'agrandissement (Tache 6) : la mieux notee de tout ce que l'echelle
+    a examine gagne, pas necessairement le fond d'origine."""
     fond = eviter_l_affiche(
         "https://cdn.test/petite.jpg",
         Lot(ORIGINE_COMPTE, lambda: ["file:///cache/aussi-petite.jpg"]),
@@ -432,7 +494,9 @@ def test_une_reserve_dont_toutes_les_photos_sont_trop_petites_ne_donne_rien():
         }),
     )
 
-    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+    assert fond == Fond(
+        "file:///cache/aussi-petite.jpg", ORIGINE_ARTICLE, a_agrandir=True
+    )
 
 
 # --- I-1 (tour de correction 1/5) : panne de transport != rien trouve ------
@@ -593,7 +657,8 @@ def test_une_affiche_averee_reste_rejetee_meme_assez_grande():
 def test_le_reel_est_plus_exigeant_que_le_post_sur_la_meme_photo():
     """La cible depend du gabarit publie : 1080x800 suffit pour un post
     (1350/800 = 1,69x) et manque pour un reel (1920/800 = 2,4x), au-dela du
-    seuil commun de 2,2x."""
+    seuil commun de 2,2x -- mais 800 px de cote mini reste assez grand pour
+    que la Tache 6 le retienne comme agrandissable plutot que de sauter."""
     verdicts = _verdicts_fixes({
         "https://cdn.test/x.jpg": Verdict(affiche=False, sujet="scene", note=70),
     })
@@ -604,7 +669,7 @@ def test_le_reel_est_plus_exigeant_que_le_post_sur_la_meme_photo():
     ) == Fond("https://cdn.test/x.jpg", ORIGINE_ARTICLE)
     assert eviter_l_affiche(
         "https://cdn.test/x.jpg", cible=CIBLE_REEL, verdicts=verdicts, tailles=tailles,
-    ) == Fond(FOND_KINDA, ORIGINE_KINDA)
+    ) == Fond("https://cdn.test/x.jpg", ORIGINE_ARTICLE, a_agrandir=True)
 
 
 def test_une_panne_de_mesure_ne_leve_pas_et_garde_le_fond():
@@ -660,6 +725,9 @@ def test_un_fond_trop_petit_cede_la_place_a_une_grande_photo_du_meme_barreau():
 
 
 def test_le_balayage_n_elit_jamais_une_affiche_meme_grande():
+    """GRANDE est plus grande ET une affiche averee : le barreau
+    d'agrandissement (Tache 6) ne la choisit jamais pour autant -- PETITE,
+    non-affiche et assez grande pour etre agrandie, gagne a sa place."""
     fond = eviter_l_affiche(
         PETITE,
         candidats=[PETITE, GRANDE],
@@ -671,7 +739,7 @@ def test_le_balayage_n_elit_jamais_une_affiche_meme_grande():
         tailles=_tailles_fixes({PETITE: (564, 345), GRANDE: (2156, 1320)}),
     )
 
-    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+    assert fond == Fond(PETITE, ORIGINE_ARTICLE, a_agrandir=True)
 
 
 def test_le_balayage_rend_l_origine_du_candidat_retenu():

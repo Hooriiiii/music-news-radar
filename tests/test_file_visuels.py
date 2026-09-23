@@ -586,7 +586,7 @@ def test_une_reserve_evite_le_saut_quand_le_fond_de_lactu_est_trop_petit(
     assert rapport.sautes == 0
     (post,) = db_session.query(Post).all()
     assert post.slides[0]["image_url"] == "file:///cache/grande.jpg"
-    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_COMPTE, "a_agrandir": False}
     assert creneau.post_id == post.id
 
 
@@ -795,3 +795,82 @@ def test_c1_un_article_revient_apres_sa_pause(db_session, fred):
     assert article.id in articles_en_pause(fin - dt.timedelta(seconds=1))
     assert article.id not in articles_en_pause(fin)
     assert article.id not in articles_en_pause(fin + dt.timedelta(hours=1))
+
+
+# --- Tache 6 (2026-09-23) : le SAUT au GEL suit le meme contrat que le saut
+# a la composition (Tache 5) -- pas une exclusion, meme comptage, meme ordre
+# liberer-avant-pause. Le vrai `preparer_fichiers` n'est pas invoque ici
+# (couvert par `tests/test_publish_preparation.py`) : cette suite verifie
+# uniquement le CABLAGE de `runner._geler` autour de `PreparationSautee`.
+
+
+def test_un_saut_au_gel_libere_le_creneau_sans_exclure(db_session, fred):
+    """`PreparationSautee` (agrandissement indisponible ou insuffisant) fait
+    LIBERER le creneau, jamais l'exclusion posee par `PreparationImpossible` :
+    `file_exclu_raison` doit rester vide, et le compteur `sautes` (pas
+    `erreurs` silencieux) doit le dire."""
+    from app.publish.preparation import PreparationSautee
+
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    creneau = _epingler(db_session, article)
+    # Dans la fenetre de gel (`publication_gel_heures`, 2h) : sans ca,
+    # `_geler` ignore un creneau trop lointain et ce test ne prouverait rien.
+    creneau.publier_a = BASE + dt.timedelta(minutes=30)
+    db_session.commit()
+
+    def preparer_sautant(post, article, dossier):
+        raise PreparationSautee("fond agrandi toujours sous le plancher de nettete pour ce gabarit")
+
+    rapport = tourner(
+        db_session, BASE, mode="apercu", composer=lambda a: _draft(),
+        preparer=preparer_sautant,
+        publier=lambda dossier, noms, legende, vraiment: "ig42",
+        notifier=lambda titre, message: None,
+        horloge=lambda: BASE,
+    )
+    db_session.refresh(article)
+    db_session.refresh(creneau)
+
+    assert article.file_exclu_raison is None
+    assert rapport.sautes == 1
+    assert (creneau.article_id, creneau.etat) == (None, EtatCreneau.LIBRE)
+
+
+def test_un_saut_au_gel_ne_pose_jamais_la_pause_si_le_creneau_n_a_pas_ete_libere(
+    db_session, fred, monkeypatch
+):
+    """Invariant d'ordre partage avec la composition (Tache 5,
+    `app/schedule/pause_visuels.py`) : si un autre agent a deja repris ce
+    creneau entre-temps (`_liberer` echoue), la mise a l'ecart n'est jamais
+    posee -- sinon un article prendrait une pause pour un creneau qu'on n'a
+    meme pas reussi a lui retirer."""
+    from app.publish import preparation
+    from app.schedule import pause_visuels, runner as runner_mod
+
+    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
+    creneau = _epingler(db_session, article)
+    creneau.publier_a = BASE + dt.timedelta(minutes=30)
+    db_session.commit()
+
+    appels_pause = []
+    monkeypatch.setattr(
+        pause_visuels, "marquer_saute",
+        lambda *a, **k: appels_pause.append((a, k)) or BASE,
+    )
+    monkeypatch.setattr(runner_mod, "marquer_saute", pause_visuels.marquer_saute)
+    # `_liberer` echoue toujours : simule un creneau deja repris ailleurs.
+    monkeypatch.setattr(runner_mod, "_liberer", lambda *a, **k: False)
+
+    def preparer_sautant(post, article, dossier):
+        raise preparation.PreparationSautee("agrandissement indisponible")
+
+    rapport = tourner(
+        db_session, BASE, mode="apercu", composer=lambda a: _draft(),
+        preparer=preparer_sautant,
+        publier=lambda dossier, noms, legende, vraiment: "ig42",
+        notifier=lambda titre, message: None,
+        horloge=lambda: BASE,
+    )
+
+    assert appels_pause == []
+    assert rapport.sautes == 0

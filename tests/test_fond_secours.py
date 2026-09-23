@@ -597,7 +597,7 @@ def test_le_post_noisia_montre_une_vraie_photo_de_l_artiste(db_session):
 
     fond = post.slides[0]["image_url"]
     assert fond not in (FOND_KINDA, None) and fond.startswith("file://")
-    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE}
+    assert post.variants["fond"] == {"origine": ORIGINE_ARTISTE, "a_agrandir": False}
 
     medias = medias_du_carrousel(post, article)
     assert any(m["url"].startswith("file://") for m in medias), medias
