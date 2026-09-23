@@ -142,16 +142,28 @@ def _reduire_si_besoin(octets: bytes, borne_px: int) -> bytes:
     4x sur 660x440 donne 2640x1760 : bien plus que ce qu'aucun gabarit
     publie n'exige (1080x1920 au maximum, le reel). Porter cette taille
     brute jusqu'au rendu Chromium et au cache disque coute pour rien -- la
-    reduire ici, une seule fois, avant l'ecriture en cache."""
-    from PIL import Image
+    reduire ici, une seule fois, avant l'ecriture en cache.
 
-    with Image.open(io.BytesIO(octets)) as image:
-        image = image.convert("RGB")
-        if max(image.size) > borne_px:
-            image.thumbnail((borne_px, borne_px))
-        tampon = io.BytesIO()
-        image.save(tampon, format="JPEG", quality=90)
-        return tampon.getvalue()
+    Leve `UpscaleIndisponible`, jamais une exception PIL brute (revue, tour
+    de correction 1/5) : une sortie d'`upscayl-bin` corrompue ou dans un
+    format inattendu est une panne de l'OUTIL, exactement comme un binaire
+    absent ou un code de retour non nul -- `_agrandir_fond_si_marque`
+    (`app/publish/preparation.py`) n'attrape que `UpscaleIndisponible`, et
+    sans cette conversion l'erreur remontait jusqu'au `except Exception` de
+    `runner._geler` (« gel interrompu », notification, format suspendu)
+    pour ce qui n'est qu'une panne d'outil comme les autres."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(octets)) as image:
+            image = image.convert("RGB")
+            if max(image.size) > borne_px:
+                image.thumbnail((borne_px, borne_px))
+            tampon = io.BytesIO()
+            image.save(tampon, format="JPEG", quality=90)
+            return tampon.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise UpscaleIndisponible(f"sortie de l'agrandissement illisible : {exc}") from exc
 
 
 def agrandir_fond(

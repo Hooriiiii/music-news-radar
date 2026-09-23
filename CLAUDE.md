@@ -890,19 +890,30 @@ n'était pas dans le fichier, visible d'abord sur les visages. Une slide est
 DOCUMENTAIRE (photo de presse, capture d'un artiste) : elle n'est jamais
 retouchée. `app/publish/preparation.py::_agrandir_fond_si_marque` est le SEUL
 point d'appel à `upscale.agrandir_fond`, et il ne lit/écrit que
-`slides[0].image_url` — un test-sentinelle
-(`tests/test_publish_preparation.py::
-test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel`)
-échoue si un media du carrousel ou la vidéo d'un reel passe par cette
+`slides[0].image_url` — deux tests-sentinelles, un par gabarit (le carrousel
+et le reel appellent chacun leur propre préparateur) :
+`tests/test_publish_preparation.py::
+test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel` et
+`tests/test_publish_preparation_reel.py::
+test_l_agrandissement_ne_touche_que_la_cover_jamais_la_video_du_reel`
+échouent si un media du carrousel, ou la vidéo d'un reel, passe par cette
 fonction.
 
 *Où la décision se prend, et pourquoi ce n'est PAS le même endroit que le
 saut de la Tâche 5.* `illustration.eviter_l_affiche` distingue désormais,
-pour le meilleur candidat rejeté par le plancher (jamais un rejeté pour
-affiche), s'il est assez grand pour être agrandi
-(`visuels_upscale_source_min_px`, 300 px de côté minimal — en dessous, même
-le facteur 4 ne repasserait pas le plancher du gabarit le plus exigeant, le
-reel à 1080×1920). Si oui, `Fond.a_agrandir` est posé à `True` et la
+pour le meilleur candidat rejeté PAR LE PLANCHER (jamais un rejeté pour
+affiche — une garde `not est_affiche` en plus ici s'est révélée redondante
+avec le filtre déjà posé par `_meilleur_agrandissable`, et coupait le
+barreau dès qu'un SEUL candidat affiché était dans la course, même quand un
+AUTRE candidat non-affiche restait éligible : exactement le cas
+Transmusicales — affiche de line-up en fond, photo d'artiste à côté — que
+l'échelle de secours existe pour résoudre ; retirée, revue du tour de
+correction 1/5), s'il est assez grand pour être agrandi
+(`visuels_upscale_source_min_px`, **230 px** de côté minimal — le vrai seuil
+structurel est 219 px, en dessous duquel même le facteur 4 ne repasserait
+plus le plancher du gabarit le plus exigeant, le reel à 1080×1920 ; 230 px
+garde une marge de sécurité modeste). Si oui, `Fond.a_agrandir` est posé à
+`True` et la
 COMPOSITION NE SAUTE PAS : `compose.resoudre_fond` ne lève plus
 `VisuelIntrouvable` pour ce cas, le brouillon est créé avec ce fond encore
 trop petit, et le marqueur est persisté dans
@@ -915,6 +926,22 @@ marge large sur les 1,1-10,7 s mesurés), et le fichier produit va dans
 résultat repasse le plancher, `post.slides` est RÉASSIGNÉ (jamais muté en
 place, colonne JSON) sur la copie locale nette, que `render_post` lira
 ensuite.
+
+**Le candidat agrandissable garde son crédit et ses photos de slides, même
+venu d'une RÉSERVE** (revue, tour de correction 1/5 — le défaut le plus
+grave signalé). Le premier jet ne rendait `Fond(agrandissable, origine,
+a_agrandir=True)` qu'avec l'origine par défaut (`origine_de` ne connaît que
+les médias de l'article, jamais les lots compte/artiste/web) et sans
+`photos` : un candidat venu de la réserve « compte » partait donc en fond
+SANS le crédit `📸 @compte` — règle dure que l'utilisateur a maintenue à
+chaque itération de ce chantier, « jamais coupé » —, le dashboard affichait
+une origine fausse sous « Image de fond », et `actifs_de_secours` ne
+produisait aucune slide, rouvrant la faille « jamais un post qui ne montre
+rien » (post Noisia, 2026-09-18). `eviter_l_affiche` associe désormais à
+CHAQUE candidat de réserve, pendant le parcours de l'échelle, l'origine du
+lot et le cortège de photos qu'il aurait reçu s'il avait gagné normalement
+— sans coût, cette information est déjà là au moment où le candidat est
+examiné.
 
 *Trois issues au gel, jamais un contournement du plancher.* (1) Binaire ou
 modèles absents (`upscale.binaire_disponible`) : PANNE MACHINE, jamais une

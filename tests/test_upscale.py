@@ -212,3 +212,23 @@ def test_agrandir_fond_rend_du_jpeg(tmp_path, monkeypatch):
     resultat = upscale.agrandir_fond(_png(660, 440), binaire=binaire, modeles=modeles)
 
     assert Image.open(io.BytesIO(resultat)).format == "JPEG"
+
+
+def test_agrandir_fond_leve_upscale_indisponible_sur_une_sortie_corrompue(tmp_path, monkeypatch):
+    """Revue, tour de correction 1/5 : une sortie d'`upscayl-bin` illisible
+    par PIL (fichier tronque, format inattendu) doit lever
+    `UpscaleIndisponible`, PAS une exception PIL brute -- sinon
+    `_agrandir_fond_si_marque` (qui n'attrape que `UpscaleIndisponible`) la
+    laisse filer jusqu'au `except Exception` de `runner._geler` (« gel
+    interrompu », notification, format suspendu) pour ce qui n'est qu'une
+    panne d'outil comme les autres."""
+    binaire, modeles = _outils(tmp_path)
+
+    def run(cmd, **kwargs):
+        with open(_chemin_sortie(cmd), "wb") as f:
+            f.write(b"pas une image")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(upscale.subprocess, "run", run)
+    with pytest.raises(upscale.UpscaleIndisponible, match="illisible"):
+        upscale.agrandir_fond(_png(660, 440), binaire=binaire, modeles=modeles)

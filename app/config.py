@@ -367,14 +367,27 @@ class Settings(BaseSettings):
     visuels_upscale_echelle: int = 4
     # En dessous, meme le facteur 4 ne suffit STRUCTURELLEMENT pas a passer
     # `cover_fond_upscale_max` sur le gabarit le plus exigeant (le reel,
-    # 1080x1920) : un cote source de 300 px donne 1200 px agrandi, donc
-    # 1920/1200 = 1,6x -- confortablement sous le plancher de 2,2x. Un cote
-    # source de 200 px (l'exemple du plan) donnerait 800 px, donc 1920/800 =
-    # 2,4x -- deja au-dela : agrandir n'aurait servi a rien, seulement chauffe
-    # le GPU pour publier quand meme sur l'aplat... sauf que l'aplat n'est
-    # plus une issue (Tache 5) : ce serait donc chauffer le GPU pour sauter
-    # quand meme. Le seuil isole ce cas AVANT de lancer l'outil.
-    visuels_upscale_source_min_px: int = 300
+    # 1080x1920) : le vrai seuil de bascule est 219 px de cote source --
+    # `resolution_suffisante((s*4, s*4), (1080, 1920))` rend False a 218 px
+    # (1920/(4*218) = 2,202 > 2,2) et True a 219 px (1920/(4*219) = 2,191).
+    # Un premier seuil pose a 300 px se voulait prudent mais demontrait
+    # l'inverse de sa propre conclusion (« 1,6x, confortablement SOUS le
+    # plancher » -- etre sous le plancher signifie justement que ca PASSE) :
+    # il etait ~37 % trop haut et ecartait a tort les sources de 219 a 299 px,
+    # exactement celles que cette tache existe pour sauver (revue, tour de
+    # correction 1/5). 230 px garde une marge de securite modeste (~5 %) sur
+    # le seuil structurel, sans reproduire l'erreur d'un seuil arbitrairement
+    # conservateur. Un cote source de 200 px (l'exemple du plan) reste
+    # ecarte : 800 px agrandi, 1920/800 = 2,4x, au-dela du plancher --
+    # agrandir n'aurait servi a rien.
+    #
+    # `min(taille)` reste un proxy grossier sur un ratio extreme (ex.
+    # 300x2000 : cote court retenu, mais apres plafonnement a
+    # `visuels_upscale_sortie_max_px` le cote LONG domine et peut retomber
+    # sous le plancher) -- rattrape sans consequence par la RE-verification
+    # du plancher au gel (`preparation._agrandir_fond_si_marque`), au prix
+    # d'un agrandissement tente pour rien dans ce cas rare.
+    visuels_upscale_source_min_px: int = 230
     # Budget de temps par tentative, meme esprit que `video.DELAI_MAX_S` et
     # `hosting.DELAI_JOIGNABLE_S` : mesure reelle 1,1-10,7 s selon le modele
     # et la charge, marge large (x5 a x10) pour une machine chargee sans

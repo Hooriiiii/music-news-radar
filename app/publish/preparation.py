@@ -49,8 +49,8 @@ from app.config import settings
 from app.content import upscale as upscale_mod
 from app.content import video as video_mod
 from app.content.export import echec_transitoire, telecharger as telecharger_media
+from app.content.compose import cible_gabarit
 from app.content.illustration import dimensions_de, resolution_suffisante
-from app.content.layout import gabarit as gabarit_de
 from app.content.media import DUREE_MAX_SLIDE_MS, PHOTO, VIDEO
 from app.content.urls import url_propre
 from app.content.render import render_post
@@ -160,17 +160,6 @@ def medias_du_carrousel(post, article) -> list[dict]:
     return medias
 
 
-def _cible_de(post) -> tuple[int, int] | None:
-    """La taille (largeur, hauteur) du gabarit publie par ce post, ou None si
-    le nom est inconnu -- meme regle que `compose._cible_gabarit` (un
-    plancher de resolution est un confort, jamais une garantie)."""
-    try:
-        gabarit_ = gabarit_de(post.template)
-    except KeyError:
-        return None
-    return gabarit_.width, gabarit_.height
-
-
 def _agrandir_fond_si_marque(
     post, fond: str, *, telecharger, agrandir, binaire_disponible
 ) -> str:
@@ -195,10 +184,10 @@ def _agrandir_fond_si_marque(
     marque = bool((getattr(post, "variants", None) or {}).get("fond", {}).get("a_agrandir"))
     if not marque:
         return fond
-    cible = _cible_de(post)
+    cible = cible_gabarit(post.template)
     if cible is None:
         # Gabarit inconnu : le plancher est desactive partout ailleurs pour
-        # la meme raison (`compose._cible_gabarit`), donc rien a agrandir.
+        # la meme raison (`compose.cible_gabarit`), donc rien a agrandir.
         return fond
     octets, raison = _octets_image(fond, telecharger)
     if octets is None:

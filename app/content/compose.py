@@ -526,10 +526,15 @@ def _fond_par_defaut(article: Article, selecteur=None) -> str | None:
     return image_de_fond(visuels_autorises(article), selecteur)
 
 
-def _cible_gabarit(template: str) -> tuple[int, int] | None:
+def cible_gabarit(template: str) -> tuple[int, int] | None:
     """La taille (largeur, hauteur) du gabarit publie, ou None si le nom est
     inconnu -- jamais d'exception pour un plancher de resolution qui est un
-    confort, pas une garantie."""
+    confort, pas une garantie.
+
+    Publique (Tache 6, tour de correction 1/5) : `app.publish.preparation` en
+    a besoin pour la MEME cible au gel, quand il verifie si le fond agrandi
+    repasse le plancher -- une seconde implementation aurait fini par
+    diverger (meme motif que `illustration.dimensions_de`)."""
     try:
         gabarit_ = gabarit_de(template)
     except KeyError:
@@ -637,7 +642,7 @@ def resoudre_fond(
         *(getattr(visuels, "secours", None) or []),
         origine=origine_du_fond(actifs, retenu) or ORIGINE_ARTICLE,
         verdicts=verdicts_fond,
-        cible=_cible_gabarit(template),
+        cible=cible_gabarit(template),
         candidats=candidats_de_fond(actifs),
         origine_de=lambda url: origine_du_fond(actifs, url),
     )

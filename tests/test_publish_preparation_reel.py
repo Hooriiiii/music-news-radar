@@ -594,3 +594,49 @@ def test_le_gel_d_un_reel_trop_long_porte_la_video_et_son_article(tmp_path):
 
     assert leve.value.url == VIDEO["url"]
     assert leve.value.duree_ms == 190_000
+
+
+# --- Tache 6, tour de correction 1/5 : la sentinelle promise par CLAUDE.md --
+# doit couvrir le reel aussi, pas seulement le carrousel (`test_publish_
+# preparation.py`) : sans ce test, un futur branchement de l'agrandissement
+# sur la VIDEO du reel ne serait rouge nulle part.
+
+
+def _post_a_agrandir(*medias, fond=FOND):
+    cover = {"kind": "cover", "headline": "**x**", "title": "**x**", "subtitle": "**x**",
+             "image_url": fond}
+    return SimpleNamespace(
+        template="kinda_reel", credit="@saralandry", slides=[cover, *medias],
+        variants={"fond": {"origine": "article", "a_agrandir": True}},
+    )
+
+
+def _telecharger_image_formats(formats):
+    def telecharger(url):
+        largeur, hauteur = formats.get(url, (1200, 800))
+        return _png(largeur, hauteur), ".png"
+
+    return telecharger
+
+
+def test_l_agrandissement_ne_touche_que_la_cover_jamais_la_video_du_reel(tmp_path):
+    """Un post marque `a_agrandir` dont la video source est ELLE AUSSI plus
+    petite que ses specs ne doit agrandir QUE la cover -- la video suit sa
+    propre chaine (telechargement, sonde, assemblage ffmpeg), jamais
+    `upscale.agrandir_fond`."""
+    appels = []
+
+    def agrandisseur(octets, **kwargs):
+        appels.append(kwargs)
+        return _png(2640, 1760)
+
+    outils = _outils()
+    noms = preparer_reel(
+        _post_a_agrandir(), _article(VIDEO), tmp_path,
+        telecharger_image=_telecharger_image_formats({FOND: (660, 440)}),
+        agrandir=agrandisseur, binaire_disponible=lambda: True,
+        **outils,
+    )
+
+    assert len(appels) == 1  # uniquement la cover, jamais la video
+    assert [nom.rsplit("_", 1)[1] for nom in noms] == ["reel.mp4", "cover.jpg"]

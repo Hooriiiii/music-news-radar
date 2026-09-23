@@ -644,8 +644,20 @@ def eviter_l_affiche(
     # d'origine, les autres medias de l'actu, les photos de chaque reserve,
     # succes ou echec -- pour le barreau d'agrandissement plus bas : rien de
     # plus a lire, juste ce que ce parcours a deja juge et mesure.
+    #
+    # `origine_par_candidat`/`photos_par_candidat` (revue, tour de correction
+    # 1/5) : sans eux, un candidat agrandissable venu d'une RESERVE retombait
+    # sur l'origine par DEFAUT (`origine_de` ne connait que les `actifs`, pas
+    # les lots) et sans aucune `photos` -- trois degats en cascade dans
+    # `create_post` : le credit de compte disparaissait de la legende, le
+    # dashboard mentait sous « Image de fond », et `actifs_de_secours` ne
+    # rendait aucune slide (« jamais un post qui ne montre rien » ne
+    # s'appliquait plus). Chaque candidat garde ici l'origine et le cortege
+    # qu'il aurait recus s'IL avait ete le gagnant normal du barreau.
     differe = False
     tentes: list[str] = [fond, *(u for u in (candidats or ()) if u and u != fond)]
+    origine_par_candidat: dict[str, str] = {}
+    photos_par_candidat: dict[str, tuple[str, ...]] = {}
     for lot in lots:
         try:
             candidat, photos = _meilleur_du_lot(lot, rendre, cible, mesurer)
@@ -654,6 +666,9 @@ def eviter_l_affiche(
             differe = True
             continue
         tentes.extend(photos)
+        for photo in photos:
+            origine_par_candidat[photo] = lot.origine
+            photos_par_candidat[photo] = (photo, *(p for p in photos if p != photo))
         if candidat is not None:
             logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, candidat)
             return Fond(candidat, lot.origine, photos)
@@ -672,19 +687,28 @@ def eviter_l_affiche(
             "fond retenu %s, et au moins une reserve n'a pas pu etre consultee : report", raison
         )
         return Fond(None, origine, differe=True)
-    if not est_affiche and cible is not None and settings.visuels_upscale_enabled:
-        # Tache 6 : le barreau d'agrandissement ne s'ouvre QUE pour un rejet
-        # de TAILLE -- une affiche averee n'est jamais agrandie, l'agrandir
-        # la rendrait juste plus lisible. AUCUN cout ici : `_meilleur_
-        # agrandissable` ne relit que ce que l'echelle vient de juger et
-        # mesurer.
+    if cible is not None and settings.visuels_upscale_enabled:
+        # Tache 6. Pas de garde `not est_affiche` ici (revue, tour de
+        # correction 1/5) : `_meilleur_agrandissable` filtre DEJA les
+        # affiches connues sur `tentes` -- une garde en plus ici n'ajoutait
+        # aucune protection et coupait le barreau des qu'un SEUL candidat
+        # affiche (le fond d'origine, le plus souvent) etait dans la course,
+        # meme quand un AUTRE candidat non-affiche restait eligible. C'est
+        # exactement le cas Transmusicales (affiche de line-up en fond,
+        # photo d'artiste 600x400 a cote) que l'echelle de secours existe
+        # pour resoudre.
         agrandissable = _meilleur_agrandissable(tentes, rendre, cible, mesurer)
         if agrandissable is not None:
             logger.info(
                 "fond %s : candidat agrandissable retenu, resolu au gel : %s", raison, agrandissable
             )
-            origine_agrandissable = (origine_de(agrandissable) if origine_de else None) or origine
-            return Fond(agrandissable, origine_agrandissable, a_agrandir=True)
+            origine_agrandissable = origine_par_candidat.get(agrandissable)
+            if origine_agrandissable is None:
+                origine_agrandissable = (origine_de(agrandissable) if origine_de else None) or origine
+            photos_agrandissable = photos_par_candidat.get(agrandissable, ())
+            return Fond(
+                agrandissable, origine_agrandissable, photos_agrandissable, a_agrandir=True
+            )
     logger.info("aucune photo trouvee, le fond retenu est %s : cover sur le fond Kinda", raison)
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
