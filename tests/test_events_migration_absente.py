@@ -12,6 +12,11 @@ en tout dernier par `diagnostiquer`).
 
 import datetime as dt
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db import Base
 from app.models import Article, ArticleStatus, Event, EventObservation, Source, SourceType
 from app.pipeline import events
 from app.pipeline.cluster import link_duplicates
@@ -19,6 +24,15 @@ from app.pipeline.comptes_artistes import construire_index
 from app.pipeline.election import elire_representants
 
 UTC = dt.timezone.utc
+
+
+def _nouvelle_session():
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    return TestingSession()
 
 
 def _src(db, name):
@@ -43,17 +57,20 @@ def _sans_tables_evenements(db_session, monkeypatch):
     """Simule une migration `0019` non jouee : les tables existent dans les
     metadonnees SQLAlchemy (Task 1 les a ajoutees a `Base`) mais pas dans CETTE
     base -- exactement l'ecart entre le code fusionne et Neon avant que
-    l'utilisateur ne donne son accord pour `alembic upgrade head`."""
+    l'utilisateur ne donne son accord pour `alembic upgrade head`.
+
+    `monkeypatch` est garde en parametre pour ne pas casser les appels
+    existants, mais n'est plus utilise : `_TABLES_PRESENTES` (`app/pipeline/
+    events.py`) est desormais cle PAR ENGINE (tour de correction 2, point 2),
+    et la fixture `db_session` cree un engine neuf a chaque test -- aucune
+    reinitialisation manuelle n'est plus necessaire."""
     bind = db_session.get_bind()
     EventObservation.__table__.drop(bind, checkfirst=True)  # FK vers events : d'abord
     Event.__table__.drop(bind, checkfirst=True)
-    # Le module met le resultat de l'introspection en cache pour tout le
-    # process (`_TABLES_PRESENTES`) : sans le reinitialiser, un test precedent
-    # qui a deja vu les tables ferait passer celui-ci a tort.
-    monkeypatch.setattr(events, "_TABLES_PRESENTES", None)
 
 
 def test_attacher_ne_leve_pas_quand_les_tables_manquent(db_session, monkeypatch):
+    db_session.autoflush = False
     _sans_tables_evenements(db_session, monkeypatch)
     src = _src(db_session, "mixmag")
     article = _art(db_session, src, n=1, title="Une actu quelconque")
@@ -65,6 +82,7 @@ def test_attacher_ne_leve_pas_quand_les_tables_manquent(db_session, monkeypatch)
 
 
 def test_retitrer_ne_leve_pas_quand_les_tables_manquent(db_session, monkeypatch):
+    db_session.autoflush = False
     _sans_tables_evenements(db_session, monkeypatch)
     src = _src(db_session, "mixmag")
     article = _art(db_session, src, n=1, title="Une actu quelconque")
@@ -76,6 +94,7 @@ def test_link_duplicates_tourne_normalement_sans_les_tables_evenements(db_sessio
     """Le scenario du bug critique : un vrai groupe de doublons se forme quand
     meme, avec les MEMES decisions que d'habitude -- seul le rattachement aux
     evenements est absent, silencieusement."""
+    db_session.autoflush = False
     _sans_tables_evenements(db_session, monkeypatch)
     mixmag = _src(db_session, "mixmag")
     tsugi = _src(db_session, "tsugi")
@@ -94,6 +113,7 @@ def test_link_duplicates_tourne_normalement_sans_les_tables_evenements(db_sessio
 
 
 def test_election_tourne_normalement_sans_les_tables_evenements(db_session, monkeypatch):
+    db_session.autoflush = False
     _sans_tables_evenements(db_session, monkeypatch)
     mixmag = _src(db_session, "mixmag")
     djmag = _src(db_session, "djmag")
@@ -111,3 +131,23 @@ def test_election_tourne_normalement_sans_les_tables_evenements(db_session, monk
     )
 
     assert stats.reelus == 1  # la reelection tient, meme sans evenement a retitrer
+
+
+def test_tables_disponibles_est_isole_par_engine():
+    """Tour de correction 2, point 2. `_TABLES_PRESENTES` etait un booleen
+    UNIQUE pour tout le process : si une base A (verifiee EN PREMIER) a ses
+    tables, le `True` mis en cache etait ensuite rendu pour N'IMPORTE QUELLE
+    autre base -- y compris une base B qui ne les a PAS. Deux sessions
+    independantes, verifiees dans cet ordre precis (A d'abord, B ensuite),
+    reproduisent exactement ce risque."""
+    db_avec_tables = _nouvelle_session()
+    db_sans_tables = _nouvelle_session()
+    EventObservation.__table__.drop(db_sans_tables.get_bind(), checkfirst=True)
+    Event.__table__.drop(db_sans_tables.get_bind(), checkfirst=True)
+
+    assert events._tables_disponibles(db_avec_tables) is True
+    # Le `True` de la base precedente ne doit JAMAIS deteindre sur celle-ci.
+    assert events._tables_disponibles(db_sans_tables) is False
+    # Et redemande ensuite, la base A reste vraie (le cache, lui, fonctionne
+    # toujours -- seule l'isolation par engine est en jeu ici).
+    assert events._tables_disponibles(db_avec_tables) is True

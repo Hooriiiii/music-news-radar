@@ -129,6 +129,7 @@ def test_first_seen_at_uses_the_same_fallback_at_creation_and_recompute(db_sessi
 
 
 def test_retitrer_logs_a_warning_when_no_event_is_found(db_session, caplog):
+    db_session.autoflush = False
     src = _src(db_session, "mixmag")
     article = _art(db_session, src, n=1, title="Un representant sans evenement")
 

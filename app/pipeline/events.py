@@ -34,12 +34,15 @@ avait déjà ses propres membres avant de rejoindre R, D portait déjà son prop
 événements pour un seul groupe.
 
 **Une migration non jouée dégrade la fonctionnalité, jamais le pipeline**
-(tour de correction 1, point 1) : `_tables_disponibles` constate l'absence de
-`events`/`event_observations` par une requête d'introspection sur LA CONNEXION
-DE LA SESSION EN COURS (`db.connection()`, jamais une connexion à part -- voir
-son docstring pour le bug reproduit et corrigé) et rend `None`/no-op sans
-lever -- même philosophie que `illustration.py` (« ce module ne lève
-jamais ») ou la source Instagram sans jeton.
+(tour de correction 1, point 1 ; confirmé sur un vrai Postgres en tour de
+correction 2 : sans cette garde, une table absente laisse la TRANSACTION
+ABORTÉE, exactement comme redouté) : `_tables_disponibles` constate l'absence
+de `events`/`event_observations` par une requête d'introspection sur LA
+CONNEXION DE LA SESSION EN COURS (`db.connection()`, jamais une connexion à
+part -- voir son docstring pour le bug reproduit et corrigé, SPÉCIFIQUE aux
+pools à connexion unique donc aux tests) et rend `None`/no-op sans lever --
+même philosophie que `illustration.py` (« ce module ne lève jamais ») ou la
+source Instagram sans jeton.
 
 Tous les compteurs (`source_count`, `platform_count`,
 `independent_source_count`, `first_seen_at`, `last_seen_at`) sont RECALCULÉS
@@ -48,9 +51,11 @@ ils doivent rester reconstructibles.
 """
 
 import logging
+import weakref
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.models import Article, Event, EventObservation, Source, SourceCategorie, SourceRole
@@ -64,11 +69,18 @@ _CATEGORIES_PRIMAIRES = frozenset(
     {SourceCategorie.ARTISTE, SourceCategorie.FESTIVAL, SourceCategorie.LABEL, SourceCategorie.CLUB}
 )
 
-# Mémorisé pour tout le process une fois vrai (les tables ne disparaissent
-# jamais après une migration jouée) ; retenté tant que ce n'est pas le cas,
+# Mémorisé PAR ENGINE, une fois vrai (les tables ne disparaissent jamais après
+# une migration jouée sur CETTE base) ; retenté tant que ce n'est pas le cas,
 # pour qu'un `alembic upgrade head` appliqué en cours de vie d'un process
 # providentiellement long (le worker du dashboard) soit repris sans redémarrage.
-_TABLES_PRESENTES: bool | None = None
+# `WeakKeyDictionary` plutôt qu'un booléen unique (tour de correction 2, point 2) :
+# un booléen de process suppose une seule base par process -- vrai en
+# production, mais un test qui ouvre plusieurs engines SQLite dans la même
+# suite obtiendrait sinon un `True` périmé de l'un pour l'autre, avec une
+# erreur illisible à la clé. Une clé par `Engine` (faible : un engine de test
+# jeté à la fin du test ne fuit pas ici) règle ça sans qu'aucun test n'ait
+# besoin de réinitialiser quoi que ce soit à la main.
+_TABLES_PRESENTES: "weakref.WeakKeyDictionary[Engine, bool]" = weakref.WeakKeyDictionary()
 
 
 def _tables_disponibles(db: Session) -> bool:
@@ -77,27 +89,36 @@ def _tables_disponibles(db: Session) -> bool:
     Introspection sur la connexion DE LA SESSION (`db.connection()`), jamais
     sur une connexion à part ouverte via `db.get_bind()` : mesuré en re-revue,
     `sa_inspect(db.get_bind())` fait checkouter à l'`Engine` une connexion
-    SÉPARÉE de celle de la transaction en cours -- sous pool à connexion
-    unique (`StaticPool`, celui des tests) c'est la MÊME connexion DBAPI
-    physique, et la connexion Core que l'inspecteur ouvre dessus émet un
-    ROLLBACK implicite en se refermant, qui annule alors AUSSI tout ce que la
-    session avait flush2 mais pas commit -- exactement l'assignation de
-    `duplicate_of_id` que `cluster.lier` vient de poser. Reproduit et vérifié :
-    avec `db.get_bind()`, un article fraîchement lié se retrouve délié après
-    un simple `db.commit(); db.refresh(...)`. `db.connection()` réutilise la
-    connexion (et la transaction) DÉJÀ ouverte par la session : aucun risque
-    de ce genre, avec ou sans les tables présentes."""
-    global _TABLES_PRESENTES
-    if _TABLES_PRESENTES:
+    SÉPARÉE de celle de la transaction en cours. **Spécifique aux pools à
+    connexion unique, donc aux tests** (tour de correction 2 : vérifié sur un
+    vrai Postgres, où le pool rend une connexion réellement distincte et ne
+    perd rien) : sous `StaticPool` (celui des tests), cette connexion séparée
+    est la MÊME connexion DBAPI physique, et la connexion Core que
+    l'inspecteur ouvre dessus émet un ROLLBACK implicite en se refermant, qui
+    annule alors AUSSI tout ce que la session avait flush2 mais pas commit --
+    exactement l'assignation de `duplicate_of_id` que `cluster.lier` vient de
+    poser. Reproduit et vérifié : avec `db.get_bind()`, un article fraîchement
+    lié se retrouve délié après un simple `db.commit(); db.refresh(...)`.
+    `db.connection()` réutilise la connexion (et la transaction) DÉJÀ ouverte
+    par la session : aucun risque de ce genre, sur SQLite comme sur Postgres,
+    avec ou sans les tables présentes -- et c'est ce qui rend les tests
+    honnêtes plutôt qu'un correctif qui ne change rien en pratique."""
+    bind = db.get_bind()
+    if isinstance(bind, Engine) and _TABLES_PRESENTES.get(bind):
         return True
     try:
         inspecteur = sa_inspect(db.connection())
-        _TABLES_PRESENTES = inspecteur.has_table("events") and inspecteur.has_table(
-            "event_observations"
-        )
+        resultat = inspecteur.has_table("events") and inspecteur.has_table("event_observations")
     except Exception:  # noqa: BLE001 -- une introspection qui echoue vaut « pas encore prete »
-        _TABLES_PRESENTES = False
-    return _TABLES_PRESENTES
+        logger.debug(
+            "events._tables_disponibles : introspection en echec, evenements desactives "
+            "pour ce passage",
+            exc_info=True,
+        )
+        resultat = False
+    if isinstance(bind, Engine):
+        _TABLES_PRESENTES[bind] = resultat
+    return resultat
 
 
 def _role(source: Source | None) -> SourceRole:
@@ -304,6 +325,18 @@ def attacher(db: Session, article: Article, representant: Article) -> Event | No
         for autre in evenements_existants.values():
             if autre.id != cible.id:
                 _fusionner(db, autre, cible)
+
+    # `representant` EST le représentant courant du groupe (celui que
+    # `cluster.lier` vient d'élire pour cet appel) : le titre le suit
+    # TOUJOURS, y compris quand `cible` est un événement RÉUTILISÉ ou issu
+    # d'une fusion -- sans cette ligne, une fusion garde le titre de
+    # l'événement CIBLE (le plus petit id, donc souvent le PREMIER membre
+    # historique du groupe), jamais celui du représentant final. Mesuré en
+    # tour de correction 2 : un événement affichait le titre de « Dour
+    # Festival unveils its 2027 lineup » alors que son représentant final
+    # était un tout autre article -- cosmétique tant que rien ne l'affiche,
+    # plus du tout une fois la Task 4 branchée sur ce champ.
+    cible.titre = representant.title
 
     for membre in tous.values():
         _ajouter_observation(db, cible, membre)

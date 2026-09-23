@@ -63,14 +63,14 @@ def _sans_fuseau(moment: dt.datetime) -> dt.datetime:
 # -- creation et extension ---------------------------------------------------
 
 
-def test_fresh_link_creates_one_event_with_both_observations(db_session, monkeypatch):
+def test_fresh_link_creates_one_event_with_both_observations(db_session):
     db_session.autoflush = False
-    # `_TABLES_PRESENTES` est un cache PROCESS-ENTIER (`app/pipeline/events.py`) :
-    # sans le reinitialiser, ce test ne repasserait par l'introspection de
-    # table (`_tables_disponibles`) que s'il est le tout premier a s'executer
-    # dans la suite -- exactement le chemin que le bug de persistance (tour de
+    # `_TABLES_PRESENTES` (`app/pipeline/events.py`) est desormais cle PAR
+    # ENGINE (tour de correction 2, point 2) : la fixture `db_session` cree un
+    # engine SQLite neuf a chaque test, donc ce test repasse TOUJOURS par
+    # l'introspection de table (`_tables_disponibles`), sans reinitialisation
+    # manuelle -- exactement le chemin que le bug de persistance (tour de
     # correction 1) empruntait.
-    monkeypatch.setattr("app.pipeline.events._TABLES_PRESENTES", None)
     mixmag = _src(db_session, "mixmag")
     tsugi = _src(db_session, "tsugi")
     first = _art(db_session, mixmag, n=1, title="Dour Festival unveils its 2027 lineup",
@@ -327,6 +327,13 @@ def test_merging_a_pre_existing_group_into_an_archive_link_keeps_one_event(db_se
     observations = _observations(db_session, evenements[0].id)
     assert {o.article_id for o in observations} == {d.id, p.id, q.id, r.id}
     assert evenements[0].source_count == 4
+    # Tour de correction 2, point 1 : la fusion garde l'evenement CIBLE (ici
+    # celui de D+P, cree en premier -- plus petit id) mais son TITRE doit
+    # suivre le REPRESENTANT FINAL (R), jamais rester celui du representant
+    # d'origine de la cible (D) -- mesure en revue : l'evenement affichait
+    # « Dour Festival unveils its 2027 lineup » (D) alors que R en est le
+    # representant. La Task 4 affiche ce champ tel quel au dashboard.
+    assert evenements[0].titre == r.title
 
 
 # -- reelection : le titre suit, jamais un second evenement --------------------
