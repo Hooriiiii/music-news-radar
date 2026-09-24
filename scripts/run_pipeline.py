@@ -94,9 +94,14 @@ def main() -> None:
         # Phase 2B : ce que le passage a fait entrer dans un evenement. Muet
         # quand il n'y a rien eu a rattacher -- le regime de croisiere ne doit
         # pas remplir le log d'une ligne a zero toutes les heures.
+        # Les deux compteurs ne disent PAS la meme chose et le libelle doit le
+        # rendre evident : « cree » = un article isole qui recoit son propre
+        # evenement, « rejoint » = un doublon qui entre dans l'evenement de son
+        # groupe. Un « 0 rattache » a cote de « 200 crees » se lisait comme un
+        # echec alors que 200 articles venaient d'entrer dans la couche.
         ligne = (
-            f"  évènements : {observation.evenements_crees} créé(s), "
-            f"{observation.articles_rattaches} article(s) rattaché(s)"
+            f"  évènements : {observation.evenements_crees} créé(s) pour un article isolé, "
+            f"{observation.articles_rattaches} article(s) rejoignant un évènement existant"
         )
         if observation.plafond_atteint:
             # Un arriere qui se resorbe sur quelques passages est normal ; un
