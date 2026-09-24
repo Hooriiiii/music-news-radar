@@ -17,6 +17,7 @@ from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
 from app.pipeline.retention import purge_old_articles
 from app.pipeline.scoring import ScoringStats, score_pending
+from app.pipeline.source_groups import GroupementStats, regrouper_sources_et_propager
 from app.sources.instagram_jeton import surveiller_jeton_sourcing
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class PipelineReport:
     # epuises ne se voyaient sinon que par des WARNING repetes dans les logs).
     duplicates_arbitres: int = 0
     duplicates_arbitrage_pannes: int = 0
+    groupement_sources: GroupementStats | None = None
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -82,6 +84,7 @@ def run_pipeline(
     purge=purge_old_articles,
     notify=notifier,
     surveiller_jeton=surveiller_jeton_sourcing,
+    grouper_sources=regrouper_sources_et_propager,
 ) -> PipelineReport:
     """Le run fréquent : ingestion -> dédup entre sources -> scoring -> alertes -> purge.
 
@@ -94,6 +97,24 @@ def run_pipeline(
     """
     report = PipelineReport()
     report.ingest = ingest(db)
+
+    # Avant le cluster : un media qui vient de rejoindre son groupe (RSS +
+    # Instagram, voir `scripts/grouper_sources.py`) doit compter pour une
+    # seule confirmation independante des le meme passage, pas seulement au
+    # suivant. `regrouper_sources_et_propager` ne leve deja jamais (voir
+    # `app.pipeline.source_groups`) ; ce `try/except` est une seconde
+    # ceinture, sur le modele de `surveiller_jeton` plus bas -- une injection
+    # de test ou une future implementation qui laisserait echapper une
+    # exception ne doit quand meme jamais interrompre le passage horaire.
+    try:
+        report.groupement_sources = grouper_sources(db)
+    except Exception:
+        logger.exception("Regroupement des sources impossible")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Rollback impossible apres l'echec du regroupement des sources")
+
     doublons = cluster(db)
     report.duplicates_linked = doublons.total
     report.duplicates_archive = doublons.archive

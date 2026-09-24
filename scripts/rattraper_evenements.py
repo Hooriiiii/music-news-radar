@@ -209,12 +209,21 @@ def _valeurs(event: Event) -> dict:
     return {champ: getattr(event, champ) for champ in _CHAMPS_RECALCULES}
 
 
-def recalculer_tout(db: Session, *, appliquer: bool = False) -> RapportRecalcul:
-    """Relit CHAQUE `Event` existant et lui applique `events._recalculer` --
+def recalculer_tout(
+    db: Session, *, appliquer: bool = False, evenements: list[Event] | None = None
+) -> RapportRecalcul:
+    """Relit des `Event` existants et leur applique `events._recalculer` --
     la seule fonction qui ecrit `source_count`, `platform_count`,
     `independent_source_count`, `first_seen_at`, `last_seen_at`. Ne cree ni ne
     supprime aucune `EventObservation`, ne touche aucun `Article`. Rend le
-    rapport dans tous les cas ; ecrit reellement seulement si `appliquer`."""
+    rapport dans tous les cas ; ecrit reellement seulement si `appliquer`.
+
+    `evenements` restreint le recalcul a une liste deja connue de
+    l'appelant (utilise par `app.pipeline.source_groups`, qui ne veut
+    recalculer QUE les evenements touches par un regroupement de sources
+    tout juste pose, jamais la base entiere a chaque passage horaire) ; par
+    defaut (`None`, le chemin du script en ligne de commande), TOUS les
+    evenements sont relus, comportement inchange."""
     rapport = RapportRecalcul()
 
     if not events._tables_disponibles(db):
@@ -222,7 +231,7 @@ def recalculer_tout(db: Session, *, appliquer: bool = False) -> RapportRecalcul:
         db.rollback()
         return rapport
 
-    tous = list(db.scalars(select(Event)))
+    tous = list(db.scalars(select(Event))) if evenements is None else evenements
     rapport.total_evenements = len(tous)
 
     for event in tous:
