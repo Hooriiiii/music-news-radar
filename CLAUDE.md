@@ -1965,6 +1965,89 @@ cover part sur l'image de secours du gabarit.
    du cache est la paire d'ids) et ne justifie donc jamais de toucher à
    `CACHE_VERSION`.
 
+   **La porte de candidature sur le RÉSUMÉ** (2026-09-24,
+   `app/pipeline/cluster_resume.py`). Les deux bandes ci-dessus raisonnent sur
+   les mots du TITRE. Mesuré sur la fenêtre réelle de 48 h (599 articles,
+   170 820 paires) : de vrais mêmes-événements n'en partagent AUCUN — le record
+   d'Ella Langley couvert par **4 articles Billboard**, une contrefaçon de
+   vinyles chez MBW et Mixmag, une levée de fonds chez les mêmes deux. Tous
+   restaient éligibles séparément, c'est-à-dire le risque de poster deux fois
+   la même actu. Ce qui les attrape est le nombre **ABSOLU** de mots
+   significatifs partagés des RÉSUMÉS : le recouvrement NORMALISÉ échoue, il
+   sature sur les captions Instagram courtes (cinq mots significatifs font
+   0,71). Seuil `cluster_arbitrage_resume_seuil` (**6**) — une borne de
+   **BUDGET, pas de précision** : un seuil bas ne pose PAS de mauvais liens
+   (l'arbitre a rejeté 27 faux sur 27 ; revérifié le 2026-09-24 sur 10 paires
+   réelles, 10/10 correctes), il paie des appels pour rien. Conséquence assumée
+   du 6 : la levée de fonds Unit1 Studio, mesurée à sh=5, n'est pas attrapée.
+
+   Le résumé est nettoyé avant d'être compté (`jetons_de_resume`), et c'est un
+   détail qui fausse en SILENCE : `Article.summary` est le résumé français du
+   scoring pour un article scoré, mais la description RSS brute (balises et
+   entités HTML comprises) ou une caption Instagram **suivie de son bandeau de
+   métriques** pour un article non scoré — `caption_depuis_summary` le retire,
+   sinon « likes » et « commentaires » rapprocheraient n'importe quels deux
+   posts. Une paire dont un résumé fait moins de 3 mots significatifs est
+   ignorée. Même `significant_tokens` que les titres, jamais une seconde
+   tokenisation.
+
+   Même machinerie que les autres bandes (cache par paire, verdict manuel
+   prioritaire, plafond de tentatives, coupe-circuit) et même convention :
+   c'est un **PARAMÈTRE** qui l'ouvre (`arbitrage_resume_min`, `None` par
+   défaut), donc `run_veille` n'arbitre jamais, et
+   `CLUSTER_ARBITRAGE_RESUME_ENABLED=false` rend exactement les décisions
+   d'avant. **Budget SÉPARÉ** (`cluster_arbitrage_resume_max_par_passage`,
+   10) : au premier passage sur une fenêtre pleine cette porte présente des
+   dizaines de paires (56 mesurées) et un budget commun de 20 la laisserait
+   affamer la bande ARCHIVE, la seule dont un faux négatif reposte une actu
+   DÉJÀ PUBLIÉE. Lien visible : compteur propre (`ClusterStats.resumes_
+   arbitres`, `duplicates_resumes_arbitres` dans le rapport) et WARNING
+   nommant les deux articles ; aucune trace sur l'article, comme tout lien
+   frais et pour la même raison (son représentant est purgé à 2 jours).
+
+   **Le correctif sans lequel on ne câblait pas : la RÉCURRENCE**
+   (`est_publication_recurrente`). La mesure a trouvé un faux positif que
+   l'arbitre ne sait pas voir : il lie « Billboard Hot 100 Top 10 Countdown
+   for Sept. 26, 2026 » aux articles sur le record d'Ella Langley, et il a
+   RAISON sur les faits — même classement, même date. Mais c'est une
+   **publication récurrente hebdomadaire**, pas une couverture de l'annonce :
+   lier sortirait l'un des deux de la file au nom d'un format qui reviendra la
+   semaine prochaine. Aucun garde-fou existant ne peut l'attraper : une
+   récurrence HEBDOMADAIRE est structurellement invisible à un critère borné à
+   **48 h**, où il n'y a qu'un seul Countdown. L'information est dans
+   `event_observations`, qui dénormalise titre et source et **n'est jamais
+   purgée**. Critère : le CADRE d'un titre est l'ensemble de ses mots
+   significatifs que la MÊME source réutilise dans au moins
+   `cluster_recurrence_min_titres` (**4**) autres titres archivés, répartis sur
+   au moins **2 journées distinctes** ; l'article est récurrent si ce cadre
+   compte au moins 2 mots et couvre `cluster_recurrence_part_min` (**0,4**) de
+   son titre. Les deux exigences portent chacune la moitié du raisonnement : la
+   FRÉQUENCE sépare un cadre de rédaction d'un événement, l'ÉTALEMENT SUR
+   PLUSIEURS JOURS sépare une série d'une rafale (quatre articles du même jour
+   sur le même record ne sont pas un format). Le 4 est mesuré : à 3, le critère
+   attrapait aussi « Taylor Swift's 'The Life of a Showgirl' era isn't over
+   yet. » sur les mots « taylor » et « swift » — un artiste récurrent n'est pas
+   un format récurrent. Mesuré le 2026-09-24 sur les 56 paires candidates :
+   **8 écartées sans rien payer** (les 7 paires du Countdown, plus une paire de
+   recaps de classement), **zéro vrai positif touché** — Ella Langley ×4
+   Billboard, contrefaçon MBW×Mixmag et Unit1 Studio MBW×Mixmag ont tous un
+   cadre VIDE (0,00), une marge énorme et non un réglage à la limite. L'archive
+   ne portait que **2 jours** au moment de la mise au point (le module Phase 2A
+   est récent) : le critère est conçu pour des semaines et deviendra plus net,
+   jamais moins.
+
+   **Ce qu'il ne faut SURTOUT PAS faire, et c'est mesuré** : transposer
+   `est_gabarit_de_source` au RÉSUMÉ. Les 2 seules paires qu'il écarterait sont
+   deux VRAIS positifs Billboard — trois articles du même média qui couvrent le
+   même record partagent forcément leurs mots porteurs, et le critère lit cette
+   répétition comme un gabarit de rédaction. `est_gabarit_de_source` reste sur
+   les TITRES, exactement tel qu'il est.
+
+   Coût d'un passage à vide : **zéro appel et zéro requête** — l'archive des
+   titres est chargée PARESSEUSEMENT, à la première paire qui atteint le
+   garde-fou. Il reste ~60 ms de CPU sur 599 articles (11 ms de tokenisation,
+   49 ms pour 179 101 intersections d'ensembles), mémorisés par article.
+
    Une seule exception ASSUMÉE à « rien ne change dans la publication » :
    `elire_representants` efface désormais la raison de doublon d'un article
    qu'elle promeut représentant. Le cas existe sans la bande fraîche et même

@@ -47,6 +47,12 @@ class PipelineReport:
     # mesure, ni le meme risque.
     duplicates_frais_arbitres: int = 0
     duplicates_gabarits_ecartes: int = 0
+    # Porte de candidature sur le RESUME (2026-09-24) : sous-ensemble de
+    # `duplicates_linked` pose entre deux articles dont les TITRES ne se
+    # rapprochent pas du tout, et paires ecartees sans rien payer parce qu'un
+    # des deux est une PUBLICATION RECURRENTE de sa source.
+    duplicates_resumes_arbitres: int = 0
+    duplicates_recurrences_ecartees: int = 0
     groupement_sources: GroupementStats | None = None
     # Phase 2B, Task 1 : les articles qui viennent d'entrer dans un evenement
     # (y compris seuls). `None` = etape jamais atteinte.
@@ -95,7 +101,21 @@ def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
         if settings.cluster_arbitrage_frais_enabled
         else None
     )
-    return link_duplicates(db, arbitre=make_claude_arbitre(), arbitrage_frais_min=frais_min)
+    # La PORTE SUR LE RESUME (2026-09-24) suit exactement la meme convention :
+    # un PARAMETRE l'ouvre, jamais le nom de l'appelant. `run_veille` ne le
+    # passe pas ; `cluster_arbitrage_resume_enabled` a false le laisse a None,
+    # ce qui rend au pipeline exactement les decisions d'avant ce chantier.
+    resume_min = (
+        settings.cluster_arbitrage_resume_seuil
+        if settings.cluster_arbitrage_resume_enabled
+        else None
+    )
+    return link_duplicates(
+        db,
+        arbitre=make_claude_arbitre(),
+        arbitrage_frais_min=frais_min,
+        arbitrage_resume_min=resume_min,
+    )
 
 
 def run_pipeline(
@@ -151,6 +171,8 @@ def run_pipeline(
     report.duplicates_arbitrage_pannes = doublons.arbitrage_pannes
     report.duplicates_frais_arbitres = doublons.frais_arbitres
     report.duplicates_gabarits_ecartes = doublons.gabarits_ecartes
+    report.duplicates_resumes_arbitres = doublons.resumes_arbitres
+    report.duplicates_recurrences_ecartees = doublons.recurrences_ecartees
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

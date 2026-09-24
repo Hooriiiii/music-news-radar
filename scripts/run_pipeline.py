@@ -47,6 +47,12 @@ def main() -> None:
         print(f"  bande fraiche : {report.duplicates_frais_arbitres} lien(s) tranche(s) "
               f"par Claude, {report.duplicates_gabarits_ecartes} paire(s) ecartee(s) "
               f"sans appel (gabarit de source)")
+    if report.duplicates_resumes_arbitres or report.duplicates_recurrences_ecartees:
+        # Porte sur le resume : des paires que la dedup par titre ne voyait pas
+        # du tout. Un compteur qui ne s'affiche nulle part est mort.
+        print(f"  porte resume : {report.duplicates_resumes_arbitres} lien(s) tranche(s) "
+              f"par Claude sur les resumes, {report.duplicates_recurrences_ecartees} "
+              f"paire(s) ecartee(s) sans appel (publication recurrente)")
     if report.groupement_sources is not None and report.groupement_sources.sources_regroupees:
         print(
             f"  regroupement de sources : {report.groupement_sources.sources_regroupees} "

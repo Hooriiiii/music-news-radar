@@ -266,6 +266,54 @@ class Settings(BaseSettings):
     # source »), qui tuerait 3 des 5 vrais rates mesures.
     cluster_arbitrage_gabarit_min_articles: int = 3
 
+    # --- Porte de candidature sur le RESUME (2026-09-24) ---
+    # La dedup rapproche par les mots du TITRE ; de vrais memes-evenements n'en
+    # partagent aucun (le record d'Ella Langley couvert par 4 articles
+    # Billboard, une contrefacon de vinyles chez MBW et Mixmag). Ce qui les
+    # attrape est le nombre ABSOLU de mots significatifs partages des RESUMES
+    # -- le recouvrement NORMALISE sature sur les captions courtes. Voir
+    # `app/pipeline/cluster_resume.py` pour la mesure complete.
+    # Coupe-circuit propre : a false, aucune paire n'est candidate par son
+    # resume et le pipeline rend EXACTEMENT les memes decisions qu'avant.
+    cluster_arbitrage_resume_enabled: bool = True
+    # 6 mots partages. Mesure du 2026-09-24 sur 48 h reelles : 9 paires a
+    # sh>=7 (9 vraies), 17 a sh>=6 (10 vraies), 43 a sh>=5 (13 vraies). C'est
+    # une borne de BUDGET, pas de precision : un seuil bas ne pose PAS de
+    # mauvais liens (l'arbitre a rejete 27 faux sur 27), il paie des appels
+    # pour rien. Le baisser coute de l'argent, jamais un lien a tort.
+    cluster_arbitrage_resume_seuil: int = 6
+    # Budget PROPRE, volontairement separe de
+    # `cluster_arbitrage_max_par_passage` : au premier passage sur une fenetre
+    # de 48 h deja pleine, cette porte peut presenter des dizaines de paires
+    # (56 mesurees le 2026-09-24) et affamerait la bande ARCHIVE, celle qui
+    # protege contre le repost d'une actu DEJA PUBLIEE -- le risque le plus
+    # cher des trois. Deux budgets se bornent chacun ; un budget commun se
+    # ferait manger par le plus bavard.
+    cluster_arbitrage_resume_max_par_passage: int = 10
+    # --- Garde-fou de RECURRENCE (meme chantier) ---
+    # Une PUBLICATION RECURRENTE (« Billboard Hot 100 Top 10 Countdown for
+    # Sept. 26, 2026 ») raconte les memes faits qu'une vraie actu sans en etre
+    # une couverture : l'arbitre repond « meme actu » et il a raison sur les
+    # faits, mais lier sortirait un article de la file au nom d'un format qui
+    # reviendra la semaine prochaine. Une recurrence HEBDOMADAIRE est
+    # invisible a tout critere borne a 48 h ; `event_observations` n'est
+    # jamais purgee et porte donc la repetition.
+    # Nombre d'AUTRES titres archives de la MEME source qui doivent porter un
+    # mot pour qu'il compte comme un mot de CADRE. 4 et pas 3 : mesure du
+    # 2026-09-24, a 3 le critere attrapait aussi « Taylor Swift's 'The Life of
+    # a Showgirl' era isn't over yet. » (Billboard IG) sur les mots « taylor »
+    # et « swift » -- un artiste recurrent n'est pas un format recurrent.
+    cluster_recurrence_min_titres: int = 4
+    # Part du titre que le cadre doit couvrir. 0.4 mesure : a ce reglage, 8
+    # des 56 paires candidates sont ecartees sans rien payer (les 7 paires du
+    # Countdown et une paire de recaps de classement) et AUCUN vrai positif
+    # n'est touche -- les trois cas de reference ont un cadre VIDE (0.00).
+    cluster_recurrence_part_min: float = 0.4
+    # Profondeur d'archive lue dans `event_observations`. 30 jours : de quoi
+    # voir quatre editions d'un format hebdomadaire, sans faire grandir la
+    # requete avec l'age du projet (les observations ne sont jamais purgees).
+    cluster_recurrence_jours: int = 30
+
     # --- Tout article devient l'observation d'un evenement (Phase 2B, Task 1) ---
     # Borne le nombre d'articles qu'un passage horaire peut faire entrer dans
     # un evenement, meme esprit qu'`illustration_max_par_run` : au premier
