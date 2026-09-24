@@ -80,6 +80,15 @@ def main() -> None:
                 f", {report.scoring.prefiltered} écartés par le modèle local "
                 f"(autant d'appels Claude non payés)"
             )
+        if report.scoring.prefiltre_muet:
+            # Un pré-filtre muet ne casse rien : l'article part chez Claude et
+            # la note est bonne. Il coûte simplement ce qu'il existe pour ne pas
+            # coûter, et sans cette ligne ça ne se voit NULLE PART -- la ligne
+            # ci-dessus est masquée tant qu'il n'a rien écarté.
+            ligne += (
+                f", ⚠ {report.scoring.prefiltre_muet} fois muet "
+                f"(payés chez Claude — LM Studio éteint ou modèle déchargé ?)"
+            )
         print(ligne)
     if report.illustres:
         print(f"  illustration : {report.illustres} articles enrichis (og:image)")

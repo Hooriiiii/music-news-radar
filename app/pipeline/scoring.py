@@ -377,6 +377,11 @@ class ScoringStats:
     prefiltered: int = 0
     # Posts Instagram quasi vides, notés sans Claude (inclus dans `prefiltered`).
     quasi_vides: int = 0
+    # Articles pour lesquels le pré-filtre était branché mais n'a RIEN rendu
+    # (LM Studio éteint, modèle déchargé, contexte trop court, timeout). Chacun
+    # est un appel Claude payé que le pré-filtre aurait pu éviter -- et sans ce
+    # compteur, la panne ne se voit nulle part.
+    prefiltre_muet: int = 0
     # Notes locales sous le seuil envoyées quand même à Claude (2026-09-17) :
     # groupe d'au moins N sources, ou artiste suivi cité.
     forces_cluster: int = 0
@@ -478,6 +483,19 @@ def score_pending(
     for article in articles:
         try:
             note = _note_du_prefiltre(prefilter, article)
+            if prefilter is not None and note is None:
+                # Le pré-filtre était là et n'a rien dit : LM Studio éteint,
+                # modèle déchargé, contexte trop court, timeout. L'article part
+                # chez Claude et tout se passe bien -- sauf qu'on PAIE ce que le
+                # pré-filtre existe précisément pour ne pas payer.
+                #
+                # Sans ce compteur la panne est INVISIBLE : elle ne produit que
+                # des WARNING par article, et le rapport masque la ligne du
+                # pré-filtre tant qu'il n'a rien écarté. Mesuré le 2026-09-24 :
+                # LM Studio était éteint et chaque passage horaire payait le
+                # plein tarif sans qu'aucune sortie ne le dise. C'est la forme
+                # exacte de la panne qui a dure cinq semaines sur l'agent digest.
+                stats.prefiltre_muet += 1
             # Post quasi vide : Claude n'aurait rien à juger. La note locale si
             # elle existe (pour son emergence), plafonnée ; sinon une note minimale.
             if post_quasi_vide(article):

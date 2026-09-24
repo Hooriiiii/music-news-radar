@@ -6,6 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/rendu-adaptatif/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/socle-local/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/source-instagram/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="uv (music-news-radar)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
