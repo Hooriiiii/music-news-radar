@@ -84,7 +84,13 @@ def main() -> None:
     else:
         print(f"  alertes sautées : {report.alerts_skipped_reason}")
     observation = report.observation_evenements
-    if observation is not None and (observation.evenements_crees or observation.articles_rattaches):
+    if observation is not None and observation.tables_absentes:
+        # La couche evenement est DORMANTE, pas en panne et pas au repos : sans
+        # cette ligne, une base ou la migration 0019 n'est pas jouee ressemble
+        # exactement a un regime de croisiere sans rien a rattacher. Les deux
+        # etapes partagent le meme diagnostic, une seule ligne suffit.
+        print("  évènements : couche inactive (migration 0019 non jouée sur cette base)")
+    elif observation is not None and (observation.evenements_crees or observation.articles_rattaches):
         # Phase 2B : ce que le passage a fait entrer dans un evenement. Muet
         # quand il n'y a rien eu a rattacher -- le regime de croisiere ne doit
         # pas remplir le log d'une ligne a zero toutes les heures.
