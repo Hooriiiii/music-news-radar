@@ -20,14 +20,36 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Event, EventObservation
+from app.models import Article, Event, EventObservation
 from app.pipeline.event_features import calculer_features
 from app.schemas import EventDetailOut, EventOut
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-def _event_out(event: Event, *, maintenant: dt.datetime) -> EventOut:
+def _relevance_representant(db: Session, event_id: int) -> int | None:
+    """La pertinence (`relevance_score`) de l'article REPRESENTANT du groupe
+    derriere cet evenement -- Tour de correction 1 : sans elle, la
+    corroboration (le bavardage de la presse) n'a aucun chiffre editorial en
+    face, et un evenement tres corrobore mais hors ligne editoriale (une salle
+    Apple, un proces de marque, du country -- voir le plan Phase 2A) ressort
+    identique a une vraie priorite.
+
+    Le representant est l'article du groupe dont `duplicate_of_id IS NULL`
+    (seul point d'ecriture : `cluster.py`, voir son docstring) -- c'est lui,
+    et lui seul, dont le titre alimente `Event.titre`. Nullable par
+    construction : l'article peut avoir ete purge (retention 14 j) sans que
+    l'evenement ni ses observations ne disparaissent, exactement comme pour
+    `Event.titre` qui reste alors fige sur le dernier representant connu."""
+    return db.scalar(
+        select(Article.relevance_score)
+        .join(EventObservation, EventObservation.article_id == Article.id)
+        .where(EventObservation.event_id == event_id, Article.duplicate_of_id.is_(None))
+        .limit(1)
+    )
+
+
+def _event_out(db: Session, event: Event, *, maintenant: dt.datetime) -> EventOut:
     features = calculer_features(
         first_seen_at=event.first_seen_at,
         maintenant=maintenant,
@@ -47,6 +69,7 @@ def _event_out(event: Event, *, maintenant: dt.datetime) -> EventOut:
         independent_source_count=event.independent_source_count,
         freshness=features.freshness,
         corroboration=features.corroboration,
+        relevance_representant=_relevance_representant(db, event.id),
     )
 
 
@@ -61,7 +84,7 @@ def list_events(
     colonne = Event.source_count if sort == "source_count" else Event.last_seen_at
     events = db.scalars(select(Event).order_by(colonne.desc()).limit(limit)).all()
     maintenant = dt.datetime.now(dt.timezone.utc)
-    return [_event_out(e, maintenant=maintenant) for e in events]
+    return [_event_out(db, e, maintenant=maintenant) for e in events]
 
 
 @router.get("/{event_id}", response_model=EventDetailOut)
@@ -72,7 +95,7 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
     maintenant = dt.datetime.now(dt.timezone.utc)
-    base = _event_out(event, maintenant=maintenant)
+    base = _event_out(db, event, maintenant=maintenant)
     observations = db.scalars(
         select(EventObservation)
         .where(EventObservation.event_id == event_id)

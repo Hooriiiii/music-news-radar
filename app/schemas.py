@@ -310,6 +310,11 @@ class EventOut(BaseModel):
     # de la presse, pas la pertinence editoriale de Kinda.
     freshness: float
     corroboration: float
+    # Pertinence (`relevance_score`) de l'article REPRESENTANT du groupe --
+    # Tour de correction 1 : c'est le chiffre editorial qui doit se lire A COTE
+    # de `corroboration`, jamais a sa place (voir app/api/events.py). Nullable :
+    # le representant peut avoir ete purge sans que l'evenement disparaisse.
+    relevance_representant: int | None
 
 
 class EventDetailOut(EventOut):
