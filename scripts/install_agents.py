@@ -52,6 +52,7 @@ LABEL_PIPELINE = "com.musicnewsradar.pipeline"
 LABEL_DASHBOARD = "com.musicnewsradar.dashboard"
 LABEL_PUBLICATION = "com.musicnewsradar.publication"
 LABEL_VEILLE = "com.musicnewsradar.veille"
+LABEL_PREFILTRE = "com.musicnewsradar.prefiltre"
 
 # Agents a decharger : `ingest` est l'agent d'ingestion seule du socle d'aout,
 # remplace par celui-ci ; `digest` date du 5 juillet et echouait chaque jour.
@@ -72,6 +73,13 @@ INTERVALLE_PUBLICATION = 600
 # ont rendu le code 4 le 2026-09-17, et le seul moyen mesure de passer de 141 min
 # de latence a quelques minutes sur les comptes qui comptent.
 INTERVALLE_VEILLE = 300
+
+# Une demi-heure. Cet agent ne fait RIEN quand tout va bien (une lecture de
+# `lms ps`, aucune sortie) : sa cadence n'est pas un cout, c'est le delai au
+# bout duquel un pre-filtre tombe se repare tout seul. Plus court n'apporterait
+# rien -- le scoring tourne a l'heure ; plus long laisserait un passage horaire
+# entier payer le plein tarif chez Claude.
+INTERVALLE_PREFILTRE = 1800
 PORT_DASHBOARD = 8000
 # KeepAlive face a un port durablement occupe boucle : sans ce plancher, launchd
 # reessaie toutes les 10 s et remplit les logs.
@@ -83,7 +91,7 @@ PATH_SYSTEME = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 ROTATION_GENERATIONS = 5
 ROTATION_TAILLE_KO = 5000
-BASES_LOG = ("pipeline", "dashboard", "publication", "veille")
+BASES_LOG = ("pipeline", "dashboard", "publication", "veille", "prefiltre")
 
 
 @dataclass(frozen=True)
@@ -278,12 +286,38 @@ def plist_veille(chemins: Chemins) -> dict:
     }
 
 
+def plist_prefiltre(chemins: Chemins) -> dict:
+    """S'assure que le pre-filtre local est debout : serveur LM Studio demarre
+    et modele charge avec un contexte SUFFISANT.
+
+    `RunAtLoad` le fait tourner a l'ouverture de session -- c'est la demande
+    « que LM Studio se lance au demarrage ». L'intervalle, lui, traite les deux
+    pannes qui reviennent apres coup : l'application fermee a la main, et le
+    modele recharge depuis l'interface, qui revient alors au contexte par
+    defaut (4096) -- trop court pour le prompt de scoring, donc des 400 sur les
+    seuls articles LONGS, ceux qui coutent le plus cher chez Claude.
+
+    Ne fait rien si `LOCAL_SCORING_ENABLED` est faux : ne pas vouloir de
+    pre-filtre est un choix, et on ne lance pas une application de 2 Go pour
+    quelqu'un qui n'en veut pas.
+    """
+    return {
+        **_commun(chemins, LABEL_PREFILTRE, "prefiltre"),
+        "ProgramArguments": [
+            str(chemins.uv), "run", "python", "-m", "scripts.assurer_prefiltre",
+        ],
+        "StartInterval": INTERVALLE_PREFILTRE,
+        "RunAtLoad": True,
+    }
+
+
 def plists(chemins: Chemins) -> dict[str, dict]:
     return {
         LABEL_PIPELINE: plist_pipeline(chemins),
         LABEL_DASHBOARD: plist_dashboard(chemins),
         LABEL_PUBLICATION: plist_publication(chemins),
         LABEL_VEILLE: plist_veille(chemins),
+        LABEL_PREFILTRE: plist_prefiltre(chemins),
     }
 
 

@@ -17,6 +17,8 @@ from scripts.install_agents import (
     LABEL_DASHBOARD,
     LABEL_PIPELINE,
     LABEL_PUBLICATION,
+    INTERVALLE_PREFILTRE,
+    LABEL_PREFILTRE,
     LABEL_VEILLE,
     LABELS_OBSOLETES,
     PORT_DASHBOARD,
@@ -30,6 +32,7 @@ from scripts.install_agents import (
     plist_dashboard,
     plist_pipeline,
     plist_publication,
+    plist_prefiltre,
     plist_veille,
     plists,
     statut,
@@ -240,7 +243,13 @@ def test_installer_decharge_les_obsoletes_AVANT_de_charger_les_nouveaux(chemins)
     )
     premier_bootstrap = min(i for i, c in enumerate(executeur.commandes) if "bootstrap" in c)
     assert dernier_bootout < premier_bootstrap
-    assert set(charges) == {LABEL_PIPELINE, LABEL_DASHBOARD, LABEL_PUBLICATION, LABEL_VEILLE}
+    assert set(charges) == {
+        LABEL_PIPELINE,
+        LABEL_DASHBOARD,
+        LABEL_PUBLICATION,
+        LABEL_VEILLE,
+        LABEL_PREFILTRE,
+    }
 
 
 def test_installer_ecrit_les_plists_et_cree_le_dossier_de_logs(chemins):
@@ -538,3 +547,16 @@ def test_statut_signale_l_agent_de_veille(chemins, capsys):
     statut(chemins, executer=FauxExecuteur(""))
 
     assert LABEL_VEILLE in capsys.readouterr().out
+
+
+def test_l_agent_du_prefiltre_tourne_au_demarrage_ET_periodiquement(chemins):
+    """`RunAtLoad` repond a la demande « que LM Studio se lance au demarrage ».
+    L'intervalle traite les deux pannes qui reviennent APRES coup : application
+    fermee a la main, et modele recharge depuis l'interface -- qui revient alors
+    au contexte par defaut (4096), trop court pour le prompt de scoring, donc
+    des 400 sur les seuls articles longs."""
+    p = plist_prefiltre(chemins)
+    assert p["Label"] == LABEL_PREFILTRE == "com.musicnewsradar.prefiltre"
+    assert p["RunAtLoad"] is True
+    assert p["StartInterval"] == INTERVALLE_PREFILTRE
+    assert p["ProgramArguments"][-2:] == ["-m", "scripts.assurer_prefiltre"]

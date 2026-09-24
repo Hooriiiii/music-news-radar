@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     local_scoring_url: str = "http://localhost:1234/v1/chat/completions"
     # Modèle chargé dans LM Studio (identifiant tel qu'il l'expose)
     local_scoring_model: str = "qwen/qwen3-4b"
+    # Le contexte avec lequel `scripts.assurer_prefiltre` charge le modele. Le
+    # defaut de LM Studio (4096) ne suffit PAS au SYSTEM_PROMPT (~180 lignes)
+    # plus un article long : mesure le 2026-09-24, il rend un 400 sur les seuls
+    # articles longs -- donc il echoue precisement sur ceux qui coutent le plus
+    # cher chez Claude, et reussit sur les autres, ce qui lui donne l'air de
+    # fonctionner. 16384 passe largement et tient dans la memoire d'un 4B.
+    local_scoring_context: int = 16384
     # Sous cette note de pertinence LOCALE, l'article est écarté sans appel Claude.
     # Volontairement plus bas que le seuil du digest (60) : la mesure porte sur
     # 36 articles, assez pour voir la tendance, pas pour jurer que le zéro faux
