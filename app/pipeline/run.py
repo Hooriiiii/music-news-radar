@@ -12,6 +12,7 @@ from app.pipeline.cluster import ClusterStats, link_duplicates
 from app.pipeline.cluster_arbitrage import make_claude_arbitre
 from app.pipeline.comptes_artistes import construire_index, lier_artistes_comptes
 from app.pipeline.election import ElectionStats, elire_representants
+from app.pipeline.events import ObservationStats, observer_articles
 from app.pipeline.health import diagnostiquer
 from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
@@ -37,6 +38,9 @@ class PipelineReport:
     duplicates_arbitres: int = 0
     duplicates_arbitrage_pannes: int = 0
     groupement_sources: GroupementStats | None = None
+    # Phase 2B, Task 1 : les articles qui viennent d'entrer dans un evenement
+    # (y compris seuls). `None` = etape jamais atteinte.
+    observation_evenements: ObservationStats | None = None
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -80,6 +84,7 @@ def run_pipeline(
     record=record_mentions,
     lier_artistes=lier_artistes_comptes,
     illustrer=enrichir_articles,
+    observer=observer_articles,
     alert=send_hot_alerts,
     purge=purge_old_articles,
     notify=notifier,
@@ -134,6 +139,22 @@ def run_pipeline(
     # dépense une requête réseau pour l'illustrer.
     report.illustres = illustrer(db).illustres
 
+    # Apres le scoring, avant `record` : tout article recoit un evenement, meme
+    # seul (Phase 2B, Task 1). Apres le scoring parce que la pertinence, qui
+    # decidera de la purge des evenements sans valeur (Task 2), n'existe qu'a
+    # ce moment-la. `observer_articles` ne leve deja jamais ; ce `try/except`
+    # est une seconde ceinture, sur le modele de `grouper_sources` plus haut --
+    # une injection de test ou une future implementation qui laisserait
+    # echapper une exception ne doit quand meme jamais interrompre le passage.
+    try:
+        report.observation_evenements = observer(db)
+    except Exception:
+        logger.exception("Rattachement des articles a un evenement impossible")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Rollback impossible apres l'echec du rattachement aux evenements")
+
     # Après le scoring, avant la purge : les artistes cités sont archivés pour de
     # bon, même quand les articles qui les mentionnaient seront supprimés
     report.mentions_recorded = record(db)
@@ -163,6 +184,13 @@ def run_pipeline(
         # chaque jour pendant cinq semaines sans que rien ne le signale.
         report.problemes.append(
             f"regroupement de sources : {report.groupement_sources.erreur}"
+        )
+    if report.observation_evenements is not None and report.observation_evenements.erreur:
+        # Meme motif que le regroupement de sources juste au-dessus : un
+        # compteur qui n'est affiche nulle part est un compteur mort, et une
+        # panne silencieuse a deja coute cinq semaines a ce depot.
+        report.problemes.append(
+            f"rattachement aux evenements : {report.observation_evenements.erreur}"
         )
     if report.problemes:
         try:

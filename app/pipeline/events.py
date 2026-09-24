@@ -50,16 +50,25 @@ depuis les observations à chaque écriture, jamais incrémentés à l'aveugle -
 ils doivent rester reconstructibles.
 """
 
+import datetime as dt
 import logging
 import weakref
 from dataclasses import dataclass, field
 
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.models import Article, Event, EventObservation, Source, SourceCategorie, SourceRole
+from app.config import settings
+from app.models import (
+    Article,
+    Event,
+    EventObservation,
+    Source,
+    SourceCategorie,
+    SourceRole,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -459,3 +468,161 @@ def retitrer(db: Session, nouveau_representant: Article) -> None:
         )
         return
     event.titre = nouveau_representant.title
+
+
+# --- Phase 2B, Task 1 : tout article devient l'observation d'un evenement ----
+
+
+@dataclass
+class ObservationStats:
+    """Ce qu'un passage horaire a fait entrer dans un evenement.
+
+    `tables_absentes` distingue « migration 0019 non jouee » (fonctionnalite
+    dormante, normale) de « rien a faire » (regime de croisiere) -- sans quoi
+    une base non migree ressemblerait a un pipeline en bonne sante qui ne
+    cree simplement aucun evenement."""
+
+    articles_examines: int = 0
+    evenements_crees: int = 0
+    articles_rattaches: int = 0
+    plafond_atteint: bool = False
+    tables_absentes: bool = False
+    erreur: str | None = None
+
+
+def _articles_sans_evenement(db: Session, plafond: int) -> list[Article]:
+    """Les articles qui n'ont encore aucune observation, les plus RECENTS
+    d'abord, bornes par `plafond`.
+
+    Deux bornes, et chacune a une raison propre.
+
+    1. **La fenetre de retention** (meme predicat exactement que
+       `retention.purge_old_articles` : date de post, repli sur la date
+       d'ingestion pour un article non date). Un article deja hors fenetre
+       sera purge par la FIN DE CE MEME PASSAGE : lui creer un evenement
+       laisserait une observation orpheline (`article_id` a NULL, la FK est
+       `ON DELETE SET NULL`) sur un evenement que plus rien ne peut juger.
+       C'est aussi ce qui garde la requete indexee : `articles.published_at`
+       porte un index, pas `fetched_at`.
+    2. **Le plafond par passage**, meme esprit qu'`illustration_max_par_run`.
+
+    Cout d'un passage A VIDE (le cas normal : tous les articles de la fenetre
+    sont deja observes) : UNE requete, un parcours d'index descendant sur la
+    fenetre de retention avec une anti-jointure par ligne, et zero ecriture.
+    Sur la base de production (~650 articles a 2 jours de retention) c'est
+    quelques centaines de sondes d'index une fois par heure -- jamais un
+    balayage de la table `articles` entiere, qui n'est bornee par rien.
+    """
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=settings.retention_days)
+    deja_observe = (
+        select(EventObservation.id)
+        .where(EventObservation.article_id == Article.id)
+        .exists()
+    )
+    return list(
+        db.scalars(
+            select(Article)
+            .where(
+                ~deja_observe,
+                or_(
+                    Article.published_at >= cutoff,
+                    (Article.published_at.is_(None)) & (Article.fetched_at >= cutoff),
+                ),
+            )
+            .order_by(Article.id.desc())
+            .limit(plafond)
+        )
+    )
+
+
+def observer_articles(db: Session, *, plafond: int | None = None) -> ObservationStats:
+    """Donne un evenement a TOUT article qui n'en a pas encore -- meme seul.
+
+    Avant cette fonction, `attacher` n'etait appele que depuis `cluster.lier` :
+    un article n'entrait dans un evenement que s'il venait d'etre lie comme
+    doublon, donc 82 % du flux n'appartenait a aucun evenement (mesure du
+    2026-09-24, plan Phase 2B). Un evenement a une seule preuve reste un
+    evenement.
+
+    **Il n'y a AUCUNE seconde mecanique de fusion a ecrire**, et c'est ce qui
+    rend cette tache courte : `attacher` relit le groupe entier et fusionne
+    dans le plus petit id tous les evenements deja portes par un membre
+    (`_fusionner`). Deux articles nes chacun avec leur evenement solo et
+    rapproches plus tard par la dedup voient donc leurs deux evenements
+    FUSIONNER tout seuls, par le chemin existant -- verrouille par
+    `tests/test_events_observation_isoles.py`.
+
+    Un article DOUBLON ne cree jamais son propre evenement : il passe par
+    `attacher`, qui le rattache a celui de son representant (et le cree pour
+    le groupe s'il n'existe pas encore). Seul un article sans
+    `duplicate_of_id` -- ou dont le representant a disparu de la base -- nait
+    avec un evenement a lui.
+
+    Idempotent : un article deja porteur d'une observation n'est meme pas
+    relu (`_articles_sans_evenement`), et `_ajouter_observation` refuse de
+    toute facon d'en poser une seconde.
+
+    **Ne leve jamais** (meme invariant que
+    `source_groups.regrouper_sources_et_propager`) : une panne ici degrade la
+    fonctionnalite pour ce passage, jamais le passage horaire, qui doit
+    continuer sur les mentions, les alertes et la purge. `rollback` en filet,
+    et l'erreur remonte dans le rapport plutot que dans les logs seuls.
+    """
+    stats = ObservationStats()
+    try:
+        if not _tables_disponibles(db):
+            stats.tables_absentes = True
+            return stats
+
+        borne = settings.events_observation_max_par_passage if plafond is None else plafond
+        if borne <= 0:
+            return stats
+
+        # OBLIGATOIRE : la production tourne en `autoflush=False`
+        # (`app/db.py`), donc une ecriture encore en attente dans la session
+        # (un `duplicate_of_id` pose par la dedup de ce meme passage) serait
+        # invisible de l'anti-jointure ci-dessous, qui est du SQL brut. C'est
+        # exactement le piege qui a mordu `attacher` et
+        # `regrouper_sources_et_propager` avant elle.
+        db.flush()
+
+        candidats = _articles_sans_evenement(db, borne)
+        stats.articles_examines = len(candidats)
+        stats.plafond_atteint = len(candidats) >= borne
+
+        for article in candidats:
+            # La liste de candidats est figee AVANT la boucle, mais un tour
+            # precedent a pu observer CET article au passage : `attacher`
+            # rattache le GROUPE entier, donc le representant d'un doublon
+            # traite plus tot est deja pourvu. Sans cette relecture, il
+            # recevrait ici un SECOND evenement solo -- deux evenements pour
+            # un seul groupe, exactement ce que `attacher` s'echine a
+            # interdire (defaut attrape par
+            # `test_un_doublon_ne_cree_jamais_son_propre_evenement`).
+            if _evenement_de(db, article.id) is not None:
+                continue
+            representant = (
+                db.get(Article, article.duplicate_of_id)
+                if article.duplicate_of_id is not None
+                else None
+            )
+            if representant is not None and representant.id != article.id:
+                # Le chemin existant : il cree l'evenement du groupe s'il
+                # manque, fusionne ceux des membres, et recalcule.
+                if attacher(db, article, representant) is not None:
+                    stats.articles_rattaches += 1
+                continue
+            event = _creer_evenement(db, article)
+            _recalculer(db, event)
+            stats.evenements_crees += 1
+
+        db.flush()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 -- ne doit jamais interrompre le passage horaire
+        logger.exception("Rattachement des articles isoles a un evenement impossible")
+        stats.erreur = str(exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            logger.exception("Rollback impossible apres l'echec du rattachement des articles")
+    return stats

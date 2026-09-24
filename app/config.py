@@ -237,6 +237,16 @@ class Settings(BaseSettings):
     # rendue.
     cluster_arbitrage_tentatives_max: int = 3
 
+    # --- Tout article devient l'observation d'un evenement (Phase 2B, Task 1) ---
+    # Borne le nombre d'articles qu'un passage horaire peut faire entrer dans
+    # un evenement, meme esprit qu'`illustration_max_par_run` : au premier
+    # passage l'arriere se compte en centaines d'articles, et chacun coute
+    # quelques INSERT. 200 est cale sur le volume reel : la retention est a
+    # 2 jours pour ~650 articles en base, soit ~13 articles neufs par heure --
+    # le regime de croisiere n'est donc JAMAIS freine par ce plafond (15x de
+    # marge), et un arriere de 650 se resorbe en quatre passages.
+    events_observation_max_par_passage: int = 200
+
     # --- Visuels d'artistes (jamais ceux des comptes Instagram media) ---
     # Un post d'artiste plus ancien que N jours avant l'article n'est jamais pris.
     # BORNE PAR LA PURGE : ces posts sont lus dans la table `articles`, que
