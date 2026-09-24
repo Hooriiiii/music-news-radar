@@ -1952,6 +1952,34 @@ Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hor
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
 Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.env`.
 
+**Les événements sans valeur sont purgés, et l'ORDRE est l'invariant**
+(2026-09-24, phase 2B Task 2, `retention.purger_evenements_sans_valeur`). Depuis
+la Task 1, TOUT article devient l'observation d'un événement, même seul : sans
+purge, c'est un événement permanent par article de bruit. La règle, tranchée par
+l'utilisateur : **une seule** observation, article sous le seuil de pertinence
+(`digest_relevance_threshold`, 60 — le seuil général du dépôt, pas un réglage de
+plus ; une note absente vaut « sous le seuil ») et jamais publié → l'événement
+meurt avec son article ; **deux observations ou plus** → permanent, sans
+condition ; **publié** (`USED`, un `Post`, un `Creneau` engagé — même prédicat
+qu'`election.representant_engage`) → permanent, sans condition.
+
+`event_observations.article_id` est `ON DELETE SET NULL` : une fois l'article
+purgé, l'observation survit sans lui et **plus rien ne permet de juger sa
+pertinence**. La décision doit donc être prise AVANT `purge_old_articles`, dans
+le même passage — l'ordre est posé dans `app/pipeline/run.py` et verrouillé par
+`tests/test_retention_evenements.py` (inverser les deux appels rend ce test
+rouge). Les deux étapes visent le même ensemble par CONSTRUCTION
+(`_predicat_purgeable`, un seul prédicat partagé) : deux copies qui
+divergeraient laisseraient des événements derrière elles, ou pire en
+supprimeraient un dont l'article reste en base.
+
+Coût d'un passage à vide : UNE requête qui rend zéro ligne (la recherche part
+des ARTICLES que la purge va supprimer, jamais de la table `events`, que rien ne
+borne). Un passage chargé coûte au plus quatre requêtes de plus, quel que soit
+le nombre de candidats — rien n'est fait article par article. Ne lève jamais
+(`rollback` en filet, `PurgeEvenementsStats.erreur` remonte dans
+`report.problemes`).
+
 ## Contraintes apprises sur le terrain
 
 - Les headers HTTP (User-Agent) doivent être ASCII pur — pas d'accents, httpx

@@ -16,7 +16,11 @@ from app.pipeline.events import ObservationStats, observer_articles
 from app.pipeline.health import diagnostiquer
 from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
-from app.pipeline.retention import purge_old_articles
+from app.pipeline.retention import (
+    PurgeEvenementsStats,
+    purge_old_articles,
+    purger_evenements_sans_valeur,
+)
 from app.pipeline.scoring import ScoringStats, score_pending
 from app.pipeline.source_groups import GroupementStats, regrouper_sources_et_propager
 from app.sources.instagram_jeton import surveiller_jeton_sourcing
@@ -51,6 +55,9 @@ class PipelineReport:
     alerts_errors: int = 0
     alerts_skipped_reason: str | None = None
     purged: int = 0
+    # Phase 2B, Task 2 : les evenements sans valeur supprimes AVANT la purge
+    # des articles (voir l'ordre plus bas). `None` = etape jamais atteinte.
+    purge_evenements: PurgeEvenementsStats | None = None
     # Ce que la supervision a trouvé. Vide = rien à signaler.
     problemes: list[str] = field(default_factory=list)
     # Echeance proche du jeton de la source Instagram (notifiee une fois par jour).
@@ -86,6 +93,7 @@ def run_pipeline(
     illustrer=enrichir_articles,
     observer=observer_articles,
     alert=send_hot_alerts,
+    purger_evenements=purger_evenements_sans_valeur,
     purge=purge_old_articles,
     notify=notifier,
     surveiller_jeton=surveiller_jeton_sourcing,
@@ -170,6 +178,24 @@ def run_pipeline(
         report.alerts_skipped_reason = "DISCORD_WEBHOOK_URL absente"
         logger.warning("Alertes sautées : %s", report.alerts_skipped_reason)
 
+    # AVANT la purge des articles, et c'est un INVARIANT, pas un detail d'ordre
+    # (Phase 2B, Task 2) : `event_observations.article_id` est
+    # `ON DELETE SET NULL`, donc une fois l'article efface l'observation survit
+    # sans lui et plus rien ne permet de juger sa pertinence ni son statut.
+    # Appelee apres `purge`, cette etape ne trouverait plus aucun candidat et la
+    # table `events` grossirait quand meme, en silence. Verrouille par
+    # `tests/test_retention_evenements.py`.
+    # `purger_evenements_sans_valeur` ne leve deja jamais ; ce `try/except` est
+    # une seconde ceinture, comme pour `grouper_sources` et `observer`.
+    try:
+        report.purge_evenements = purger_evenements(db, settings.retention_days)
+    except Exception:
+        logger.exception("Purge des evenements sans valeur impossible")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Rollback impossible apres l'echec de la purge des evenements")
+
     # Rétention : on ne garde que les articles récents (par date de post)
     report.purged = purge(db, settings.retention_days)
 
@@ -191,6 +217,13 @@ def run_pipeline(
         # panne silencieuse a deja coute cinq semaines a ce depot.
         report.problemes.append(
             f"rattachement aux evenements : {report.observation_evenements.erreur}"
+        )
+    if report.purge_evenements is not None and report.purge_evenements.erreur:
+        # Meme motif : un compteur qui n'est affiche nulle part est un compteur
+        # mort, et une purge qui ne tourne plus est une fuite lente que rien ne
+        # signalerait autrement.
+        report.problemes.append(
+            f"purge des evenements : {report.purge_evenements.erreur}"
         )
     if report.problemes:
         try:
