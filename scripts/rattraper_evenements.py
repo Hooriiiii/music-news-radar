@@ -44,6 +44,29 @@ d'article : `attacher` ne lit que `Article`, n'ecrit que `Event` et
 Usage :
     uv run python -m scripts.rattraper_evenements            # affiche le plan
     uv run python -m scripts.rattraper_evenements --apply
+
+--recalculer : propager un changement de regroupement (`scripts/grouper_sources.py`)
+ou une correction future du calcul lui-meme aux evenements DEJA en base.
+
+Les compteurs (`source_count`, `platform_count`, `independent_source_count`,
+`first_seen_at`, `last_seen_at`) sont STOCKES sur `events` -- remplir
+`sources.source_group_id` ne les recalcule pas tout seul, et un groupe deja
+complet (aucune observation nouvelle) est classe `groupes_deja_a_jour` par
+`rattraper()` SANS jamais appeler `events._recalculer`. Sans ce mode, poser
+un groupement sur des sources dont les articles ont deja quitte la fenetre de
+retention (14 jours, 2 jours pour X) ne changerait jamais le compte affiche :
+la colonne serait remplie, la corroboration resterait fausse, et rien ne le
+signalerait.
+
+`--recalculer` relit chaque `Event` existant et appelle `events._recalculer`
+-- la seule fonction qui ecrit ces champs, deja couverte par ses propres
+tests, reutilisee telle quelle. Aucune observation n'est creee ni supprimee,
+aucun champ d'`Article` n'est touche : uniquement les colonnes de `Event`.
+Meme mode PLAN que le reste du fichier (execute puis `db.rollback()` si
+`--apply` n'est pas passe, donc le compte annonce est garanti identique a ce
+qui serait ecrit). Idempotent : une fois les compteurs a jour, un second
+passage ne change plus rien (`_recalculer` est une fonction pure du contenu
+des `EventObservation`, jamais un increment).
 """
 
 import argparse
@@ -53,8 +76,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, attendre_base
-from app.models import Article, EventObservation
+from app.models import Article, Event, EventObservation
 from app.pipeline import events
+
+_CHAMPS_RECALCULES = (
+    "source_count", "platform_count", "independent_source_count",
+    "first_seen_at", "last_seen_at",
+)
 
 
 @dataclass
@@ -163,10 +191,105 @@ def rattraper(db: Session, *, appliquer: bool = False, limite_exemples: int = 5)
     return rapport
 
 
+@dataclass
+class LigneRecalcul:
+    event_id: int
+    titre: str
+    diffs: list[str]
+
+
+@dataclass
+class RapportRecalcul:
+    tables_absentes: bool = False
+    total_evenements: int = 0
+    lignes: list[LigneRecalcul] = field(default_factory=list)
+
+
+def _valeurs(event: Event) -> dict:
+    return {champ: getattr(event, champ) for champ in _CHAMPS_RECALCULES}
+
+
+def recalculer_tout(db: Session, *, appliquer: bool = False) -> RapportRecalcul:
+    """Relit CHAQUE `Event` existant et lui applique `events._recalculer` --
+    la seule fonction qui ecrit `source_count`, `platform_count`,
+    `independent_source_count`, `first_seen_at`, `last_seen_at`. Ne cree ni ne
+    supprime aucune `EventObservation`, ne touche aucun `Article`. Rend le
+    rapport dans tous les cas ; ecrit reellement seulement si `appliquer`."""
+    rapport = RapportRecalcul()
+
+    if not events._tables_disponibles(db):
+        rapport.tables_absentes = True
+        db.rollback()
+        return rapport
+
+    tous = list(db.scalars(select(Event)))
+    rapport.total_evenements = len(tous)
+
+    for event in tous:
+        avant = _valeurs(event)
+        events._recalculer(db, event)
+        apres = _valeurs(event)
+        diffs = [
+            f"{champ} : {avant[champ]!r} -> {apres[champ]!r}"
+            for champ in _CHAMPS_RECALCULES
+            if avant[champ] != apres[champ]
+        ]
+        if diffs:
+            rapport.lignes.append(LigneRecalcul(event.id, event.titre, diffs))
+
+    if appliquer:
+        db.commit()
+    else:
+        db.rollback()
+    return rapport
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--recalculer", action="store_true",
+        help=(
+            "recalcule les compteurs de tous les evenements existants depuis "
+            "leurs observations (propage un changement de regroupement des "
+            "sources) au lieu de rattacher de nouveaux groupes de doublons"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.recalculer:
+        attendre_base()
+        with SessionLocal() as db:
+            rapport = recalculer_tout(db, appliquer=args.apply)
+
+        if rapport.tables_absentes:
+            print(
+                "Tables `events`/`event_observations` absentes (migration 0019 non "
+                "jouee) : rien a faire pour l'instant."
+            )
+            return
+
+        if not rapport.lignes:
+            print(
+                f"{rapport.total_evenements} evenement(s) verifie(s), aucun compteur "
+                "a changer : deja a jour."
+            )
+            return
+
+        print(
+            f"{len(rapport.lignes)} evenement(s) sur {rapport.total_evenements} "
+            "verraient un compteur changer :"
+        )
+        for ligne in rapport.lignes:
+            print(f"  - #{ligne.event_id} {ligne.titre!r}")
+            for diff in ligne.diffs:
+                print(f"      {diff}")
+
+        if args.apply:
+            print(f"\n{len(rapport.lignes)} evenement(s) recalcule(s) : ecrits.")
+        else:
+            print("\nRelancer avec --apply pour appliquer.")
+        return
 
     attendre_base()
     with SessionLocal() as db:

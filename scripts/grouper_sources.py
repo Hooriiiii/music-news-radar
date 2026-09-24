@@ -150,6 +150,20 @@ def main() -> None:
     if not args.apply and plan:
         print("\nRelancer avec --apply pour appliquer.")
 
+    if plan:
+        # `sources.source_group_id` ne recalcule rien tout seul : les
+        # compteurs (`independent_source_count` en tete) restent STOCKES sur
+        # `events` jusqu'a ce qu'un nouveau membre declenche `attacher`, ce
+        # qui n'arrive pas pour les evenements deja sortis de leur fenetre de
+        # retention. Sans cette propagation, la colonne serait remplie et la
+        # corroboration resterait fausse -- voir `scripts/rattraper_evenements.py`.
+        print(
+            "\nCe regroupement ne propage rien tout seul : lancer ensuite "
+            "`uv run python -m scripts.rattraper_evenements --recalculer` "
+            "(puis `--recalculer --apply`) pour mettre a jour les compteurs "
+            "des evenements deja en base."
+        )
+
 
 if __name__ == "__main__":
     main()
