@@ -1930,6 +1930,75 @@ cover part sur l'image de secours du gabarit.
      (`representant_engage`). Un groupe rattaché à l'archive ne change donc
      jamais de tête par ce chemin.
 
+   **La bande douteuse FRAÎCHE aussi** (Phase 2B, Task 3, 2026-09-24). La
+   même machinerie — cache par paire, verdicts manuels prioritaires, plafond
+   de tentatives, plafond par passage, écriture atomique — s'applique
+   désormais aux paires de deux articles FRAIS dont le recouvrement de titre
+   est entre `cluster_arbitrage_frais_seuil` (**0.30**) et
+   `DEFAULT_THRESHOLD` (0.65, où le lien est déjà posé sans rien demander).
+   Le plancher est MESURÉ, pas arrondi : sur 50 paires réelles jugées le
+   2026-09-24, **0 vrai positif sur les 18 paires sous 0.30**, et les deux
+   seuls ratés purement sémantiques sont à 0.33 ; entre 0.33 et 0.57 la
+   courbe est PLATE (22 % / 20 % / 10 %), donc aucun seuil ne les sépare —
+   d'où un arbitrage et non un seuil abaissé (abaisser `DEFAULT_THRESHOLD` à
+   0.40 donnait 87 % de faux rapprochements, voie fermée). Comme pour
+   l'archive, c'est un **paramètre** qui ouvre la bande
+   (`arbitrage_frais_min`, `None` par défaut) : `run_veille` ne le passe
+   jamais, et `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` le laisse à `None`,
+   ce qui rend au pipeline exactement les décisions d'avant. Un lien frais
+   tranché par Claude est **visible** : compteur propre
+   (`ClusterStats.frais_arbitres`) et WARNING nommant les deux articles.
+   **Aucune trace n'est posée sur l'article**, et c'est une propriété, pas un
+   oubli : `duplicate_of_id` est `ON DELETE SET NULL` et un représentant
+   FRAIS est purgé à 2 jours, donc un `file_exclu_raison` survivrait à son
+   représentant et tiendrait le doublon hors de la file pour toujours
+   (`store._articles_publiables` exige `file_exclu_raison IS NULL`) — au nom
+   d'un doublon d'un article qui n'existe plus. Un lien frais est
+   AUTO-RÉPARANT, il l'était avant la Phase 2B et le reste. Le cas archive
+   n'a pas ce défaut parce que son représentant est `USED`, donc jamais
+   purgé : la propriété ne se transporte pas d'une bande à l'autre.
+
+   Le prompt d'arbitrage **dit la vérité sur l'article de référence** : son
+   en-tête annonce « DEJA PUBLIE PAR KINDA » ou « ingéré plus tôt, pas encore
+   publié » selon `ArticleStatus.USED`, lu sur l'article et non reçu en
+   paramètre. Reformuler ce prompt n'invalide aucun verdict mémorisé (la clé
+   du cache est la paire d'ids) et ne justifie donc jamais de toucher à
+   `CACHE_VERSION`.
+
+   Une seule exception ASSUMÉE à « rien ne change dans la publication » :
+   `elire_representants` efface désormais la raison de doublon d'un article
+   qu'elle promeut représentant. Le cas existe sans la bande fraîche et même
+   coupe-circuit fermé (`marquer_doublon_manuel --meme-actu` sur deux
+   articles frais pose `RAISON_DOUBLON_PREFIXE` sur un doublon dont le
+   représentant n'est pas verrouillé) : garder la raison sortirait l'élu de
+   la file pour un lien qui n'existe plus. Une raison posée ailleurs (« gel
+   impossible : … ») n'est jamais effacée.
+
+   **L'anti-gabarit, qui est la moitié du travail** (`est_gabarit_de_source`).
+   Mesuré le 2026-09-24 sur la fenêtre réelle de 48 h (601 articles, 488
+   paires dans la bande) : **179 des 255 paires de même source viennent d'un
+   seul compte** (AIM UK), qui publie « The winner of *X* at the 2026
+   Independent Music Awards » une fois par prix. C'est un gabarit de
+   rédaction, pas un signal d'événement, et il faut l'écarter AVANT de payer.
+   Le remède naïf — écarter toute paire de même source — est un **piège
+   mesuré** : il tuerait 3 des 5 vrais ratés (deux paires Billboard, une
+   paire Soompi, une même source qui couvre vraiment deux fois la même
+   actu). Le critère est donc la RÉPÉTITION, jamais l'identité de la source :
+   les mots que la paire PARTAGE se retrouvent-ils dans au moins
+   `cluster_arbitrage_gabarit_min_articles` (**3**) articles de cette source ?
+   Deux articles sur un même événement partagent des mots propres à cet
+   événement (porteurs = 2) ; un gabarit ressort partout (porteurs = 18 chez
+   AIM UK). La distribution mesurée est nette : 44 paires à 2 porteurs, puis
+   17 à 3, 12 à 6, 60 à 18. Le critère ne s'applique qu'aux paires de **même
+   source**, et c'est vérifié plutôt que supposé : l'étendre aux paires
+   croisées écarte 132 paires de plus, dont « Taylor Swift Announces New
+   Single *Patient Zero* » (Pitchfork) contre « Taylor Swift has updated her
+   Instagram bio » (Pop Crave) — le raté sémantique même que ce chantier
+   existe pour attraper. Effet mesuré sur le parcours réel de
+   `link_duplicates` : 333 appels sur 48 h sans l'anti-gabarit, **162 avec**,
+   soit **~3,4 appels/h** (~0,003 $/h), très loin du plafond de 20 par
+   passage.
+
    Trois limites résiduelles, assumées : une reprise ingérée par `run_veille`
    (toutes les 5 min) reste non arbitrée — donc potentiellement publiable —
    jusqu'au prochain passage horaire, qui seul arbitre ; une paire qui échoue
@@ -1951,6 +2020,38 @@ jours, par DATE DE POST (`published_at`), pas date d'ajout — `app/pipeline/ret
 Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hors fenêtre).
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
 Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.env`.
+
+**Les événements sans valeur sont purgés, et l'ORDRE est l'invariant**
+(2026-09-24, phase 2B Task 2, `retention.purger_evenements_sans_valeur`). Depuis
+la Task 1, TOUT article devient l'observation d'un événement, même seul : sans
+purge, c'est un événement permanent par article de bruit. La règle, tranchée par
+l'utilisateur : **une seule** observation, article sous le seuil de pertinence
+(`digest_relevance_threshold`, 60 — le seuil général du dépôt, pas un réglage de
+plus ; une note absente vaut « sous le seuil ») et jamais publié → l'événement
+meurt avec son article ; **deux observations ou plus** → permanent, sans
+condition ; **publié** (`USED`, un `Post`, un `Creneau` engagé) → permanent,
+sans condition. Cette dernière règle n'est écrite qu'à UN endroit,
+`election.articles_engages` (version ensembliste : trois requêtes quel que soit
+le lot), appelée aussi par `representant_engage` — deux copies qui divergeraient
+feraient disparaître en silence l'archive d'une actu publiée, et un test
+verrouille l'accord des deux chemins.
+
+`event_observations.article_id` est `ON DELETE SET NULL` : une fois l'article
+purgé, l'observation survit sans lui et **plus rien ne permet de juger sa
+pertinence**. La décision doit donc être prise AVANT `purge_old_articles`, dans
+le même passage — l'ordre est posé dans `app/pipeline/run.py` et verrouillé par
+`tests/test_retention_evenements.py` (inverser les deux appels rend ce test
+rouge). Les deux étapes visent le même ensemble par CONSTRUCTION
+(`_predicat_purgeable`, un seul prédicat partagé) : deux copies qui
+divergeraient laisseraient des événements derrière elles, ou pire en
+supprimeraient un dont l'article reste en base.
+
+Coût d'un passage à vide : UNE requête qui rend zéro ligne (la recherche part
+des ARTICLES que la purge va supprimer, jamais de la table `events`, que rien ne
+borne). Un passage chargé coûte au plus quatre requêtes de plus, quel que soit
+le nombre de candidats — rien n'est fait article par article. Ne lève jamais
+(`rollback` en filet, `PurgeEvenementsStats.erreur` remonte dans
+`report.problemes`).
 
 ## Contraintes apprises sur le terrain
 

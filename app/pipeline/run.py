@@ -12,10 +12,15 @@ from app.pipeline.cluster import ClusterStats, link_duplicates
 from app.pipeline.cluster_arbitrage import make_claude_arbitre
 from app.pipeline.comptes_artistes import construire_index, lier_artistes_comptes
 from app.pipeline.election import ElectionStats, elire_representants
+from app.pipeline.events import ObservationStats, observer_articles
 from app.pipeline.health import diagnostiquer
 from app.pipeline.illustrations import enrichir_articles
 from app.pipeline.ingest import IngestStats, run_ingest
-from app.pipeline.retention import purge_old_articles
+from app.pipeline.retention import (
+    PurgeEvenementsStats,
+    purge_old_articles,
+    purger_evenements_sans_valeur,
+)
 from app.pipeline.scoring import ScoringStats, score_pending
 from app.pipeline.source_groups import GroupementStats, regrouper_sources_et_propager
 from app.sources.instagram_jeton import surveiller_jeton_sourcing
@@ -36,7 +41,16 @@ class PipelineReport:
     # epuises ne se voyaient sinon que par des WARNING repetes dans les logs).
     duplicates_arbitres: int = 0
     duplicates_arbitrage_pannes: int = 0
+    # Phase 2B, Task 3 : sous-ensemble de `duplicates_linked` tranche par Claude
+    # dans la bande FRAICHE 0.30-0.65, et paires de cette bande ecartees sans
+    # rien payer par l'anti-gabarit. Comptes a part de l'archive : ni la meme
+    # mesure, ni le meme risque.
+    duplicates_frais_arbitres: int = 0
+    duplicates_gabarits_ecartes: int = 0
     groupement_sources: GroupementStats | None = None
+    # Phase 2B, Task 1 : les articles qui viennent d'entrer dans un evenement
+    # (y compris seuls). `None` = etape jamais atteinte.
+    observation_evenements: ObservationStats | None = None
     election: ElectionStats | None = None
     scoring: ScoringStats | None = None
     mentions_recorded: int = 0
@@ -47,6 +61,9 @@ class PipelineReport:
     alerts_errors: int = 0
     alerts_skipped_reason: str | None = None
     purged: int = 0
+    # Phase 2B, Task 2 : les evenements sans valeur supprimes AVANT la purge
+    # des articles (voir l'ordre plus bas). `None` = etape jamais atteinte.
+    purge_evenements: PurgeEvenementsStats | None = None
     # Ce que la supervision a trouvé. Vide = rien à signaler.
     problemes: list[str] = field(default_factory=list)
     # Echeance proche du jeton de la source Instagram (notifiee une fois par jour).
@@ -68,7 +85,17 @@ def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
     qu'un client fantome ait deja ete cree avec une mauvaise cle."""
     if not settings.cluster_arbitrage_enabled or not settings.anthropic_api_key:
         return link_duplicates(db)
-    return link_duplicates(db, arbitre=make_claude_arbitre())
+    # La bande FRAICHE (Phase 2B, Task 3) suit le meme principe : c'est un
+    # PARAMETRE qui l'ouvre, jamais le nom de l'appelant. `run_veille` ne le
+    # passe pas, donc n'arbitre jamais ; et `cluster_arbitrage_frais_enabled`
+    # a false le laisse a None, ce qui rend au pipeline exactement les
+    # decisions qu'il prenait avant ce chantier.
+    frais_min = (
+        settings.cluster_arbitrage_frais_seuil
+        if settings.cluster_arbitrage_frais_enabled
+        else None
+    )
+    return link_duplicates(db, arbitre=make_claude_arbitre(), arbitrage_frais_min=frais_min)
 
 
 def run_pipeline(
@@ -80,7 +107,9 @@ def run_pipeline(
     record=record_mentions,
     lier_artistes=lier_artistes_comptes,
     illustrer=enrichir_articles,
+    observer=observer_articles,
     alert=send_hot_alerts,
+    purger_evenements=purger_evenements_sans_valeur,
     purge=purge_old_articles,
     notify=notifier,
     surveiller_jeton=surveiller_jeton_sourcing,
@@ -120,6 +149,8 @@ def run_pipeline(
     report.duplicates_archive = doublons.archive
     report.duplicates_arbitres = doublons.arbitres
     report.duplicates_arbitrage_pannes = doublons.arbitrage_pannes
+    report.duplicates_frais_arbitres = doublons.frais_arbitres
+    report.duplicates_gabarits_ecartes = doublons.gabarits_ecartes
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)
@@ -133,6 +164,22 @@ def run_pipeline(
     # Après le scoring : on ne sait qu'à ce moment-là si l'article mérite qu'on
     # dépense une requête réseau pour l'illustrer.
     report.illustres = illustrer(db).illustres
+
+    # Apres le scoring, avant `record` : tout article recoit un evenement, meme
+    # seul (Phase 2B, Task 1). Apres le scoring parce que la pertinence, qui
+    # decidera de la purge des evenements sans valeur (Task 2), n'existe qu'a
+    # ce moment-la. `observer_articles` ne leve deja jamais ; ce `try/except`
+    # est une seconde ceinture, sur le modele de `grouper_sources` plus haut --
+    # une injection de test ou une future implementation qui laisserait
+    # echapper une exception ne doit quand meme jamais interrompre le passage.
+    try:
+        report.observation_evenements = observer(db)
+    except Exception:
+        logger.exception("Rattachement des articles a un evenement impossible")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Rollback impossible apres l'echec du rattachement aux evenements")
 
     # Après le scoring, avant la purge : les artistes cités sont archivés pour de
     # bon, même quand les articles qui les mentionnaient seront supprimés
@@ -149,6 +196,24 @@ def run_pipeline(
         report.alerts_skipped_reason = "DISCORD_WEBHOOK_URL absente"
         logger.warning("Alertes sautées : %s", report.alerts_skipped_reason)
 
+    # AVANT la purge des articles, et c'est un INVARIANT, pas un detail d'ordre
+    # (Phase 2B, Task 2) : `event_observations.article_id` est
+    # `ON DELETE SET NULL`, donc une fois l'article efface l'observation survit
+    # sans lui et plus rien ne permet de juger sa pertinence ni son statut.
+    # Appelee apres `purge`, cette etape ne trouverait plus aucun candidat et la
+    # table `events` grossirait quand meme, en silence. Verrouille par
+    # `tests/test_retention_evenements.py`.
+    # `purger_evenements_sans_valeur` ne leve deja jamais ; ce `try/except` est
+    # une seconde ceinture, comme pour `grouper_sources` et `observer`.
+    try:
+        report.purge_evenements = purger_evenements(db, settings.retention_days)
+    except Exception:
+        logger.exception("Purge des evenements sans valeur impossible")
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Rollback impossible apres l'echec de la purge des evenements")
+
     # Rétention : on ne garde que les articles récents (par date de post)
     report.purged = purge(db, settings.retention_days)
 
@@ -163,6 +228,20 @@ def run_pipeline(
         # chaque jour pendant cinq semaines sans que rien ne le signale.
         report.problemes.append(
             f"regroupement de sources : {report.groupement_sources.erreur}"
+        )
+    if report.observation_evenements is not None and report.observation_evenements.erreur:
+        # Meme motif que le regroupement de sources juste au-dessus : un
+        # compteur qui n'est affiche nulle part est un compteur mort, et une
+        # panne silencieuse a deja coute cinq semaines a ce depot.
+        report.problemes.append(
+            f"rattachement aux evenements : {report.observation_evenements.erreur}"
+        )
+    if report.purge_evenements is not None and report.purge_evenements.erreur:
+        # Meme motif : un compteur qui n'est affiche nulle part est un compteur
+        # mort, et une purge qui ne tourne plus est une fuite lente que rien ne
+        # signalerait autrement.
+        report.problemes.append(
+            f"purge des evenements : {report.purge_evenements.erreur}"
         )
     if report.problemes:
         try:
