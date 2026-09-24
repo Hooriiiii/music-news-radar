@@ -324,3 +324,68 @@ def test_sans_migration_0019_la_purge_est_un_no_op(db_session, monkeypatch):
     assert stats.tables_absentes is True
     assert stats.erreur is None
     assert stats.evenements_supprimes == 0
+
+
+# -- la regle « engage » n'existe qu'a un seul endroit -----------------------
+
+
+def test_les_deux_chemins_s_accordent_sur_les_trois_formes_d_engagement(db_session):
+    """`election.representant_engage` (un article) et `election.articles_engages`
+    (un lot) doivent toujours dire la meme chose.
+
+    La seconde decide de la suppression DEFINITIVE d'un evenement : une
+    divergence ferait disparaitre en silence l'archive editoriale d'une actu
+    publiee. Ce test echoue a la prochaine divergence au lieu de la laisser
+    passer."""
+    from app.pipeline.election import articles_engages, representant_engage
+
+    db_session.autoflush = False
+    src = _src(db_session)
+
+    libre = _art(db_session, src, n=1)
+
+    used = _art(db_session, src, n=2, status=ArticleStatus.USED)
+
+    avec_post = _art(db_session, src, n=3)
+    db_session.add(
+        Post(
+            article_id=avec_post.id,
+            article_title=avec_post.title,
+            article_url=avec_post.url,
+            source_name=src.name,
+            template="kinda_post",
+            caption="Une legende",
+            hashtags=[],
+            slides=[],
+        )
+    )
+
+    avec_creneau = _art(db_session, src, n=4)
+    db_session.add(
+        Creneau(
+            publier_a=dt.datetime.now(UTC),
+            etat=EtatCreneau.GELE,
+            article_id=avec_creneau.id,
+        )
+    )
+
+    # Un creneau LIBRE n'engage rien, des deux cotes.
+    avec_creneau_libre = _art(db_session, src, n=5)
+    db_session.add(
+        Creneau(
+            publier_a=dt.datetime.now(UTC),
+            etat=EtatCreneau.LIBRE,
+            article_id=avec_creneau_libre.id,
+        )
+    )
+    db_session.commit()
+
+    tous = [libre, used, avec_post, avec_creneau, avec_creneau_libre]
+    en_lot = articles_engages(db_session, [a.id for a in tous])
+
+    assert en_lot == {used.id, avec_post.id, avec_creneau.id}
+    for article in tous:
+        assert representant_engage(db_session, article) is (article.id in en_lot), article.title
+
+    assert articles_engages(db_session, []) == set()
+    assert articles_engages(db_session, [None]) == set()

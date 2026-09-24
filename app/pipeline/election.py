@@ -75,20 +75,53 @@ def cle_information(article: Article, index: IndexComptes) -> tuple:
     )
 
 
+def articles_engages(db: Session, ids: Iterable[int | None]) -> set[int]:
+    """Parmi `ids`, ceux qui sont ENGAGES : publies (`USED`), composes (un
+    `Post`), ou portes par un `Creneau` non `LIBRE`.
+
+    **Le point unique ou cette regle est ecrite**, et c'est deliberement une
+    fonction ENSEMBLISTE (trois requetes, quel que soit le nombre d'ids) :
+    `retention.purger_evenements_sans_valeur` doit juger des centaines
+    d'articles en un passage, et une copie du predicat la-bas deciderait de la
+    suppression DEFINITIVE d'un evenement. Le jour ou les deux copies
+    divergeraient, ce n'est pas un comportement bizarre qu'on obtiendrait :
+    c'est l'archive editoriale d'une actu publiee qui disparait en silence.
+
+    Un id `None` (article jamais flushe) est ignore, jamais engage.
+    """
+    connus = {identifiant for identifiant in ids if identifiant is not None}
+    if not connus:
+        return set()
+    engages = set(
+        db.scalars(
+            select(Article.id).where(Article.id.in_(connus), Article.status == ArticleStatus.USED)
+        )
+    )
+    engages.update(db.scalars(select(Post.article_id).where(Post.article_id.in_(connus))))
+    engages.update(
+        db.scalars(
+            select(Creneau.article_id).where(
+                Creneau.article_id.in_(connus), Creneau.etat != EtatCreneau.LIBRE
+            )
+        )
+    )
+    return engages
+
+
 def representant_engage(db: Session, article: Article) -> bool:
-    """Publie, compose, ou porte par un creneau : il ne change plus."""
+    """Publie, compose, ou porte par un creneau : il ne change plus.
+
+    Le cas `USED` est tranche SUR L'OBJET avant toute requete : c'est un
+    raccourci (il ne peut jamais contredire `articles_engages`, qui le couvre
+    aussi) et surtout la seule lecture qui vaut quand le statut vient d'etre
+    change dans la session sans avoir ete flushe -- `SessionLocal` tourne en
+    `autoflush=False`. Le reste de la regle n'existe qu'une fois, dans
+    `articles_engages` ; `tests/test_retention_evenements.py` verrouille
+    l'accord des deux chemins sur les trois formes d'engagement.
+    """
     if article.status == ArticleStatus.USED:
         return True
-    if db.scalar(select(Post.id).where(Post.article_id == article.id).limit(1)) is not None:
-        return True
-    return (
-        db.scalar(
-            select(Creneau.id)
-            .where(Creneau.article_id == article.id, Creneau.etat != EtatCreneau.LIBRE)
-            .limit(1)
-        )
-        is not None
-    )
+    return article.id in articles_engages(db, (article.id,))
 
 
 def remettre_a_noter(article: Article) -> None:

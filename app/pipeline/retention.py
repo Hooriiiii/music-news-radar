@@ -6,16 +6,9 @@ from sqlalchemy import ColumnElement, and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import (
-    Article,
-    ArticleStatus,
-    Creneau,
-    EtatCreneau,
-    Event,
-    EventObservation,
-    Post,
-)
+from app.models import Article, ArticleStatus, Event, EventObservation
 from app.pipeline import events
+from app.pipeline.election import articles_engages
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +145,6 @@ def purger_evenements_sans_valeur(
                 EventObservation.event_id,
                 EventObservation.article_id,
                 Article.relevance_score,
-                Article.status,
             )
             .join(Article, Article.id == EventObservation.article_id)
             .where(_predicat_purgeable(cutoff))
@@ -186,31 +178,19 @@ def purger_evenements_sans_valeur(
         if not en_lice:
             return stats
 
-        # « Publie » au sens de `election.representant_engage` : USED, un `Post`,
-        # ou un `Creneau` non LIBRE. En VERSION ENSEMBLISTE (deux requetes pour
-        # tout le lot, au lieu de deux par candidat) : le lot peut compter des
-        # centaines d'articles le jour ou la fenetre de retention est raccourcie.
-        articles_en_lice = {ligne.article_id for ligne in en_lice.values()}
-        engages = set(
-            db.scalars(select(Post.article_id).where(Post.article_id.in_(articles_en_lice)))
-        )
-        engages.update(
-            db.scalars(
-                select(Creneau.article_id).where(
-                    Creneau.article_id.in_(articles_en_lice),
-                    Creneau.etat != EtatCreneau.LIBRE,
-                )
-            )
-        )
+        # « Publie » au sens d'`election.articles_engages` : `USED`, un `Post`,
+        # ou un `Creneau` non LIBRE. La regle n'est PAS recopiee ici -- elle
+        # decide d'une suppression definitive, et deux copies qui divergeraient
+        # feraient disparaitre en silence l'archive d'une actu publiee. Version
+        # ensembliste : trois requetes pour tout le lot, jamais deux par
+        # candidat (le lot peut compter des centaines d'articles le jour ou la
+        # fenetre de retention est raccourcie).
+        engages = articles_engages(db, (ligne.article_id for ligne in en_lice.values()))
 
         a_supprimer = [
             event_id
             for event_id, ligne in en_lice.items()
-            # `ArticleStatus.USED` est deja exclu par `_predicat_purgeable` (un
-            # article publie n'est jamais purge) ; relu ici quand meme, pour que
-            # la regle « publie -> permanent » tienne par elle-meme et non par
-            # effet de bord d'un predicat voisin.
-            if ligne.status != ArticleStatus.USED and ligne.article_id not in engages
+            if ligne.article_id not in engages
         ]
 
         if not a_supprimer:

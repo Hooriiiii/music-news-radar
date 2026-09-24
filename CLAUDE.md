@@ -1960,8 +1960,12 @@ l'utilisateur : **une seule** observation, article sous le seuil de pertinence
 (`digest_relevance_threshold`, 60 — le seuil général du dépôt, pas un réglage de
 plus ; une note absente vaut « sous le seuil ») et jamais publié → l'événement
 meurt avec son article ; **deux observations ou plus** → permanent, sans
-condition ; **publié** (`USED`, un `Post`, un `Creneau` engagé — même prédicat
-qu'`election.representant_engage`) → permanent, sans condition.
+condition ; **publié** (`USED`, un `Post`, un `Creneau` engagé) → permanent,
+sans condition. Cette dernière règle n'est écrite qu'à UN endroit,
+`election.articles_engages` (version ensembliste : trois requêtes quel que soit
+le lot), appelée aussi par `representant_engage` — deux copies qui divergeraient
+feraient disparaître en silence l'archive d'une actu publiée, et un test
+verrouille l'accord des deux chemins.
 
 `event_observations.article_id` est `ON DELETE SET NULL` : une fois l'article
 purgé, l'observation survit sans lui et **plus rien ne permet de juger sa
