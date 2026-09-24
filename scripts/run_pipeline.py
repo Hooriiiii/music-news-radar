@@ -83,7 +83,31 @@ def main() -> None:
         print(f"  alertes : {report.alerts_sent} envoyées, {report.alerts_errors} erreurs")
     else:
         print(f"  alertes sautées : {report.alerts_skipped_reason}")
+    observation = report.observation_evenements
+    if observation is not None and (observation.evenements_crees or observation.articles_rattaches):
+        # Phase 2B : ce que le passage a fait entrer dans un evenement. Muet
+        # quand il n'y a rien eu a rattacher -- le regime de croisiere ne doit
+        # pas remplir le log d'une ligne a zero toutes les heures.
+        ligne = (
+            f"  évènements : {observation.evenements_crees} créé(s), "
+            f"{observation.articles_rattaches} article(s) rattaché(s)"
+        )
+        if observation.plafond_atteint:
+            # Un arriere qui se resorbe sur quelques passages est normal ; un
+            # plafond atteint a CHAQUE passage veut dire qu'on n'absorbe plus
+            # le flux, et rien d'autre ne le dirait.
+            ligne += " (plafond atteint, suite au prochain passage)"
+        print(ligne)
+
     print(f"  rétention : {report.purged} articles purgés (> {settings.retention_days} j)")
+    purge_ev = report.purge_evenements
+    if purge_ev is not None and purge_ev.evenements_supprimes:
+        # Ce qui meurt avec son article : une seule preuve, sous le seuil,
+        # jamais publie. Deux preuves ou une publication = permanent.
+        print(
+            f"  rétention : {purge_ev.evenements_supprimes} évènement(s) sans valeur "
+            f"purgé(s), {purge_ev.observations_supprimees} observation(s)"
+        )
     if report.problemes:
         print("  \u26a0 supervision :")
         for probleme in report.problemes:
