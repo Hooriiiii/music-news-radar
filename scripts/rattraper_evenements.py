@@ -67,6 +67,14 @@ Meme mode PLAN que le reste du fichier (execute puis `db.rollback()` si
 qui serait ecrit). Idempotent : une fois les compteurs a jour, un second
 passage ne change plus rien (`_recalculer` est une fonction pure du contenu
 des `EventObservation`, jamais un increment).
+
+**`LigneRecalcul`, `RapportRecalcul` et `recalculer_tout` vivent desormais
+dans `app.pipeline.events`** (tour de correction 1, 2026-09-24), a cote de
+`_recalculer`, leur seul autre ecrivain -- `app.pipeline.source_groups` en a
+besoin pour le passage horaire, et `app/` ne doit jamais dependre d'un module
+qui fait de l'`argparse`. Re-exportes ici pour que ce script et ses tests
+existants continuent de les importer depuis `scripts.rattraper_evenements`
+sans rien changer.
 """
 
 import argparse
@@ -76,13 +84,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, attendre_base
-from app.models import Article, Event, EventObservation
+from app.models import Article, EventObservation
 from app.pipeline import events
-
-_CHAMPS_RECALCULES = (
-    "source_count", "platform_count", "independent_source_count",
-    "first_seen_at", "last_seen_at",
-)
+from app.pipeline.events import LigneRecalcul, RapportRecalcul, recalculer_tout  # noqa: F401
 
 
 @dataclass
@@ -183,59 +187,6 @@ def rattraper(db: Session, *, appliquer: bool = False, limite_exemples: int = 5)
                 f"representant {representant.id} ({representant.title!r}) : "
                 f"{len(ids)} membre(s), {detail}"
             )
-
-    if appliquer:
-        db.commit()
-    else:
-        db.rollback()
-    return rapport
-
-
-@dataclass
-class LigneRecalcul:
-    event_id: int
-    titre: str
-    diffs: list[str]
-
-
-@dataclass
-class RapportRecalcul:
-    tables_absentes: bool = False
-    total_evenements: int = 0
-    lignes: list[LigneRecalcul] = field(default_factory=list)
-
-
-def _valeurs(event: Event) -> dict:
-    return {champ: getattr(event, champ) for champ in _CHAMPS_RECALCULES}
-
-
-def recalculer_tout(db: Session, *, appliquer: bool = False) -> RapportRecalcul:
-    """Relit CHAQUE `Event` existant et lui applique `events._recalculer` --
-    la seule fonction qui ecrit `source_count`, `platform_count`,
-    `independent_source_count`, `first_seen_at`, `last_seen_at`. Ne cree ni ne
-    supprime aucune `EventObservation`, ne touche aucun `Article`. Rend le
-    rapport dans tous les cas ; ecrit reellement seulement si `appliquer`."""
-    rapport = RapportRecalcul()
-
-    if not events._tables_disponibles(db):
-        rapport.tables_absentes = True
-        db.rollback()
-        return rapport
-
-    tous = list(db.scalars(select(Event)))
-    rapport.total_evenements = len(tous)
-
-    for event in tous:
-        avant = _valeurs(event)
-        events._recalculer(db, event)
-        apres = _valeurs(event)
-        diffs = [
-            f"{champ} : {avant[champ]!r} -> {apres[champ]!r}"
-            for champ in _CHAMPS_RECALCULES
-            if avant[champ] != apres[champ]
-        ]
-        if diffs:
-            rapport.lignes.append(LigneRecalcul(event.id, event.titre, diffs))
 
     if appliquer:
         db.commit()

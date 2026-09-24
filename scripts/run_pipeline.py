@@ -41,6 +41,21 @@ def main() -> None:
         print(f"  doublons : {report.duplicates_linked} lies, dont "
               f"{report.duplicates_archive} contre une actu deja publiee "
               f"({report.duplicates_arbitres} tranches par Claude)")
+    if report.groupement_sources is not None and report.groupement_sources.sources_regroupees:
+        print(
+            f"  regroupement de sources : {report.groupement_sources.sources_regroupees} "
+            f"source(s) regroupee(s), {report.groupement_sources.evenements_recalcules} "
+            f"evenement(s) recalcule(s)"
+        )
+    if report.groupement_sources is not None and report.groupement_sources.avertissements:
+        # Un groupe saute en silence (source renommee au dashboard, conflit
+        # deja pose) fausserait la corroboration sans que rien ne le dise --
+        # deja loggue en WARNING par `regrouper_sources_et_propager`, mais
+        # invisible tant que ce script n'affiche que `sources_regroupees`.
+        for avertissement in report.groupement_sources.avertissements:
+            print(f"  ⚠ regroupement de sources : {avertissement}")
+    if report.groupement_sources is not None and report.groupement_sources.erreur:
+        print(f"  ⚠ regroupement de sources : {report.groupement_sources.erreur}")
     if report.duplicates_arbitrage_pannes:
         print(f"  ⚠ arbitrage de doublons : {report.duplicates_arbitrage_pannes} "
               f"panne(s) (paire redemandee au prochain passage)")
