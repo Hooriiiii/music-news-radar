@@ -64,27 +64,27 @@ DEFAULT_WINDOW_HOURS = 48
 # avec un doublon.
 RAISON_DOUBLON_PREFIXE = "doublon d'une actu deja publiee"
 
-# Trace des liens FRAIS poses par l'arbitrage Claude (Phase 2B, Task 3). Prefixe
-# DISTINCT de celui de l'archive : les deux liens n'ont pas la meme consequence
-# -- un lien d'archive sort l'article de la file pour de bon, un lien frais le
-# range seulement derriere un representant qui, lui, reste publiable. Mais un
-# lien frais tranche par un modele doit se VOIR sur l'article lui-meme : sans
-# trace, il sort du dashboard par le filtre `duplicate_of_id IS NULL` et plus
-# rien ne dit pourquoi.
-RAISON_DOUBLON_FRAIS_PREFIXE = "doublon d'une actu recente"
-
-# Les raisons posees par la dedup, et elles seules : ce que l'auto-reparation
-# d'un verdict manuel a le droit d'effacer, et ce que l'election efface quand
-# elle promeut un doublon en representant. Une raison posee AILLEURS (« gel
-# impossible : ... ») dit une vraie raison de ne pas publier, sans rapport avec
-# un doublon -- l'effacer remettrait dans la file un article que la publication
-# avait ecarte.
-RAISONS_DOUBLON_PREFIXES = (RAISON_DOUBLON_PREFIXE, RAISON_DOUBLON_FRAIS_PREFIXE)
+# UN LIEN FRAIS NE POSE AUCUNE TRACE, et c'est une propriete, pas un oubli
+# (tour de correction 1, 2026-09-24). Un lien d'ARCHIVE en pose une parce que
+# son representant est `USED`, donc jamais purge : la trace decrit une
+# situation qui dure. Un lien FRAIS, lui, a un representant ordinaire, purge a
+# `retention_days` (2 jours) -- et `articles.duplicate_of_id` est
+# `ON DELETE SET NULL`. Le doublon survit donc a son representant, delie ; si
+# on lui avait pose un `file_exclu_raison`, il le garderait, et
+# `store._articles_publiables` (qui exige `file_exclu_raison IS NULL`) le
+# tiendrait hors de la file POUR TOUJOURS -- au nom d'un doublon d'un article
+# qui n'existe plus et n'a jamais rien produit, alors qu'il peut lui-meme etre
+# bien plus recent. Avant la Phase 2B un lien frais etait AUTO-REPARANT
+# (aucune trace, donc la purge du representant rendait le doublon publiable) :
+# cette propriete est conservee. La visibilite d'un lien frais tranche par
+# Claude vit donc dans le compteur (`ClusterStats.frais_arbitres`) et dans un
+# WARNING qui nomme les deux articles -- de la supervision, qui ne doit pas
+# survivre a ce qu'elle decrit, jamais un verrou.
 
 
 def raison_de_doublon(raison: str | None) -> bool:
-    """Vrai si cette raison d'exclusion a ete posee par la dedup."""
-    return (raison or "").startswith(RAISONS_DOUBLON_PREFIXES)
+    """Vrai si cette raison d'exclusion a ete posee par la dedup (archive)."""
+    return (raison or "").startswith(RAISON_DOUBLON_PREFIXE)
 
 
 def est_gabarit_de_source(
@@ -606,19 +606,12 @@ def link_duplicates(
         repointes = lier(article, rep_article)
         if origine == "arbitre_frais":
             # Un lien que le seuil de 0.65 n'aurait JAMAIS pose : compteur a
-            # part, journalise, et trace sur l'article lui-meme. Sans les
-            # trois, un article sortirait du dashboard (filtre
-            # `duplicate_of_id IS NULL`) sans que rien ne dise pourquoi --
-            # exactement ce que ce depot s'interdit depuis le faux positif
-            # d'archive. La raison posee AILLEURS (« gel impossible : ... »)
-            # n'est jamais recouverte, meme regle que pour l'archive.
+            # part et WARNING qui nomme les deux articles. AUCUNE trace sur
+            # l'article, deliberement -- voir le commentaire de
+            # `raison_de_doublon` : elle survivrait a la purge de son
+            # representant et exclurait le doublon de la file pour toujours.
             stats.frais += 1
             stats.frais_arbitres += 1
-            if article.file_exclu_raison is None:
-                article.file_exclu_raison = (
-                    f"{RAISON_DOUBLON_FRAIS_PREFIXE} (article {rep_article.id}, "
-                    f"tranche par Claude : {raison})"
-                )[:500]
             logger.warning(
                 "doublon frais tranche par Claude : « %s » (%s) rattache a « %s » (%s), "
                 "recouvrement %.2f : %s",

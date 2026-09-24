@@ -19,13 +19,14 @@ import pytest
 from app.config import settings
 from app.models import Article, Source, SourceType
 from app.pipeline.cluster import (
-    RAISON_DOUBLON_FRAIS_PREFIXE,
+    RAISON_DOUBLON_PREFIXE,
     est_gabarit_de_source,
     link_duplicates,
     significant_tokens,
 )
 from app.pipeline.cluster_arbitrage import EntreeArbitrage, cle_paire, ecrire_cache, Cache
 from app.pipeline.cluster_arbitrage import marquer_manuel
+from app.pipeline.retention import purge_old_articles
 
 UTC = dt.timezone.utc
 
@@ -143,11 +144,58 @@ def test_une_paire_fraiche_de_la_bande_est_liee_quand_claude_dit_meme_actu(
     assert stats.archive == 0
     db_session.refresh(second)
     assert second.duplicate_of_id == premier.id
-    # La trace, sur l'article lui-meme : sans elle il sort du dashboard par le
-    # filtre `duplicate_of_id IS NULL` et rien ne dit pourquoi.
-    assert second.file_exclu_raison.startswith(RAISON_DOUBLON_FRAIS_PREFIXE)
-    assert "le compte a rebours annoncait ce single" in second.file_exclu_raison
+    # AUCUNE trace : voir le test suivant, qui dit pourquoi.
+    assert second.file_exclu_raison is None
 
+
+def test_un_lien_frais_ne_survit_pas_a_la_purge_de_son_representant(
+    db_session, tmp_path
+):
+    """Tour de correction 1 : un lien FRAIS doit rester AUTO-REPARANT.
+
+    `articles.duplicate_of_id` est `ON DELETE SET NULL` et la purge n'epargne
+    que les `USED` : le representant d'un lien frais disparait a deux jours et
+    le doublon lui survit, delie. Si le lien lui avait pose un
+    `file_exclu_raison`, il le garderait, et `store._articles_publiables`
+    (qui exige `file_exclu_raison IS NULL`) le tiendrait hors de la file POUR
+    TOUJOURS -- au nom d'un doublon d'un article qui n'existe plus. Avant la
+    Phase 2B, aucune trace n'etait posee sur un lien frais et la purge le
+    reparait toute seule : ce test verrouille cette propriete.
+
+    C'est le test de la preuve par mutation du tour 1 : reposer la trace le
+    fait echouer."""
+    db_session.autoflush = False
+    gauche = _source(db_session, "media-a", "https://a/feed")
+    droite = _source(db_session, "media-b", "https://b/feed")
+    premier, = _articles(db_session, gauche, [SEMANTIQUE_A])
+    second, = _articles(db_session, droite, [SEMANTIQUE_B], depart_heures=3)
+
+    arbitre = _Arbitre((True, "meme actu"))
+    link_duplicates(
+        db_session,
+        arbitre=arbitre,
+        cache_chemin=tmp_path / "arbitrage.json",
+        arbitrage_frais_min=0.30,
+    )
+    db_session.refresh(second)
+    assert second.duplicate_of_id == premier.id
+
+    # La purge emporte le representant (frais, jamais publie) ; Postgres remet
+    # `duplicate_of_id` a NULL (`ON DELETE SET NULL`), joue ici a la main --
+    # SQLite n'applique pas les actions referentielles sans PRAGMA.
+    premier.published_at = dt.datetime.now(UTC) - dt.timedelta(days=10)
+    db_session.commit()
+    id_second = second.id
+    # `expunge_all` avant la purge : elle fait un DELETE en masse dont la
+    # synchronisation de session reevalue le predicat EN PYTHON, sur des dates
+    # que SQLite rend naives -- rien a voir avec la propriete testee.
+    db_session.expunge_all()
+    assert purge_old_articles(db_session, retention_days=2) == 1
+    second = db_session.get(Article, id_second)
+    second.duplicate_of_id = None
+    db_session.commit()
+
+    assert second.file_exclu_raison is None  # redevenu publiable, tout seul
 
 def test_un_verdict_different_ne_pose_aucun_lien_et_n_est_jamais_redemande(
     db_session, tmp_path
@@ -443,13 +491,20 @@ def test_run_veille_n_arbitre_jamais_la_bande_fraiche(db_session, tmp_path):
 # -- l'election ne garde pas une trace perimee ------------------------------
 
 
-def test_un_doublon_frais_promu_representant_perd_sa_trace_d_exclusion(
-    db_session, tmp_path
-):
-    """Un lien frais tranche par Claude pose une trace sur l'article lie. Si
-    l'election le promeut representant plus tard, cette trace n'a plus cours :
-    la garder sortirait l'elu de la file de publication pour une raison
-    devenue fausse."""
+def test_un_doublon_promu_representant_perd_sa_trace_de_doublon(db_session, tmp_path):
+    """La SEULE exception assumee a la contrainte « rien ne change dans le
+    comportement de publication » (tour de correction 1, 2026-09-24).
+
+    Le cas existe independamment de la bande fraiche, et meme avec
+    `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` : `scripts.marquer_doublon_manuel
+    --meme-actu` sur deux articles FRAIS passe par la branche « archive » de
+    `appliquer` (l'origine `manuel` n'est ni `frais` ni `arbitre_frais`) et
+    pose donc `RAISON_DOUBLON_PREFIXE` sur un doublon dont le representant
+    n'est ni `USED` ni engage. L'election peut ensuite promouvoir ce doublon
+    en representant : garder sa raison le sortirait de la file de publication
+    pour un lien qui n'existe plus, exactement a l'envers. L'election efface
+    donc cette raison quand elle delie l'elu -- et uniquement celle-la : une
+    raison posee ailleurs (« gel impossible : ... ») reste."""
     db_session.autoflush = False
     from app.pipeline.comptes_artistes import construire_index
     from app.pipeline.election import elire_representants
@@ -466,7 +521,9 @@ def test_un_doublon_frais_promu_representant_perd_sa_trace_d_exclusion(
         depart_heures=3,
     )
     second.duplicate_of_id = premier.id
-    second.file_exclu_raison = f"{RAISON_DOUBLON_FRAIS_PREFIXE} (article {premier.id}, ...)"
+    second.file_exclu_raison = (
+        f"{RAISON_DOUBLON_PREFIXE} (article {premier.id}, verdict manuel)"
+    )
     db_session.commit()
 
     elire_representants(db_session, construire_index(db_session))
@@ -474,3 +531,68 @@ def test_un_doublon_frais_promu_representant_perd_sa_trace_d_exclusion(
     db_session.refresh(second)
     assert second.duplicate_of_id is None
     assert second.file_exclu_raison is None
+
+
+def test_une_raison_etrangere_a_la_dedup_survit_a_l_election(db_session):
+    """L'autre moitie de la regle : l'election n'efface QUE la raison posee
+    par la dedup. Un « gel impossible » dit une vraie raison de ne pas
+    publier, sans rapport avec un doublon -- l'effacer remettrait dans la file
+    un article que la publication avait ecarte."""
+    db_session.autoflush = False
+    from app.pipeline.comptes_artistes import construire_index
+    from app.pipeline.election import elire_representants
+
+    gauche = _source(db_session, "media-a", "https://a/feed")
+    droite = _source(db_session, "media-b", "https://b/feed")
+    premier, = _articles(db_session, gauche, ["Taylor Swift teasing"])
+    second, = _articles(
+        db_session,
+        droite,
+        ["Taylor Swift teasing un compte a rebours avant Patient Zero"],
+        depart_heures=3,
+    )
+    second.duplicate_of_id = premier.id
+    second.file_exclu_raison = "gel impossible : le post n'a pas de visuel publiable"
+    db_session.commit()
+
+    elire_representants(db_session, construire_index(db_session))
+
+    db_session.refresh(second)
+    assert second.duplicate_of_id is None
+    assert second.file_exclu_raison == "gel impossible : le post n'a pas de visuel publiable"
+
+
+# -- le prompt dit la verite sur l'article de reference ---------------------
+
+
+def test_le_prompt_annonce_un_article_publie_seulement_s_il_l_est():
+    """Tour de correction 1 : depuis que l'arbitrage s'applique aussi aux
+    paires fraiches, la reference n'est plus forcement un article publie.
+    L'en-tete le lit sur l'article (`ArticleStatus.USED`), et ne le recoit pas
+    en parametre -- une source de verite, pas deux."""
+    from app.models import ArticleStatus
+    from app.pipeline.cluster_arbitrage import build_user_prompt
+
+    reference = Article(
+        id=1, source_id=1, url="https://a/1", title=SEMANTIQUE_A, raw_hash="1"
+    )
+    nouveau = Article(
+        id=2, source_id=2, url="https://b/1", title=SEMANTIQUE_B, raw_hash="2"
+    )
+
+    frais = build_user_prompt(reference, nouveau)
+    assert "DEJA PUBLIE" not in frais
+    assert "pas encore publie" in frais
+
+    reference.status = ArticleStatus.USED
+    assert "DEJA PUBLIE PAR KINDA" in build_user_prompt(reference, nouveau)
+
+
+def test_reformuler_le_prompt_n_invalide_aucun_verdict_memorise():
+    """La cle d'un verdict est la PAIRE D'IDS, jamais le texte du prompt :
+    changer la formulation ne desarme rien, et ne justifie donc jamais de
+    toucher a `CACHE_VERSION` (qui, elle, desarmerait les verdicts manuels)."""
+    from app.pipeline.cluster_arbitrage import CACHE_VERSION
+
+    assert cle_paire(12, 40) == "12:40"
+    assert CACHE_VERSION == 1

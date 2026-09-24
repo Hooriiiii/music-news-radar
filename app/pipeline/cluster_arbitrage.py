@@ -94,7 +94,7 @@ import anthropic
 from pydantic import BaseModel, field_validator
 
 from app.config import settings
-from app.models import Article
+from app.models import Article, ArticleStatus
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,11 @@ SYSTEM_PROMPT = """\
 Tu arbitres une decision de deduplication editoriale pour KINDA, un compte \
 Instagram d'actualite musicale.
 
-On te presente DEUX articles : un DEJA PUBLIE par Kinda, et un NOUVEAU qui \
-vient d'etre ingere. Un algorithme de similarite de titres est incertain sur \
-ces deux-la -- ni assez proches pour etre surs, ni assez differents pour etre \
-ecartes sans arbitrage.
+On te presente DEUX articles : un article de REFERENCE, vu en premier (son \
+en-tete dit s'il a deja ete publie par Kinda ou s'il a seulement ete ingere \
+plus tot), et un NOUVEAU qui vient d'etre ingere. Un algorithme de similarite \
+de titres est incertain sur ces deux-la -- ni assez proches pour etre surs, ni \
+assez differents pour etre ecartes sans arbitrage.
 
 Ta question : ces deux articles racontent-ils LA MEME ACTUALITE, ou deux \
 actualites DIFFERENTES a propos du meme sujet (meme artiste, meme festival, \
@@ -182,12 +183,34 @@ def _resume_borne(article: Article) -> str:
     return article.summary[:RESUME_MAX_CARACTERES]
 
 
-def build_user_prompt(publie: Article, nouveau: Article) -> str:
+def build_user_prompt(reference: Article, nouveau: Article) -> str:
+    """L'en-tete de l'article de reference dit la VERITE sur son statut, et la
+    lit sur l'article lui-meme plutot que de la recevoir en parametre (tour de
+    correction 1, 2026-09-24).
+
+    Depuis que l'arbitrage s'applique aussi aux paires FRAICHES (Phase 2B,
+    Task 3), la reference n'est plus forcement un article publie : l'annoncer
+    « DEJA PUBLIE » donnait au juge un contexte faux sur toute la bande
+    fraiche. `ArticleStatus.USED` est exactement le critere voulu -- un
+    representant d'archive l'est par construction (`link_duplicates` ne
+    retient que des `USED`), un representant frais ne l'est generalement pas,
+    et s'il l'est (article publie a la main dans les 48 h) l'en-tete « deja
+    publie » est alors vrai lui aussi.
+
+    Sans effet sur le CACHE : la cle d'un verdict est `cle_paire(ids)`, jamais
+    le texte du prompt. Reformuler ici n'invalide aucun verdict memorise et
+    n'exige donc PAS de toucher a `CACHE_VERSION` (la changer desarmerait les
+    verdicts manuels -- voir le commentaire de cette constante)."""
+
     def _bloc(article: Article) -> str:
         return f"Titre : {article.title}\nResume : {_resume_borne(article)}"
 
+    if reference.status == ArticleStatus.USED:
+        entete = "ARTICLE DE REFERENCE (DEJA PUBLIE PAR KINDA)"
+    else:
+        entete = "ARTICLE DE REFERENCE (ingere plus tot, pas encore publie)"
     return (
-        f"ARTICLE DEJA PUBLIE :\n{_bloc(publie)}\n\n"
+        f"{entete} :\n{_bloc(reference)}\n\n"
         f"ARTICLE NOUVEAU :\n{_bloc(nouveau)}"
     )
 
@@ -422,27 +445,27 @@ def make_claude_arbitre(client: anthropic.Anthropic | None = None):
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    def arbitre(publie: Article, nouveau: Article) -> tuple[bool, str] | None:
+    def arbitre(reference: Article, nouveau: Article) -> tuple[bool, str] | None:
         try:
             response = client.messages.parse(
                 model=settings.scoring_model,
                 max_tokens=500,
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_user_prompt(publie, nouveau)}],
+                messages=[{"role": "user", "content": build_user_prompt(reference, nouveau)}],
                 output_format=VerdictArbitrage,
             )
             sortie = response.parsed_output
             if sortie is None:
                 logger.warning(
                     "arbitrage de doublon sans sortie structuree (%s, %s)",
-                    publie.id, nouveau.id,
+                    reference.id, nouveau.id,
                 )
                 return None
             return sortie.meme_actu, sortie.raison
         except Exception as exc:  # noqa: BLE001 -- une panne n'est jamais un verdict
             logger.warning(
                 "arbitrage de doublon en echec pour (%s, %s) : %s (%s)",
-                publie.id, nouveau.id, exc, type(exc).__name__,
+                reference.id, nouveau.id, exc, type(exc).__name__,
             )
             return None
 

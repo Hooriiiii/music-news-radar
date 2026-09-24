@@ -1947,11 +1947,32 @@ cover part sur l'image de secours du gabarit.
    jamais, et `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` le laisse à `None`,
    ce qui rend au pipeline exactement les décisions d'avant. Un lien frais
    tranché par Claude est **visible** : compteur propre
-   (`ClusterStats.frais_arbitres`), WARNING avec les deux titres, et trace
-   sur l'article (`RAISON_DOUBLON_FRAIS_PREFIXE`, préfixe distinct de celui
-   de l'archive). `elire_representants` efface cette trace quand elle promeut
-   le doublon en représentant — sinon l'élu sortirait de la file pour une
-   raison qui n'a plus cours.
+   (`ClusterStats.frais_arbitres`) et WARNING nommant les deux articles.
+   **Aucune trace n'est posée sur l'article**, et c'est une propriété, pas un
+   oubli : `duplicate_of_id` est `ON DELETE SET NULL` et un représentant
+   FRAIS est purgé à 2 jours, donc un `file_exclu_raison` survivrait à son
+   représentant et tiendrait le doublon hors de la file pour toujours
+   (`store._articles_publiables` exige `file_exclu_raison IS NULL`) — au nom
+   d'un doublon d'un article qui n'existe plus. Un lien frais est
+   AUTO-RÉPARANT, il l'était avant la Phase 2B et le reste. Le cas archive
+   n'a pas ce défaut parce que son représentant est `USED`, donc jamais
+   purgé : la propriété ne se transporte pas d'une bande à l'autre.
+
+   Le prompt d'arbitrage **dit la vérité sur l'article de référence** : son
+   en-tête annonce « DEJA PUBLIE PAR KINDA » ou « ingéré plus tôt, pas encore
+   publié » selon `ArticleStatus.USED`, lu sur l'article et non reçu en
+   paramètre. Reformuler ce prompt n'invalide aucun verdict mémorisé (la clé
+   du cache est la paire d'ids) et ne justifie donc jamais de toucher à
+   `CACHE_VERSION`.
+
+   Une seule exception ASSUMÉE à « rien ne change dans la publication » :
+   `elire_representants` efface désormais la raison de doublon d'un article
+   qu'elle promeut représentant. Le cas existe sans la bande fraîche et même
+   coupe-circuit fermé (`marquer_doublon_manuel --meme-actu` sur deux
+   articles frais pose `RAISON_DOUBLON_PREFIXE` sur un doublon dont le
+   représentant n'est pas verrouillé) : garder la raison sortirait l'élu de
+   la file pour un lien qui n'existe plus. Une raison posée ailleurs (« gel
+   impossible : … ») n'est jamais effacée.
 
    **L'anti-gabarit, qui est la moitié du travail** (`est_gabarit_de_source`).
    Mesuré le 2026-09-24 sur la fenêtre réelle de 48 h (601 articles, 488
