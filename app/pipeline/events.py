@@ -52,6 +52,7 @@ ils doivent rester reconstructibles.
 
 import logging
 import weakref
+from dataclasses import dataclass, field
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
@@ -266,6 +267,80 @@ def _recalculer(db: Session, event: Event) -> None:
         cles_independantes.add(cle)
     cles_independantes.update(("nom", nom) for nom in noms_sans_source)
     event.independent_source_count = len(cles_independantes)
+
+
+_CHAMPS_RECALCULES = (
+    "source_count", "platform_count", "independent_source_count",
+    "first_seen_at", "last_seen_at",
+)
+
+
+@dataclass
+class LigneRecalcul:
+    event_id: int
+    titre: str
+    diffs: list[str]
+
+
+@dataclass
+class RapportRecalcul:
+    tables_absentes: bool = False
+    total_evenements: int = 0
+    lignes: list[LigneRecalcul] = field(default_factory=list)
+
+
+def _valeurs(event: Event) -> dict:
+    return {champ: getattr(event, champ) for champ in _CHAMPS_RECALCULES}
+
+
+def recalculer_tout(
+    db: Session, *, appliquer: bool = False, evenements: list[Event] | None = None
+) -> RapportRecalcul:
+    """Relit des `Event` existants et leur applique `_recalculer` -- la seule
+    fonction qui écrit `source_count`, `platform_count`,
+    `independent_source_count`, `first_seen_at`, `last_seen_at`. Ne crée ni ne
+    supprime aucune `EventObservation`, ne touche aucun `Article`. Rend le
+    rapport dans tous les cas ; écrit réellement seulement si `appliquer`.
+
+    `evenements` restreint le recalcul à une liste déjà connue de l'appelant
+    (utilisé par `app.pipeline.source_groups`, qui ne veut recalculer QUE les
+    événements touchés par un regroupement de sources tout juste posé, jamais
+    la base entière à chaque passage horaire) ; par défaut (`None`, le chemin
+    de `scripts/rattraper_evenements.py --recalculer`), TOUS les événements
+    sont relus, comportement inchangé.
+
+    Point d'écriture unique de ces compteurs (avec `_recalculer` lui-même) :
+    déplacé depuis `scripts/rattraper_evenements.py` (tour de correction 1,
+    2026-09-24) pour que `app/` cesse de dépendre d'un module qui fait de
+    l'`argparse` -- le script en reste un simple appelant, ré-exportant cette
+    fonction pour sa ligne de commande et ses tests existants."""
+    rapport = RapportRecalcul()
+
+    if not _tables_disponibles(db):
+        rapport.tables_absentes = True
+        db.rollback()
+        return rapport
+
+    tous = list(db.scalars(select(Event))) if evenements is None else evenements
+    rapport.total_evenements = len(tous)
+
+    for event in tous:
+        avant = _valeurs(event)
+        _recalculer(db, event)
+        apres = _valeurs(event)
+        diffs = [
+            f"{champ} : {avant[champ]!r} -> {apres[champ]!r}"
+            for champ in _CHAMPS_RECALCULES
+            if avant[champ] != apres[champ]
+        ]
+        if diffs:
+            rapport.lignes.append(LigneRecalcul(event.id, event.titre, diffs))
+
+    if appliquer:
+        db.commit()
+    else:
+        db.rollback()
+    return rapport
 
 
 def attacher(db: Session, article: Article, representant: Article) -> Event | None:
