@@ -170,6 +170,29 @@
     background: #16161c; display: block; }
   .media-choice label { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
   .media-empty { color: var(--muted); font-size: 12px; }
+
+  /* --- Panneau Événements (Phase 2A, lecture seule) --- */
+  #events-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .event-row { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 8px; }
+  .event-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+  .event-head .grow { flex: 1; min-width: 0; }
+  .event-head .hl { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .event-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .event-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+  /* Meme rouge d'alerte que .render-warning : sert a signaler l'ecart
+     corroboration/pertinence, jamais a decider quoi que ce soit. */
+  .badge.corrob { background: #23232d; color: var(--muted); }
+  .badge.corrob.ecart { background: #3d1f1f; color: #ff8a8a; }
+  .event-observations { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px; }
+  .event-observations[hidden] { display: none; }
+  .obs-row { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+  .obs-row a { color: var(--text); text-decoration: none; }
+  .obs-row a:hover { color: #b9a6ff; }
+  .obs-row .plateforme { font-size: 10.5px; background: #23232d; color: var(--muted);
+    border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -200,6 +223,7 @@
     </select>
     <button class="chip" data-preset="schedule">🗓 Programmation</button>
     <button class="chip" data-preset="posts">🖼 Posts</button>
+    <button class="chip" data-preset="events">🕸 Événements</button>
     <button class="chip right" data-preset="sources">⚙️ Sources</button>
   </div>
 </header>
@@ -258,6 +282,16 @@
   <div id="mode-explication" class="mode-explication"></div>
   <div id="offre-reels" class="mode-explication"></div>
   <div id="schedule-list"></div>
+</section>
+
+<section id="events-panel" hidden>
+  <div class="posts-bar">
+    <select id="event-sort">
+      <option value="last_seen_at">Tri : dernière observation</option>
+      <option value="source_count">Tri : nombre de sources</option>
+    </select>
+  </div>
+  <div id="events-list"></div>
 </section>
 
 <div id="post-detail" hidden></div>
@@ -363,12 +397,14 @@ const gridEl = document.getElementById("grid");
 const panelEl = document.getElementById("sources-panel");
 const postsPanelEl = document.getElementById("posts-panel");
 const schedulePanelEl = document.getElementById("schedule-panel");
+const eventsPanelEl = document.getElementById("events-panel");
 
 document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
   chip.classList.add("on");
   preset = chip.dataset.preset;
   gridEl.hidden = true; panelEl.hidden = true; postsPanelEl.hidden = true; schedulePanelEl.hidden = true;
+  eventsPanelEl.hidden = true;
   document.getElementById("count").textContent = "";
   if (preset === "sources") {
     panelEl.hidden = false;
@@ -379,6 +415,9 @@ document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
   } else if (preset === "schedule") {
     schedulePanelEl.hidden = false;
     loadSchedulePanel();
+  } else if (preset === "events") {
+    eventsPanelEl.hidden = false;
+    loadEventsPanel();
   } else {
     gridEl.hidden = false;
     load();
@@ -1096,6 +1135,88 @@ function renderPostDetail(post, article, covers) {
   }
 
   detailEl.hidden = false;
+}
+
+// --- Panneau Événements (Phase 2A, lecture seule, rien n'est éditable) ---
+
+const PLATEFORMES_LABELS = {
+  rss: "RSS", reddit_rss: "Reddit", bluesky: "Bluesky", x: "X", instagram: "Instagram",
+};
+// primary = compte artiste/festival/label/club (la source du fait) ; secondary
+// = média (repackaging) ; unknown = catégorie non classée -- voir "Qui parle"
+// dans CLAUDE.md.
+const ROLES_LABELS = { primary: "source primaire", secondary: "média", unknown: "?" };
+
+document.getElementById("event-sort").onchange = loadEventsPanel;
+
+async function loadEventsPanel() {
+  const list = document.getElementById("events-list");
+  list.innerHTML = "Chargement…";
+  const sort = document.getElementById("event-sort").value;
+  let events;
+  try {
+    const reponse = await fetch(`/events?sort=${sort}&limit=100`);
+    if (!reponse.ok) throw new Error(await reponse.text());
+    events = await reponse.json();
+  } catch (erreur) {
+    list.innerHTML = '<div id="empty">Échec du chargement des événements.</div>';
+    document.getElementById("count").textContent = "";
+    return;
+  }
+  document.getElementById("count").textContent =
+    `${events.length} événement${events.length > 1 ? "s" : ""}`;
+  if (!events.length) {
+    list.innerHTML = '<div id="empty">Aucun événement pour le moment — la dédup en crée un dès qu\'un article en rejoint un autre.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const ev of events) {
+    const row = document.createElement("div");
+    row.className = "event-row";
+    row.innerHTML = `
+      <div class="event-head">
+        <div class="grow">
+          <div class="hl"></div>
+          <div class="sub"></div>
+        </div>
+        <div class="event-metrics"></div>
+      </div>
+      <div class="event-observations" hidden></div>`;
+    row.querySelector(".hl").textContent = ev.titre;
+    row.querySelector(".sub").textContent =
+      `événement #${ev.id}${ev.event_type ? ` · ${ev.event_type}` : ""} · vu du ${fmtDate(ev.first_seen_at)} au ${fmtDate(ev.last_seen_at)}`;
+    // La corroboration mesure le bavardage de la presse, pas l'intérêt pour Kinda :
+    // elle est affichée À CÔTÉ des compteurs bruts, jamais à leur place, pour que
+    // l'écart (les événements les plus corroborés sont parfois hors ligne éditoriale)
+    // se voie dans l'interface plutôt qu'il ne se découvre plus tard.
+    row.querySelector(".event-metrics").innerHTML = `
+      <span class="badge">${ev.source_count} source${ev.source_count > 1 ? "s" : ""}</span>
+      <span class="badge">${ev.independent_source_count} indépendante${ev.independent_source_count > 1 ? "s" : ""}</span>
+      <span class="badge">${ev.platform_count} plateforme${ev.platform_count > 1 ? "s" : ""}</span>
+      <span class="badge">fraîcheur ${Math.round(ev.freshness)}</span>
+      <span class="badge corrob">corroboration ${Math.round(ev.corroboration)}</span>`;
+    const obsZone = row.querySelector(".event-observations");
+    let charge = false;
+    row.querySelector(".event-head").onclick = async () => {
+      obsZone.hidden = !obsZone.hidden;
+      if (obsZone.hidden || charge) return;
+      charge = true;
+      obsZone.textContent = "Chargement…";
+      try {
+        const detail = await (await fetch(`/events/${ev.id}`)).json();
+        obsZone.innerHTML = (detail.observations || []).map((o) => `
+          <div class="obs-row">
+            <span class="plateforme">${escapeHtml(PLATEFORMES_LABELS[o.platform] || o.platform)}</span>
+            <span class="plateforme">${escapeHtml(ROLES_LABELS[o.source_role] || o.source_role)}</span>
+            <a href="${escapeHtml(o.url)}" target="_blank" rel="noopener">${escapeHtml(o.title)}</a>
+            <span>· ${escapeHtml(o.source_name)} · ${fmtDate(o.published_at) || "?"}${o.article_id == null ? " · archivé" : ""}</span>
+          </div>`).join("") || '<div class="obs-row">Aucune observation.</div>';
+      } catch (erreur) {
+        obsZone.textContent = "Échec du chargement des observations.";
+      }
+    };
+    list.appendChild(row);
+  }
 }
 
 function escapeHtml(str) {
