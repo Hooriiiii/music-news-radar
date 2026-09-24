@@ -41,6 +41,12 @@ class PipelineReport:
     # epuises ne se voyaient sinon que par des WARNING repetes dans les logs).
     duplicates_arbitres: int = 0
     duplicates_arbitrage_pannes: int = 0
+    # Phase 2B, Task 3 : sous-ensemble de `duplicates_linked` tranche par Claude
+    # dans la bande FRAICHE 0.30-0.65, et paires de cette bande ecartees sans
+    # rien payer par l'anti-gabarit. Comptes a part de l'archive : ni la meme
+    # mesure, ni le meme risque.
+    duplicates_frais_arbitres: int = 0
+    duplicates_gabarits_ecartes: int = 0
     groupement_sources: GroupementStats | None = None
     # Phase 2B, Task 1 : les articles qui viennent d'entrer dans un evenement
     # (y compris seuls). `None` = etape jamais atteinte.
@@ -79,7 +85,17 @@ def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
     qu'un client fantome ait deja ete cree avec une mauvaise cle."""
     if not settings.cluster_arbitrage_enabled or not settings.anthropic_api_key:
         return link_duplicates(db)
-    return link_duplicates(db, arbitre=make_claude_arbitre())
+    # La bande FRAICHE (Phase 2B, Task 3) suit le meme principe : c'est un
+    # PARAMETRE qui l'ouvre, jamais le nom de l'appelant. `run_veille` ne le
+    # passe pas, donc n'arbitre jamais ; et `cluster_arbitrage_frais_enabled`
+    # a false le laisse a None, ce qui rend au pipeline exactement les
+    # decisions qu'il prenait avant ce chantier.
+    frais_min = (
+        settings.cluster_arbitrage_frais_seuil
+        if settings.cluster_arbitrage_frais_enabled
+        else None
+    )
+    return link_duplicates(db, arbitre=make_claude_arbitre(), arbitrage_frais_min=frais_min)
 
 
 def run_pipeline(
@@ -133,6 +149,8 @@ def run_pipeline(
     report.duplicates_archive = doublons.archive
     report.duplicates_arbitres = doublons.arbitres
     report.duplicates_arbitrage_pannes = doublons.arbitrage_pannes
+    report.duplicates_frais_arbitres = doublons.frais_arbitres
+    report.duplicates_gabarits_ecartes = doublons.gabarits_ecartes
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

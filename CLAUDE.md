@@ -1930,6 +1930,54 @@ cover part sur l'image de secours du gabarit.
      (`representant_engage`). Un groupe rattaché à l'archive ne change donc
      jamais de tête par ce chemin.
 
+   **La bande douteuse FRAÎCHE aussi** (Phase 2B, Task 3, 2026-09-24). La
+   même machinerie — cache par paire, verdicts manuels prioritaires, plafond
+   de tentatives, plafond par passage, écriture atomique — s'applique
+   désormais aux paires de deux articles FRAIS dont le recouvrement de titre
+   est entre `cluster_arbitrage_frais_seuil` (**0.30**) et
+   `DEFAULT_THRESHOLD` (0.65, où le lien est déjà posé sans rien demander).
+   Le plancher est MESURÉ, pas arrondi : sur 50 paires réelles jugées le
+   2026-09-24, **0 vrai positif sur les 18 paires sous 0.30**, et les deux
+   seuls ratés purement sémantiques sont à 0.33 ; entre 0.33 et 0.57 la
+   courbe est PLATE (22 % / 20 % / 10 %), donc aucun seuil ne les sépare —
+   d'où un arbitrage et non un seuil abaissé (abaisser `DEFAULT_THRESHOLD` à
+   0.40 donnait 87 % de faux rapprochements, voie fermée). Comme pour
+   l'archive, c'est un **paramètre** qui ouvre la bande
+   (`arbitrage_frais_min`, `None` par défaut) : `run_veille` ne le passe
+   jamais, et `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` le laisse à `None`,
+   ce qui rend au pipeline exactement les décisions d'avant. Un lien frais
+   tranché par Claude est **visible** : compteur propre
+   (`ClusterStats.frais_arbitres`), WARNING avec les deux titres, et trace
+   sur l'article (`RAISON_DOUBLON_FRAIS_PREFIXE`, préfixe distinct de celui
+   de l'archive). `elire_representants` efface cette trace quand elle promeut
+   le doublon en représentant — sinon l'élu sortirait de la file pour une
+   raison qui n'a plus cours.
+
+   **L'anti-gabarit, qui est la moitié du travail** (`est_gabarit_de_source`).
+   Mesuré le 2026-09-24 sur la fenêtre réelle de 48 h (601 articles, 488
+   paires dans la bande) : **179 des 255 paires de même source viennent d'un
+   seul compte** (AIM UK), qui publie « The winner of *X* at the 2026
+   Independent Music Awards » une fois par prix. C'est un gabarit de
+   rédaction, pas un signal d'événement, et il faut l'écarter AVANT de payer.
+   Le remède naïf — écarter toute paire de même source — est un **piège
+   mesuré** : il tuerait 3 des 5 vrais ratés (deux paires Billboard, une
+   paire Soompi, une même source qui couvre vraiment deux fois la même
+   actu). Le critère est donc la RÉPÉTITION, jamais l'identité de la source :
+   les mots que la paire PARTAGE se retrouvent-ils dans au moins
+   `cluster_arbitrage_gabarit_min_articles` (**3**) articles de cette source ?
+   Deux articles sur un même événement partagent des mots propres à cet
+   événement (porteurs = 2) ; un gabarit ressort partout (porteurs = 18 chez
+   AIM UK). La distribution mesurée est nette : 44 paires à 2 porteurs, puis
+   17 à 3, 12 à 6, 60 à 18. Le critère ne s'applique qu'aux paires de **même
+   source**, et c'est vérifié plutôt que supposé : l'étendre aux paires
+   croisées écarte 132 paires de plus, dont « Taylor Swift Announces New
+   Single *Patient Zero* » (Pitchfork) contre « Taylor Swift has updated her
+   Instagram bio » (Pop Crave) — le raté sémantique même que ce chantier
+   existe pour attraper. Effet mesuré sur le parcours réel de
+   `link_duplicates` : 333 appels sur 48 h sans l'anti-gabarit, **162 avec**,
+   soit **~3,4 appels/h** (~0,003 $/h), très loin du plafond de 20 par
+   passage.
+
    Trois limites résiduelles, assumées : une reprise ingérée par `run_veille`
    (toutes les 5 min) reste non arbitrée — donc potentiellement publiable —
    jusqu'au prochain passage horaire, qui seul arbitre ; une paire qui échoue

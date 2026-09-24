@@ -64,6 +64,69 @@ DEFAULT_WINDOW_HOURS = 48
 # avec un doublon.
 RAISON_DOUBLON_PREFIXE = "doublon d'une actu deja publiee"
 
+# Trace des liens FRAIS poses par l'arbitrage Claude (Phase 2B, Task 3). Prefixe
+# DISTINCT de celui de l'archive : les deux liens n'ont pas la meme consequence
+# -- un lien d'archive sort l'article de la file pour de bon, un lien frais le
+# range seulement derriere un representant qui, lui, reste publiable. Mais un
+# lien frais tranche par un modele doit se VOIR sur l'article lui-meme : sans
+# trace, il sort du dashboard par le filtre `duplicate_of_id IS NULL` et plus
+# rien ne dit pourquoi.
+RAISON_DOUBLON_FRAIS_PREFIXE = "doublon d'une actu recente"
+
+# Les raisons posees par la dedup, et elles seules : ce que l'auto-reparation
+# d'un verdict manuel a le droit d'effacer, et ce que l'election efface quand
+# elle promeut un doublon en representant. Une raison posee AILLEURS (« gel
+# impossible : ... ») dit une vraie raison de ne pas publier, sans rapport avec
+# un doublon -- l'effacer remettrait dans la file un article que la publication
+# avait ecarte.
+RAISONS_DOUBLON_PREFIXES = (RAISON_DOUBLON_PREFIXE, RAISON_DOUBLON_FRAIS_PREFIXE)
+
+
+def raison_de_doublon(raison: str | None) -> bool:
+    """Vrai si cette raison d'exclusion a ete posee par la dedup."""
+    return (raison or "").startswith(RAISONS_DOUBLON_PREFIXES)
+
+
+def est_gabarit_de_source(
+    partage: set[str], jetons_de_la_source: list[set[str]], seuil: int
+) -> bool:
+    """Le critere ANTI-GABARIT (Phase 2B, Task 3), et tout son raisonnement.
+
+    Deux titres d'une meme source peuvent se ressembler pour deux raisons
+    opposees : ils couvrent le meme evenement (Billboard qui revient sur une
+    actu, Soompi qui la reprend), ou la source publie en SERIE sur un gabarit
+    de redaction. Mesure du 2026-09-24 : 179 des 255 paires de meme source de
+    la bande 0.30-0.65 viennent d'un seul compte (AIM UK), qui publie « The
+    winner of <X> at the 2026 Independent Music Awards » une fois par prix.
+    Payer un arbitrage pour chacune serait payer un gabarit.
+
+    Le remede naif -- ecarter toute paire de meme source -- est un piege
+    MESURE : il tuerait 3 des 5 vrais rates de la mesure (deux paires
+    Billboard, une paire Soompi). Ce qu'il faut detecter n'est pas l'identite
+    de la source, c'est la REPETITION.
+
+    D'ou le critere : les mots que la paire PARTAGE -- ceux-la memes qui la
+    font ressembler a un evenement -- se retrouvent-ils dans au moins `seuil`
+    articles de la meme source ? Deux articles qui couvrent un evenement
+    partagent des mots propres a cet evenement, qu'aucun troisieme article de
+    la source ne porte (porteurs = 2). Un gabarit, lui, ressort partout
+    (porteurs = 18 chez AIM UK). Le seuil de 3 dit exactement « au moins un
+    article au-dela de la paire », et la distribution mesuree est nette : 44
+    paires a 2 porteurs, puis 17 a 3, 12 a 6, 60 a 18.
+
+    Applique aux seules paires de MEME SOURCE (l'appelant s'en assure), parce
+    qu'un gabarit est l'habitude d'UNE source : quand les deux cotes viennent
+    de sources differentes, la ressemblance ne s'explique plus par l'habitude
+    d'une seule, et c'est precisement le signal recherche. Verifie plutot que
+    suppose : etendre le critere aux paires croisees ecarte 132 paires de plus
+    -- dont « Taylor Swift Announces New Single Patient Zero » (Pitchfork)
+    contre « Taylor Swift has updated her Instagram bio » (Pop Crave), c'est-a-
+    dire le rate semantique meme que ce chantier existe pour attraper.
+    """
+    if not partage:
+        return False  # jamais le cas dans la bande (MIN_SHARED_TOKENS), ceinture
+    return sum(1 for jetons in jetons_de_la_source if partage <= jetons) >= seuil
+
 
 def normalize_title(title: str) -> str:
     """Minuscules, sans accents ni ponctuation, traits d'union recollés."""
@@ -142,6 +205,15 @@ class ClusterStats:
     # Appels a l'arbitre qui n'ont rendu aucune reponse exploitable : jamais
     # memorises, jamais un lien, mais utile a voir dans la supervision.
     arbitrage_pannes: int = 0
+    # Sous-ensemble de `frais` : lien entre deux articles FRAIS pose par Claude
+    # dans la bande 0.30-0.65 (Phase 2B, Task 3), que le seuil de 0.65 n'aurait
+    # jamais pose. Compte a part de `arbitres` (l'archive) : les deux n'ont ni
+    # la meme mesure, ni le meme risque, et les melanger rendrait invisible
+    # celui des deux qui derape.
+    frais_arbitres: int = 0
+    # Paires de la bande fraiche ecartees SANS rien payer par l'anti-gabarit
+    # (`est_gabarit_de_source`). Comptees une fois par paire.
+    gabarits_ecartes: int = 0
 
     @property
     def total(self) -> int:
@@ -158,6 +230,8 @@ def link_duplicates(
     arbitrage_max: int | None = None,
     tentatives_max: int | None = None,
     cache_chemin: Path | None = None,
+    arbitrage_frais_min: float | None = None,
+    gabarit_min_articles: int | None = None,
 ) -> ClusterStats:
     """Pointe chaque doublon vers son représentant et renvoie le compte des liens créés.
 
@@ -224,6 +298,24 @@ def link_duplicates(
     représentant entre-temps est REPOINTÉ directement vers la vraie cible :
     jamais de chaîne à deux sauts.
 
+    **La bande douteuse FRAÎCHE** (Phase 2B, Task 3, 2026-09-24). La même
+    machinerie s'applique aux paires de deux articles FRAIS dont le
+    recouvrement est sous `threshold` (0.65, où le lien est déjà posé sans
+    rien demander) mais au-dessus de `arbitrage_frais_min` (0.30 mesuré : 0
+    vrai positif sur 18 paires en dessous, et les deux seuls ratés purement
+    sémantiques à 0.33). `arbitrage_frais_min` resté à `None` -- le DÉFAUT,
+    donc `run_veille` et tout appelant qui ne demande rien -- cette bande ne
+    produit aucun lien et aucun appel, et le module rend exactement les
+    décisions d'avant ce chantier : le coupe-circuit est le paramètre
+    lui-même, jamais une devinette sur l'appelant. Le cache, les verdicts
+    manuels, le plafond de tentatives et le plafond par passage sont les
+    MÊMES que pour l'archive -- une seule machinerie, pas deux.
+
+    Une paire de la bande fraîche dont la ressemblance s'explique par un
+    GABARIT de rédaction de sa source est écartée AVANT tout appel
+    (`est_gabarit_de_source`, qui porte la mesure et le piège du remède
+    naïf).
+
     **Le manuel converge, il ne parie pas sur l'ordre des écritures** (tour de
     correction 2/5, LE défaut le plus important trouvé en re-revue) : un
     lien tranché par Claude n'est posé qu'après avoir RELU le disque -- si un
@@ -243,6 +335,11 @@ def link_duplicates(
     )
     tentatives_max = (
         settings.cluster_arbitrage_tentatives_max if tentatives_max is None else tentatives_max
+    )
+    gabarit_min_articles = (
+        settings.cluster_arbitrage_gabarit_min_articles
+        if gabarit_min_articles is None
+        else gabarit_min_articles
     )
     seen_at = func.coalesce(Article.published_at, Article.fetched_at)
     now = dt.datetime.now(dt.timezone.utc)
@@ -283,7 +380,7 @@ def link_duplicates(
                 # rien à voir avec ce verdict manuel -- l'effacer remettrait
                 # dans la file un article que la publication avait écarté
                 # pour une vraie raison, sans rapport avec un doublon.
-                if (article_lie.file_exclu_raison or "").startswith(RAISON_DOUBLON_PREFIXE):
+                if raison_de_doublon(article_lie.file_exclu_raison):
                     article_lie.file_exclu_raison = None
     db.commit()
 
@@ -306,6 +403,20 @@ def link_duplicates(
     representatives: list[tuple[Article, set[str], bool]] = [
         (article, significant_tokens(article.title), True) for article in archived
     ]
+
+    # Jetons de TOUS les articles frais, groupes par source : le materiau de
+    # l'anti-gabarit (`est_gabarit_de_source`). Construit une seule fois --
+    # `significant_tokens` est deja appele par article dans les boucles, mais
+    # le cout est negligeable devant une requete, et le construire ici garde
+    # la mesure independante de l'ordre de parcours.
+    jetons_par_source: dict[int | None, list[set[str]]] = {}
+    for article_frais in articles:
+        jetons_par_source.setdefault(article_frais.source_id, []).append(
+            significant_tokens(article_frais.title)
+        )
+    # Paires deja ecartees par l'anti-gabarit : comptees UNE fois, meme si
+    # `resoudre` repasse dessus en passe 2.
+    gabarits_vus: set[str] = set()
 
     # Etat de travail pour ce passage SEULEMENT : jamais écrit tel quel, fusionné
     # avec une relecture du disque juste avant l'écriture (voir `fusionner_et_
@@ -347,6 +458,42 @@ def link_duplicates(
                 score = title_similarity_from_tokens(tokens, rep_tokens)
                 if score >= threshold:
                     return (rep_article, score, "frais", None)
+                if arbitrage_frais_min is None or score < arbitrage_frais_min:
+                    continue  # bande « differente », ou arbitrage frais coupe
+                # Bande douteuse FRAICHE. L'anti-gabarit passe AVANT tout --
+                # avant le cache, avant le budget, avant l'appel : son interet
+                # est justement de ne rien payer.
+                if rep_article.source_id == article.source_id and est_gabarit_de_source(
+                    tokens & rep_tokens,
+                    jetons_par_source.get(article.source_id, []),
+                    gabarit_min_articles,
+                ):
+                    if cle not in gabarits_vus:
+                        gabarits_vus.add(cle)
+                        stats.gabarits_ecartes += 1
+                    continue
+                if entree is not None:
+                    if entree.meme_actu:
+                        return (rep_article, score, "arbitre_frais", entree.raison)
+                    continue
+                deja_tentee_frais = tentatives_travail.get(cle, 0)
+                if deja_tentee_frais >= tentatives_max:
+                    continue
+                if deja_tentee_frais > 0 and not autoriser_retentatives:
+                    differe = True
+                    continue
+                if arbitre is None or appels_restants <= 0:
+                    continue
+                verdict = arbitre(rep_article, article)
+                appels_restants -= 1
+                if verdict is None:
+                    stats.arbitrage_pannes += 1
+                    tentatives_travail[cle] = deja_tentee_frais + 1
+                    continue
+                meme_actu, raison = verdict
+                nouveaux_verdicts[cle] = EntreeArbitrage(meme_actu, raison, manuel=False)
+                if meme_actu:
+                    return (rep_article, score, "arbitre_frais", raison)
                 continue
 
             score_certain = archive_similarity_from_tokens(tokens, rep_tokens)
@@ -442,7 +589,7 @@ def link_duplicates(
             representatives.append((article, tokens, False))
             return
         rep_article, score, origine, raison = resultat
-        if origine == "arbitre":
+        if origine in ("arbitre", "arbitre_frais"):
             # Relecture juste AVANT de poser un lien tranché par Claude (tour
             # de correction 2/5, cas 2, LE défaut le plus important du
             # chantier) : entre l'appel à l'arbitre et cet instant, un verdict
@@ -457,6 +604,27 @@ def link_duplicates(
                 representatives.append((article, tokens, False))
                 return
         repointes = lier(article, rep_article)
+        if origine == "arbitre_frais":
+            # Un lien que le seuil de 0.65 n'aurait JAMAIS pose : compteur a
+            # part, journalise, et trace sur l'article lui-meme. Sans les
+            # trois, un article sortirait du dashboard (filtre
+            # `duplicate_of_id IS NULL`) sans que rien ne dise pourquoi --
+            # exactement ce que ce depot s'interdit depuis le faux positif
+            # d'archive. La raison posee AILLEURS (« gel impossible : ... »)
+            # n'est jamais recouverte, meme regle que pour l'archive.
+            stats.frais += 1
+            stats.frais_arbitres += 1
+            if article.file_exclu_raison is None:
+                article.file_exclu_raison = (
+                    f"{RAISON_DOUBLON_FRAIS_PREFIXE} (article {rep_article.id}, "
+                    f"tranche par Claude : {raison})"
+                )[:500]
+            logger.warning(
+                "doublon frais tranche par Claude : « %s » (%s) rattache a « %s » (%s), "
+                "recouvrement %.2f : %s",
+                article.title, article.id, rep_article.title, rep_article.id, score, raison,
+            )
+            return
         if origine == "frais":
             stats.frais += 1
             return
@@ -497,8 +665,8 @@ def link_duplicates(
             # Une raison posée AILLEURS (« gel impossible : … ») dit déjà une
             # vraie raison de ne pas publier : ne pas la recouvrir, pour la
             # même raison que l'auto-réparation ne l'efface jamais.
-            if (pointeur.file_exclu_raison or RAISON_DOUBLON_PREFIXE).startswith(
-                RAISON_DOUBLON_PREFIXE
+            if pointeur.file_exclu_raison is None or raison_de_doublon(
+                pointeur.file_exclu_raison
             ):
                 pointeur.file_exclu_raison = (
                     f"{RAISON_DOUBLON_PREFIXE} (article {rep_article.id}, "

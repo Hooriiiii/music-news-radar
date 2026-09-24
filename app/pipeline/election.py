@@ -24,7 +24,11 @@ from app.config import settings
 from app.content.visuels import origine_interdite
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, ScoredBy, SourceCategorie
 from app.pipeline import events
-from app.pipeline.cluster import DEFAULT_WINDOW_HOURS, significant_tokens
+from app.pipeline.cluster import (
+    DEFAULT_WINDOW_HOURS,
+    raison_de_doublon,
+    significant_tokens,
+)
 from app.pipeline.comptes_artistes import IndexComptes
 from app.sources.instagram import TITRE_PAR_DEFAUT
 
@@ -192,6 +196,15 @@ def elire_representants(
                 stats.changements.append((actuel.id, meilleur.id))
                 if appliquer:
                     meilleur.duplicate_of_id = None
+                    # Un doublon promu representant ne garde pas la trace
+                    # d'exclusion que la dedup lui avait posee (Phase 2B,
+                    # Task 3 : un lien frais tranche par Claude en pose une) --
+                    # sinon l'elu sortirait de la file de publication pour une
+                    # raison qui n'a plus cours. Une raison posee AILLEURS
+                    # (« gel impossible : ... ») n'est jamais effacee : meme
+                    # filtre que l'auto-reparation d'un verdict manuel.
+                    if raison_de_doublon(meilleur.file_exclu_raison):
+                        meilleur.file_exclu_raison = None
                     for membre in membres:
                         if membre.id != meilleur.id:
                             membre.duplicate_of_id = meilleur.id

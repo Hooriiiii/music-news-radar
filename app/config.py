@@ -237,6 +237,35 @@ class Settings(BaseSettings):
     # rendue.
     cluster_arbitrage_tentatives_max: int = 3
 
+    # --- Arbitrage des paires FRAICHES (Phase 2B, Task 3, 2026-09-24) ---
+    # La meme machinerie (cache par paire, verdicts manuels prioritaires,
+    # plafonds, coupe-circuit) s'applique desormais aussi aux paires de deux
+    # articles FRAIS dont le recouvrement de titre est SOUS le seuil de lien
+    # automatique (`DEFAULT_THRESHOLD`, 0.65) mais au-dessus de ce plancher.
+    # Coupe-circuit propre : a false, aucune paire fraiche n'est arbitree et
+    # le pipeline rend EXACTEMENT les memes decisions qu'avant ce chantier.
+    cluster_arbitrage_frais_enabled: bool = True
+    # 0.30 et pas 0.35 : mesure du 2026-09-24 sur 50 paires reelles jugees par
+    # Haiku -- 0 vrai positif sur les 18 paires sous 0.30, et les deux seuls
+    # rates purement semantiques sont a 0.33. La courbe est PLATE entre 0.33 et
+    # 0.57 (22 % / 20 % / 10 % de vrais meme-evenements par tranche) : aucun
+    # seuil ne les separe, d'ou un arbitrage et non un seuil abaisse (abaisser
+    # `DEFAULT_THRESHOLD` a 0.40 donnait 87 % de faux rapprochements).
+    cluster_arbitrage_frais_seuil: float = 0.30
+    # Anti-gabarit : nombre d'articles d'UNE MEME source qui doivent porter les
+    # mots partages d'une paire pour que la ressemblance soit imputee a un
+    # gabarit de redaction plutot qu'a un evenement. 3 = « au moins un article
+    # au-dela de la paire elle-meme ». Mesure du 2026-09-24 sur la fenetre
+    # reelle de 48 h (601 articles, 488 paires dans la bande) : 211 paires
+    # ecartees, dont les 179 de AIM UK (« The winner of X at the 2026
+    # Independent Music Awards », un gabarit de legende publie en serie), et la
+    # distribution est nette -- 44 paires a 2 porteurs, puis 17 a 3, 12 a 6,
+    # 60 a 18. Les paires Billboard x2 et Soompi x2 qui couvrent reellement
+    # deux fois la meme actu restent a 2 porteurs, donc gardees : c'est ce qui
+    # distingue ce critere du remede naif (« ecarter les paires de meme
+    # source »), qui tuerait 3 des 5 vrais rates mesures.
+    cluster_arbitrage_gabarit_min_articles: int = 3
+
     # --- Tout article devient l'observation d'un evenement (Phase 2B, Task 1) ---
     # Borne le nombre d'articles qu'un passage horaire peut faire entrer dans
     # un evenement, meme esprit qu'`illustration_max_par_run` : au premier
