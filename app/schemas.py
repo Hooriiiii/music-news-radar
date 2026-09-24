@@ -5,7 +5,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.content import layout
 from app.content.highlight import validate_headline
-from app.models import ArticleStatus, EtatCreneau, FormatCreneau, PostStatus, SourceCategorie, SourceType
+from app.models import (
+    ArticleStatus,
+    EtatCreneau,
+    FormatCreneau,
+    PostStatus,
+    SourceCategorie,
+    SourceRole,
+    SourceType,
+)
 
 
 class SourceOut(BaseModel):
@@ -260,6 +268,57 @@ class ReelsOut(BaseModel):
 
 class ReelsUpdate(BaseModel):
     actifs: bool
+
+
+class EventObservationOut(BaseModel):
+    """Une preuve (Phase 2A, Task 4) -- champs denormalises, lisibles meme si
+    `article_id` est devenu NULL apres la purge de l'article."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    article_id: int | None
+    platform: SourceType
+    source_id: int | None
+    source_role: SourceRole
+    published_at: dt.datetime | None
+    observed_at: dt.datetime
+    title: str
+    url: str
+    source_name: str
+
+
+class EventOut(BaseModel):
+    """Un evenement et ses features deterministes (Task 3), calculees a la
+    lecture -- rien de tout ca n'est persiste ni ne pese sur l'arbitrage de
+    publication, voir `docs/superpowers/plans/2026-09-23-phase-2a-evenements.md`,
+    Task 4."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    titre: str
+    event_type: str | None
+    first_seen_at: dt.datetime
+    last_seen_at: dt.datetime
+    source_count: int
+    platform_count: int
+    independent_source_count: int
+    # Calcule a la lecture (app/pipeline/event_features.py), jamais stocke :
+    # voir la note de `corroboration` cote dashboard -- elle mesure le bavardage
+    # de la presse, pas la pertinence editoriale de Kinda.
+    freshness: float
+    corroboration: float
+    # Pertinence (`relevance_score`) de l'article REPRESENTANT du groupe --
+    # Tour de correction 1 : c'est le chiffre editorial qui doit se lire A COTE
+    # de `corroboration`, jamais a sa place (voir app/api/events.py). Nullable :
+    # le representant peut avoir ete purge sans que l'evenement disparaisse.
+    relevance_representant: int | None
+
+
+class EventDetailOut(EventOut):
+    observations: list[EventObservationOut]
 
 
 class ModeOut(BaseModel):

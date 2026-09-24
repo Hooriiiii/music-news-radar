@@ -3,13 +3,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from app.api import articles, artists, digests, posts, schedule, sources
+from app.api import articles, artists, digests, events, posts, schedule, sources
 
 app = FastAPI(title="Music News Radar", version="0.1.0")
 
 app.include_router(articles.router)
 app.include_router(artists.router)
 app.include_router(digests.router)
+app.include_router(events.router)
 app.include_router(posts.router)
 app.include_router(schedule.router)
 app.include_router(sources.router)
