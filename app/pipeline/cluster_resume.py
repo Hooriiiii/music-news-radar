@@ -134,16 +134,38 @@ JOURS_MIN = 2
 
 _BALISES = re.compile(r"<[^>]+>")
 
+# Les deux artefacts STRUCTURELS que les flux WordPress accolent a chaque
+# description : le pied « The post <titre> appeared first on <Site>. » et le
+# lien de coupure « ... Continue reading <titre> ». Ce ne sont PAS un signal de
+# FREQUENCE -- on les reconnait a leur FORME, exactement comme on reconnait le
+# bandeau de metriques d'Instagram -- et ils ne parlent jamais de l'actu : les
+# retirer ne ressemble en rien au filtre de frequence sur les mots du resume,
+# que la mesure interdit (voir le docstring de `cluster.est_gabarit_de_source`).
+# Sans eux, « appeared », « first », « post », « stereogum » / « soompi »,
+# « continue », « reading » suffisaient a eux seuls a faire franchir le seuil a
+# deux articles sans aucun rapport de la meme source.
+_PIED_WORDPRESS = re.compile(
+    r"\s*\bThe post\b.{0,400}?\bappeared first on\b[^.]{0,80}\.?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_COUPURE_WORDPRESS = re.compile(
+    r"(?:\.{3}|\u2026)?\s*\bContinue reading\b.*$", re.IGNORECASE | re.DOTALL
+)
+
 
 def jetons_de_resume(article: Article) -> set[str]:
     """Les mots significatifs du resume d'un article, bandeau et HTML retires.
 
-    Trois nettoyages, chacun pour une forme reellement rencontree en base :
+    Quatre nettoyages, chacun pour une forme reellement rencontree en base :
     le bandeau de metriques d'une caption Instagram (`caption_depuis_summary`,
     valable AVANT le scoring -- ensuite `apply_score` a remplace le summary par
     le resume du modele et il n'y a plus de bandeau a retirer, la fonction est
     alors un no-op) ; les balises d'une description RSS ; les entites HTML que
     ces descriptions portent (`&amp;`, `&#8217;`).
+
+    Et les deux artefacts de flux WordPress (`_PIED_WORDPRESS`,
+    `_COUPURE_WORDPRESS`), reconnus a leur FORME et non a la frequence de
+    leurs mots.
 
     Reutilise `significant_tokens` (mots vides FR+EN, longueur minimale,
     accents replies) : une SECONDE tokenisation divergerait de celle des
@@ -152,7 +174,10 @@ def jetons_de_resume(article: Article) -> set[str]:
     texte = caption_depuis_summary(article.summary)
     if not texte:
         return set()
-    return significant_tokens(html.unescape(_BALISES.sub(" ", texte)))
+    texte = html.unescape(_BALISES.sub(" ", texte))
+    texte = _PIED_WORDPRESS.sub(" ", texte)
+    texte = _COUPURE_WORDPRESS.sub(" ", texte)
+    return significant_tokens(texte)
 
 
 @dataclass

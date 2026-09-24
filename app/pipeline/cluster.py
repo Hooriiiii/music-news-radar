@@ -234,6 +234,10 @@ class ClusterStats:
     # PUBLICATION RECURRENTE de sa source (le « Billboard Hot 100 Top 10
     # Countdown » hebdomadaire). Comptees une fois par paire.
     recurrences_ecartees: int = 0
+    # Paires ecartees SANS rien payer parce que les DEUX articles sont sous le
+    # seuil de pertinence : aucune publication a proteger, et un evenement a
+    # deux observations est PERMANENT (`purger_evenements_sans_valeur`).
+    resumes_sous_le_seuil: int = 0
 
     @property
     def total(self) -> int:
@@ -560,6 +564,39 @@ def link_duplicates(
             return None
         partages = len(jetons_a & jetons_b)
         if partages < arbitrage_resume_min:
+            return None
+        # DEUX articles sous le seuil de pertinence : ni l'un ni l'autre ne
+        # sera jamais publie, donc le lien ne protegerait AUCUNE publication.
+        # Et il ferait pire que rien : depuis la Phase 2B, `lier` cree une
+        # observation, et `purger_evenements_sans_valeur` rend PERMANENT (sans
+        # condition) tout evenement a DEUX observations ou plus -- deux posts
+        # vides qui se ressemblent, et ils se ressemblent beaucoup, seraient
+        # donc un evenement de bruit que plus rien ne purgerait JAMAIS. La
+        # garde qui protege la table `events` serait contournee par ce chemin
+        # neuf. Si UN des deux est au-dessus du seuil, la paire est gardee :
+        # la corroboration a de la valeur pour celui-la. C'est aussi la regle
+        # de cout que le depot applique deja a l'illustration -- on ne paie
+        # rien pour un article qui ne sera jamais poste.
+        #
+        # Le seuil est celui de `purger_evenements_sans_valeur`
+        # (`digest_relevance_threshold`), lu ici meme, pour que les deux
+        # regles ne puissent pas diverger.
+        #
+        # Une note ABSENTE (article jamais score -- `link_duplicates` tourne
+        # AVANT le scoring) vaut AU-DESSUS du seuil : on ne sait pas, donc on
+        # ne jette pas, la regle du doute du depot. La purge d'evenements
+        # prend la convention INVERSE sur le meme champ, et c'est voulu des
+        # deux cotes : la-bas une note absente ne PROUVE pas la valeur d'un
+        # evenement qu'on garderait pour toujours ; ici elle ne prouve pas non
+        # plus qu'on peut renoncer a reconnaitre un doublon. Chaque regle
+        # penche du cote ou le doute coute le moins cher.
+        if (
+            article.relevance_score is not None
+            and rep_article.relevance_score is not None
+            and article.relevance_score < settings.digest_relevance_threshold
+            and rep_article.relevance_score < settings.digest_relevance_threshold
+        ):
+            stats.resumes_sous_le_seuil += 1
             return None
         # Le garde-fou de RECURRENCE passe AVANT tout -- avant le cache, avant
         # le budget, avant l'appel : son interet est justement de ne rien

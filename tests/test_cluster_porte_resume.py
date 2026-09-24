@@ -383,3 +383,81 @@ def test_un_verdict_deja_en_cache_relie_sans_repayer(db_session, cache):
     assert second.appels == []
     assert b.duplicate_of_id == a.id
     assert stats.resumes_arbitres == 1
+
+
+# -- les pieds de page structurels des flux WordPress -----------------------
+
+
+def test_le_pied_wordpress_ne_fabrique_pas_de_mots_partages():
+    """« The post ... appeared first on Stereogum. » est un artefact de FLUX,
+    reconnu a sa FORME -- rien a voir avec le filtre de frequence sur les mots
+    du resume, que la mesure interdit (il tue les vrais positifs Billboard).
+    Sans ce retrait, « appeared », « first », « post » et le nom du site
+    suffisaient a rapprocher deux articles sans aucun rapport."""
+    corps = "Bicep annonce un live au Zenith de Paris pour janvier prochain."
+    pied = f"{corps} The post Bicep annonce un live appeared first on Stereogum."
+    assert jetons_de_resume(_faux_article(pied)) == jetons_de_resume(
+        _faux_article(corps)
+    )
+
+
+def test_la_coupure_continue_reading_est_retiree():
+    corps = "Le festival Dour devoile sa programmation complete pour 2027."
+    coupe = f"{corps}... Continue reading Le festival Dour devoile sa programmation"
+    assert jetons_de_resume(_faux_article(coupe)) == jetons_de_resume(
+        _faux_article(corps)
+    )
+
+
+# -- la garde de pertinence -------------------------------------------------
+
+
+def _noter(db, article, note):
+    article.relevance_score = note
+    db.commit()
+
+
+def test_deux_articles_sous_le_seuil_ne_sont_jamais_arbitres(db_session, cache):
+    """Le lien ne protegerait AUCUNE publication -- et il ferait pire : un
+    evenement a DEUX observations est PERMANENT (`purger_evenements_sans_valeur`),
+    donc deux posts vides qui se ressemblent deviendraient du bruit que plus
+    rien ne purgerait jamais."""
+    db_session.autoflush = False
+    a, b = _paire(db_session)
+    _noter(db_session, a, 20)
+    _noter(db_session, b, 25)
+    arbitre = _Arbitre((True, "meme condamnation"))
+    link_duplicates(
+        db_session, arbitre=arbitre, arbitrage_resume_min=6, cache_chemin=cache
+    )
+    assert arbitre.appels == []
+    assert b.duplicate_of_id is None
+
+
+def test_un_seul_article_au_dessus_du_seuil_suffit_a_garder_la_paire(db_session, cache):
+    """La corroboration a de la valeur pour celui qui, lui, peut etre publie."""
+    db_session.autoflush = False
+    a, b = _paire(db_session)
+    _noter(db_session, a, 75)
+    _noter(db_session, b, 20)
+    arbitre = _Arbitre((True, "meme condamnation"))
+    link_duplicates(
+        db_session, arbitre=arbitre, arbitrage_resume_min=6, cache_chemin=cache
+    )
+    assert arbitre.appels == [cle_paire(a.id, b.id)]
+    assert b.duplicate_of_id == a.id
+
+
+def test_une_note_absente_vaut_au_dessus_du_seuil(db_session, cache):
+    """`link_duplicates` tourne AVANT le scoring : un article frais n'a pas de
+    note. On ne sait pas, donc on ne jette pas -- la regle du doute du depot.
+    La purge d'evenements prend la convention INVERSE sur le meme champ, et
+    c'est voulu : chaque regle penche du cote ou le doute coute le moins cher."""
+    db_session.autoflush = False
+    a, b = _paire(db_session)
+    assert a.relevance_score is None and b.relevance_score is None
+    arbitre = _Arbitre((True, "meme condamnation"))
+    link_duplicates(
+        db_session, arbitre=arbitre, arbitrage_resume_min=6, cache_chemin=cache
+    )
+    assert arbitre.appels == [cle_paire(a.id, b.id)]
