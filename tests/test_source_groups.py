@@ -254,3 +254,109 @@ def test_run_pipeline_survit_a_une_panne_du_groupement_de_sources(db_session, mo
     # sautee independamment du groupement de sources.
     assert calls == ["ingest", "cluster", "elire", "illustrer", "record", "purge"]
     assert report.purged == 3
+
+
+def test_panne_de_propagation_annule_aussi_le_groupement_deja_pose(db_session, monkeypatch):
+    """Preuve par MUTATION de l'atomicite (tour de correction 2, 2026-09-24).
+
+    Avant le correctif, `grouper_sources(appliquer=True)` committait seule,
+    puis `recalculer_tout` committait ou annulait seule : une panne PENDANT
+    le recalcul laissait les `source_group_id` deja committes, et le
+    `rollback` de l'exception n'annulait QUE les compteurs. Le passage suivant
+    trouvait alors un plan VIDE (sources deja alignees) et ne retentait plus
+    jamais la propagation -- les compteurs restaient faux pour de bon.
+
+    Ce test injecte la panne exactement a cet endroit (apres l'assignation
+    des `source_group_id`, pendant le recalcul) et prouve les DEUX moities de
+    la garantie : (1) le groupement lui-meme est annule, pas seulement les
+    compteurs -- sinon le second appel ci-dessous verrait un plan vide et
+    `sources_regroupees == 0` ; (2) le second appel, sans panne, retente tout
+    depuis zero et reussit entierement."""
+    db_session.autoflush = False
+    rss = _source(db_session, "Mixmag", SourceType.RSS)
+    ig = _source(db_session, "Mixmag (IG)", SourceType.INSTAGRAM)
+    art_rss = _article(db_session, rss, n=1, title="Une actu Mixmag")
+    art_ig = _article(db_session, ig, n=2, title="Une actu Mixmag")
+    event = _event(db_session, titre="Actu Mixmag", independent_source_count=2)
+    _observation(db_session, event, art_rss, rss)
+    _observation(db_session, event, art_ig, ig)
+
+    def recalcul_qui_casse(*args, **kwargs):
+        raise RuntimeError("connexion perdue pendant la propagation")
+
+    monkeypatch.setattr("app.pipeline.events.recalculer_tout", recalcul_qui_casse)
+
+    stats1 = regrouper_sources_et_propager(db_session)
+
+    assert stats1.erreur is not None
+    assert stats1.sources_regroupees == 2  # le plan a bien ete calcule...
+    db_session.refresh(rss)
+    db_session.refresh(ig)
+    # ... mais RIEN n'est reste committe : le groupement est annule avec les
+    # compteurs, pas seulement les compteurs.
+    assert rss.source_group_id is None
+    assert ig.source_group_id is None
+    db_session.refresh(event)
+    assert event.independent_source_count == 2  # inchange lui aussi
+
+    monkeypatch.undo()  # `recalculer_tout` retrouve son vrai comportement
+
+    stats2 = regrouper_sources_et_propager(db_session)
+
+    assert stats2.erreur is None
+    assert stats2.sources_regroupees == 2  # RETENTE, pas un plan vide
+    assert stats2.evenements_recalcules == 1
+    db_session.refresh(rss)
+    db_session.refresh(ig)
+    assert rss.source_group_id == ig.source_group_id == min(rss.id, ig.id)
+    db_session.refresh(event)
+    assert event.independent_source_count == 1
+
+
+def test_avertissements_sont_journalises(db_session, caplog):
+    """Une source renommee au dashboard (le canal Instagram de Mixmag
+    n'existe plus sous ce nom) fait tomber son groupe sous deux membres
+    trouves : le groupe est saute -- `stats.avertissements` doit porter
+    l'info, et elle doit etre journalisee, pas seulement calculee en
+    silence."""
+    db_session.autoflush = False
+    _source(db_session, "Mixmag", SourceType.RSS)  # canal IG absent
+
+    with caplog.at_level("WARNING", logger="app.pipeline.source_groups"):
+        stats = regrouper_sources_et_propager(db_session)
+
+    assert stats.avertissements
+    assert any("avertissement" in message for message in caplog.messages)
+
+
+def test_erreur_de_groupement_rejoint_les_problemes_notifies(db_session, monkeypatch):
+    """`stats.erreur` doit rejoindre `report.problemes` pour declencher une
+    notification -- sans cette ligne, une panne de regroupement des sources
+    ne serait jamais signalee, meme forme que l'agent digest qui a echoue
+    chaque jour pendant cinq semaines sans que rien ne le dise."""
+    from app.config import settings
+    from app.pipeline.cluster import ClusterStats
+    from app.pipeline.election import ElectionStats
+    from app.pipeline.scoring import ScoringStats
+    from app.pipeline.source_groups import GroupementStats
+
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "discord_webhook_url", None)
+
+    notifications = []
+
+    report = run_pipeline(
+        db_session,
+        ingest=lambda db: [],
+        cluster=lambda db: ClusterStats(),
+        elire=lambda db: ElectionStats(),
+        score=lambda db: ScoringStats(),
+        record=lambda db: 0,
+        illustrer=lambda db: type("S", (), {"illustres": 0})(),
+        purge=lambda db, days: 0,
+        grouper_sources=lambda db: GroupementStats(erreur="connexion perdue"),
+        notify=lambda titre, message: notifications.append((titre, message)),
+    )
+
+    assert any("regroupement de sources" in p for p in report.problemes)
+    assert any("regroupement de sources" in message for _, message in notifications)

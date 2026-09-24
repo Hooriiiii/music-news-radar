@@ -106,13 +106,22 @@ class LignePlan:
 
 
 def grouper_sources(
-    db: Session, *, appliquer: bool = False
+    db: Session, *, appliquer: bool = False, commit: bool = True
 ) -> tuple[list[LignePlan], list[str]]:
     """Rend (plan, avertissements) et ecrit si `appliquer`. Idempotent.
 
     `avertissements` couvre deux cas tolerants, jamais une erreur : un membre
     du mapping absent de la base, et un groupe deja pose differemment sur au
-    moins un de ses membres (laisse intact, jamais applique a moitie)."""
+    moins un de ses membres (laisse intact, jamais applique a moitie).
+
+    `commit` (tour de correction 2, 2026-09-24, defaut `True` -- comportement
+    inchange pour `scripts/grouper_sources.py --apply`) : `False` pose les
+    `source_group_id` sur les objets de LA SESSION sans cloturer la
+    transaction, pour que l'appelant (`regrouper_sources_et_propager`) puisse
+    committer ce regroupement et le recalcul des compteurs d'evenements dans
+    UNE SEULE transaction -- sinon une panne pendant le recalcul laisserait
+    les groupes deja committes avec des compteurs faux que plus rien ne
+    retenterait (voir le docstring du module)."""
     plan: list[LignePlan] = []
     absents: list[str] = []
 
@@ -158,7 +167,7 @@ def grouper_sources(
             if appliquer:
                 source.source_group_id = cible
 
-    if appliquer:
+    if appliquer and commit:
         db.commit()
     return plan, absents
 
@@ -184,19 +193,50 @@ def regrouper_sources_et_propager(db: Session) -> GroupementStats:
     est pose et celui ou quelqu'un pense a relancer
     `scripts/rattraper_evenements.py --recalculer` a la main.
 
+    **Une seule transaction, tout ou rien** (tour de correction 2,
+    2026-09-24) : `grouper_sources` est appelee avec `commit=False` et
+    `recalculer_tout` avec `finaliser=False`, et c'est CETTE fonction qui
+    committe une fois, apres les deux etapes. Avant ce correctif,
+    `grouper_sources(appliquer=True)` committait seule puis `recalculer_tout`
+    committait ou annulait seule : une panne PENDANT le recalcul (connexion
+    perdue, une requete par evenement) faisait annuler les compteurs par le
+    `rollback` du `except` ci-dessous mais laissait les `source_group_id`
+    DEJA COMMITTES par `grouper_sources` -- le passage suivant trouvait alors
+    tous les membres deja alignes, un plan VIDE, et sortait avant la moindre
+    requete sur `events` : la propagation n'etait plus jamais retentee, et
+    les compteurs restaient faux jusqu'a une intervention manuelle. `db.flush()`
+    devient alors OBLIGATOIRE juste apres `grouper_sources` : la production
+    tourne en `autoflush=False` (`app/db.py`), donc sans lui le SELECT Core de
+    `_recalculer` (qui lit `Source.source_group_id`) verrait encore les
+    anciennes valeurs et propagerait dans le vide.
+
     Ne leve jamais (voir le docstring du module)."""
     stats = GroupementStats()
     try:
-        plan, avertissements = grouper_sources(db, appliquer=True)
+        plan, avertissements = grouper_sources(db, appliquer=True, commit=False)
         stats.sources_regroupees = len(plan)
         stats.avertissements = avertissements
+        if avertissements:
+            # Un groupe saute en silence (source renommee, conflit deja pose)
+            # fausserait la corroboration sans que rien ne le dise jamais.
+            logger.warning(
+                "regroupement de sources : %d avertissement(s) : %s",
+                len(avertissements), " ; ".join(avertissements),
+            )
         if not plan:
             return stats
+
+        # OBLIGATOIRE : `grouper_sources` n'a pas committe (`commit=False`),
+        # et la production tourne en `autoflush=False` -- sans ce flush,
+        # `_recalculer` (appele plus bas par `recalculer_tout`) lirait encore
+        # les anciens `source_group_id` via son SELECT Core.
+        db.flush()
 
         if not events_module._tables_disponibles(db):
             # Migration 0019 non jouee sur cette base : le regroupement des
             # sources reste pose (utile independamment des evenements), mais
             # rien a propager pour l'instant.
+            db.commit()
             return stats
 
         source_ids = {ligne.source_id for ligne in plan}
@@ -208,11 +248,16 @@ def regrouper_sources_et_propager(db: Session) -> GroupementStats:
             )
         )
         if not event_ids:
+            db.commit()
             return stats
 
         evenements = list(db.scalars(select(Event).where(Event.id.in_(event_ids))))
-        rapport = events_module.recalculer_tout(db, appliquer=True, evenements=evenements)
+        rapport = events_module.recalculer_tout(
+            db, appliquer=True, evenements=evenements, finaliser=False
+        )
         stats.evenements_recalcules = len(rapport.lignes)
+        # Frontiere de commit UNIQUE : groupes + compteurs, tout ou rien.
+        db.commit()
     except Exception as exc:  # noqa: BLE001 -- ne doit jamais interrompre le passage horaire
         logger.exception("Regroupement des sources / propagation aux evenements impossible")
         stats.erreur = str(exc)

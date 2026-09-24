@@ -294,7 +294,11 @@ def _valeurs(event: Event) -> dict:
 
 
 def recalculer_tout(
-    db: Session, *, appliquer: bool = False, evenements: list[Event] | None = None
+    db: Session,
+    *,
+    appliquer: bool = False,
+    evenements: list[Event] | None = None,
+    finaliser: bool = True,
 ) -> RapportRecalcul:
     """Relit des `Event` existants et leur applique `_recalculer` -- la seule
     fonction qui écrit `source_count`, `platform_count`,
@@ -309,6 +313,15 @@ def recalculer_tout(
     de `scripts/rattraper_evenements.py --recalculer`), TOUS les événements
     sont relus, comportement inchangé.
 
+    `finaliser` (tour de correction 2, 2026-09-24) : par défaut (`True`), la
+    fonction clôt elle-même la transaction (`commit` si `appliquer`, sinon
+    `rollback`) -- comportement inchangé pour `scripts/rattraper_evenements.py`.
+    `app.pipeline.source_groups.regrouper_sources_et_propager` passe `False` :
+    poser `sources.source_group_id` et recalculer les compteurs doivent être
+    une SEULE transaction (tout ou rien), pour qu'une panne pendant le recalcul
+    ne laisse jamais les groupes déjà committés avec des compteurs faux que
+    plus rien ne retente. C'est alors à cet appelant de committer ou d'annuler.
+
     Point d'écriture unique de ces compteurs (avec `_recalculer` lui-même) :
     déplacé depuis `scripts/rattraper_evenements.py` (tour de correction 1,
     2026-09-24) pour que `app/` cesse de dépendre d'un module qui fait de
@@ -318,7 +331,8 @@ def recalculer_tout(
 
     if not _tables_disponibles(db):
         rapport.tables_absentes = True
-        db.rollback()
+        if finaliser:
+            db.rollback()
         return rapport
 
     tous = list(db.scalars(select(Event))) if evenements is None else evenements
@@ -336,10 +350,11 @@ def recalculer_tout(
         if diffs:
             rapport.lignes.append(LigneRecalcul(event.id, event.titre, diffs))
 
-    if appliquer:
-        db.commit()
-    else:
-        db.rollback()
+    if finaliser:
+        if appliquer:
+            db.commit()
+        else:
+            db.rollback()
     return rapport
 
 

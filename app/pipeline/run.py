@@ -156,6 +156,14 @@ def run_pipeline(
     # Trois pannes sont passees inapercues faute de ce controle -- l'agent
     # digest cinq semaines, une source X figee sept jours, les credits epuises.
     report.problemes = diagnostiquer(db, report.ingest, report.scoring)
+    if report.groupement_sources is not None and report.groupement_sources.erreur:
+        # Sans cette ligne, une panne de regroupement des sources ne serait
+        # jamais notifiee : `diagnostiquer` ne regarde que l'ingestion et le
+        # scoring. Meme forme exactement que l'agent digest qui a echoue
+        # chaque jour pendant cinq semaines sans que rien ne le signale.
+        report.problemes.append(
+            f"regroupement de sources : {report.groupement_sources.erreur}"
+        )
     if report.problemes:
         try:
             notify("Kinda", " · ".join(report.problemes))
