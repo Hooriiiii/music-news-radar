@@ -37,14 +37,34 @@ class Settings(BaseSettings):
     # Endpoint compatible OpenAI exposé par LM Studio
     local_scoring_url: str = "http://localhost:1234/v1/chat/completions"
     # Modèle chargé dans LM Studio (identifiant tel qu'il l'expose)
-    local_scoring_model: str = "qwen/qwen3-4b"
+    # Qwen3 **1.7B** et non 4B : mesure du 2026-09-30 sur la machine de
+    # l'utilisateur (16 Go de RAM, swap a 9,5 Go sur 10,2 avant reglage -- le
+    # 4B chargé large faisait planter le poste). Sur 30 articles deja notes par
+    # Claude, le 1.7B ne perd AUCUN article : il ne descend jamais sous le
+    # seuil un article que Claude a juge bon (>= 60). Ses 10 desaccords vont
+    # tous dans le sens SUR -- il envoie a Claude un article que Claude note
+    # sous 45, ce qui ne coute qu'un appel. C'est exactement le compromis
+    # voulu pour un pre-filtre : rater une economie, jamais un article.
+    local_scoring_model: str = "qwen/qwen3-1.7b"
     # Le contexte avec lequel `scripts.assurer_prefiltre` charge le modele. Le
     # defaut de LM Studio (4096) ne suffit PAS au SYSTEM_PROMPT (~180 lignes)
     # plus un article long : mesure le 2026-09-24, il rend un 400 sur les seuls
     # articles longs -- donc il echoue precisement sur ceux qui coutent le plus
     # cher chez Claude, et reussit sur les autres, ce qui lui donne l'air de
     # fonctionner. 16384 passe largement et tient dans la memoire d'un 4B.
-    local_scoring_context: int = 16384
+    # 8192 et non 16384 : le prompt systeme pese a lui seul ~14 000 caracteres
+    # et domine tout (l'article n'ajoute que quelques centaines) ; le plus gros
+    # prompt mesure sur 400 articles reels fait 15 851 caracteres, soit ~5 300
+    # tokens en estimation prudente. 8192 laisse de la marge pour la sortie.
+    # 4096 etait TROP COURT et rendait un 400 sur les seuls articles LONGS --
+    # donc precisement ceux qui coutent le plus cher chez Claude.
+    local_scoring_context: int = 8192
+    # UN SEUL emplacement : le pre-filtre note article par article, jamais en
+    # parallele. Le defaut de LM Studio est 4, et le cache d'attention se paie
+    # par emplacement -- 16384 x 4 tenait 65 536 tokens en memoire pour rien,
+    # sur une machine de 16 Go. C'est ce reglage, plus que le poids du modele,
+    # qui a fait planter le poste.
+    local_scoring_parallel: int = 1
     # Sous cette note de pertinence LOCALE, l'article est écarté sans appel Claude.
     # Volontairement plus bas que le seuil du digest (60) : la mesure porte sur
     # 36 articles, assez pour voir la tendance, pas pour jurer que le zéro faux

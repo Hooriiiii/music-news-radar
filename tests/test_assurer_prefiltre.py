@@ -86,22 +86,32 @@ def test_une_sortie_illisible_rend_None(appels):
 # -- agir ------------------------------------------------------------------
 
 
-def test_tout_va_bien_ne_lance_AUCUNE_commande_de_plus(appels):
+def test_tout_va_bien_ne_charge_ni_ne_decharge_RIEN(appels):
     """Le regime de croisiere doit etre gratuit : un agent qui tourne toutes
-    les demi-heures ne doit ni recharger un modele sain ni ecrire un log."""
+    les demi-heures ne doit ni recharger un modele sain ni ecrire un log. Il
+    relit `ps` pour verifier l'empilement et les autres modeles -- des lectures,
+    jamais une ecriture."""
     journal, reponses = appels
     reponses[("ps", "--json")] = _resultat(sortie=_charge())
     assert ap.assurer(LMS, "qwen/qwen3-4b", 16384, lambda *_: None) is True
-    assert journal == [("ps", "--json")]
+    assert all(a[0] == "ps" for a in journal), journal
 
 
 def test_un_serveur_eteint_est_demarre_puis_le_modele_charge(appels):
     journal, reponses = appels
-    etats = iter([_resultat(code=1), _resultat(sortie="[]")])
-    reponses[("ps", "--json")] = lambda _: next(etats)
+    # Le serveur est eteint au premier `ps`, puis repond « rien de charge ».
+    # La derniere reponse VAUT pour tous les appels suivants : compter les
+    # lectures rendrait le test fragile a chaque garde ajoutee (empilement,
+    # modeles etrangers) alors qu'aucune n'ecrit rien.
+    etats = [_resultat(code=1), _resultat(sortie="[]")]
+
+    def suivant(_):
+        return etats.pop(0) if len(etats) > 1 else etats[0]
+
+    reponses[("ps", "--json")] = suivant
     assert ap.assurer(LMS, "qwen/qwen3-4b", 16384, lambda *_: None) is True
     assert ("server", "start") in journal
-    assert ("load", "qwen/qwen3-4b", "--context-length", "16384") in journal
+    assert ("load", "qwen/qwen3-4b", "--context-length", "16384", "--parallel", "1") in journal
 
 
 def test_un_contexte_trop_court_est_DECHARGE_avant_rechargement(appels):
@@ -111,7 +121,7 @@ def test_un_contexte_trop_court_est_DECHARGE_avant_rechargement(appels):
     reponses[("ps", "--json")] = _resultat(sortie=_charge(contexte=4096))
     assert ap.assurer(LMS, "qwen/qwen3-4b", 16384, lambda *_: None) is True
     assert journal.index(("unload", "qwen/qwen3-4b")) < journal.index(
-        ("load", "qwen/qwen3-4b", "--context-length", "16384")
+        ("load", "qwen/qwen3-4b", "--context-length", "16384", "--parallel", "1")
     )
 
 
@@ -147,3 +157,66 @@ def test_sans_binaire_nulle_part_on_rend_None(monkeypatch, tmp_path):
     monkeypatch.setattr(ap.shutil, "which", lambda _: None)
     monkeypatch.setattr(ap, "EMPLACEMENTS_CONNUS", (tmp_path / "absent",))
     assert ap.trouver_lms() is None
+
+
+# -- la memoire : empilement et modeles etrangers ---------------------------
+
+
+def _charges(*specs):
+    return json.dumps(
+        [
+            {"identifier": ident, "modelKey": cle, "contextLength": ctx, "sizeBytes": 2_000_000_000}
+            for ident, cle, ctx in specs
+        ]
+    )
+
+
+def test_deux_instances_du_meme_modele_sont_comptees(appels):
+    """`lms load` n'REMPLACE pas, il EMPILE : deux appels chargent deux copies
+    et donc deux fois la memoire. Constate sur une machine de 16 Go."""
+    _, reponses = appels
+    reponses[("ps", "--json")] = _resultat(
+        sortie=_charges(
+            ("qwen/qwen3-1.7b", "qwen/qwen3-1.7b", 8192),
+            ("qwen/qwen3-1.7b:2", "qwen/qwen3-1.7b", 8192),
+        )
+    )
+    assert ap.instances_chargees(LMS, "qwen/qwen3-1.7b") == 2
+
+
+def test_un_empilement_est_defait_avant_de_repartir(appels):
+    journal, reponses = appels
+    reponses[("ps", "--json")] = _resultat(
+        sortie=_charges(
+            ("qwen/qwen3-1.7b", "qwen/qwen3-1.7b", 8192),
+            ("qwen/qwen3-1.7b:2", "qwen/qwen3-1.7b", 8192),
+        )
+    )
+    assert ap.assurer(LMS, "qwen/qwen3-1.7b", 8192, lambda *_: None) is True
+    assert ("unload", "--all") in journal
+    assert ("load", "qwen/qwen3-1.7b", "--context-length", "8192", "--parallel", "1") in journal
+
+
+def test_un_autre_modele_est_SIGNALE_et_jamais_decharge(appels, capsys):
+    """LM Studio est aussi l'outil de l'utilisateur : un agent qui decharge ce
+    qu'il n'a pas charge se battrait contre lui. On rend le cout visible, la
+    decision reste humaine."""
+    journal, reponses = appels
+    reponses[("ps", "--json")] = _resultat(
+        sortie=_charges(
+            ("qwen/qwen3-1.7b", "qwen/qwen3-1.7b", 8192),
+            ("gemma-4-12b-it", "gemma-4-12b-it", 8192),
+        )
+    )
+    assert ap.assurer(LMS, "qwen/qwen3-1.7b", 8192, lambda *_: None) is True
+    assert not any(a[0] == "unload" for a in journal), journal
+    assert "gemma-4-12b-it" in capsys.readouterr().out
+
+
+def test_un_seul_modele_ne_declenche_aucun_avertissement(appels, capsys):
+    _, reponses = appels
+    reponses[("ps", "--json")] = _resultat(
+        sortie=_charges(("qwen/qwen3-1.7b", "qwen/qwen3-1.7b", 8192))
+    )
+    assert ap.assurer(LMS, "qwen/qwen3-1.7b", 8192, lambda *_: None) is True
+    assert "occupent la memoire" not in capsys.readouterr().out

@@ -108,13 +108,83 @@ def contexte_charge(lms: Path, modele: str) -> int | None:
     return 0
 
 
-def assurer(lms: Path, modele: str, contexte: int, dire) -> bool:
+def autres_modeles(lms: Path, modele: str) -> list[str]:
+    """Les modeles charges qui ne sont PAS le notre.
+
+    Sur une machine contrainte, deux modeles en memoire est le probleme, pas le
+    poids de l'un d'eux : mesure le 2026-09-30, un 4B et un 1.7B cohabitaient a
+    4,12 Go sur 16 Go de RAM deja en swap.
+
+    On les SIGNALE sans les decharger. LM Studio est aussi l'outil de
+    l'utilisateur : un agent qui tourne toutes les demi-heures et decharge ce
+    qu'il n'a pas charge se battrait contre lui. Le rapport rend le cout
+    visible, la decision reste humaine.
+    """
+    resultat = _lancer(lms, "ps", "--json")
+    if resultat.returncode != 0:
+        return []
+    try:
+        charges = json.loads(resultat.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    autres = []
+    for e in charges:
+        if not isinstance(e, dict):
+            continue
+        cle = str(e.get("modelKey") or e.get("path") or "")
+        if cle and cle != modele:
+            autres.append(f"{e.get('identifier') or cle} ({int(e.get('sizeBytes') or 0) / 1e9:.2f} Go)")
+    return autres
+
+
+def instances_chargees(lms: Path, modele: str) -> int:
+    """Combien d'instances de `modele` sont en memoire.
+
+    `lms load` n'REMPLACE pas, il EMPILE : deux appels chargent deux copies
+    (la seconde prend un identifiant suffixe `:2`) et donc deux fois la
+    memoire. Constate le 2026-09-30 sur la machine de l'utilisateur, ou cet
+    empilement a contribue a saturer 16 Go de RAM. Rend 0 si on n'a pas pu
+    savoir -- on ne decharge jamais sur une incertitude.
+    """
+    resultat = _lancer(lms, "ps", "--json")
+    if resultat.returncode != 0:
+        return 0
+    try:
+        charges = json.loads(resultat.stdout or "[]")
+    except json.JSONDecodeError:
+        return 0
+    return sum(
+        1
+        for e in charges
+        if isinstance(e, dict)
+        and str(e.get("modelKey") or e.get("path") or "") == modele
+    )
+
+
+def _signaler_autres(lms: Path, modele: str) -> None:
+    autres = autres_modeles(lms, modele)
+    if autres:
+        print(
+            "⚠ d'autres modeles occupent la memoire et ne servent pas au "
+            f"pre-filtre : {', '.join(autres)} — `lms unload <modele>` les retire"
+        )
+
+
+def assurer(lms: Path, modele: str, contexte: int, dire, paralleles: int = 1) -> bool:
     """Demarre le serveur et charge le modele si besoin. Rend True si tout est
     pret a la sortie."""
     charge = contexte_charge(lms, modele)
     if charge is not None and charge >= contexte:
-        dire(f"pre-filtre deja pret ({modele}, contexte {charge})")
-        return True
+        # Pret, mais peut-etre EMPILE : deux instances tiennent deux fois la
+        # memoire alors qu'une seule sert. On repart d'une seule copie plutot
+        # que de laisser la machine payer le doublon.
+        if instances_chargees(lms, modele) > 1:
+            print(f"{modele} etait charge en plusieurs instances : on repart d'une seule")
+            _lancer(lms, "unload", "--all")
+        else:
+            dire(f"pre-filtre deja pret ({modele}, contexte {charge})")
+            _signaler_autres(lms, modele)
+            return True
 
     if charge is None:
         # Serveur injoignable : le demarrer lance aussi l'application, qui
@@ -134,11 +204,20 @@ def assurer(lms: Path, modele: str, contexte: int, dire) -> bool:
         # aucun dechargement -- et surtout aucune requete de plus.
         _lancer(lms, "unload", modele)
 
-    chargement = _lancer(lms, "load", modele, "--context-length", str(contexte))
+    chargement = _lancer(
+        lms, "load", modele,
+        "--context-length", str(contexte),
+        # UN SEUL emplacement : le pre-filtre note article par article. Le
+        # defaut de LM Studio est 4, et le cache d'attention se paie PAR
+        # emplacement -- c'est ce reglage, plus que le poids du modele, qui a
+        # fait planter un poste de 16 Go le 2026-09-30.
+        "--parallel", str(paralleles),
+    )
     if chargement.returncode != 0:
         print(f"[ERREUR] chargement de {modele} : {chargement.stderr.strip()[:300]}")
         return False
     print(f"modele {modele} charge (contexte {contexte})")
+    _signaler_autres(lms, modele)
     return True
 
 
@@ -165,7 +244,13 @@ def main() -> None:
         raise SystemExit(1)
 
     try:
-        pret = assurer(lms, settings.local_scoring_model, settings.local_scoring_context, dire)
+        pret = assurer(
+            lms,
+            settings.local_scoring_model,
+            settings.local_scoring_context,
+            dire,
+            settings.local_scoring_parallel,
+        )
     except subprocess.TimeoutExpired:
         print(f"[ERREUR] `lms` n'a pas repondu en {DELAI_COMMANDE_S} s")
         raise SystemExit(1) from None
