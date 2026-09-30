@@ -14,16 +14,18 @@ dates d'ingestion mesure la cadence horaire du pipeline, pas la propagation de
 l'actu. Basculer ce champ ne ferait echouer aucun calcul -- seulement mentir
 la metrique.
 
-**Limite mesuree, a savoir avant de lire un taux.** `EventObservation.
-published_at` n'est jamais NULL en base (0 sur 1 259 le 2026-09-30) parce que
-`events._moment_fait` y ecrit `article.published_at or article.fetched_at` :
-pour un article sans date de publication, la colonne porte donc notre date
-d'INGESTION, et rien dans la ligne ne permet de le savoir apres coup. Mesure
-du meme jour : 79 des 548 observations dont l'article vit encore (14 %)
-viennent d'un article sans `published_at`. La velocite de ces evenements-la
-est partiellement contaminee par notre propre cadence. Le corriger demande de
-tracer le repli au moment de l'ecriture (une colonne, donc une migration) --
-hors du perimetre de 2C, mais a faire avant que 2D ne classe sur ce chiffre.
+**Une ligne d'archive ANCIENNE peut mentir, et on ne peut pas toujours le
+savoir.** Jusqu'au tour de correction 1 de la Phase 2C,
+`events._moment_fait` ecrivait `article.published_at or article.fetched_at`
+dans `EventObservation.published_at` : pour un article sans date de
+publication, la colonne portait notre date d'INGESTION sans que rien ne le
+trace. Mesure du 2026-09-30 : 79 des 548 observations dont l'article vivait
+encore (14 %) etaient dans ce cas. L'ecriture ne replie plus (`events.
+_ajouter_observation` ecrit `article.published_at` tel quel, la colonne est
+nullable), donc toute ligne NEUVE est honnete ; les anciennes se rattrapent
+avec `scripts/nettoyer_dates_observations.py` TANT QUE leur article vit
+encore -- au-dela (purge a deux jours) l'information est perdue pour de bon,
+et il vaut mieux le dire que de faire semblant.
 
 Ce module ne LEVE jamais et n'exige pas la migration `0019` : sans les tables
 d'evenements, l'archive est vide et la nouveaute vaut `None` -- une

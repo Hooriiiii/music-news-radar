@@ -161,12 +161,29 @@ def _observation_existe(db: Session, event_id: int, article_id: int) -> bool:
 
 
 def _moment_fait(article: Article):
-    """Le repli UNIQUE utilisé pour dater un fait (tour de correction 1,
-    point 5) : la date de publication, sinon celle d'ingestion -- jamais celle
-    du rattachement. Résolu ICI, une seule fois, et écrit tel quel dans
-    `EventObservation.published_at` : `_recalculer` n'a alors plus à choisir
-    entre deux replis différents pour la même grandeur (`freshness`, Task 3,
-    se calculera dessus)."""
+    """Dater l'ÉVÉNEMENT : la date de publication, sinon celle d'ingestion --
+    jamais celle du rattachement.
+
+    **Ce repli ne vaut QUE pour l'événement, plus pour l'observation** (Phase
+    2C, tour de correction 1). Les deux usages divergent, et cette divergence
+    est voulue -- ne pas « harmoniser » :
+
+    - un `Event` DOIT porter une date (`first_seen_at` / `last_seen_at` sont
+      NOT NULL, et la fraîcheur se calcule dessus) : à défaut de date de
+      publication, l'ingestion est le seul recours, et un événement daté à
+      l'heure près vaut mieux qu'un événement sans date ;
+    - une `EventObservation`, elle, est une MESURE. Sa colonne `published_at`
+      est nullable, et y écrire une date d'ingestion en faisait un mensonge
+      de schéma : mesuré le 2026-09-30, 79 des 548 observations dont
+      l'article vivait encore (14 %) venaient d'un article sans date de
+      publication, sans que rien ne permette de le savoir après coup --
+      l'article est purgé à deux jours. La vélocité de Phase 2C (`app/
+      pipeline/event_features.py`) mesurait donc partiellement notre propre
+      cadence horaire, exactement ce que toute cette phase existe pour
+      éviter. `event_archive.dates_de_publication` écarte les observations
+      sans date : NULL rend la mesure honnête par construction, au prix de
+      moins d'événements mesurables.
+    """
     return article.published_at or article.fetched_at
 
 
@@ -184,7 +201,10 @@ def _ajouter_observation(db: Session, event: Event, article: Article) -> None:
             platform=source.type,
             source_id=article.source_id,
             source_role=_role(source),
-            published_at=_moment_fait(article),
+            # `article.published_at` TEL QUEL, sans repli : voir `_moment_fait`.
+            # Une observation sans date de publication n'en a pas, et le dire
+            # vaut mieux que d'y écrire notre heure d'ingestion.
+            published_at=article.published_at,
             title=article.title,
             url=article.url,
             source_name=source.name,
@@ -234,6 +254,26 @@ def _fusionner(db: Session, source_event: Event, cible: Event) -> None:
     db.flush()
 
 
+def _moment_observe(db: Session, observation: EventObservation):
+    """La date a utiliser pour DATER L'EVENEMENT depuis une observation.
+
+    `published_at` quand elle existe (le cas normal). Sinon la `fetched_at` de
+    l'article tant qu'il vit, pour rester d'accord avec `_creer_evenement` ;
+    sinon `observed_at`, seule trace restante apres la purge. Ce repli ne
+    contamine JAMAIS `EventObservation.published_at`, qui reste NULL : la
+    velocite (Phase 2C) ne lit que la colonne, jamais cette fonction.
+    """
+    if observation.published_at is not None:
+        return observation.published_at
+    if observation.article_id is not None:
+        recuperee = db.scalar(
+            select(Article.fetched_at).where(Article.id == observation.article_id)
+        )
+        if recuperee is not None:
+            return recuperee
+    return observation.observed_at
+
+
 def _recalculer(db: Session, event: Event) -> None:
     """Recompte tout depuis les `EventObservation` -- jamais une valeur devinée
     ou incrémentée. Seule fonction qui écrit `first_seen_at`, `last_seen_at`,
@@ -243,10 +283,20 @@ def _recalculer(db: Session, event: Event) -> None:
     )
     if not observations:
         return
-    # `o.published_at` porte déjà le repli résolu par `_moment_fait` à
-    # l'écriture ; `o.observed_at` n'est qu'un FILET pour une ligne écrite
-    # autrement (avant ce module, ou directement en base).
-    moments = [o.published_at or o.observed_at for o in observations]
+    # C'est ICI que le repli de DATATION vit désormais, et nulle part ailleurs :
+    # depuis la Phase 2C, `published_at` est NULL sur une observation dont
+    # l'article n'avait pas de date de publication (voir `_moment_fait`).
+    # L'ÉVÉNEMENT, lui, doit rester daté -- `first_seen_at` est NOT NULL et la
+    # fraîcheur se calcule dessus.
+    #
+    # Le repli reste `article.fetched_at`, LE MÊME que celui de
+    # `_creer_evenement` : sans ça, un événement créé sur un article sans date
+    # se ferait redater à l'heure du RATTACHEMENT au premier recalcul, et
+    # `first_seen_at` cesserait d'être reconstructible depuis les articles
+    # (invariant du tour de correction 1 de la Phase 2A, teste). `observed_at`
+    # ne sert qu'en dernier ressort, quand l'article a été purgé -- la seule
+    # trace qui reste alors.
+    moments = [_moment_observe(db, o) for o in observations]
     event.first_seen_at = min(moments)
     event.last_seen_at = max(moments)
 

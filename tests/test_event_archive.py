@@ -11,6 +11,7 @@ propagation de l'actu.
 import datetime as dt
 
 import pytest
+from sqlalchemy import select
 
 from app.models import Article, Event, EventObservation, Source, SourceRole, SourceType
 from app.pipeline.event_archive import (
@@ -247,3 +248,144 @@ class TestRienNeChangeDansLaPublication:
             "2C observe, elle ne decide rien : ces modules de publication lisent "
             f"les features d'evenement -> {coupables}"
         )
+
+
+class TestUneObservationNeMentJamaisSaDate:
+    """Phase 2C, tour de correction 1.
+
+    `EventObservation.published_at` porte une date de PUBLICATION ou rien.
+    Y ecrire la date d'ingestion (ce que faisait `events._moment_fait`
+    jusqu'ici) faisait mesurer a la velocite notre propre cadence horaire --
+    14 % des observations mesurables le 2026-09-30, et indetectable apres
+    coup puisque l'article est purge a deux jours.
+    """
+
+    def _rattacher(self, db, titre, publie_le):
+        from app.models import Article
+        from app.pipeline import events
+
+        src = _source(db, "mixmag")
+        art = Article(
+            source_id=src.id,
+            url="https://mixmag.test/1",
+            title=titre,
+            raw_hash="1" * 64,
+            published_at=publie_le,
+        )
+        art.fetched_at = dt.datetime(2026, 9, 25, 9, 0, tzinfo=UTC)
+        db.add(art)
+        db.commit()
+        ev = events._creer_evenement(db, art)
+        events._ajouter_observation(db, ev, art)
+        db.commit()
+        obs = db.scalars(
+            select(EventObservation).where(EventObservation.event_id == ev.id)
+        ).all()
+        return ev, obs
+
+    def test_un_article_sans_date_de_publication_donne_une_observation_a_null(self, db_session):
+        ev, obs = self._rattacher(db_session, "Une actu sans date", publie_le=None)
+        assert [o.published_at for o in obs] == [None]
+        # Et la velocite n'a alors AUCUNE date a se mettre sous la dent,
+        # plutot qu'une date d'ingestion deguisee.
+        assert dates_de_publication(obs) == []
+
+    def test_l_evenement_reste_date_malgre_l_observation_sans_date(self, db_session):
+        from app.pipeline import events
+
+        ev, _ = self._rattacher(db_session, "Une actu sans date", publie_le=None)
+        # Un evenement DOIT porter une date : `first_seen_at` est NOT NULL et
+        # la fraicheur se calcule dessus. Le repli d'ingestion vit la, et la
+        # seulement -- il ne redescend jamais dans l'observation.
+        assert ev.first_seen_at is not None
+        assert ev.first_seen_at.replace(tzinfo=None) == dt.datetime(2026, 9, 25, 9, 0)
+        # Et il tient au recalcul : sinon l'evenement se ferait redater a
+        # l'heure du RATTACHEMENT des le premier membre ajoute.
+        events._recalculer(db_session, ev)
+        db_session.commit()
+        assert ev.first_seen_at.replace(tzinfo=None) == dt.datetime(2026, 9, 25, 9, 0)
+
+    def test_un_article_date_donne_bien_sa_date_de_publication(self, db_session):
+        publie = dt.datetime(2026, 9, 25, 8, 0, tzinfo=UTC)
+        _, obs = self._rattacher(db_session, "Une actu datee", publie_le=publie)
+        assert [o.published_at.replace(tzinfo=None) for o in obs] == [publie.replace(tzinfo=None)]
+
+
+class TestScriptDeRattrapage:
+    """`scripts/nettoyer_dates_observations.py` : le plan par defaut,
+    l'ecriture sous `--apply`, idempotent, et surtout PRUDENT -- il ne touche
+    jamais une observation dont l'article a ete purge, ou une date de
+    publication legitime."""
+
+    def _observation(self, db, *, n, article_publie_le, observation_publie_le, purge=False):
+        from app.models import Article
+
+        src = _source(db, f"src{n}")
+        art = Article(
+            source_id=src.id,
+            url=f"https://src{n}.test/{n}",
+            title=f"Titre {n}",
+            raw_hash=f"{n:064d}",
+            published_at=article_publie_le,
+        )
+        db.add(art)
+        db.commit()
+        ev = _event(db, f"Titre {n}", dt.datetime(2026, 9, 25, tzinfo=UTC))
+        obs = EventObservation(
+            event_id=ev.id,
+            article_id=None if purge else art.id,
+            platform=SourceType.RSS,
+            source_id=src.id,
+            source_role=SourceRole.SECONDARY,
+            published_at=observation_publie_le,
+            title=art.title,
+            url=art.url,
+            source_name=src.name,
+        )
+        db.add(obs)
+        db.commit()
+        return obs
+
+    def test_repare_seulement_la_date_d_ingestion_deguisee(self, db_session):
+        from scripts.nettoyer_dates_observations import nettoyer_dates
+
+        ingestion = dt.datetime(2026, 9, 25, 9, 0, tzinfo=UTC)
+        publication = dt.datetime(2026, 9, 25, 8, 0, tzinfo=UTC)
+        deguisee = self._observation(
+            db_session, n=1, article_publie_le=None, observation_publie_le=ingestion
+        )
+        legitime = self._observation(
+            db_session, n=2, article_publie_le=publication, observation_publie_le=publication
+        )
+        # Article purge : indecidable, on n'y touche pas plutot que de
+        # detruire une vraie mesure.
+        purgee = self._observation(
+            db_session, n=3, article_publie_le=None, observation_publie_le=ingestion, purge=True
+        )
+
+        plan = nettoyer_dates(db_session)
+        assert plan.corrigees == 1
+        assert plan.article_purge == 1
+        # Sans --apply, rien n'a bouge.
+        assert deguisee.published_at is not None
+
+        rapport = nettoyer_dates(db_session, appliquer=True)
+        assert rapport.corrigees == 1
+        db_session.refresh(deguisee)
+        db_session.refresh(legitime)
+        db_session.refresh(purgee)
+        assert deguisee.published_at is None
+        assert legitime.published_at is not None
+        assert purgee.published_at is not None
+
+    def test_idempotent(self, db_session):
+        from scripts.nettoyer_dates_observations import nettoyer_dates
+
+        self._observation(
+            db_session,
+            n=1,
+            article_publie_le=None,
+            observation_publie_le=dt.datetime(2026, 9, 25, 9, 0, tzinfo=UTC),
+        )
+        assert nettoyer_dates(db_session, appliquer=True).corrigees == 1
+        assert nettoyer_dates(db_session, appliquer=True).corrigees == 0
