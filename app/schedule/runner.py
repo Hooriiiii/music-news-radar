@@ -313,11 +313,38 @@ def _differer(
 
 
 def _compter_manque(creneau: Creneau, attendu: tuple, formats_actifs: set, rapport: RapportPublication) -> None:
-    if attendu[1] is None:
+    # Un creneau REELLEMENT vide -- ni article ni post -- n'est pas une
+    # publication manquee : rien n'attendait de partir. Un creneau qui porte un
+    # POST compose, lui, en est une, meme si la purge a emporte son article : le
+    # post est autonome (voir `store.porte_un_post_orphelin`). Ne tester que
+    # l'article, c'est exactement ce qui rendait ces manques invisibles du
+    # rapport ET de la notification de fin de passage.
+    if attendu[1] is None and attendu[2] is None:
         return
     rapport.manques += 1
     if creneau.format not in formats_actifs:
         rapport.manques_formats_coupes += 1
+
+
+def _raison_manque(creneau: Creneau, formats_actifs: set) -> str:
+    """Pourquoi ce creneau est manque. UN CRENEAU MANQUE PORTE TOUJOURS UNE
+    RAISON -- 25 des 37 manques de production n'en avaient aucune, et c'est ce
+    qui a rendu le defaut de la file invisible pendant une semaine
+    (mesure du 2026-09-30). Ce depot a une longue histoire de pannes muettes :
+    `_marquer_manques` ecrivait `etat = MANQUE` sans jamais toucher `erreur`,
+    qui valait donc None des que la derniere etape reussie etait une
+    composition ou une reattribution."""
+    retard = settings.publication_retard_max_minutes
+    if creneau.format not in formats_actifs:
+        return (
+            f"creneau manque : aucun outil pour le format {creneau.format.value} "
+            "(reels coupes ?), rien n'a ete publie"
+        )
+    if creneau.etat == EtatCreneau.GELE:
+        return f"creneau manque : gele mais jamais publie, plus de {retard} min de retard"
+    if creneau.post_id is None:
+        return f"creneau manque : aucun post compose a l'heure dite, plus de {retard} min de retard"
+    return f"creneau manque : post compose mais jamais gele, plus de {retard} min de retard"
 
 
 def _completer_credit(db, post: Post, article: Article | None) -> None:
@@ -392,7 +419,8 @@ def _marquer_manques(
         if not _relire(db, creneau):
             continue
         attendu = _attendu(creneau)
-        if _ecrire_si(db, creneau, attendu, etat=EtatCreneau.MANQUE):
+        raison = _raison_manque(creneau, formats_actifs)
+        if _ecrire_si(db, creneau, attendu, etat=EtatCreneau.MANQUE, erreur=raison[:1000]):
             _compter_manque(creneau, attendu, formats_actifs, rapport)
             _effacer_dossier(creneau)
 
@@ -576,18 +604,24 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         if _deja_publie(article, post):
             _liberer(db, creneau, attendu, "article deja publie")
             continue
-        if creneau.format == FormatCreneau.REEL:
-            raison = (
-                raison_ineligible_reel(article, maintenant=maintenant)
-                if article is not None
-                else "article purge"
-            )
+        if creneau.format == FormatCreneau.REEL and article is not None:
+            raison = raison_ineligible_reel(article, maintenant=maintenant)
             if raison is not None:
                 # L'article a change depuis la composition (video retiree, compte
                 # reclasse) : il reste bon pour un carrousel, pas d'exclusion.
                 _liberer(db, creneau, attendu, f"reel impossible : {raison}")
                 continue
             _completer_credit(db, post, article)
+        # Article PURGE (`retention_days`, 2 jours) : la relecture d'eligibilite
+        # est SAUTEE, et le creneau part quand meme. Ce n'est pas une
+        # complaisance -- c'est qu'il n'y a plus rien a relire : la composition a
+        # deja verifie cette eligibilite (video, categorie du compte, credit), et
+        # tout ce que la publication demande vit desormais sur le POST, qui est
+        # denormalise exprès pour survivre a la purge -- le credit
+        # (`posts.credit`, obligatoire, verifie par `preparer_reel`), les actifs
+        # et leur video (`posts.assets`), les copies locales des visuels, la
+        # palette, les textes. Liberer ici, c'etait jeter un reel PRET pour une
+        # information absente, et enterrer le creneau en MANQUE sans raison.
         if _brouillon_perime(db, post, article):
             # Relu au gel, APRES la regle reel : la source d'un actif d'artiste
             # est reprise par son article (compte passe `media` depuis la
@@ -777,7 +811,12 @@ def _publier(
         retard = horloge() - utc(creneau.publier_a)
         a_venir = retard < dt.timedelta(0)
         if retard > dt.timedelta(minutes=settings.publication_retard_max_minutes):
-            if _ecrire_si(db, creneau, attendu, etat=EtatCreneau.MANQUE):
+            # Une raison, toujours : ce chemin passait un creneau GELE en MANQUE
+            # sans rien inscrire.
+            if _ecrire_si(
+                db, creneau, attendu, etat=EtatCreneau.MANQUE,
+                erreur=_raison_manque(creneau, set(publieurs))[:1000],
+            ):
                 _compter_manque(creneau, attendu, set(publieurs), rapport)
                 _effacer_dossier(creneau)
             continue
