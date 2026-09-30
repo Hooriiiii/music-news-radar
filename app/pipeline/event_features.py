@@ -14,9 +14,10 @@ recalcules ici -- ce module les LIT (Task 2 les tient a jour, recalcules
 depuis les `EventObservation` a chaque ecriture, jamais devines). Les
 redemander ici dupliquerait une logique deja correcte et testee.
 
-`velocity` n'est PAS calculee dans cette tache : elle demande un historique
-d'observations sur 22 h que la retention a 2 jours rend fragile (voir le plan
-Phase 2A, Task 3) -- elle merite son propre chantier et sa propre mesure.
+`velocity` et `nouveaute` ont rejoint ce module en Phase 2C (Tasks 1 et 2),
+avec leur propre mesure -- voir plus bas. Elles gardent la regle du module :
+l'appelant fournit les dates et la similarite, ce module ne lit jamais la base
+(la lecture vit dans `app/pipeline/event_archive.py`).
 """
 
 from __future__ import annotations
@@ -136,6 +137,226 @@ def corroboration(n_sources_independantes: int) -> float:
     return 100.0 * (1.0 - math.exp(-n / 3.0))
 
 
+# --- Velocite (Phase 2C, Task 1) --------------------------------------------
+#
+# LE CHAMP DE DATE EST `published_at`, JAMAIS `observed_at`. Mesure du
+# 2026-09-30 sur les 205 evenements multi-preuves de la base de production :
+# l'etalement des dates d'INGESTION a une mediane de 1,68 h et 44 % des
+# evenements y tiennent en moins d'une heure -- ce chiffre mesure la cadence
+# HORAIRE de notre propre pipeline, pas la propagation de l'actu. L'etalement
+# des dates de PUBLICATION a une mediane de 10,69 h et decrit la realite.
+# Se tromper de champ ne fait echouer aucun calcul : il rend une metrique qui
+# a l'air de marcher et qui ne parle que de nous. D'ou le nom explicite du
+# parametre (`dates_publication`) et le test-sentinelle sur
+# `event_archive.dates_de_publication`, SEUL endroit ou ce champ est choisi.
+#
+# PLANCHER D'ETALEMENT. Le plan ne demandait `None` que pour un etalement NUL
+# (deux articles publies a la meme seconde : le taux serait infini). Mesure :
+# cette regle est necessaire mais PAS suffisante, et la laisser seule livre
+# une feature qui classe du bruit en tete. Taux n/etalement sur les donnees
+# reelles, les six premiers :
+#
+#     7200,0/h  n=4  etalement 0,00 h  'yunglean2001 - Boiler Room: London'
+#      276,9/h  n=2  etalement 0,01 h  'CMU Selects - the last week s standout releases'
+#      276,9/h  n=2  etalement 0,01 h  'Stray Kids 2027 Season s Greetings'
+#      240,0/h  n=2  etalement 0,01 h  'In KORG Prophecy, anyone know what settings...'
+#      109,1/h  n=2  etalement 0,02 h  'Lucky You! Hilary Duff s Lucky Me Tour...'
+#       61,5/h  n=2  etalement 0,03 h  'Watch Kacey Musgraves Sing Dolly Parton s...'
+#
+# Aucune de ces actus n'explose : ce sont des publications SIMULTANEES (un
+# carrousel Instagram, une liste hebdomadaire postee d'un bloc). 53 des 205
+# evenements multi-preuves tiennent en moins d'une heure, et 25 d'entre eux ne
+# viennent que d'UNE SEULE source. Au-dessus d'une heure le classement
+# redevient lisible (Queens of the Stone Age, Boys Noize annonce un album,
+# Jennie x Tame Impala no 1 -- deux a trois sources distinctes, 1 a 3 h
+# d'ecart). D'ou `None` sous une heure d'etalement : sous ce plancher, le
+# denominateur mesure la granularite des horodatages, pas la propagation.
+VELOCITE_ETALEMENT_MIN_HEURES = 1.0
+
+
+def etalement_heures(dates_publication) -> float | None:
+    """L'etalement, en heures, des dates de publication DATEES d'un evenement.
+
+    `None` sous deux dates : un etalement sur un point n'existe pas. Les
+    `None` de la liste sont ignores (une observation sans date de publication
+    ne doit JAMAIS etre remplacee par sa date d'ingestion -- ce serait
+    reintroduire notre cadence dans la mesure).
+
+    Melanger datetimes aware et naive leve, comme partout ailleurs dans ce
+    module : une confusion de fuseau ne doit jamais etre avalee en silence.
+    """
+    datees = [d for d in dates_publication if d is not None]
+    if len(datees) < 2:
+        return None
+    return (max(datees) - min(datees)).total_seconds() / 3600.0
+
+
+def velocity(
+    dates_publication,
+    *,
+    etalement_min_heures: float = VELOCITE_ETALEMENT_MIN_HEURES,
+) -> float | None:
+    """Le TAUX : preuves par heure sur l'etalement des publications.
+
+    `None` -- jamais `0.0` -- sous deux preuves datees, ou quand l'etalement
+    est nul ou plus court que `etalement_min_heures` (voir la mesure
+    ci-dessus). Zero voudrait dire « mesure a zero » ; ici la matiere manque.
+
+    Le numerateur est `n - 1`, le nombre de preuves arrivees APRES la
+    premiere, et non `n`. La premiere preuve OUVRE la fenetre, elle ne tombe
+    pas dedans : la compter fait mecaniquement gagner les paires (n=2), dont
+    le taux vaudrait alors 2/etalement. Verifie sur les donnees reelles --
+    avec `n`, les six premieres places sont six paires ; avec `n - 1`,
+    l'evenement de tete redevient « Boards of Canada - Hi Scores » (3 preuves,
+    3 sources distinctes, 2,4 h) devant ces paires. Les deux formules sont
+    monotones l'une dans l'autre A n CONSTANT ; elles ne different que dans la
+    comparaison ENTRE evenements, qui est precisement l'usage prevu (2D).
+
+    Ce que ce taux NE dit PAS : rien sur la DIVERSITE des sources. 46 des 152
+    evenements mesurables ne viennent que d'une source (un compte qui poste
+    plusieurs fois). C'est le role de `corroboration`, et 2D devra croiser les
+    deux plutot que classer sur l'un seul.
+    """
+    etalement = etalement_heures(dates_publication)
+    if etalement is None or etalement <= 0 or etalement < etalement_min_heures:
+        return None
+    n = len([d for d in dates_publication if d is not None])
+    return (n - 1) / etalement
+
+
+def acceleration(
+    dates_publication,
+    *,
+    etalement_min_heures: float = VELOCITE_ETALEMENT_MIN_HEURES,
+) -> float | None:
+    """Est-ce que ca monte encore, ou est-ce que c'etait au debut ?
+
+    Densite de la SECONDE moitie de la fenetre comparee a celle de la
+    PREMIERE, rendue sous forme d'indice borne dans [-1, +1] :
+
+        (n2 - n1) / (n1 + n2)
+
+    Les deux moities durent exactement le meme temps par construction, donc
+    le rapport des densites se reduit a celui des effectifs -- pas de
+    division par une duree qui pourrait etre nulle. +1 : tout est arrive dans
+    la seconde moitie (l'actu monte). -1 est inatteignable, la premiere preuve
+    ouvrant toujours la premiere moitie. Negatif : la rafale etait au debut et
+    retombe -- mesure sur les donnees reelles, « Here's What Went Down at
+    Olivia Rodrigo's Unraveled Tour Opener » vaut -0,64 (9 preuves puis 2),
+    le profil exact d'une actu qui a explose puis s'eteint.
+
+    `None` sous TROIS preuves datees : avec deux points il n'y a qu'un
+    intervalle et rien a comparer. C'est le cas de 825 evenements sur 901 --
+    seuls 76 ont trois preuves ou plus, et 68 passent aussi le plancher
+    d'etalement. Le dire est plus utile que de rendre 0, qui se propagerait
+    dans un classement comme une acceleration reellement mesuree a plat.
+
+    Meme plancher d'etalement que `velocity`, et pour la meme raison : couper
+    en deux une fenetre de trente secondes ne compare rien.
+    """
+    datees = sorted(d for d in dates_publication if d is not None)
+    if len(datees) < 3:
+        return None
+    etalement = (datees[-1] - datees[0]).total_seconds() / 3600.0
+    if etalement <= 0 or etalement < etalement_min_heures:
+        return None
+    milieu = datees[0] + (datees[-1] - datees[0]) / 2
+    # Frontiere : une preuve exactement au milieu compte pour la SECONDE
+    # moitie. Consequence a connaitre avant de lire un signe : un nombre
+    # IMPAIR de preuves regulierement espacees penche de +1/n (trois preuves
+    # equidistantes valent +0,33, pas 0). Le biais est fixe et s'efface quand
+    # n grandit ; deux evenements de meme effectif restent comparables. Le
+    # corriger en comptant la preuve mediane pour une demi-preuve de chaque
+    # cote rendrait le signe moins lisible qu'il ne gagnerait en justesse.
+    premiere = sum(1 for d in datees if d < milieu)
+    seconde = len(datees) - premiere
+    return (seconde - premiere) / len(datees)
+
+
+# --- Nouveaute (Phase 2C, Task 2) -------------------------------------------
+#
+# « Cette actu est-elle neuve, ou une reprise de quelque chose qu'on a deja
+# vu ? » La reponse est dans `event_observations`, qui n'est JAMAIS purgee et
+# garde titre, source et dates -- la meme archive qui sert la garde de
+# recurrence de la porte resume (`cluster_resume.charger_archive`).
+#
+# LE CRITERE, et pourquoi celui-la. On compare le titre de l'evenement aux
+# titres archives STRICTEMENT ANTERIEURS a sa premiere preuve, avec
+# `cluster.archive_similarity_from_tokens` -- la mesure deja calibree contre
+# l'archive (part des mots porteurs du titre le PLUS LONG), et ses deux seuils
+# deja mesures : 0,8 (« meme actu », `cluster_archive_seuil`) et 0,65 (la
+# bande douteuse de la dedup). Reutiliser cette mesure plutot que d'en
+# inventer une troisieme n'est pas une economie : c'est la MEME question que
+# celle que la dedup pose contre l'archive, et deux mesures divergentes pour
+# une seule question finiraient par se contredire.
+#
+# Mesure du 2026-09-30 sur les 893 evenements au titre exploitable :
+# similarite maximale mediane 0,00 (447 evenements a exactement 0), 98
+# evenements au-dessus de 0,65, 97 au-dessus de 0,8. Lecture des vingt
+# premiers : ce sont tous de vraies reprises -- le meme article Mixmag/RA
+# re-emis 24 a 159 h plus tard (« Erol Alkan to publish book... », « Calvin
+# Harris sets Guinness World Record... »), ou une serie de promotion
+# (« JUN 9 1st EP CHINA Poster 05 » contre « ... Poster 01 »). Un seul
+# evenement tombe dans la bande 0,65-0,8 : l'interpolation ci-dessous ne
+# decide presque rien aujourd'hui, elle evite seulement une marche d'escalier.
+NOUVEAUTE_SEUIL_REPRISE = 0.8
+NOUVEAUTE_SEUIL_DOUTE = 0.65
+
+# L'horizon de reprise, repris tel quel de `cluster_archive_jours` (7 jours) :
+# « une reprise ressort dans la semaine, au-dela le risque de faux positif
+# depasse le service rendu ». C'est aussi la profondeur d'archive exigee pour
+# oser conclure a la NOUVEAUTE -- voir la dissymetrie ci-dessous.
+NOUVEAUTE_HORIZON_HEURES = 7 * 24.0
+
+
+def nouveaute(
+    *,
+    similarite_max: float | None,
+    profondeur_archive_heures: float | None,
+    horizon_heures: float = NOUVEAUTE_HORIZON_HEURES,
+    seuil_reprise: float = NOUVEAUTE_SEUIL_REPRISE,
+    seuil_doute: float = NOUVEAUTE_SEUIL_DOUTE,
+) -> float | None:
+    """100 = rien d'anterieur n'y ressemble. 0 = reprise d'une actu archivee.
+
+    `similarite_max` est la plus forte similarite entre ce titre et les titres
+    archives ANTERIEURS (calculee par l'appelant :
+    `app/pipeline/event_archive.py`, ce module ne lit pas la base).
+    `profondeur_archive_heures` est le temps que l'archive couvre REELLEMENT
+    avant l'evenement juge.
+
+    LA DISSYMETRIE, qui est le coeur du critere. L'archive est JEUNE : la
+    couche evenements date du 2026-09-23 et ne portait que huit jours au
+    moment ou ce code a ete ecrit. Une archive courte ne peut produire qu'un
+    seul type d'erreur -- declarer NEUF ce dont elle n'a simplement pas vu
+    l'original. Elle ne peut pas inventer une reprise qu'elle ne contient
+    pas. Donc :
+
+    - une reprise TROUVEE vaut, quelle que soit la profondeur : un fait
+      positif n'a pas besoin de recul ;
+    - une ABSENCE de reprise ne vaut 100 que si l'archive couvre au moins
+      `horizon_heures` avant l'evenement ; sinon `None` -- « on ne peut pas
+      conclure », jamais un 100 de confort.
+
+    Le 2026-09-30, 355 evenements sur 901 franchissent cette profondeur ; ce
+    nombre monte tout seul avec le temps, sans rien a recalibrer. Ne PAS
+    durcir ce critere sur ce que l'archive montre aujourd'hui : il est concu
+    pour des mois d'archive et deviendra plus net, jamais moins.
+
+    Entre `seuil_doute` et `seuil_reprise`, interpolation lineaire de 100 a 0
+    plutot qu'une marche d'escalier.
+    """
+    if similarite_max is not None:
+        s = max(0.0, min(1.0, similarite_max))
+        if s >= seuil_reprise:
+            return 0.0
+        if s > seuil_doute:
+            return 100.0 * (seuil_reprise - s) / (seuil_reprise - seuil_doute)
+    if profondeur_archive_heures is None or profondeur_archive_heures < horizon_heures:
+        return None
+    return 100.0
+
+
 @dataclass(frozen=True)
 class EventFeatures:
     """Le paquet de features deterministes d'un evenement, a un instant donne.
@@ -150,6 +371,13 @@ class EventFeatures:
     source_count: int
     platform_count: int
     independent_source_count: int
+    # Phase 2C. `None` n'est jamais un defaut de confort : il veut dire « pas
+    # assez de matiere pour mesurer », quand 0.0 voudrait dire « mesure a
+    # zero ». Les confondre est exactement ce qui rend un classement faux sans
+    # qu'on le voie -- 85 % des evenements n'ont qu'une preuve.
+    velocity: float | None = None
+    acceleration: float | None = None
+    nouveaute: float | None = None
 
 
 def calculer_features(
@@ -161,6 +389,9 @@ def calculer_features(
     independent_source_count: int,
     event_type: str | None = None,
     demi_vie_heures: float | None = None,
+    dates_publication=(),
+    similarite_max: float | None = None,
+    profondeur_archive_heures: float | None = None,
 ) -> EventFeatures:
     """Assemble les features d'un evenement a partir de ses champs deja
     connus (ceux d'un `Event`, Task 1/2) et de l'instant de calcul.
@@ -173,6 +404,13 @@ def calculer_features(
     `demi_vie_heures` : si absent, resolue depuis `event_type` via
     `demi_vie_pour` (donc le defaut documente plus haut tant que la
     taxonomie n'existe pas).
+
+    Les trois entrees de Phase 2C sont OPTIONNELLES et leur absence rend
+    `None`, pas 0 : un appelant qui ne fournit ni dates ni similarite obtient
+    exactement les features de 2A. `dates_publication` sont les
+    `EventObservation.published_at` de l'evenement (JAMAIS `observed_at`, voir
+    la mesure plus haut) ; `similarite_max` et `profondeur_archive_heures`
+    viennent de `app/pipeline/event_archive.py`.
     """
     h = demi_vie_heures if demi_vie_heures is not None else demi_vie_pour(event_type)
     return EventFeatures(
@@ -181,4 +419,10 @@ def calculer_features(
         source_count=source_count,
         platform_count=platform_count,
         independent_source_count=independent_source_count,
+        velocity=velocity(dates_publication),
+        acceleration=acceleration(dates_publication),
+        nouveaute=nouveaute(
+            similarite_max=similarite_max,
+            profondeur_archive_heures=profondeur_archive_heures,
+        ),
     )
