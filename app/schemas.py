@@ -310,6 +310,18 @@ class EventOut(BaseModel):
     # de la presse, pas la pertinence editoriale de Kinda.
     freshness: float
     corroboration: float
+    # Phase 2C -- toutes NULLABLES, et un `null` ne veut JAMAIS dire zero : il
+    # veut dire « pas assez de matiere pour mesurer ». 85 % des evenements
+    # n'ont qu'une preuve, donc pas de velocite ; 92 % en ont moins de trois,
+    # donc pas d'acceleration. Les confondre avec 0 est exactement ce qui
+    # rendrait faux le classement de 2D sans qu'on le voie.
+    velocity: float | None
+    acceleration: float | None
+    nouveaute: float | None
+    # 100 = marqueur France dans le titre, 70 = compte primaire francais,
+    # 0 = aucun marqueur TROUVE (jamais « prouve etranger » : le rappel mesure
+    # est d'environ 2/3). Voir `event_features.pertinence_france`.
+    pertinence_france: float | None
     # Pertinence (`relevance_score`) de l'article REPRESENTANT du groupe --
     # Tour de correction 1 : c'est le chiffre editorial qui doit se lire A COTE
     # de `corroboration`, jamais a sa place (voir app/api/events.py). Nullable :

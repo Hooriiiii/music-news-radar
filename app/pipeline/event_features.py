@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
+import unicodedata
 from dataclasses import dataclass
 
 # --- Demi-vie de la fraicheur -----------------------------------------------
@@ -357,6 +359,187 @@ def nouveaute(
     return 100.0
 
 
+# --- Pertinence France (Phase 2C, Task 3) -----------------------------------
+#
+# Le compte est FRANCAIS NATIONAL (CLAUDE.md). Cette feature sert a ne pas
+# noyer la scene FR sous l'actu internationale AU MOMENT DU CLASSEMENT (2D).
+# Elle ne se fond JAMAIS dans `relevance` : une note repond a « cette
+# information est-elle bonne ? », pas a « parle-t-elle de chez nous ? ».
+#
+# DETERMINISTE ET GRATUIT, decision prise en amont : aucun champ ajoute au
+# prompt de scoring (il faudrait re-noter tout le flux), aucun appel de
+# modele. Il n'existe aucune colonne « pays » sur les sources -- verifie.
+#
+# LE SIGNAL RETENU, ET CE QUI A ETE ESSAYE PUIS REJETE. Mesure du 2026-09-30
+# sur les 901 evenements de la base de production, titres lus un par un.
+#
+# (a) LEXIQUE France dans le TITRE -- villes, regions, salles, festivals,
+#     artistes et labels francais. 44 evenements sur 901 (4,9 %). A la
+#     lecture : aucun faux positif dur. Les deux cas les plus discutables
+#     concernent bien la France (« Macklemore ... concerts in London, Dublin
+#     and Paris », « David Guetta announces biggest London show ») : un
+#     artiste francais ou une date parisienne SONT de l'actu de la scene FR.
+#     Une dizaine de titres Konbini/Booska-P (mode, sport, cinema en France)
+#     sont FR et hors ligne editoriale -- c'est `relevance` qui les baisse,
+#     pas cette feature, et les melanger est exactement l'erreur a eviter.
+#
+# (b) SOURCE PRIMAIRE francaise -- un compte d'artiste, de festival, de label
+#     ou de club francais. +30 evenements (3,3 %), aucun faux positif : pour
+#     une source PRIMAIRE, le compte EST le sujet (meme doctrine que
+#     `legende.sans_mentions_de_source`, ou `source.name` est le sujet de
+#     l'actu des que la source n'est pas un media). C'est aussi la seule
+#     facon honnete de contourner le piege du depot -- « un nom de source
+#     n'est pas un pays » vaut pour les MEDIAS : Tsugi est francais et couvre
+#     l'international, donc aucune source `media` n'entre dans cette liste.
+#     Note plus faible que (a) : 5 des 30 parlent d'une activite a l'etranger
+#     (Madeon a Tomorrowland Brasil, Polo & Pan a New York) -- l'acteur est
+#     francais, l'evenement non.
+#
+# (c) LANGUE du titre -- REJETE, et c'est la mesure qui l'a tranche. 65
+#     evenements sont ecrits en francais SANS aucun marqueur de (a) ni (b).
+#     Lus un par un : au moins 15 ont un sujet ouvertement etranger (« LA
+#     BELGE A REGALE SA VILLE NATALE », « QUAND HYSTA EMMENE LE HARDCORE EN
+#     CROATIE », « DJ et producteur argentin ... », « LE NEERLANDAIS SORT
+#     ... », Charlotte de Witte a Gand, les Sex Pistols, Stevie Wonder), et
+#     la moitie du reste est indecidable (« Pour ou contre cette nouvelle
+#     regle ? »). Ce tiers-la aurait DOUBLE la population classee FR en y
+#     versant de l'actu internationale : c'est precisement le piege annonce
+#     (Guettapen et Electro News ecrivent en francais sur toute la planete).
+#     La langue mesure QUI RACONTE, pas DE QUI ON PARLE. Elle n'entre donc
+#     pas dans la note -- ni ponderee, ni en tie-break.
+#
+# RAPPEL DE CALIBRAGE. Faux negatifs estimes sur un echantillon de 70
+# evenements non classes, lus un par un : 2 a 4 (une soiree parisienne
+# annoncee sans nommer la ville, « Avec Young Marco, Bambounou et Belaria »,
+# un Flash Rap de Booska-P), soit un rappel d'environ 2/3 pour une precision
+# proche de 1. C'est le compromis voulu : cette note sert a REMONTER ce qui
+# est surement francais, pas a prouver qu'un evenement ne l'est pas.
+#
+# CE QUE 0.0 VEUT DIRE : « aucun marqueur France trouve », jamais « prouve
+# etranger ». Avec un rappel de 2/3, un tiers des evenements francais dort
+# a 0. Un classement 2D doit s'en servir comme d'un BONUS, jamais comme
+# d'un filtre excluant.
+#
+# ENTRETIEN : ces listes sont editoriales, pas techniques. Les elargir est
+# sans danger tant qu'on evite les mots qui existent aussi en anglais -- le
+# prototype a perdu six evenements a cause de « air » (« fair use », « Ca a
+# l'air »), et « justice » (le label francais) est volontairement absent du
+# lexique de titre pour la meme raison : il est couvert par (b), ou le nom
+# de compte ne peut pas se confondre avec un mot courant.
+
+# Villes, regions, gentiles. Un mot n'entre ici QUE s'il ne peut pas etre lu
+# comme un mot anglais courant : ni « nice », ni « tours », ni « angers », ni
+# « nancy » (prenom) -- « nancy jazz » est dans les entites, qui sont
+# cherchees en sous-chaine.
+LIEUX_FRANCE = frozenset({
+    "france", "francais", "francaise", "francaises", "hexagone",
+    "paris", "parisien", "parisienne", "parisiens", "parisiennes",
+    "lyon", "lyonnais", "marseille", "marseillais", "bordeaux", "lille",
+    "toulouse", "nantes", "rennes", "rennais", "brest", "strasbourg",
+    "montpellier", "grenoble", "reims", "rouen", "dijon", "caen", "metz",
+    "amiens", "toulon", "carcassonne", "bourges", "tourcoing", "nimes",
+    "bretagne", "breton", "bretonne", "normandie", "corse", "provence",
+    "alsace", "occitanie",
+})
+
+# Festivals, salles, clubs, labels et artistes francais. Cherches en
+# SOUS-CHAINE sur le titre normalise (plusieurs sont en plusieurs mots, et
+# « #RexClub » n'a pas d'espace).
+ENTITES_FRANCE = frozenset({
+    "hellfest", "solidays", "transmusicales", "trans musicales", "astropolis",
+    "marsatac", "nuits sonores", "rock en seine", "we love green",
+    "peacock society", "rex club", "rexclub", "vieilles charrues", "garorock",
+    "eurockeennes", "printemps de bourges", "cabaret vert", "main square",
+    "interceltique", "positive education", "ed banger", "ninkasi", "trabendo",
+    "elysee montmartre", "la cigale", "olympia", "accor arena", "salle pleyel",
+    "bataclan", "macki music", "plages electroniques", "lons electronic",
+    "nancy jazz", "techno parade", "weather festival", "kompromat",
+    "polo & pan", "folamour", "laurent garnier", "agoria", "breakbot",
+    "dj snake", "gesaffelstein", "kavinsky", "kungs", "the blaze",
+    "bob sinclar", "david guetta", "daft punk", "vladimir cauchemar",
+    "worakls", "madeon", "christine and the queens", "oklou", "teki latex",
+    "stromae", "tour eiffel", "chatelet",
+})
+
+# Comptes PRIMAIRES francais (artiste / festival / label / club), normalises
+# par `_nom_de_source`. Aucun media ici, et c'est la regle : le nom d'un
+# media ne dit rien du pays de son sujet.
+SOURCES_PRIMAIRES_FRANCE = frozenset({
+    "astropolis", "marsatac", "nuits sonores", "transmusicales",
+    "rock en seine", "solidays", "we love green", "peacock society",
+    "rex club", "ninkasi / heat lyon", "positive education", "ed banger",
+    "cercle", "kompromat", "polo & pan", "folamour", "laurent garnier",
+    "agoria", "bob sinclar", "david guetta", "dj snake (fr)", "justice (fr)",
+    "madeon (fr)", "breakbot (fr)", "vladimir cauchemar (fr)",
+    "worakls (fr)", "trym",
+})
+
+FRANCE_MARQUEUR_TITRE = 100.0
+FRANCE_SOURCE_PRIMAIRE = 70.0
+
+
+def _sans_accents(texte: str) -> str:
+    decompose = unicodedata.normalize("NFKD", texte or "")
+    return "".join(c for c in decompose if not unicodedata.combining(c)).lower()
+
+
+def _mots(texte: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9']+", _sans_accents(texte)))
+
+
+def _nom_de_source(nom: str) -> str:
+    """Le nom d'une source sans son suffixe de canal : « Astropolis (IG) » ->
+    « astropolis ». Le suffixe de PAYS, lui, est garde (« madeon (fr) ») : il
+    distingue le compte francais d'un homonyme, exactement comme dans la
+    base."""
+    return re.sub(r"\s*\((ig|rss)\)\s*$", "", _sans_accents(nom).strip()).strip()
+
+
+def marqueurs_france(titre: str) -> frozenset[str]:
+    """Les marqueurs France trouves dans un titre (vide si aucun).
+
+    Rendre l'ENSEMBLE et non un booleen n'est pas de la coquetterie : c'est
+    ce qui rend une mesure relisible -- on voit QUEL mot a declenche, donc on
+    voit le faux positif (c'est ainsi que « air » a ete retire)."""
+    normalise = _sans_accents(titre)
+    trouves = set(_mots(titre) & LIEUX_FRANCE)
+    trouves.update(e for e in ENTITES_FRANCE if e in normalise)
+    return frozenset(trouves)
+
+
+def source_primaire_francaise(noms_sources_primaires) -> bool:
+    """Vrai si l'un des comptes PRIMAIRES de l'evenement est francais.
+
+    L'appelant ne passe QUE des sources primaires (role `primary`) : une
+    source media n'a rien a faire ici, voir la note (c) ci-dessus."""
+    return any(_nom_de_source(n) in SOURCES_PRIMAIRES_FRANCE for n in noms_sources_primaires if n)
+
+
+def pertinence_france(
+    *,
+    titre: str,
+    noms_sources_primaires=(),
+) -> float | None:
+    """100 = marqueur France dans le titre. 70 = compte primaire francais.
+    0 = aucun marqueur trouve. `None` = rien a lire.
+
+    `None` -- jamais 0 -- quand le titre ne porte AUCUN mot exploitable (« . »,
+    « Post Instagram » reduit a deux mots generiques, une legende d'emojis) ET
+    qu'aucun compte primaire n'est connu : on n'a alors rien mesure du tout,
+    et le dire vaut mieux que de rendre un zero qui se lirait « regarde, pas
+    francais ».
+    """
+    marqueurs = marqueurs_france(titre)
+    if marqueurs:
+        return FRANCE_MARQUEUR_TITRE
+    noms = [n for n in noms_sources_primaires if n]
+    if source_primaire_francaise(noms):
+        return FRANCE_SOURCE_PRIMAIRE
+    if not noms and not _mots(titre):
+        return None
+    return 0.0
+
+
 @dataclass(frozen=True)
 class EventFeatures:
     """Le paquet de features deterministes d'un evenement, a un instant donne.
@@ -378,6 +561,7 @@ class EventFeatures:
     velocity: float | None = None
     acceleration: float | None = None
     nouveaute: float | None = None
+    pertinence_france: float | None = None
 
 
 def calculer_features(
@@ -392,6 +576,8 @@ def calculer_features(
     dates_publication=(),
     similarite_max: float | None = None,
     profondeur_archive_heures: float | None = None,
+    titre: str = "",
+    noms_sources_primaires=(),
 ) -> EventFeatures:
     """Assemble les features d'un evenement a partir de ses champs deja
     connus (ceux d'un `Event`, Task 1/2) et de l'instant de calcul.
@@ -411,6 +597,11 @@ def calculer_features(
     `EventObservation.published_at` de l'evenement (JAMAIS `observed_at`, voir
     la mesure plus haut) ; `similarite_max` et `profondeur_archive_heures`
     viennent de `app/pipeline/event_archive.py`.
+
+    `titre` et `noms_sources_primaires` alimentent la pertinence France
+    (Task 3). `noms_sources_primaires` ne doit contenir QUE des sources de
+    role `primary` -- une source media n'y dit rien du pays du sujet. Titre
+    vide et liste vide rendent `None`, pas 0 : rien n'a ete mesure.
     """
     h = demi_vie_heures if demi_vie_heures is not None else demi_vie_pour(event_type)
     return EventFeatures(
@@ -424,5 +615,8 @@ def calculer_features(
         nouveaute=nouveaute(
             similarite_max=similarite_max,
             profondeur_archive_heures=profondeur_archive_heures,
+        ),
+        pertinence_france=pertinence_france(
+            titre=titre, noms_sources_primaires=noms_sources_primaires
         ),
     )

@@ -52,6 +52,22 @@ from app.pipeline.event_features import NOUVEAUTE_HORIZON_HEURES
 FENETRE_JOURS = int(NOUVEAUTE_HORIZON_HEURES // 24)
 
 
+def en_utc(quand: dt.datetime) -> dt.datetime:
+    """Un datetime naif est lu comme de l'UTC ; un datetime aware est
+    converti.
+
+    Publique parce que c'est la FRONTIERE : `app/pipeline/event_features.py`
+    exige par contrat que ses dates soient du meme monde (il leve sinon, et
+    c'est voulu -- une confusion de fuseau ne doit jamais etre avalee), donc
+    quelqu'un doit normaliser AVANT lui. Ce quelqu'un est la couche qui lit
+    la base, c'est-a-dire ce module et l'API. Voir
+    `ArchiveEvenements.profondeur_heures` pour le detail du piege.
+    """
+    if quand.tzinfo is None:
+        return quand.replace(tzinfo=dt.timezone.utc)
+    return quand.astimezone(dt.timezone.utc)
+
+
 def dates_de_publication(observations) -> list[dt.datetime]:
     """Les dates de PUBLICATION datees d'une suite d'observations.
 
@@ -84,10 +100,24 @@ class ArchiveEvenements:
 
         `None` si l'archive est vide, ou si `instant` precede son debut (un
         evenement plus ancien que l'archive n'a aucun recul derriere lui).
+
+        LES DEUX BORNES SONT RAMENEES EN UTC AWARE avant la soustraction
+        (`en_utc`). Sans ca, cette ligne leve un `TypeError` des que les
+        deux dates ne viennent pas du meme monde -- et c'est exactement ce
+        qui arrive ici : `debut` est lu EN BASE (aware sous Postgres,
+        NAIF sous SQLite, ou le type `DateTime(timezone=True)` ne porte
+        aucun fuseau), tandis qu'`instant` est fourni par l'appelant, qui
+        doit passer une horloge explicite (`dt.datetime.now(dt.timezone.utc)`
+        cote API). Une feature qui marche en production et fait tomber
+        `/events` sous SQLite n'est pas une feature, c'est un piege --
+        et la suite de tests tourne justement sur SQLite.
+
+        La convention appliquee au naif est UTC, parce que c'est ce que la
+        base stocke partout dans ce projet.
         """
         if self.debut is None:
             return None
-        heures = (instant - self.debut).total_seconds() / 3600.0
+        heures = (en_utc(instant) - en_utc(self.debut)).total_seconds() / 3600.0
         return heures if heures > 0 else None
 
     def similarite_max(
@@ -104,9 +134,12 @@ class ArchiveEvenements:
         jetons = significant_tokens(titre)
         if not jetons:
             return None
+        # Meme precaution de fuseau que `profondeur_heures` : `quand` vient de
+        # la base, `avant` de l'appelant. Une comparaison mixte leve.
+        borne = en_utc(avant)
         meilleure = 0.0
         for autre_id, quand, autres_jetons in self.entrees:
-            if autre_id == event_id or quand >= avant:
+            if autre_id == event_id or en_utc(quand) >= borne:
                 continue
             score = archive_similarity_from_tokens(jetons, set(autres_jetons))
             if score > meilleure:
@@ -114,8 +147,19 @@ class ArchiveEvenements:
         return meilleure
 
 
-def charger_archive(db: Session, jours: int = FENETRE_JOURS) -> ArchiveEvenements:
+def charger_archive(
+    db: Session,
+    jours: int = FENETRE_JOURS,
+    *,
+    maintenant: dt.datetime | None = None,
+) -> ArchiveEvenements:
     """Lit l'archive des titres d'observations, bornee a `jours`.
+
+    `maintenant` borne la fenetre et se passe EXPLICITEMENT depuis
+    l'appelant (l'API le fait) : une horloge implicite rend la lecture non
+    reproductible d'un appel a l'autre. Absent, on retombe sur l'heure
+    courante -- c'est un confort d'appel a la main, jamais le chemin d'un
+    point d'entree.
 
     Une seule requete pour les titres, une seconde -- scalaire -- pour le
     debut REEL de l'archive, qui n'est pas borne par la fenetre : la
@@ -124,7 +168,7 @@ def charger_archive(db: Session, jours: int = FENETRE_JOURS) -> ArchiveEvenement
     """
     if not events._tables_disponibles(db):
         return ArchiveEvenements()
-    depuis = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=jours)
+    depuis = (maintenant or dt.datetime.now(dt.timezone.utc)) - dt.timedelta(days=jours)
     lignes = db.execute(
         select(
             EventObservation.event_id,

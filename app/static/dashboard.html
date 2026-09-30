@@ -1159,6 +1159,17 @@ document.getElementById("event-sort").onchange = loadEventsPanel;
 // signal, donc pas de classe .ecart plutôt qu'une fausse alerte.
 const ECART_CORROBORATION_SEUIL = 30;
 
+// Les features de la Phase 2C sont NULLABLES, et un null n'est pas un zéro :
+// il dit « pas assez de matière pour mesurer » (une vélocité demande deux
+// preuves datées, une accélération trois — 85 % des événements n'en ont
+// qu'une). Le badge affiche donc « ? » plutôt que 0, sinon l'œil lirait
+// « mesuré à plat » là où rien n'a été mesuré. Lecture seule : 2C expose,
+// c'est 2D qui classera.
+function badgeFeature(nom, valeur, decimales, aide) {
+  const texte = valeur == null ? "?" : Number(valeur).toFixed(decimales);
+  return `<span class="badge" title="${escapeHtml(aide)}">${nom} ${texte}</span>`;
+}
+
 async function loadEventsPanel() {
   const list = document.getElementById("events-list");
   list.innerHTML = "Chargement…";
@@ -1208,7 +1219,11 @@ async function loadEventsPanel() {
       <span class="badge">${ev.platform_count} plateforme${ev.platform_count > 1 ? "s" : ""}</span>
       <span class="badge">fraîcheur ${Math.round(ev.freshness)}</span>
       <span class="badge${ecart ? " corrob ecart" : ""}" title="${ecart ? "corroboration élevée, pertinence éditoriale faible : probablement hors ligne éditoriale" : ""}">pertinence ${pertinence ?? "?"}</span>
-      <span class="badge corrob${ecart ? " ecart" : ""}">corroboration ${Math.round(ev.corroboration)}</span>`;
+      <span class="badge corrob${ecart ? " ecart" : ""}">corroboration ${Math.round(ev.corroboration)}</span>
+      ${badgeFeature("vélocité", ev.velocity, 2, "preuves par heure, sur les dates de publication")}
+      ${badgeFeature("accélération", ev.acceleration, 2, "densité de la seconde moitié contre la première : positif, l'actu monte")}
+      ${badgeFeature("nouveauté", ev.nouveaute, 0, "100 = rien d'antérieur n'y ressemble ; 0 = reprise d'une actu archivée")}
+      ${badgeFeature("France", ev.pertinence_france, 0, "100 = marqueur France dans le titre ; 70 = compte primaire français ; 0 = aucun marqueur trouvé")}`;
     const obsZone = row.querySelector(".event-observations");
     let charge = false;
     row.querySelector(".event-head").onclick = async () => {
