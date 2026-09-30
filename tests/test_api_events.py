@@ -362,11 +362,7 @@ def test_la_liste_ne_fait_pas_une_requete_par_evenement(client, db_session):
     compte = []
 
     def _tracer(conn, curseur, requete, params, contexte, executemany):
-        if (
-            "event_observations" in requete
-            and "articles" not in requete
-            and requete.lstrip().upper().startswith("SELECT")
-        ):
+        if "event_observations" in requete and requete.lstrip().upper().startswith("SELECT"):
             compte.append(requete)
 
     sa_event.listen(db_session.get_bind(), "before_cursor_execute", _tracer)
@@ -374,8 +370,10 @@ def test_la_liste_ne_fait_pas_une_requete_par_evenement(client, db_session):
         assert client.get("/events").status_code == 200
     finally:
         sa_event.remove(db_session.get_bind(), "before_cursor_execute", _tracer)
-    # Exactement trois, quel que soit le nombre d'evenements : les titres de
-    # l'archive, son debut, et le contexte de la page. Les requetes qui
-    # joignent `articles` sont exclues du compte -- c'est le N+1 de
-    # `_relevance_representant`, herite de la Phase 2A et hors perimetre ici.
-    assert len(compte) == 3, compte
+    # Exactement QUATRE, quel que soit le nombre d'evenements : les titres de
+    # l'archive, son debut, le contexte de la page, et les pertinences des
+    # representants. Cette derniere etait un N+1 herite de la Phase 2A --
+    # mesure du tour de correction 2 : 20,4 s sur les 22,7 s de
+    # `/events?limit=200`, donc ~10 s a chaque ouverture du panneau au
+    # dashboard, qui demande 100 evenements. Groupee, elle coute 0,11 s.
+    assert len(compte) == 4, compte

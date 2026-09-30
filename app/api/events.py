@@ -38,7 +38,7 @@ from app.schemas import EventDetailOut, EventOut
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-def _relevance_representant(db: Session, event_id: int) -> int | None:
+def _relevances_representants(db: Session, event_ids: list[int]) -> dict[int, int]:
     """La pertinence (`relevance_score`) de l'article REPRESENTANT du groupe
     derriere cet evenement -- Tour de correction 1 : sans elle, la
     corroboration (le bavardage de la presse) n'a aucun chiffre editorial en
@@ -51,13 +51,34 @@ def _relevance_representant(db: Session, event_id: int) -> int | None:
     et lui seul, dont le titre alimente `Event.titre`. Nullable par
     construction : l'article peut avoir ete purge (retention 14 j) sans que
     l'evenement ni ses observations ne disparaissent, exactement comme pour
-    `Event.titre` qui reste alors fige sur le dernier representant connu."""
-    return db.scalar(
-        select(Article.relevance_score)
-        .join(EventObservation, EventObservation.article_id == Article.id)
-        .where(EventObservation.event_id == event_id, Article.duplicate_of_id.is_(None))
-        .limit(1)
-    )
+    `Event.titre` qui reste alors fige sur le dernier representant connu.
+
+    UNE requete pour toute la page, jamais une par evenement (tour de
+    correction 2) : mesure avant correction, `/events?limit=200` passait
+    **20,4 s sur 22,7 s** dans cette seule fonction, et le dashboard, qui
+    demande 100 evenements, mettait ~10 s a ouvrir son panneau. C'etait
+    herite de la Phase 2A, et c'est devenu le seul cout de la page une fois
+    le contexte de la Phase 2C groupe. Meme motif que `_contexte`.
+
+    Rend un dictionnaire des pertinences CONNUES : un evenement absent du
+    resultat n'a pas de representant note (purge, ou note jamais posee), et
+    l'appelant lit alors `None`. Le premier representant rencontre gagne,
+    comme le faisait le `LIMIT 1` d'avant."""
+    if not event_ids:
+        return {}
+    trouvees: dict[int, int] = {}
+    for event_id, note in db.execute(
+        select(EventObservation.event_id, Article.relevance_score)
+        .join(Article, EventObservation.article_id == Article.id)
+        .where(
+            EventObservation.event_id.in_(event_ids),
+            Article.duplicate_of_id.is_(None),
+            Article.relevance_score.is_not(None),
+        )
+        .order_by(EventObservation.id)
+    ):
+        trouvees.setdefault(event_id, note)
+    return trouvees
 
 
 def _contexte(db: Session, event_ids: list[int]) -> dict[int, tuple[list, list[str]]]:
@@ -111,6 +132,7 @@ def _event_out(
     maintenant: dt.datetime,
     archive: ArchiveEvenements,
     contexte: dict[int, tuple[list, list[str]]],
+    relevances: dict[int, int],
 ) -> EventOut:
     dates, primaires = contexte.get(event.id, ([], []))
     # NORMALISATION DE FUSEAU, ici et pas ailleurs. Sous Postgres les
@@ -152,7 +174,7 @@ def _event_out(
         acceleration=features.acceleration,
         nouveaute=features.nouveaute,
         pertinence_france=features.pertinence_france,
-        relevance_representant=_relevance_representant(db, event.id),
+        relevance_representant=relevances.get(event.id),
     )
 
 
@@ -172,9 +194,14 @@ def list_events(
     # par contrat toute horloge implicite.
     maintenant = dt.datetime.now(dt.timezone.utc)
     archive = charger_archive(db, maintenant=maintenant)
-    contexte = _contexte(db, [e.id for e in events])
+    ids = [e.id for e in events]
+    contexte = _contexte(db, ids)
+    relevances = _relevances_representants(db, ids)
     return [
-        _event_out(db, e, maintenant=maintenant, archive=archive, contexte=contexte)
+        _event_out(
+            db, e, maintenant=maintenant, archive=archive,
+            contexte=contexte, relevances=relevances,
+        )
         for e in events
     ]
 
@@ -194,6 +221,7 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
         maintenant=maintenant,
         archive=archive,
         contexte=_contexte(db, [event.id]),
+        relevances=_relevances_representants(db, [event.id]),
     )
     observations = db.scalars(
         select(EventObservation)

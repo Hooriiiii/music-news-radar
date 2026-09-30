@@ -304,9 +304,15 @@ class TestNouveaute:
     def test_profondeur_inconnue_vaut_none(self):
         assert nouveaute(similarite_max=0.1, profondeur_archive_heures=None) is None
 
-    def test_similarite_inconnue_ne_fait_pas_une_reprise(self):
-        # Titre sans mot significatif : la comparaison n'a pas eu lieu.
-        assert nouveaute(similarite_max=None, profondeur_archive_heures=200.0) == 100.0
+    def test_similarite_inconnue_n_est_pas_une_nouveaute_maximale(self):
+        """Tour de correction 2 : ce test attendait 100.0, et c'etait le
+        defaut le plus grave de la phase -- la valeur NON CALCULABLE devenait
+        la valeur MAXIMALE, donc la tete de n'importe quel classement. Un
+        titre sans jeton significatif n'a ete compare a RIEN ; `None` est la
+        seule reponse honnete. Mesure : 5 evenements de production
+        recevaient 100.0 par ce chemin (« AIR FT. », « IVE EP », « . »)."""
+        assert nouveaute(similarite_max=None, profondeur_archive_heures=200.0) is None
+        assert nouveaute(similarite_max=None, profondeur_archive_heures=None) is None
 
     def test_interpolation_dans_la_bande_douteuse(self):
         milieu = nouveaute(similarite_max=0.725, profondeur_archive_heures=200.0)

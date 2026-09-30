@@ -275,7 +275,7 @@ class TestUneObservationNeMentJamaisSaDate:
         art.fetched_at = dt.datetime(2026, 9, 25, 9, 0, tzinfo=UTC)
         db.add(art)
         db.commit()
-        ev = events._creer_evenement(db, art)
+        ev, _ = events._creer_evenement(db, art)
         events._ajouter_observation(db, ev, art)
         db.commit()
         obs = db.scalars(

@@ -146,14 +146,73 @@ def test_au_dela_de_la_borne_c_est_une_actu_neuve(db_session):
     assert len(_events(db_session)) == 2
 
 
-def test_un_titre_sans_mot_significatif_ne_rattache_rien_par_le_titre(db_session):
-    """« Post Instagram » et consorts se normalisent a vide : les rattacher
-    entre eux collerait des actus sans rapport. Seule l'url peut alors
-    trancher."""
+def test_un_titre_trop_pauvre_ne_rattache_rien_par_le_titre(db_session):
+    """Tour de correction 2 -- ce test passait pour une MAUVAISE raison.
+
+    Il annoncait que « Post Instagram et consorts se normalisent a vide »,
+    et se contentait de « ... » qui, lui, normalise bien a vide. Or
+    `normalize_title("Post Instagram")` vaut « post instagram » : la garde
+    d'alors ne protegeait que les titres reellement vides, et trois posts
+    promo distincts d'un meme compte devenaient UN evenement -- donc une
+    velocite fabriquee. La garde porte desormais sur les jetons
+    SIGNIFICATIFS (`TITRE_JETONS_MIN`), et ce test le verifie sur les titres
+    reels qui posaient probleme.
+    """
     db_session.autoflush = False
-    src = _src(db_session, "ComptePro")
-    _art(db_session, src, n=1, title="...", heures=3)
-    _art(db_session, src, n=2, title="...", heures=1)
+    for rang, titre in enumerate(("Post Instagram", "JEONGHAN X JOSHUA", "IVE EP", "...")):
+        src = _src(db_session, f"Compte{rang}")
+        for i in range(3):
+            _art(db_session, src, n=rang * 10 + i, title=titre, heures=3 - i)
+    observer_articles(db_session)
+
+    # Quatre comptes x trois posts, aucun rattachement par le titre.
+    assert len(_events(db_session)) == 12
+
+
+def test_un_titre_assez_riche_rattache_bien(db_session):
+    """Le pendant du precedent : la garde ne doit pas tout bloquer. Trois
+    jetons significatifs suffisent -- 45 des 48 vraies re-ingestions
+    mesurees en production en portent au moins autant."""
+    db_session.autoflush = False
+    src = _src(db_session, "Mixmag")
+    premier = _art(db_session, src, n=1, title="Boxout Fest founder DJ Buxley has died", heures=40)
+    _observer_puis_purger(db_session, premier)
+    _art(db_session, src, n=2, title="Boxout Fest founder DJ Buxley has died", heures=0)
+    observer_articles(db_session)
+
+    assert len(_events(db_session)) == 1
+
+
+def test_une_chronique_hebdomadaire_reste_deux_evenements(db_session):
+    """La fenetre de la branche TITRE est de 72 h, pas de 7 jours : deux
+    editions de « This week's top 10 on the Global Excl. » sont separees de
+    127 h en production, et 7 jours les fusionnait -- en retitrant l'absorbe
+    par-dessus le marche."""
+    db_session.autoflush = False
+    src = _src(db_session, "BillboardCharts")
+    premier = _art(db_session, src, n=1, title="This week s top 10 on the Global Excl", heures=1)
+    observer_articles(db_session)
+    obs = db_session.scalars(select(EventObservation)).one()
+    obs.observed_at = dt.datetime.now(UTC) - dt.timedelta(hours=127)
+    db_session.commit()
+    _purger(db_session, premier)
+
+    _art(db_session, src, n=2, title="This week s top 10 on the Global Excl", heures=0)
     observer_articles(db_session)
 
     assert len(_events(db_session)) == 2
+
+
+def test_le_compteur_ne_ment_pas_sur_une_re_ingestion(db_session):
+    """`evenements_crees` comptait une creation la ou il n'y avait qu'un
+    rattachement -- un compteur de supervision qui ment, dans un depot qui a
+    deja paye ca."""
+    db_session.autoflush = False
+    src = _src(db_session, "Mixmag")
+    premier = _art(db_session, src, n=1, title="Vector Lovers has died aged 50", heures=40)
+    _observer_puis_purger(db_session, premier)
+
+    _art(db_session, src, n=2, title="Vector Lovers has died aged 50", heures=0)
+    stats = observer_articles(db_session)
+    assert stats.evenements_crees == 0
+    assert stats.articles_rattaches == 1

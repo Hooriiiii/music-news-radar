@@ -213,6 +213,11 @@ def _ajouter_observation(db: Session, event: Event, article: Article) -> None:
     db.flush()
 
 
+# Voir `_evenement_deja_observe` pour la mesure qui fixe ces deux valeurs.
+TITRE_JETONS_MIN = 3
+TITRE_FENETRE_HEURES = 72.0
+
+
 def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     """L'événement qui porte DÉJÀ cette actu, quand l'article n'est qu'une
     RÉ-INGESTION de lui-même (Phase 2C, tour de correction 1).
@@ -234,7 +239,9 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     haut : la feature décrivait notre pipeline en croyant décrire le monde.
 
     L'IDENTITÉ RETENUE : même URL, ou bien même titre normalisé chez la
-    **MÊME** source. La contrainte de source est essentielle et ne doit pas
+    **MÊME** source, avec un minimum de jetons SIGNIFICATIFS et une fenêtre
+    plus courte pour cette seconde branche (tour de correction 2, voir les
+    deux paragraphes dédiés plus bas). La contrainte de source est essentielle et ne doit pas
     sauter -- un même titre chez DEUX sources est une vraie corroboration
     éditorielle (c'est la dédup par titre qui les relie, `cluster.py`), pas un
     artefact. Seule la répétition d'une source SUR ELLE-MÊME signe la
@@ -246,10 +253,40 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     phénomène à détecter EST notre cadence : la bonne horloge est donc celle
     de l'ingestion.
 
-    LA BORNE est `cluster_archive_jours` (7 j), le précédent du dépôt pour
-    « au-delà, une reprise n'en est plus une ». Un marronnier republié six
-    mois plus tard n'est pas la même actu et doit bien faire un événement
-    neuf.
+    UN GARDE-FOU DE CONTENU, sinon cette fonction fabrique exactement ce que
+    la phase combat. Sans lui, trois posts Instagram distincts intitulés
+    « Post Instagram » chez le même compte deviennent UN seul événement --
+    et `velocity`/`acceleration` se calculent alors sur un agrégat de posts
+    promo sans rapport : six posts d'un même compte en 23 h donnent ~0,22
+    preuve/h, une propagation entièrement fabriquée. Le titre visé doit donc
+    porter au moins `TITRE_JETONS_MIN` jetons **significatifs**
+    (`cluster.significant_tokens`, pas `normalize_title` : ce dernier rend
+    « post instagram », qui n'est pas vide et ne protège de rien). Mesuré sur
+    la production : tous les titres génériques répétés d'un même compte
+    tiennent en 2 jetons ou moins -- « Post Instagram » (2), « JEONGHAN X
+    JOSHUA » (2), « The Mix 123: Optimo » (1), « IVE EP » (0), les titres
+    coréens de Stray Kids (0 et 1) -- tandis que 45 des 48 vraies
+    ré-ingestions en portent 3 ou plus. Le seuil de 3 sépare donc les deux
+    populations sans arbitrage.
+
+    LA BORNE DE LA BRANCHE TITRE est `TITRE_FENETRE_HEURES` (72 h), et non
+    les 7 jours de la branche URL. Mesure des écarts CONSÉCUTIFS entre deux
+    ré-ingestions d'un même (titre, source) sur la production : médiane
+    **59,1 h**, p90 103 h -- la signature de la rétention à 48 h, plus le
+    délai du passage suivant. 72 h couvre ce noyau (39 des 48 groupes) avec
+    24 h de marge pour un Mac endormi, et reste très en deçà des 127 h qui
+    séparent deux éditions de « This week's top 10 on the Global Excl. » --
+    deux SEMAINES différentes, que 7 jours fusionnait en un seul événement,
+    en retitrant l'absorbé par-dessus le marché. On préfère manquer 9 groupes
+    de ré-ingestion tardive (93 à 146 h) que fusionner une chronique
+    hebdomadaire : rater une fusion coûte un événement de trop, la faire à
+    tort fabrique de la vélocité.
+
+    LA BRANCHE URL garde les 7 jours de `cluster_archive_jours` : l'identité
+    d'URL est bien plus forte que celle du titre -- vérifié en revue, aucune
+    des 1 267 observations ne partage son URL avec une autre source. Un
+    marronnier republié des mois plus tard sort de toute façon de la fenêtre
+    et fait bien un événement neuf.
 
     Rattacher plutôt que créer ne fabrique AUCUNE corroboration :
     `_recalculer` compte des sources DISTINCTES, et c'est la même. Seul
@@ -258,12 +295,16 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     """
     # Import differé : `cluster` importe ce module, un import en tête serait
     # circulaire.
-    from app.pipeline.cluster import normalize_title
+    from app.pipeline.cluster import normalize_title, significant_tokens
 
-    depuis = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=settings.cluster_archive_jours)
+    maintenant = dt.datetime.now(dt.timezone.utc)
     par_url = db.scalar(
         select(EventObservation.event_id)
-        .where(EventObservation.url == article.url, EventObservation.observed_at >= depuis)
+        .where(
+            EventObservation.url == article.url,
+            EventObservation.observed_at
+            >= maintenant - dt.timedelta(days=settings.cluster_archive_jours),
+        )
         .order_by(EventObservation.id)
         .limit(1)
     )
@@ -273,13 +314,14 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     if article.source_id is None:
         return None
     vise = normalize_title(article.title)
-    if not vise:
+    if len(significant_tokens(article.title)) < TITRE_JETONS_MIN:
         return None
     for event_id, titre in db.execute(
         select(EventObservation.event_id, EventObservation.title)
         .where(
             EventObservation.source_id == article.source_id,
-            EventObservation.observed_at >= depuis,
+            EventObservation.observed_at
+            >= maintenant - dt.timedelta(hours=TITRE_FENETRE_HEURES),
         )
         .order_by(EventObservation.id)
     ):
@@ -288,20 +330,24 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     return None
 
 
-def _creer_evenement(db: Session, article: Article) -> Event:
+def _creer_evenement(db: Session, article: Article) -> tuple[Event, bool]:
     """Crée l'événement de cet article -- ou lui rend celui qui porte déjà la
     MÊME actu de la MÊME source, quand l'article n'en est qu'une
-    ré-ingestion (`_evenement_deja_observe`)."""
+    ré-ingestion (`_evenement_deja_observe`).
+
+    Rend `(event, cree)` : le second terme dit si un événement a réellement
+    été créé, pour que l'appelant ne compte pas une création là où il n'y a
+    eu qu'un rattachement (`ObservationStats.evenements_crees` mentait)."""
     deja = _evenement_deja_observe(db, article)
     if deja is not None:
         _ajouter_observation(db, deja, article)
-        return deja
+        return deja, False
     vu = _moment_fait(article)
     event = Event(titre=article.title, first_seen_at=vu, last_seen_at=vu)
     db.add(event)
     db.flush()
     _ajouter_observation(db, event, article)
-    return event
+    return event, True
 
 
 def _fusionner(db: Session, source_event: Event, cible: Event) -> None:
@@ -547,7 +593,7 @@ def attacher(db: Session, article: Article, representant: Article) -> Event | No
     }
 
     if not evenements_existants:
-        cible = _creer_evenement(db, representant)
+        cible, _ = _creer_evenement(db, representant)
     else:
         # Le plus petit id sert de cible stable ; les autres (rare : deux
         # groupes préexistants qui se rejoignent dans le même appel) sont
@@ -744,9 +790,17 @@ def observer_articles(db: Session, *, plafond: int | None = None) -> Observation
                 if attacher(db, article, representant) is not None:
                     stats.articles_rattaches += 1
                 continue
-            event = _creer_evenement(db, article)
+            # `_creer_evenement` peut RATTACHER a un evenement existant
+            # (re-ingestion, `_evenement_deja_observe`) : compter une
+            # creation dans ce cas ferait mentir la supervision, ce que ce
+            # depot a deja paye. C'est elle qui dit ce qu'elle a fait, plutot
+            # que l'appelant qui le devine.
+            event, cree = _creer_evenement(db, article)
             _recalculer(db, event)
-            stats.evenements_crees += 1
+            if cree:
+                stats.evenements_crees += 1
+            else:
+                stats.articles_rattaches += 1
 
         db.flush()
         db.commit()

@@ -334,6 +334,8 @@ def nouveaute(
     l'original. Elle ne peut pas inventer une reprise qu'elle ne contient
     pas. Donc :
 
+    - `similarite_max is None` (aucun jeton significatif dans le titre :
+      rien n'a ete compare) rend `None` AVANT tout le reste ;
     - une reprise TROUVEE vaut, quelle que soit la profondeur : un fait
       positif n'a pas besoin de recul ;
     - une ABSENCE de reprise ne vaut 100 que si l'archive couvre au moins
@@ -348,12 +350,22 @@ def nouveaute(
     Entre `seuil_doute` et `seuil_reprise`, interpolation lineaire de 100 a 0
     plutot qu'une marche d'escalier.
     """
-    if similarite_max is not None:
-        s = max(0.0, min(1.0, similarite_max))
-        if s >= seuil_reprise:
-            return 0.0
-        if s > seuil_doute:
-            return 100.0 * (seuil_reprise - s) / (seuil_reprise - seuil_doute)
+    # LA COMPARAISON N'A PAS EU LIEU (`None`) N'EST PAS « RIEN TROUVE »
+    # (`0.0`). `event_archive.similarite_max` distingue soigneusement les
+    # deux ; les confondre ici retournait la contrainte cardinale du plan --
+    # la valeur non calculable devenait la valeur MAXIMALE. Mesure du tour de
+    # correction 2 : 8 evenements ont un titre sans jeton significatif et 5
+    # recevaient 100.0 (« AIR FT. », « IVE EP », « . », un titre d'emojis),
+    # donc « actu parfaitement neuve » en tete de n'importe quel classement.
+    # Population faible aujourd'hui, mais structurellement peuplee des titres
+    # generiques Instagram et des titres en ecriture non latine.
+    if similarite_max is None:
+        return None
+    s = max(0.0, min(1.0, similarite_max))
+    if s >= seuil_reprise:
+        return 0.0
+    if s > seuil_doute:
+        return 100.0 * (seuil_reprise - s) / (seuil_reprise - seuil_doute)
     if profondeur_archive_heures is None or profondeur_archive_heures < horizon_heures:
         return None
     return 100.0

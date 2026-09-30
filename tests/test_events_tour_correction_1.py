@@ -113,7 +113,7 @@ def test_first_seen_at_uses_the_same_fallback_at_creation_and_recompute(db_sessi
     article.fetched_at = dt.datetime.now(UTC) - dt.timedelta(hours=10)
     db_session.commit()
 
-    event = events._creer_evenement(db_session, article)
+    event, _ = events._creer_evenement(db_session, article)
     db_session.commit()
 
     assert event.first_seen_at.replace(tzinfo=None) == article.fetched_at.replace(tzinfo=None)
