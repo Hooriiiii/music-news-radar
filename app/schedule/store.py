@@ -356,6 +356,33 @@ def candidats_eligibles(
     ]
 
 
+def porte_un_post_orphelin(creneau: Creneau) -> bool:
+    """Vrai pour un creneau qui porte un post COMPOSE dont l'article a disparu.
+
+    `creneaux.article_id` ET `posts.article_id` sont tous deux
+    `ON DELETE SET NULL` : la purge des articles (`retention_days`, 2 jours
+    depuis le 2026-09-21) vide les deux en silence, y compris sur un creneau du
+    TROISIEME jour de la file (`publication_creneaux` = 9, soit 3 jours) dont le
+    post etait deja compose la veille. Le post, lui, est AUTONOME : textes,
+    visuels copies en local (`visuels_cache_dir`), credit, palette et actifs
+    sont denormalises exprès pour survivre a cette purge.
+
+    Sans ce predicat, `appliquer_arbitrage` forcait `etat = LIBRE` -- l'article
+    est parti -- tout en GARDANT `post_id`, parce que
+    `if article_id != creneau.article_id` ne voit rien a faire quand les deux
+    valent None. Le creneau devenait alors invisible de la composition comme du
+    gel, qui n'examinent que des creneaux PROGRAMME, et pourrissait jusqu'a
+    MANQUE. Mesure le 2026-09-30 : 8 des 25 creneaux manques SANS AUCUNE RAISON
+    portaient exactement ce profil (post compose, article NULL, jamais gele).
+
+    Un tel creneau est donc traite comme EPINGLE par l'arbitrage : il garde son
+    post jusqu'au gel. Si ce post se revele impubliable, le gel le lache
+    (`post_id = None`) et le creneau retombe dans le cas ordinaire au passage
+    suivant -- la protection se defait toute seule, sans intervention.
+    """
+    return creneau.article_id is None and creneau.post_id is not None
+
+
 def post_a_reprendre(db: Session, article_id: int, template: str = "kinda_post") -> int | None:
     return db.scalar(
         select(Post.id)
@@ -405,10 +432,25 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
         occupes = _tenus_ailleurs(db, maintenant, format_) | places_ce_passage
         candidats = [c for c in candidats_eligibles(db, maintenant, format_) if c.article_id not in occupes]
         places = [
-            Place(utc(c.publier_a), c.article_id, c.epingle or c.etat in VERROUILLES) for c in creneaux
+            Place(
+                utc(c.publier_a),
+                c.article_id,
+                c.epingle or c.etat in VERROUILLES or porte_un_post_orphelin(c),
+            )
+            for c in creneaux
         ]
         affectation = arbitrer(places, candidats, maintenant)
         for creneau in creneaux:
+            if porte_un_post_orphelin(creneau):
+                # Le post survit a son article : le creneau le garde jusqu'au
+                # gel. Un creneau deja passe en LIBRE par l'ancien defaut
+                # redevient PROGRAMME, sinon son post -- pret a partir -- reste
+                # invisible du gel, qui ne regarde que des creneaux PROGRAMME.
+                # Les etats VERROUILLES (GELE, PUBLIE, ...) ne sont jamais
+                # touches : ils passent par ce `continue` sans etre reecrits.
+                if creneau.etat == EtatCreneau.LIBRE:
+                    creneau.etat = EtatCreneau.PROGRAMME
+                continue
             if creneau.epingle or creneau.etat in VERROUILLES:
                 continue
             article_id = affectation.get(utc(creneau.publier_a))

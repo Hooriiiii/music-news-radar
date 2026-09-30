@@ -1357,6 +1357,59 @@ quelques minutes, le créneau est en ECHEC de réclamation
 d'erreur, et `PATCH /posts/{id}` refuse toute édition de contenu (409), comme
 sur un créneau GELE. Au-delà (crash), il redevient un échec éditable.
 
+**Le creneau est AUTONOME de son article** (2026-09-30). Mesure ce jour-la :
+46 % des creneaux aboutis etaient manques (37 contre 43 publies), et **25 des
+37 ne portaient AUCUNE raison** alors que tous les 25 avaient un post compose.
+Deux defauts distincts se cachaient sous ce meme silence.
+
+*Le trou.* La file couvre TROIS jours (`publication_creneaux` = 9, trois par
+jour) et `publication_fraicheur_jours` vaut 3, alors que `retention_days` vaut
+**2** depuis le 2026-09-21 : un article attribue a un creneau du troisieme jour
+est purge avant l'heure de sa publication. Or `creneaux.article_id` ET
+`posts.article_id` sont tous deux `ON DELETE SET NULL` : la purge vide les deux
+sans un mot. Dans `appliquer_arbitrage`, `if article_id != creneau.article_id`
+ne voyait alors rien a faire — les deux valent `None` — donc `post_id`
+survivait pendant que `etat` etait force a `LIBRE`. Le creneau devenait
+invisible de la composition (qui exige un article) comme du gel (qui exige
+`PROGRAMME`) et pourrissait jusqu'a `MANQUE` : 8 des 25 portaient exactement ce
+profil (post compose, article NULL, jamais gele).
+
+*Le choix de l'utilisateur* : rendre le creneau autonome, plutot que raccourcir
+la file ou regonfler la base. Le post porte deja tout ce qu'il faut pour partir
+— textes, visuels copies en local, credit, palette, `assets` —, denormalise
+exprès pour survivre a cette purge. `store.porte_un_post_orphelin` traite donc
+un creneau « post compose + article NULL » comme EPINGLE : l'arbitrage ne le
+touche plus, et une ligne deja passee en `LIBRE` par l'ancien defaut redevient
+`PROGRAMME` toute seule (aucune reprise manuelle). Au gel, la relecture
+d'eligibilite reel est SAUTEE quand l'article est parti : ce n'est pas une
+complaisance, il n'y a plus rien a relire — la composition l'a deja verifiee, et
+`preparer_reel` exige de toute facon `posts.credit`. Les deux preparateurs
+etaient deja tolerants a `article=None` (partout `getattr(article, ...)`), et
+`_publier` gardait deja chaque touche a l'article derriere un `if article is not
+None` — le basculement `USED` inclus, qui n'a plus d'objet sans article. La
+COMPOSITION, elle, garde sa dependance : elle a besoin du titre, du resume et
+des medias. Un creneau sans article n'est jamais compose, il est reattribue.
+
+*Le silence.* `_marquer_manques` ecrivait `etat = MANQUE` **sans jamais toucher
+`erreur`**, qui valait donc `None` des que la derniere etape reussie etait une
+composition ou une reattribution — et `_compter_manque` sortait des que
+`article_id` etait `None`, si bien que ces manques n'apparaissaient ni au
+rapport ni a la notification de fin de passage. Le second chemin vers `MANQUE`
+(le retard relu sur l'horloge fraiche dans `_publier`) etait muet de la meme
+facon. Desormais **un creneau manque porte TOUJOURS une raison**
+(`_raison_manque` : format coupe, gele mais jamais publie, aucun post compose,
+post compose mais jamais gele), et n'est exempte du compteur que s'il etait
+REELLEMENT vide — ni article ni post, rien n'attendait de partir.
+
+*Ce que la mesure a aussi montre, et qui n'est PAS corrige ici* : les 17 autres
+manques sans raison ne viennent pas du trou mais d'une absence de l'agent —
+`publication.log` montre des trous de 2 a 3 h en pleine journee (16:52 → 19:57
+le 30/09), donc un Mac ferme, pas une panne de code. Sept d'entre eux etaient
+deja GELES, et sept autres ont vu leur post publie par un creneau suivant, sans
+perte editoriale. Restent deux causes distinctes et hors perimetre : les tunnels
+`cloudflared` injoignables (8 creneaux) et le solde de credits Anthropic epuise,
+qui fait echouer toute composition depuis le matin du 30/09.
+
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 
 **Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
