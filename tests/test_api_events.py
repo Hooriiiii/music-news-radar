@@ -12,6 +12,8 @@ dans ce depot, voir CLAUDE.md).
 
 import datetime as dt
 
+import pytest
+
 from app.models import Article, Event, EventObservation, Source, SourceRole, SourceType
 
 UTC = dt.timezone.utc
@@ -219,3 +221,159 @@ def test_relevance_representant_ignore_les_membres_non_representants(client, db_
 
     corps = client.get(f"/events/{event.id}").json()
     assert corps["relevance_representant"] is None
+
+
+# --- Phase 2C : les features exposees en lecture seule ---------------------
+
+
+def _obs_datee(db, event, src, *, n, publie_le, titre=None, role=SourceRole.PRIMARY):
+    """Une observation dont on maitrise la date de PUBLICATION -- le champ sur
+    lequel toute la Phase 2C se calcule (jamais `observed_at`)."""
+    obs = EventObservation(
+        event_id=event.id,
+        article_id=None,
+        platform=SourceType.RSS,
+        source_id=src.id if src else None,
+        source_role=role,
+        published_at=publie_le,
+        title=titre or f"Titre {n}",
+        url=f"https://archive.test/{n}",
+        source_name=src.name if src else "Source disparue",
+    )
+    db.add(obs)
+    db.commit()
+    return obs
+
+
+def test_les_features_2c_sont_exposees(client, db_session):
+    """Trois preuves etalees sur 4 h : velocite et acceleration mesurables."""
+    db_session.autoflush = False
+    src = _src(db_session, name="Mixmag")
+    base = dt.datetime.now(UTC) - dt.timedelta(hours=6)
+    event = _event(db_session, titre="Une actu qui monte", first_seen_at=base)
+    for i, decalage in enumerate((0, 3, 4)):
+        _obs_datee(db_session, event, src, n=i, publie_le=base + dt.timedelta(hours=decalage))
+
+    corps = client.get("/events").json()[0]
+    assert corps["velocity"] == pytest.approx(2 / 4.0)
+    # Deux preuves sur trois dans la seconde moitie -> indice positif.
+    assert corps["acceleration"] > 0
+    assert "nouveaute" in corps and "pertinence_france" in corps
+
+
+def test_une_preuve_unique_ne_ment_pas(client, db_session):
+    """85 % des evenements sont dans ce cas : `null`, jamais 0."""
+    db_session.autoflush = False
+    src = _src(db_session)
+    event = _event(db_session, titre="Actu isolee")
+    _obs_datee(db_session, event, src, n=1, publie_le=dt.datetime.now(UTC))
+
+    corps = client.get("/events").json()[0]
+    assert corps["velocity"] is None
+    assert corps["acceleration"] is None
+
+
+def test_la_pertinence_france_sort_du_titre_et_du_compte_primaire(client, db_session):
+    db_session.autoflush = False
+    marseille = _src(db_session, name="Marsatac (IG)")
+    etranger = _src(db_session, name="Drumcode (IG)")
+    maintenant = dt.datetime.now(UTC)
+    par_titre = _event(db_session, titre="Une soiree a Marseille")
+    _obs_datee(db_session, par_titre, etranger, n=1, publie_le=maintenant)
+    par_compte = _event(db_session, titre="What a night")
+    _obs_datee(db_session, par_compte, marseille, n=2, publie_le=maintenant)
+    ailleurs = _event(db_session, titre="Berlin club closes")
+    _obs_datee(db_session, ailleurs, etranger, n=3, publie_le=maintenant)
+
+    notes = {e["titre"]: e["pertinence_france"] for e in client.get("/events").json()}
+    assert notes["Une soiree a Marseille"] == 100.0
+    assert notes["What a night"] == 70.0
+    assert notes["Berlin club closes"] == 0.0
+
+
+def test_le_nom_d_un_media_francais_ne_classe_rien(client, db_session):
+    """Tsugi est francais et couvre l'international : son nom ne dit rien du
+    pays du sujet. Meme en source PRIMAIRE, il n'est pas dans la liste."""
+    db_session.autoflush = False
+    tsugi = _src(db_session, name="Tsugi")
+    event = _event(db_session, titre="UK vinyl counterfeit operation sentenced")
+    _obs_datee(db_session, event, tsugi, n=1, publie_le=dt.datetime.now(UTC))
+
+    assert client.get("/events").json()[0]["pertinence_france"] == 0.0
+
+
+def test_une_source_secondaire_ne_compte_pas_pour_la_france(client, db_session):
+    """Seules les sources PRIMAIRES alimentent le signal : un media qui
+    reprend l'annonce d'un festival francais reste un media."""
+    db_session.autoflush = False
+    src = _src(db_session, name="Astropolis (IG)")
+    event = _event(db_session, titre="A festival somewhere")
+    _obs_datee(db_session, event, src, n=1, publie_le=dt.datetime.now(UTC),
+               role=SourceRole.SECONDARY)
+
+    assert client.get("/events").json()[0]["pertinence_france"] == 0.0
+
+
+def test_la_route_detail_porte_les_memes_features(client, db_session):
+    db_session.autoflush = False
+    src = _src(db_session, name="Nuits Sonores (IG)")
+    event = _event(db_session, titre="Une annonce")
+    _obs_datee(db_session, event, src, n=1, publie_le=dt.datetime.now(UTC))
+
+    corps = client.get(f"/events/{event.id}").json()
+    assert corps["pertinence_france"] == 70.0
+    for champ in ("velocity", "acceleration", "nouveaute"):
+        assert champ in corps
+
+
+def test_la_profondeur_d_archive_ne_tombe_pas_sur_un_datetime_naif(client, db_session):
+    """Sous SQLite, `DateTime(timezone=True)` relit des datetimes NAIFS ; sous
+    Postgres ils sont AWARE. `profondeur_heures` soustrayait l'un de l'autre
+    et levait un `TypeError` -- c'est-a-dire un 500 sur `/events` dans un des
+    deux mondes seulement. Ce test ecrit une date naive a la main et exige une
+    reponse 200."""
+    db_session.autoflush = False
+    src = _src(db_session)
+    event = _event(db_session, titre="Date naive en base")
+    _obs_datee(
+        db_session, event, src, n=1,
+        publie_le=dt.datetime.now(UTC).replace(tzinfo=None) - dt.timedelta(days=10),
+    )
+
+    reponse = client.get("/events")
+    assert reponse.status_code == 200, reponse.text
+    assert client.get(f"/events/{event.id}").status_code == 200
+
+
+def test_la_liste_ne_fait_pas_une_requete_par_evenement(client, db_session):
+    """Le contexte (dates + comptes primaires) se charge en UNE requete pour
+    toute la page. `/events` en rend jusqu'a 200 : un N+1 se paierait en
+    secondes sur Neon. Verifie en comptant les SELECT sur
+    `event_observations` pendant la reponse."""
+    from sqlalchemy import event as sa_event
+
+    db_session.autoflush = False
+    src = _src(db_session)
+    maintenant = dt.datetime.now(UTC)
+    for i in range(6):
+        ev = _event(db_session, titre=f"Evenement {i}")
+        _obs_datee(db_session, ev, src, n=i, publie_le=maintenant)
+
+    compte = []
+
+    def _tracer(conn, curseur, requete, params, contexte, executemany):
+        if "event_observations" in requete and requete.lstrip().upper().startswith("SELECT"):
+            compte.append(requete)
+
+    sa_event.listen(db_session.get_bind(), "before_cursor_execute", _tracer)
+    try:
+        assert client.get("/events").status_code == 200
+    finally:
+        sa_event.remove(db_session.get_bind(), "before_cursor_execute", _tracer)
+    # Exactement QUATRE, quel que soit le nombre d'evenements : les titres de
+    # l'archive, son debut, le contexte de la page, et les pertinences des
+    # representants. Cette derniere etait un N+1 herite de la Phase 2A --
+    # mesure du tour de correction 2 : 20,4 s sur les 22,7 s de
+    # `/events?limit=200`, donc ~10 s a chaque ouverture du panneau au
+    # dashboard, qui demande 100 evenements. Groupee, elle coute 0,11 s.
+    assert len(compte) == 4, compte

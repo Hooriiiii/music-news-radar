@@ -161,12 +161,29 @@ def _observation_existe(db: Session, event_id: int, article_id: int) -> bool:
 
 
 def _moment_fait(article: Article):
-    """Le repli UNIQUE utilisé pour dater un fait (tour de correction 1,
-    point 5) : la date de publication, sinon celle d'ingestion -- jamais celle
-    du rattachement. Résolu ICI, une seule fois, et écrit tel quel dans
-    `EventObservation.published_at` : `_recalculer` n'a alors plus à choisir
-    entre deux replis différents pour la même grandeur (`freshness`, Task 3,
-    se calculera dessus)."""
+    """Dater l'ÉVÉNEMENT : la date de publication, sinon celle d'ingestion --
+    jamais celle du rattachement.
+
+    **Ce repli ne vaut QUE pour l'événement, plus pour l'observation** (Phase
+    2C, tour de correction 1). Les deux usages divergent, et cette divergence
+    est voulue -- ne pas « harmoniser » :
+
+    - un `Event` DOIT porter une date (`first_seen_at` / `last_seen_at` sont
+      NOT NULL, et la fraîcheur se calcule dessus) : à défaut de date de
+      publication, l'ingestion est le seul recours, et un événement daté à
+      l'heure près vaut mieux qu'un événement sans date ;
+    - une `EventObservation`, elle, est une MESURE. Sa colonne `published_at`
+      est nullable, et y écrire une date d'ingestion en faisait un mensonge
+      de schéma : mesuré le 2026-09-30, 79 des 548 observations dont
+      l'article vivait encore (14 %) venaient d'un article sans date de
+      publication, sans que rien ne permette de le savoir après coup --
+      l'article est purgé à deux jours. La vélocité de Phase 2C (`app/
+      pipeline/event_features.py`) mesurait donc partiellement notre propre
+      cadence horaire, exactement ce que toute cette phase existe pour
+      éviter. `event_archive.dates_de_publication` écarte les observations
+      sans date : NULL rend la mesure honnête par construction, au prix de
+      moins d'événements mesurables.
+    """
     return article.published_at or article.fetched_at
 
 
@@ -184,7 +201,10 @@ def _ajouter_observation(db: Session, event: Event, article: Article) -> None:
             platform=source.type,
             source_id=article.source_id,
             source_role=_role(source),
-            published_at=_moment_fait(article),
+            # `article.published_at` TEL QUEL, sans repli : voir `_moment_fait`.
+            # Une observation sans date de publication n'en a pas, et le dire
+            # vaut mieux que d'y écrire notre heure d'ingestion.
+            published_at=article.published_at,
             title=article.title,
             url=article.url,
             source_name=source.name,
@@ -193,13 +213,141 @@ def _ajouter_observation(db: Session, event: Event, article: Article) -> None:
     db.flush()
 
 
-def _creer_evenement(db: Session, article: Article) -> Event:
+# Voir `_evenement_deja_observe` pour la mesure qui fixe ces deux valeurs.
+TITRE_JETONS_MIN = 3
+TITRE_FENETRE_HEURES = 72.0
+
+
+def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
+    """L'événement qui porte DÉJÀ cette actu, quand l'article n'est qu'une
+    RÉ-INGESTION de lui-même (Phase 2C, tour de correction 1).
+
+    Le défaut, mesuré sur la production le 2026-09-30 : **48 paires (titre,
+    source) se retrouvaient dans plusieurs événements, soit 147 événements
+    sur 907 -- 16 % de la couche**, avec des écarts de 34 à 59 heures. La
+    mécanique : l'article est purgé à `retention_days` (2 j), le flux RSS de
+    Mixmag le liste encore, il est ré-ingéré comme neuf, et il naît un
+    SECOND événement permanent. La dédup par hash ne peut rien y voir --
+    elle compare aux articles PRÉSENTS en base, et celui-là n'y est plus.
+    `event_observations`, elle, n'est jamais purgée : l'information était là,
+    personne ne la lisait.
+
+    Ce que ça coûtait à la Phase 2C : `nouveaute` comparait un titre aux
+    titres archivés et trouvait... nos propres ré-ingestions. Les vingt
+    « reprises » les mieux notées étaient exactement ces artefacts. C'est le
+    même piège que la vélocité calculée sur `observed_at`, un étage plus
+    haut : la feature décrivait notre pipeline en croyant décrire le monde.
+
+    L'IDENTITÉ RETENUE : même URL, ou bien même titre normalisé chez la
+    **MÊME** source, avec un minimum de jetons SIGNIFICATIFS et une fenêtre
+    plus courte pour cette seconde branche (tour de correction 2, voir les
+    deux paragraphes dédiés plus bas). La contrainte de source est essentielle et ne doit pas
+    sauter -- un même titre chez DEUX sources est une vraie corroboration
+    éditorielle (c'est la dédup par titre qui les relie, `cluster.py`), pas un
+    artefact. Seule la répétition d'une source SUR ELLE-MÊME signe la
+    ré-ingestion.
+
+    L'HORLOGE EST `observed_at`, et c'est délibérément l'inverse de la règle
+    de la vélocité. Ailleurs en Phase 2C, `observed_at` est proscrit parce
+    qu'il mesure notre cadence et non la propagation de l'actu. Ici, le
+    phénomène à détecter EST notre cadence : la bonne horloge est donc celle
+    de l'ingestion.
+
+    UN GARDE-FOU DE CONTENU, sinon cette fonction fabrique exactement ce que
+    la phase combat. Sans lui, trois posts Instagram distincts intitulés
+    « Post Instagram » chez le même compte deviennent UN seul événement --
+    et `velocity`/`acceleration` se calculent alors sur un agrégat de posts
+    promo sans rapport : six posts d'un même compte en 23 h donnent ~0,22
+    preuve/h, une propagation entièrement fabriquée. Le titre visé doit donc
+    porter au moins `TITRE_JETONS_MIN` jetons **significatifs**
+    (`cluster.significant_tokens`, pas `normalize_title` : ce dernier rend
+    « post instagram », qui n'est pas vide et ne protège de rien). Mesuré sur
+    la production : tous les titres génériques répétés d'un même compte
+    tiennent en 2 jetons ou moins -- « Post Instagram » (2), « JEONGHAN X
+    JOSHUA » (2), « The Mix 123: Optimo » (1), « IVE EP » (0), les titres
+    coréens de Stray Kids (0 et 1) -- tandis que 45 des 48 vraies
+    ré-ingestions en portent 3 ou plus. Le seuil de 3 sépare donc les deux
+    populations sans arbitrage.
+
+    LA BORNE DE LA BRANCHE TITRE est `TITRE_FENETRE_HEURES` (72 h), et non
+    les 7 jours de la branche URL. Mesure des écarts CONSÉCUTIFS entre deux
+    ré-ingestions d'un même (titre, source) sur la production : médiane
+    **59,1 h**, p90 103 h -- la signature de la rétention à 48 h, plus le
+    délai du passage suivant. 72 h couvre ce noyau (39 des 48 groupes) avec
+    24 h de marge pour un Mac endormi, et reste très en deçà des 127 h qui
+    séparent deux éditions de « This week's top 10 on the Global Excl. » --
+    deux SEMAINES différentes, que 7 jours fusionnait en un seul événement,
+    en retitrant l'absorbé par-dessus le marché. On préfère manquer 9 groupes
+    de ré-ingestion tardive (93 à 146 h) que fusionner une chronique
+    hebdomadaire : rater une fusion coûte un événement de trop, la faire à
+    tort fabrique de la vélocité.
+
+    LA BRANCHE URL garde les 7 jours de `cluster_archive_jours` : l'identité
+    d'URL est bien plus forte que celle du titre -- vérifié en revue, aucune
+    des 1 267 observations ne partage son URL avec une autre source. Un
+    marronnier republié des mois plus tard sort de toute façon de la fenêtre
+    et fait bien un événement neuf.
+
+    Rattacher plutôt que créer ne fabrique AUCUNE corroboration :
+    `_recalculer` compte des sources DISTINCTES, et c'est la même. Seul
+    `last_seen_at` avance -- ce qui porte une vraie information : cette actu
+    est encore republiée.
+    """
+    # Import differé : `cluster` importe ce module, un import en tête serait
+    # circulaire.
+    from app.pipeline.cluster import normalize_title, significant_tokens
+
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    par_url = db.scalar(
+        select(EventObservation.event_id)
+        .where(
+            EventObservation.url == article.url,
+            EventObservation.observed_at
+            >= maintenant - dt.timedelta(days=settings.cluster_archive_jours),
+        )
+        .order_by(EventObservation.id)
+        .limit(1)
+    )
+    if par_url is not None:
+        return db.get(Event, par_url)
+
+    if article.source_id is None:
+        return None
+    vise = normalize_title(article.title)
+    if len(significant_tokens(article.title)) < TITRE_JETONS_MIN:
+        return None
+    for event_id, titre in db.execute(
+        select(EventObservation.event_id, EventObservation.title)
+        .where(
+            EventObservation.source_id == article.source_id,
+            EventObservation.observed_at
+            >= maintenant - dt.timedelta(hours=TITRE_FENETRE_HEURES),
+        )
+        .order_by(EventObservation.id)
+    ):
+        if normalize_title(titre) == vise:
+            return db.get(Event, event_id)
+    return None
+
+
+def _creer_evenement(db: Session, article: Article) -> tuple[Event, bool]:
+    """Crée l'événement de cet article -- ou lui rend celui qui porte déjà la
+    MÊME actu de la MÊME source, quand l'article n'en est qu'une
+    ré-ingestion (`_evenement_deja_observe`).
+
+    Rend `(event, cree)` : le second terme dit si un événement a réellement
+    été créé, pour que l'appelant ne compte pas une création là où il n'y a
+    eu qu'un rattachement (`ObservationStats.evenements_crees` mentait)."""
+    deja = _evenement_deja_observe(db, article)
+    if deja is not None:
+        _ajouter_observation(db, deja, article)
+        return deja, False
     vu = _moment_fait(article)
     event = Event(titre=article.title, first_seen_at=vu, last_seen_at=vu)
     db.add(event)
     db.flush()
     _ajouter_observation(db, event, article)
-    return event
+    return event, True
 
 
 def _fusionner(db: Session, source_event: Event, cible: Event) -> None:
@@ -234,6 +382,26 @@ def _fusionner(db: Session, source_event: Event, cible: Event) -> None:
     db.flush()
 
 
+def _moment_observe(db: Session, observation: EventObservation):
+    """La date a utiliser pour DATER L'EVENEMENT depuis une observation.
+
+    `published_at` quand elle existe (le cas normal). Sinon la `fetched_at` de
+    l'article tant qu'il vit, pour rester d'accord avec `_creer_evenement` ;
+    sinon `observed_at`, seule trace restante apres la purge. Ce repli ne
+    contamine JAMAIS `EventObservation.published_at`, qui reste NULL : la
+    velocite (Phase 2C) ne lit que la colonne, jamais cette fonction.
+    """
+    if observation.published_at is not None:
+        return observation.published_at
+    if observation.article_id is not None:
+        recuperee = db.scalar(
+            select(Article.fetched_at).where(Article.id == observation.article_id)
+        )
+        if recuperee is not None:
+            return recuperee
+    return observation.observed_at
+
+
 def _recalculer(db: Session, event: Event) -> None:
     """Recompte tout depuis les `EventObservation` -- jamais une valeur devinée
     ou incrémentée. Seule fonction qui écrit `first_seen_at`, `last_seen_at`,
@@ -243,10 +411,20 @@ def _recalculer(db: Session, event: Event) -> None:
     )
     if not observations:
         return
-    # `o.published_at` porte déjà le repli résolu par `_moment_fait` à
-    # l'écriture ; `o.observed_at` n'est qu'un FILET pour une ligne écrite
-    # autrement (avant ce module, ou directement en base).
-    moments = [o.published_at or o.observed_at for o in observations]
+    # C'est ICI que le repli de DATATION vit désormais, et nulle part ailleurs :
+    # depuis la Phase 2C, `published_at` est NULL sur une observation dont
+    # l'article n'avait pas de date de publication (voir `_moment_fait`).
+    # L'ÉVÉNEMENT, lui, doit rester daté -- `first_seen_at` est NOT NULL et la
+    # fraîcheur se calcule dessus.
+    #
+    # Le repli reste `article.fetched_at`, LE MÊME que celui de
+    # `_creer_evenement` : sans ça, un événement créé sur un article sans date
+    # se ferait redater à l'heure du RATTACHEMENT au premier recalcul, et
+    # `first_seen_at` cesserait d'être reconstructible depuis les articles
+    # (invariant du tour de correction 1 de la Phase 2A, teste). `observed_at`
+    # ne sert qu'en dernier ressort, quand l'article a été purgé -- la seule
+    # trace qui reste alors.
+    moments = [_moment_observe(db, o) for o in observations]
     event.first_seen_at = min(moments)
     event.last_seen_at = max(moments)
 
@@ -415,7 +593,7 @@ def attacher(db: Session, article: Article, representant: Article) -> Event | No
     }
 
     if not evenements_existants:
-        cible = _creer_evenement(db, representant)
+        cible, _ = _creer_evenement(db, representant)
     else:
         # Le plus petit id sert de cible stable ; les autres (rare : deux
         # groupes préexistants qui se rejoignent dans le même appel) sont
@@ -612,9 +790,17 @@ def observer_articles(db: Session, *, plafond: int | None = None) -> Observation
                 if attacher(db, article, representant) is not None:
                     stats.articles_rattaches += 1
                 continue
-            event = _creer_evenement(db, article)
+            # `_creer_evenement` peut RATTACHER a un evenement existant
+            # (re-ingestion, `_evenement_deja_observe`) : compter une
+            # creation dans ce cas ferait mentir la supervision, ce que ce
+            # depot a deja paye. C'est elle qui dit ce qu'elle a fait, plutot
+            # que l'appelant qui le devine.
+            event, cree = _creer_evenement(db, article)
             _recalculer(db, event)
-            stats.evenements_crees += 1
+            if cree:
+                stats.evenements_crees += 1
+            else:
+                stats.articles_rattaches += 1
 
         db.flush()
         db.commit()

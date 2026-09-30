@@ -59,12 +59,32 @@ def test_le_panneau_evenements_existe():
 # (le cas Apple/proces/country du plan Phase 2A), un aligne.
 
 _DEBUT_EXTRAIT = "const pertinence = ev.relevance_representant;"
-_FIN_EXTRAIT = 'corroboration ${Math.round(ev.corroboration)}</span>`;'
+# Phase 2C : le bloc de badges s'est allonge (velocite, acceleration,
+# nouveaute, France). La borne suit la DERNIERE ligne du gabarit plutot que
+# la corroboration, sinon l'extrait coupe au milieu d'un litteral de gabarit
+# et Node refuse de le parser -- c'est ainsi que ce test a rougi a l'ajout.
+_FIN_EXTRAIT = 'pertinence_france, 0, "100 = marqueur France'
+
+
+def _fonctions_auxiliaires() -> str:
+    """`badgeFeature` et `escapeHtml`, extraites de la PAGE elle-meme et non
+    reecrites ici : une reimplementation en dur se desynchroniserait du code
+    reellement servi, ce que ce fichier existe precisement pour empecher."""
+    morceaux = []
+    for depart in ("function badgeFeature(", "function escapeHtml("):
+        debut = PAGE.index(depart)
+        # La fonction se termine a la premiere accolade en colonne 0.
+        fin = PAGE.index("\n}", debut) + len("\n}")
+        morceaux.append(PAGE[debut:fin])
+    return "\n".join(morceaux)
 
 
 def _extrait_calcul_badges() -> str:
     debut = PAGE.index(_DEBUT_EXTRAIT)
     fin = PAGE.index(_FIN_EXTRAIT, debut) + len(_FIN_EXTRAIT)
+    # `_FIN_EXTRAIT` s'arrete a l'interieur de la derniere ligne : on rejoint
+    # la fin reelle du gabarit pour que l'extrait soit du JS complet.
+    fin = PAGE.index("`;", fin) + len("`;")
     extrait = PAGE[debut:fin]
     # Le code de production ecrit dans le DOM (`row.querySelector(...).innerHTML
     # = ...`) ; on ne change que la cible de l'affectation pour recuperer la
@@ -83,6 +103,7 @@ def _classes_badges(ev: dict) -> str:
     assert seuil_match, "constante de seuil introuvable dans dashboard.html"
     script = f"""
     const ECART_CORROBORATION_SEUIL = {seuil_match.group(1)};
+    {_fonctions_auxiliaires()}
     const ev = {json.dumps(ev)};
     {_extrait_calcul_badges()}
     console.log(html);
