@@ -213,7 +213,89 @@ def _ajouter_observation(db: Session, event: Event, article: Article) -> None:
     db.flush()
 
 
+def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
+    """L'événement qui porte DÉJÀ cette actu, quand l'article n'est qu'une
+    RÉ-INGESTION de lui-même (Phase 2C, tour de correction 1).
+
+    Le défaut, mesuré sur la production le 2026-09-30 : **48 paires (titre,
+    source) se retrouvaient dans plusieurs événements, soit 147 événements
+    sur 907 -- 16 % de la couche**, avec des écarts de 34 à 59 heures. La
+    mécanique : l'article est purgé à `retention_days` (2 j), le flux RSS de
+    Mixmag le liste encore, il est ré-ingéré comme neuf, et il naît un
+    SECOND événement permanent. La dédup par hash ne peut rien y voir --
+    elle compare aux articles PRÉSENTS en base, et celui-là n'y est plus.
+    `event_observations`, elle, n'est jamais purgée : l'information était là,
+    personne ne la lisait.
+
+    Ce que ça coûtait à la Phase 2C : `nouveaute` comparait un titre aux
+    titres archivés et trouvait... nos propres ré-ingestions. Les vingt
+    « reprises » les mieux notées étaient exactement ces artefacts. C'est le
+    même piège que la vélocité calculée sur `observed_at`, un étage plus
+    haut : la feature décrivait notre pipeline en croyant décrire le monde.
+
+    L'IDENTITÉ RETENUE : même URL, ou bien même titre normalisé chez la
+    **MÊME** source. La contrainte de source est essentielle et ne doit pas
+    sauter -- un même titre chez DEUX sources est une vraie corroboration
+    éditorielle (c'est la dédup par titre qui les relie, `cluster.py`), pas un
+    artefact. Seule la répétition d'une source SUR ELLE-MÊME signe la
+    ré-ingestion.
+
+    L'HORLOGE EST `observed_at`, et c'est délibérément l'inverse de la règle
+    de la vélocité. Ailleurs en Phase 2C, `observed_at` est proscrit parce
+    qu'il mesure notre cadence et non la propagation de l'actu. Ici, le
+    phénomène à détecter EST notre cadence : la bonne horloge est donc celle
+    de l'ingestion.
+
+    LA BORNE est `cluster_archive_jours` (7 j), le précédent du dépôt pour
+    « au-delà, une reprise n'en est plus une ». Un marronnier republié six
+    mois plus tard n'est pas la même actu et doit bien faire un événement
+    neuf.
+
+    Rattacher plutôt que créer ne fabrique AUCUNE corroboration :
+    `_recalculer` compte des sources DISTINCTES, et c'est la même. Seul
+    `last_seen_at` avance -- ce qui porte une vraie information : cette actu
+    est encore republiée.
+    """
+    # Import differé : `cluster` importe ce module, un import en tête serait
+    # circulaire.
+    from app.pipeline.cluster import normalize_title
+
+    depuis = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=settings.cluster_archive_jours)
+    par_url = db.scalar(
+        select(EventObservation.event_id)
+        .where(EventObservation.url == article.url, EventObservation.observed_at >= depuis)
+        .order_by(EventObservation.id)
+        .limit(1)
+    )
+    if par_url is not None:
+        return db.get(Event, par_url)
+
+    if article.source_id is None:
+        return None
+    vise = normalize_title(article.title)
+    if not vise:
+        return None
+    for event_id, titre in db.execute(
+        select(EventObservation.event_id, EventObservation.title)
+        .where(
+            EventObservation.source_id == article.source_id,
+            EventObservation.observed_at >= depuis,
+        )
+        .order_by(EventObservation.id)
+    ):
+        if normalize_title(titre) == vise:
+            return db.get(Event, event_id)
+    return None
+
+
 def _creer_evenement(db: Session, article: Article) -> Event:
+    """Crée l'événement de cet article -- ou lui rend celui qui porte déjà la
+    MÊME actu de la MÊME source, quand l'article n'en est qu'une
+    ré-ingestion (`_evenement_deja_observe`)."""
+    deja = _evenement_deja_observe(db, article)
+    if deja is not None:
+        _ajouter_observation(db, deja, article)
+        return deja
     vu = _moment_fait(article)
     event = Event(titre=article.title, first_seen_at=vu, last_seen_at=vu)
     db.add(event)
