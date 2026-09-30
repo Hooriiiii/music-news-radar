@@ -100,7 +100,15 @@ def _decisions(db) -> list[tuple]:
 
 
 def test_pipeline_decisions_are_identical_with_events_neutralized(monkeypatch):
-    now = dt.datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    # L'horaire est RELATIF a l'instant reel, pas une date figee : `link_
+    # duplicates` compare la fenetre de 48 h a `dt.datetime.now()` et n'accepte
+    # aucun parametre d'horloge. Avec une date en dur (2026-09-24), le jeu de
+    # donnees sortait de la fenetre des que le calendrier avancait, plus aucun
+    # lien ne se formait, aucun evenement n'etait cree, et la garde finale de
+    # ce test (« la comparaison n'est pas vide de sens ») passait au rouge
+    # toute seule le 2026-09-30. Les deux bases restent semees au MEME
+    # instant : c'est ce que la reproductibilite exige, pas une date absolue.
+    now = dt.datetime.now(UTC)
 
     db_avec_evenements = _nouvelle_session()
     db_sans_evenements = _nouvelle_session()
