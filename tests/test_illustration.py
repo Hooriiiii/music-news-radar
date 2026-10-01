@@ -847,3 +847,139 @@ def test_le_balayage_rend_l_origine_du_candidat_retenu():
     )
 
     assert fond == Fond(GRANDE, "artiste")
+
+
+# --- Un visuel deja couvert de texte n'est pas un fond ---------------------
+
+STORY = "https://exemple.test/story-legendee.jpg"
+VERDICT_STORY = Verdict(affiche=False, texte_incruste=True, sujet="scene", note=70)
+
+
+def test_une_photo_legendee_perd_contre_une_photo_nue(tmp_path):
+    """Post du 28/09 (Dimitri Vegas & Like Mike) : le fond etait une frame de
+    story portant sa legende (« Much love to that one person watching my show on
+    FaceTime... »), et l'accroche Kinda venait par-dessus -- deux textes sur la
+    meme cover. Le juge disait `affiche: false` a juste titre : c'EST une
+    photographie. Seul `texte_incruste` la distingue."""
+    verdicts = {STORY: VERDICT_STORY, SCENE: VERDICTS[SCENE]}
+    candidats = [STORY, SCENE]
+
+    choisi = choisir_illustration(
+        candidats,
+        juge=lambda images: [verdicts[url] for url in candidats],
+        maintenant=MAINTENANT,
+        chemin_cache=tmp_path / "c.json",
+    )
+
+    assert choisi == SCENE
+
+
+def test_une_photo_legendee_descend_l_echelle_comme_une_affiche(tmp_path):
+    """Le defaut est le meme (un texte qui concurrence l'accroche), la reponse
+    doit donc etre la meme : ouvrir les reserves."""
+    fond = eviter_l_affiche(
+        STORY,
+        Lot(ORIGINE_COMPTE, lambda: [SCENE]),
+        verdicts=lambda urls: {
+            url: {STORY: VERDICT_STORY, SCENE: VERDICTS[SCENE]}[url] for url in urls
+        },
+    )
+
+    assert fond == Fond(SCENE, ORIGINE_COMPTE)
+
+
+def test_sans_reserve_une_photo_legendee_ne_reste_pas_le_fond(tmp_path):
+    """Sans remplacant, on part sur le fond Kinda -- que `compose.resoudre_fond`
+    traduit en saut du creneau. Jamais la photo legendee."""
+    fond = eviter_l_affiche(
+        STORY,
+        Lot(ORIGINE_COMPTE, lambda: []),
+        verdicts=lambda urls: {STORY: VERDICT_STORY},
+    )
+
+    assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
+
+
+def test_le_texte_dans_la_scene_ne_disqualifie_rien(tmp_path):
+    """Le piege du critere : presque toute photo porte un peu de texte (une
+    enseigne, un t-shirt, une banderole « FREE PARTY IS NOT A CRIME »). Le juge
+    repond `texte_incruste: false` pour tout cela, et rien ne doit alors bouger
+    -- sinon le critere viderait les covers."""
+    fond = eviter_l_affiche(
+        SCENE,
+        Lot(ORIGINE_COMPTE, lambda: [PORTRAIT]),
+        verdicts=lambda urls: {SCENE: VERDICTS[SCENE]},
+    )
+
+    assert fond == Fond(SCENE, ORIGINE_ARTICLE)
+
+
+def test_une_photo_legendee_reste_une_slide_honnete(tmp_path):
+    """`plafonner_affiches` ne lit PAS `texte_incruste` : sous l'accroche la
+    frame de story est fautive, dans le carrousel elle montre l'actu."""
+    autre_story = "https://exemple.test/story-2.jpg"
+    actifs = [
+        {"type": "photo", "url": STORY},
+        {"type": "photo", "url": autre_story},
+        {"type": "photo", "url": SCENE},
+    ]
+
+    gardes = illustration.plafonner_affiches(
+        actifs,
+        verdicts=lambda urls: {
+            STORY: VERDICT_STORY,
+            autre_story: VERDICT_STORY,
+            SCENE: VERDICTS[SCENE],
+        },
+    )
+
+    # DEUX frames legendees, et le plafond (une affiche par carrousel) ne les
+    # compte pas : il ne lit que `affiche`.
+    assert gardes == actifs
+
+
+def test_un_verdict_sans_le_champ_vaut_pas_de_texte_incruste():
+    """La regle du doute du module : un verdict construit sans ce champ (code
+    ancien, cache ecrit a la main) ne doit jamais faire sauter une image."""
+    assert Verdict(affiche=False, sujet="scene", note=70).inexploitable_en_fond is False
+
+
+def test_le_schema_envoye_au_juge_exige_le_champ():
+    """Test-sentinelle. `texte_incruste` porte un defaut cote Python, et une
+    valeur par defaut sort le champ du `required` du schema JSON : le modele
+    pourrait l'omettre, le critere serait INERTE et le defaut du 28/09
+    repasserait en silence. `Verdicts.model_json_schema` l'y remet."""
+    schema = illustration.Verdicts.model_json_schema()
+
+    assert "texte_incruste" in schema["$defs"]["Verdict"]["required"]
+
+
+def test_les_verdicts_d_un_cache_d_avant_le_critere_sont_jetes(tmp_path):
+    """Un verdict pose en version 1 ne dit rien de `texte_incruste` : le relire
+    comme « pas de texte » laisserait passer le defaut pendant une semaine. Les
+    TAILLES, elles, ne dependent d'aucun critere du juge et sont gardees."""
+    chemin = tmp_path / "c.json"
+    chemin.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "verdicts": {
+                    SCENE: {
+                        "affiche": False,
+                        "sujet": "scene",
+                        "note": 80,
+                        "le": MAINTENANT.isoformat(),
+                    }
+                },
+                "tailles": {
+                    SCENE: {"largeur": 1600, "hauteur": 900, "le": MAINTENANT.isoformat()}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cache = lire_cache(MAINTENANT, chemin)
+
+    assert cache.verdicts == {}
+    assert cache.tailles == {SCENE: (1600, 900)}

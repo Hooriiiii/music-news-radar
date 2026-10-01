@@ -17,6 +17,7 @@ from app.content.compose import (
     probleme_accents,
     probleme_cloture_question,
     probleme_emojis,
+    probleme_enumeration_surlignee,
     resoudre_fond,
 )
 from app.content.choix_visuels import ChoixVisuels, VisuelIntrouvable, VisuelsDifferes
@@ -1285,3 +1286,60 @@ def test_le_brouillon_rendu_porte_deja_la_legende_filtree(db_session):
 
     assert "Tsugi" not in resultat.caption
     assert resultat.caption.endswith("vendredi ✨.")
+
+
+# --- Une enumeration se surligne en entier, ou pas du tout -----------------
+
+
+def _draft_accroche(headline):
+    return PostDraft(
+        variantes=[
+            CoverVariante(headline=headline, title="**Titre**", subtitle="**Sous**"),
+            *[_variante(i) for i in range(3)],
+        ],
+        caption="Une legende 🎧 correcte ✨",
+        hashtags=[],
+    )
+
+
+def test_probleme_enumeration_decrit_l_oubli_pour_la_relance():
+    probleme = probleme_enumeration_surlignee(
+        "**Angele**, **Caroline Polachek** et SebastiAn s'unissent"
+    )
+
+    assert "SebastiAn" in probleme
+    assert "TOUS les elements ou AUCUN" in probleme
+
+
+def test_probleme_enumeration_laisse_passer_le_double_surlignage_legitime():
+    assert probleme_enumeration_surlignee("**Bicep** referme le triptyque **AIR**") is None
+
+
+def test_composer_relance_une_enumeration_a_moitie_surlignee(db_session):
+    """Meme mecanique que les emojis et la cloture : on relance avec le probleme
+    decrit, on ne jette pas le brouillon."""
+    article = _article(db_session)
+    bancale = _draft_accroche("**Angele**, **Caroline Polachek** et SebastiAn s'unissent")
+    propre = _draft_accroche("**Angele**, **Caroline Polachek** et **SebastiAn** s'unissent")
+    client = _FakeClient([_FakeParsedResponse(bancale), _FakeParsedResponse(propre)])
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is propre
+    assert len(client.messages.appels) == 2
+    assert "SebastiAn" in _contenu_utilisateur(client.messages.appels[1])
+
+
+def test_composer_accepte_une_enumeration_bancale_plutot_que_de_perdre_le_creneau(db_session):
+    """Un controle de forme ne fait JAMAIS perdre une composition -- la lecon des
+    legendes sans emoji (articles 17930 et 18078)."""
+    article = _article(db_session)
+    bancale = _draft_accroche("**Angele**, **Caroline Polachek** et SebastiAn s'unissent")
+    client = _FakeClient([_FakeParsedResponse(bancale)] * 3)
+    composer = make_claude_composer(client=client, max_attempts=3)
+
+    assert composer(article) is bancale
+    assert len(client.messages.appels) == 3
+
+
+def test_le_prompt_demande_une_enumeration_coherente():
+    assert "TOUS ou \\\nAUCUN" in SYSTEM_PROMPT or "TOUS ou AUCUN" in SYSTEM_PROMPT.replace("\n", " ")
