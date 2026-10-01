@@ -26,7 +26,7 @@ from app.config import settings
 from app.content.choix_visuels import VisuelIntrouvable, VisuelsDifferes, actif_du_web
 from app.content.credit import credit_video
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
-from app.content.highlight import validate_headline
+from app.content.highlight import enumeration_incoherente, validate_headline
 from app.content.legende import sans_mentions_de_source
 from app.content.illustration import (
     Fond,
@@ -249,6 +249,60 @@ def probleme_cloture_question(caption: str) -> str | None:
     )
 
 
+def probleme_enumeration_surlignee(texte: str) -> str | None:
+    """Decrit, pour la relance, une enumeration a moitie surlignee ; None sinon.
+
+    Post publie le 2026-10-01 : « **Angele**, **Caroline Polachek** et SebastiAn
+    s'unissent sur "Love Triangle" ». Deux artistes sur trois surlignes, sans
+    qu'aucune raison ne distingue le troisieme : ca se lit comme un oubli.
+
+    Ce controle ne compte PAS les segments surlignes. La regle 3 en autorise
+    deux, et la mesure sur les 1 704 textes de variantes en base (568 accroches,
+    568 titres, 568 sous-titres) le justifie : 483 en portent DEUX, et la
+    plupart le meritent -- l'artiste et son oeuvre, « **Bicep** referme le
+    triptyque **AIR** ». Interdire le second surlignage casserait 28 % des
+    textes, dont la majorite sont bons. Ce qui est fautif, c'est
+    l'incoherence a l'interieur d'une enumeration -- `highlight.
+    enumeration_incoherente`, mesure : 5 textes signales sur 1 704 (0,3 %), les
+    cinq fautifs. Le precedent de la cloture en question (jusqu'a trois appels
+    `composer_model` par composition) impose cette borne : un controle qui
+    signale un texte sur trois est un controle qui relance sans cesse.
+
+    Meme mecanique que `probleme_emojis`, `probleme_accents` et
+    `probleme_cloture_question` : pas un validateur de `PostDraft`, une relance
+    puis une acceptation avec avertissement. Une accroche mal surlignee vaut
+    mieux que pas de post.
+    """
+    trouvee = enumeration_incoherente(texte)
+    if trouvee is None:
+        return None
+    noms, etats = trouvee
+    surlignes = [nom for nom, etat in zip(noms, etats, strict=True) if etat]
+    oublies = [nom for nom, etat in zip(noms, etats, strict=True) if not etat]
+    return (
+        f"Le texte « {texte} » enumere des elements de meme nature "
+        f"({', '.join(noms)}) mais n'en surligne qu'une partie : "
+        f"{', '.join(surlignes)} entre ** et pas {', '.join(oublies)}. "
+        "Dans une enumeration, surligne TOUS les elements ou AUCUN -- une "
+        "difference que rien ne justifie se lit comme un oubli. Si l'enumeration "
+        "est trop longue pour etre surlignee en entier, surligne plutot un autre "
+        "segment du texte (le lieu, la date, le chiffre)."
+    )
+
+
+def probleme_de_variantes(draft: PostDraft) -> str | None:
+    """Les defauts de FORME des textes RENDUS (accroche, titre, sous-titre).
+
+    Separe de `probleme_de_legende` parce que la cible l'est : la legende n'est
+    pas rendue et n'a pas de surlignage, ces trois textes-la en vivent."""
+    for variante in draft.variantes:
+        for texte in (variante.headline, variante.title, variante.subtitle):
+            probleme = probleme_enumeration_surlignee(texte)
+            if probleme is not None:
+                return probleme
+    return None
+
+
 def probleme_de_legende(caption: str) -> str | None:
     """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
     return probleme_emojis(caption) or probleme_accents(caption) or probleme_cloture_question(caption)
@@ -291,6 +345,12 @@ visuelle du compte. Surligne ce qui accroche l'oeil : le nom d'artiste, le lieu,
 la date, le chiffre qui frappe. UN A DEUX segments par texte, jamais plus, sinon \
 l'effet se perd. CHACUN des trois textes doit contenir au moins un segment \
 surligne.
+Dans une ENUMERATION -- plusieurs elements de meme nature separes par des \
+virgules et « et », typiquement des noms d'artistes --, surligne-les TOUS ou \
+AUCUN : « **Angele**, **Caroline Polachek** et SebastiAn » se lit comme un \
+oubli sur le troisieme. Si la liste est trop longue pour etre surlignee en \
+entier, laisse-la entierement sans surlignage et surligne autre chose (le lieu, \
+la date, le chiffre).
 Exemple de headline correcte :
 Nico Moreno, Mosimann, Cassius... et **c'est ce week-end** aux **Vieilles Charrues**
 Exemple de couple title/subtitle correct :
@@ -456,7 +516,7 @@ def make_claude_composer(
             nettoyee = sans_mentions_de_source(draft.caption, article)
             if nettoyee != draft.caption:
                 draft = draft.model_copy(update={"caption": nettoyee})
-            probleme = probleme_de_legende(draft.caption)
+            probleme = probleme_de_legende(draft.caption) or probleme_de_variantes(draft)
             if probleme is None:
                 return draft
             repli = draft
@@ -470,9 +530,9 @@ def make_claude_composer(
             )
         if repli is not None:
             logger.warning(
-                "legende acceptee malgre son defaut de forme pour l'article %s : %s",
+                "composition acceptee malgre son defaut de forme pour l'article %s : %s",
                 article.id,
-                probleme_de_legende(repli.caption),
+                probleme_de_legende(repli.caption) or probleme_de_variantes(repli),
             )
             return repli
         raise CompositionError(

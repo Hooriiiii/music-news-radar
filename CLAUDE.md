@@ -595,7 +595,44 @@ déjà couvert de texte donne une cover illisible et redondante. Une affiche ne 
 reconnaît ni à son ratio (souvent 4:5, comme une photo de concert), ni à son URL,
 ni à ses métadonnées : elle se reconnaît à ce qu'on y VOIT, d'où un modèle de
 vision (`visuels_model`, défaut Haiku) qui rend un verdict strict par image
-(`{affiche, sujet: scene|portrait|autre, note}`).
+(`{affiche, texte_incruste, sujet: scene|portrait|autre, note}`).
+
+**Et jamais non plus un visuel DÉJÀ COUVERT DE TEXTE** (`texte_incruste`,
+2026-10-01). Post du 28/09 (Dimitri Vegas & Like Mike) : le fond était une
+frame de story portant sa légende tapée par-dessus (« Much love to that one
+person watching my show on FaceTime. Hope to see you soon in Ibiza »), et
+l'accroche Kinda venait se poser dessus — deux textes sur la même cover, un
+repost avec une bannière collée devant, le rôle d'intermédiaire dont le projet
+cherche à sortir. Le juge répondait `affiche: false`, **et il avait raison** :
+c'est bien une photographie prise sur le vif. D'où un CHAMP DE PLUS plutôt
+qu'une définition d'`affiche` élargie jusqu'à devenir fausse. Le piège est de
+viser trop large : presque toute photo porte un peu de texte (logo sur un
+t-shirt, enseigne au fond, banderole, écran LED), et un critère qui les prend
+toutes viderait les covers — la formulation vise donc le texte **ajouté
+par-dessus** (légende de story, sous-titres, bandeau, typo posée à l'export),
+assez gros pour entrer en concurrence avec l'accroche, jamais le texte qui
+appartient à la scène photographiée ; « dans le doute, réponds false ».
+Mesure (sur les 70 images non-affiche encore présentes dans
+`illustration_cache_path`, relues à l'œil faute de crédits pour re-juger) :
+**zéro** bascule — aucune photo de concert ou de portrait ordinaire n'est
+touchée, y compris une banderole « FREE PARTY IS NOT A CRIME » et une enseigne
+de pharmacie ; le fond du post 134 (720×1280, légende sur trois lignes) est le
+cas positif.
+`Verdict.inexploitable_en_fond` (`affiche or texte_incruste`) est le seul point
+de lecture : les deux défauts posent le même problème et appellent la même
+réponse, descendre l'échelle (compte source → artiste cité → web →
+agrandissement → saut). **En SLIDE rien ne change** : `plafonner_affiches` ne
+lit QUE `affiche` — sous l'accroche la frame de story est fautive, dans le
+carrousel elle montre l'actu (test-sentinelle). Zéro appel de plus : c'est un
+champ du même verdict, dans le même appel. Le cache passe en **version 2** et
+ses verdicts de version 1 sont **jetés** (ils ne disent rien du nouveau critère,
+et les relire comme « pas de texte » laisserait passer le défaut pendant
+`illustration_cache_jours`) ; ses TAILLES sont gardées, elles ne dépendent
+d'aucun critère du juge. Le champ porte un défaut `False` côté Python (règle du
+doute, et un verdict ancien reste valide) mais est **remis dans le `required`
+du schéma JSON** envoyé au modèle (`Verdicts.model_json_schema`) : un champ
+facultatif est un champ que le modèle peut omettre, et le critère serait alors
+inerte.
 
 Trois règles de coût : on ne juge **que s'il y a un choix** (au moins deux
 candidats — payer pour confirmer l'unique image disponible ne changerait rien) ;
@@ -1109,6 +1146,31 @@ contrôle sans mémoire ne sait pas faire « de temps en temps », seulement
 « jamais » : c'est la question qui est sortie des clôtures proposées, pas le
 contrôle qui s'est assoupli. Une question reste permise au milieu de la
 légende.
+
+**Une énumération se surligne en entier, ou pas du tout** (2026-10-01, post
+« **Angèle**, **Caroline Polachek** et SebastiAn s'unissent sur "Love
+Triangle" » : deux artistes sur trois surlignés, rien ne justifie la
+différence, ça se lit comme un oubli). **Le défaut n'est PAS le nombre de
+segments surlignés**, et la correction naïve est interdite par la mesure : sur
+les 1 704 textes de variantes en base (568 accroches, 568 titres, 568
+sous-titres), 483 portent DEUX segments et la plupart le méritent — « **Bicep** referme le triptyque **AIR** »,
+l'artiste et l'œuvre. Interdire le second surlignage casserait 28 % des textes,
+dont la majorité sont bons. Ce qui est fautif est l'INCOHÉRENCE à l'intérieur
+d'une énumération. `highlight.enumeration_incoherente` repère les suites d'au
+moins **trois** noms propres séparés par des virgules ou « et » dont une partie
+seulement est surlignée ; `compose.probleme_enumeration_surlignee` la décrit
+pour la relance, sur le modèle exact des trois contrôles précédents (relance,
+puis acceptation avec warning — jamais un créneau perdu), et la règle 3 du
+prompt dit la même chose. Trois réglages, chacun payé d'une mesure sur ces
+1 704 textes : le seuil à TROIS éléments (à deux, 18 textes signalés dont 9
+légitimes — « **Palacio**, Mexico », « Adam Beyer et **Drumcode** » : des
+couples de nature différente ; à trois, **5 signalés, 0 légitime**, soit
+0,3 %) ; un segment ne peut OUVRIR une énumération que s'il se réduit à son nom
+propre (sinon « C'est officiel, … » et « En **1996**, … » en fabriquent une) ;
+et « et X » FERME l'énumération (sinon « entre Londres, Miami et Liverpool,
+**Mele** sort son album » rattache Mele aux villes). Coût : ce contrôle ne
+signale que 0,3 % des textes, là où la clôture en question en signalait six sur
+six et provoquait jusqu'à trois appels `composer_model` par composition.
 
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 

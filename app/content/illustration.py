@@ -1,4 +1,5 @@
-"""Le fond d'une cover doit etre une ILLUSTRATION, jamais une affiche.
+"""Le fond d'une cover doit etre une ILLUSTRATION : ni une affiche, ni une image
+deja couverte de texte.
 
 Demande de l'utilisateur, 2026-09-18 : « pour la cover background pour la
 premiere slide avec le titre, je veux une image d'illustration de l'evenement, ou
@@ -16,6 +17,20 @@ grille de noms, un logo centre. Une detection de texte par OCR dirait « il y a 
 texte » sur une photo de scene portant un ecran LED. Le seul juge fiable est
 celui qui regarde l'image.
 
+Le meme raisonnement a valu, le 2026-10-01, un SECOND critere : `texte_incruste`
+(post du 28/09, Dimitri Vegas & Like Mike). Le fond etait une frame de story
+portant sa legende tapee par-dessus (« Much love to that one person watching my
+show on FaceTime. Hope to see you soon in Ibiza »), et l'accroche Kinda venait
+se poser dessus : deux textes sur la meme cover, un repost avec une banniere
+collee devant. Le juge repondait `affiche: false`, et il avait raison -- c'est
+bien une photographie prise sur le vif. Un champ de plus, donc, plutot qu'une
+definition d'`affiche` elargie jusqu'a devenir fausse. Le piege est de viser
+trop large : presque toute photo porte un peu de texte (un logo sur un t-shirt,
+une enseigne au fond, une banderole), et un critere qui les prend toutes
+viderait les covers. Ce qui est vise est le texte AJOUTE PAR-DESSUS, assez gros
+pour entrer en concurrence avec l'accroche -- jamais le texte qui appartient a
+la scene photographiee.
+
 Trois regles de cout, dans cet ordre :
   1. on ne juge QUE s'il y a un choix a faire (au moins deux candidats) ;
   2. au plus `illustration_max_candidats` images, reduites a
@@ -27,7 +42,8 @@ Trois regles de cout, dans cet ordre :
      recomposition, ou un second creneau sur le meme article, ne repaie rien.
 
 Et quand il n'y a rien a choisir parce que TOUT est une affiche (le carrousel de
-line-up d'un festival), `eviter_l_affiche` ouvre des RESERVES : le compte qui a
+line-up d'un festival, ou la frame de story legendee d'un artiste),
+`eviter_l_affiche` ouvre des RESERVES : le compte qui a
 publie l'actu, puis les artistes suivis cites. Si aucune ne donne de vraie photo,
 la cover part sur le fond Kinda -- mieux vaut le fond Kinda qu'une affiche
 (utilisateur, 2026-09-18 : « ya toujours l'affiche en fond !! »). Ce chemin ne
@@ -77,15 +93,53 @@ SUJETS = ("scene", "portrait", "autre")
 # d'objet, un visuel abstrait) passe apres.
 RANG_SUJET = {"scene": 2, "portrait": 2, "autre": 1}
 
-CACHE_VERSION = 1
+# Version 2 (2026-10-01) : `Verdict` porte `texte_incruste`. Un verdict pose en
+# version 1 ne dit RIEN de ce critere -- le lire comme « pas de texte incruste »
+# laisserait passer, pendant `illustration_cache_jours`, exactement le defaut que
+# ce champ existe pour attraper. Les verdicts de la version 1 sont donc jetes ;
+# les TAILLES, elles, sont gardees (`lire_cache`) : elles ne dependent d'aucun
+# critere du juge, et les perdre ferait passer un fond trop petit pour « taille
+# inconnue », donc acceptable, jusqu'au prochain jugement.
+CACHE_VERSION = 2
 
 
 class Verdict(BaseModel):
     """Ce que le juge dit d'UNE image."""
 
     affiche: bool
+    # Vrai quand l'image porte du texte AJOUTE PAR-DESSUS (legende de story,
+    # sous-titres, bandeau, typo posee a l'export) assez gros pour se lire d'un
+    # coup d'oeil -- pas le texte qui appartient a la SCENE photographiee
+    # (enseigne, t-shirt, banderole, ecran LED, logo sur un flight-case).
+    #
+    # Post du 28/09 (Dimitri Vegas & Like Mike) : le fond etait une frame de
+    # story portant « Much love to that one person watching my show on FaceTime.
+    # Hope to see you soon in Ibiza », et l'accroche Kinda venait par-dessus. La
+    # cover portait donc DEUX textes, et ressemblait a un repost avec une
+    # banniere collee dessus -- le role d'intermediaire dont le projet cherche a
+    # sortir. C'est la meme famille que l'affiche de line-up (un visuel deja
+    # couvert de texte), mais le juge repondait `affiche: false` a juste titre :
+    # c'est bien une PHOTOGRAPHIE, prise sur le vif. D'ou un second champ plutot
+    # qu'une definition elargie d'`affiche`, qui aurait fait mentir celle-ci.
+    #
+    # Ce champ ne vaut QUE pour le fond de cover (`eviter_l_affiche`,
+    # `choisir_illustration`, les reserves) : en SLIDE, une frame de story
+    # legendee reste un visuel honnete de l'actu -- `plafonner_affiches` ne le
+    # lit pas.
+    texte_incruste: bool = False
     sujet: Literal["scene", "portrait", "autre"]
     note: int = Field(ge=0, le=100)
+
+    @property
+    def inexploitable_en_fond(self) -> bool:
+        """Les deux defauts qui descendent l'echelle du fond, et eux seuls.
+
+        Une affiche et une photo deja legendee posent le MEME probleme -- un
+        texte qui entre en concurrence avec l'accroche --, et appellent donc la
+        meme reponse : chercher ailleurs (compte source, artiste cite, web,
+        agrandissement), et sauter le creneau plutot que de publier ca.
+        """
+        return self.affiche or self.texte_incruste
 
 
 class Verdicts(BaseModel):
@@ -94,11 +148,35 @@ class Verdicts(BaseModel):
 
     verdicts: list[Verdict]
 
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):  # type: ignore[override]
+        """Le schema ENVOYE au juge exige `texte_incruste`, que la valeur par
+        defaut cote Python rendrait facultatif.
+
+        `Verdict.texte_incruste` porte un defaut (`False`) pour deux raisons :
+        un verdict relu d'un cache ecrit a la main, ou construit par du code
+        anterieur a ce champ, reste valide et vaut « pas de texte incruste » --
+        la regle du doute de ce module. Mais une valeur par defaut sort le champ
+        du `required` du schema JSON (verifie sur
+        `anthropic.lib._parse._transform.transform_schema`), et un champ
+        facultatif est un champ que le modele peut omettre : le critere serait
+        alors INERTE, jamais vrai, et le defaut du 28/09 repasserait en silence.
+        On l'y remet donc explicitement. Verrouille par un test-sentinelle
+        (`tests/test_illustration.py`).
+        """
+        schema = super().model_json_schema(*args, **kwargs)
+        verdict = (schema.get("$defs") or {}).get("Verdict")
+        if isinstance(verdict, dict):
+            requis = list(verdict.get("required") or [])
+            if "texte_incruste" not in requis:
+                verdict["required"] = [*requis, "texte_incruste"]
+        return schema
+
 
 # Verdict pose sur un candidat qu'on n'a pas pu juger (telechargement en echec,
 # juge muet). Neutre expres : il passe DEVANT une affiche averee -- ne pas savoir
 # vaut mieux que savoir que c'est une affiche -- et DERRIERE une photo reconnue.
-VERDICT_INCONNU = Verdict(affiche=False, sujet="autre", note=50)
+VERDICT_INCONNU = Verdict(affiche=False, texte_incruste=False, sujet="autre", note=50)
 
 
 SYSTEM_PROMPT = """\
@@ -115,13 +193,24 @@ d'ecran, un post texte ou une story mise en page. false pour une PHOTOGRAPHIE \
 — concert, foule, club, materiel, portrait, paysage — meme si un logo, un \
 ecran LED ou une banderole y porte quelques mots : ce qui compte est de savoir \
 si l'image EST un support graphique ou une photo prise sur le vif.
+- texte_incruste (true/false) : true si l'image porte du texte AJOUTE \
+PAR-DESSUS apres coup — legende de story tapee sur la photo, sous-titres, \
+bandeau, grosse typo posee a l'export —, meme sur une vraie photographie, et \
+assez gros pour se lire d'un coup d'oeil : un titre viendrait alors se poser \
+sur un texte qui est deja la. false quand le texte lisible APPARTIENT A LA \
+SCENE photographiee — enseigne, panneau, banderole, t-shirt, ecran LED, logo \
+sur un flight-case, marque sur du materiel —, et false aussi pour une \
+signature, un watermark discret ou un logo de coin. Ce qui compte est de savoir \
+si ce texte entrerait en CONCURRENCE avec un gros titre, pas s'il y a du texte : \
+presque toute photo en porte un peu. Dans le doute, reponds false.
 - sujet : "scene" pour un moment vivant (concert, DJ set, foule, club, \
 festival), "portrait" pour une ou plusieurs personnes posant ou photographiees \
 de pres, "autre" pour tout le reste (lieu vide, objet, paysage, abstrait).
 - note (0-100) : la qualite de cette image COMME FOND derriere un gros titre. \
 Monte pour une image nette, contrastee, avec une zone calme ou du texte peut se \
 poser. Descends pour une image floue, minuscule, tres chargee, presque noire ou \
-presque blanche. Une affiche ne merite jamais plus de 20.
+presque blanche. Une affiche, ou une image dont `texte_incruste` est true, ne \
+merite jamais plus de 20.
 
 Rends exactement autant de verdicts que d'images, dans le meme ordre.\
 """
@@ -226,15 +315,25 @@ def lire_cache(maintenant: dt.datetime, chemin: Path | None = None) -> Cache:
     chemin = chemin or _chemin_cache()
     try:
         brut = json.loads(chemin.read_text(encoding="utf-8"))
-        if brut.get("version") != CACHE_VERSION:
+        version = brut.get("version")
+        if version not in (1, CACHE_VERSION):
             return Cache({})
         limite = maintenant - dt.timedelta(days=settings.illustration_cache_jours)
         verdicts = {}
-        for url, ligne in (brut.get("verdicts") or {}).items():
+        # Un fichier de la version 1 ne connait pas `texte_incruste` : ses
+        # verdicts sont JETES (le lire comme False laisserait passer le defaut
+        # qu'il existe pour attraper), ses tailles gardees -- elles ne dependent
+        # d'aucun critere du juge.
+        for url, ligne in (brut.get("verdicts") or {} if version == CACHE_VERSION else {}).items():
             pose = dt.datetime.fromisoformat(ligne["le"])
             if pose >= limite:
                 verdicts[url] = Verdict.model_validate(
-                    {cle: ligne[cle] for cle in ("affiche", "sujet", "note")}
+                    {
+                        "affiche": ligne["affiche"],
+                        "texte_incruste": ligne.get("texte_incruste", False),
+                        "sujet": ligne["sujet"],
+                        "note": ligne["note"],
+                    }
                 )
         tailles = {}
         for url, ligne in (brut.get("tailles") or {}).items():
@@ -281,7 +380,12 @@ def ecrire_cache(cache: Cache, maintenant: dt.datetime, chemin: Path | None = No
 def _rang(index: int, verdict: Verdict) -> tuple:
     """La cle de tri. Plus c'est grand, mieux c'est -- sauf `-index`, qui garde
     l'ordre historique comme dernier departage (le premier candidat gagne)."""
-    return (not verdict.affiche, RANG_SUJET.get(verdict.sujet, 0), verdict.note, -index)
+    return (
+        not verdict.inexploitable_en_fond,
+        RANG_SUJET.get(verdict.sujet, 0),
+        verdict.note,
+        -index,
+    )
 
 
 def choisir_illustration(
@@ -483,7 +587,7 @@ def _choisir(candidats, juge, maintenant, chemin_cache) -> str | None:
         return None
     verdicts = [connus.get(url, VERDICT_INCONNU) for url in retenus]
     meilleur = max(range(len(retenus)), key=lambda i: _rang(i, verdicts[i]))
-    if all(v.affiche for v in verdicts):
+    if all(v.inexploitable_en_fond for v in verdicts):
         logger.info(
             "tous les fonds candidats sont des affiches : %s passe la main a "
             "`eviter_l_affiche`",
@@ -622,7 +726,7 @@ def eviter_l_affiche(
     except Exception as exc:  # noqa: BLE001 -- jamais d'echec de composition pour un gout
         logger.warning("fond non juge (%s) : fond d'origine conserve", type(exc).__name__)
         return Fond(fond, origine)
-    est_affiche = verdict is not None and verdict.affiche
+    est_affiche = verdict is not None and verdict.inexploitable_en_fond
     trop_petit = cible is not None and not _assez_grand(fond, cible, mesurer)
     if not est_affiche and not trop_petit:
         # Une photo assez grande, ou un defaut qu'on n'a pas pu etablir. Ne pas
@@ -684,7 +788,7 @@ def eviter_l_affiche(
         if candidat is not None:
             logger.info("fond de cover remplace par une photo (%s) : %s", lot.origine, candidat)
             return Fond(candidat, lot.origine, photos)
-    raison = "une affiche" if est_affiche else "trop petit pour le gabarit"
+    raison = _raison(verdict) if est_affiche else "trop petit pour le gabarit"
     if differe:
         # Ne PAS conclure a l'absence d'image : au moins une reserve n'a pas pu
         # etre consultee, `compose.resoudre_fond` doit reporter, pas sauter.
@@ -725,6 +829,15 @@ def eviter_l_affiche(
     return Fond(FOND_KINDA, ORIGINE_KINDA)
 
 
+def _raison(verdict: Verdict | None) -> str:
+    """Le defaut qui a fait descendre l'echelle, pour le journal. Deux defauts
+    distincts appellent deux mots distincts : « une affiche » n'explique rien
+    quand le fond ecarte est une frame de story legendee."""
+    if verdict is not None and verdict.texte_incruste and not verdict.affiche:
+        return "un visuel deja couvert de texte"
+    return "une affiche"
+
+
 def _assez_grand(url: str, cible: tuple[int, int], mesurer) -> bool:
     """`resolution_suffisante`, mais qui ne leve jamais : une panne de mesure
     (fonction injectee cassee) vaut « on ne sait pas », jamais un rejet."""
@@ -760,7 +873,7 @@ def _meilleur_candidat(fond, candidats, rendre, cible, mesurer) -> str | None:
     retenus = [
         (index, url)
         for index, url in enumerate(autres)
-        if not (url in connus and connus[url].affiche)
+        if not (url in connus and connus[url].inexploitable_en_fond)
         and (cible is None or resolution_suffisante(tailles.get(url), cible))
     ]
     if not retenus:
@@ -828,7 +941,7 @@ def _meilleur_agrandissable(
     minimum = settings.visuels_upscale_source_min_px
     eligibles = []
     for index, url in enumerate(uniques):
-        if url in connus and connus[url].affiche:
+        if url in connus and connus[url].inexploitable_en_fond:
             continue
         taille = tailles.get(url)
         if taille is None or min(taille) < minimum:
@@ -860,7 +973,8 @@ def classer_photos(candidats: list[str], rendre, *, garder_inconnues: bool = Fal
     retenues = [
         url
         for url in candidats
-        if (url in connus and not connus[url].affiche) or (garder_inconnues and url not in connus)
+        if (url in connus and not connus[url].inexploitable_en_fond)
+        or (garder_inconnues and url not in connus)
     ]
     if not retenues:
         return ()
@@ -1030,6 +1144,9 @@ def plafonner_affiches(actifs: list[dict] | None, *, verdicts=None, **options) -
     for actif_ in actifs:
         image = image_de(actif_) if actif_.get("type") == PHOTO else None
         verdict = connus.get(image) if image else None
+        # `affiche` SEULEMENT, jamais `texte_incruste` : en slide, une frame
+        # de story legendee reste un visuel honnete de l'actu -- le defaut du
+        # 28/09 etait de la poser SOUS l'accroche, pas de la publier.
         if verdict is not None and verdict.affiche:
             affiches += 1
             if affiches > AFFICHES_MAX:
