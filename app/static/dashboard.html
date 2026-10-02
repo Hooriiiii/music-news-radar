@@ -38,15 +38,27 @@
   .badge.hot-high { background: #3d1f1f; color: #ff8a8a; }
   .badge.visuel { background: #1f2d3d; color: #8ac4ff; }
   .badge.sans-visuel { background: #3d2a1f; color: #ffb38a; }
+  /* Hors file : meme rouge que .render-warning, le langage « attention » deja en
+     service. La raison est ECRITE a cote, pas seulement en infobulle. */
+  .badge.exclu { background: #3d1f1f; color: #ff8a8a; flex-basis: 100%;
+    line-height: 1.35; }
   a.title { color: var(--text); text-decoration: none; font-weight: 600; font-size: 14.5px; }
   a.title:hover { color: #b9a6ff; }
   .summary { color: var(--muted); font-size: 12.5px; }
   .meta { color: #6a6a78; font-size: 11px; margin-top: auto; }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .actions button.reintegrer { flex-basis: 100%; border-color: #5a2a2a; color: #ff8a8a; }
   .actions button { flex: 1; border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
   .actions button:hover { border-color: var(--accent); }
   #empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
+  /* Un etat d'ECHEC TERMINAL, avec sa raison et une relance. Sans relance, une
+     base lente (`attendre_base`) laissait « Chargement… » a l'ecran pour
+     toujours : indistinguable d'un chargement en cours. */
+  .zone-erreur { grid-column: 1/-1; text-align: center; padding: 50px 0; }
+  .zone-erreur .pourquoi { color: #ff9aa5; font-size: 13px; margin-bottom: 12px; }
+  .zone-erreur .relance { border: 1px solid var(--accent); background: #241f3d; color: #b9a6ff;
+    border-radius: 8px; padding: 7px 16px; cursor: pointer; font-size: 12.5px; }
   .chip.right { margin-left: auto; }
   #sources-panel { max-width: 820px; margin: 0 auto; padding: 20px; }
   .src-form { display: grid; grid-template-columns: 1fr 160px; gap: 10px;
@@ -70,6 +82,10 @@
      ingestion et n'apparaissait nulle part. Meme rouge que .render-warning. */
   .src-row .sante { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .src-row .sante.ko { color: #ff9aa5; }
+  /* Le verdict de l'ecriture de categorie, a cote du selecteur : ce PATCH
+     partait sans que personne ne lise la reponse (cf. `catSel.onchange`). */
+  .src-row .cat-etat { font-size: 12px; color: #7ee2a0; width: 12px; text-align: center; }
+  .src-row .cat-etat.ko { color: #ff9aa5; }
   .src-row .toggle { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 
@@ -372,6 +388,26 @@ const grid = document.getElementById("grid");
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 
+// Un echec de chargement doit etre TERMINAL ET RELANCABLE : il porte sa raison
+// et un bouton. Sans ce bouton, la seule issue d'une panne passagere (Neon qui
+// demarre, `attendre_base()` qui patiente) etait de recharger la page entiere --
+// et avant lui, l'ecran restait sur « Chargement… » sans jamais rien dire.
+function afficherErreur(cible, message, relancer) {
+  cible.innerHTML = "";
+  const zone = document.createElement("div");
+  zone.className = "zone-erreur";
+  const pourquoi = document.createElement("div");
+  pourquoi.className = "pourquoi";
+  pourquoi.textContent = message;
+  const bouton = document.createElement("button");
+  bouton.className = "relance";
+  bouton.textContent = "↻ Réessayer";
+  bouton.onclick = relancer;
+  zone.appendChild(pourquoi);
+  zone.appendChild(bouton);
+  cible.appendChild(zone);
+}
+
 async function load() {
   const params = new URLSearchParams({ limit: 200, sort: document.getElementById("sort").value });
   for (const [k, v] of Object.entries(PRESETS[preset])) params.set(k, v);
@@ -382,11 +418,19 @@ async function load() {
 
   // L'API plafonne une page a 200 : on enchaine les pages pour tout afficher.
   const articles = [];
-  for (let offset = 0; ; offset += 200) {
-    params.set("offset", offset);
-    const page = await (await fetch(`/articles?${params}`)).json();
-    articles.push(...page);
-    if (page.length < 200) break;
+  try {
+    for (let offset = 0; ; offset += 200) {
+      params.set("offset", offset);
+      const reponse = await fetch(`/articles?${params}`);
+      if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+      const page = await reponse.json();
+      articles.push(...page);
+      if (page.length < 200) break;
+    }
+  } catch (erreur) {
+    document.getElementById("count").textContent = "";
+    afficherErreur(grid, "Échec du chargement des articles : " + erreur.message, load);
+    return;
   }
   document.getElementById("count").textContent = `${articles.length} article${articles.length > 1 ? "s" : ""}`;
   grid.innerHTML = articles.length ? "" : '<div id="empty">Rien ici — change de filtre ou attends le prochain run (toutes les 2 h).</div>';
@@ -407,6 +451,12 @@ async function load() {
       : a.raison_sans_visuel
         ? `<span class="badge sans-visuel" title="${escapeHtml(a.raison_sans_visuel)}">🚫 sans visuel</span>`
         : "";
+    // Hors file, et POURQUOI. Le champ refuse l'article partout (le gel, la
+    // composition et « Sauter » l'ecrivent) et n'etait affiche nulle part : un
+    // article invisible de la file semblait simplement ne jamais sortir.
+    const excluBadge = a.file_exclu_raison
+      ? `<span class="badge exclu" title="${escapeHtml(a.file_exclu_raison)}">⛔ hors file : ${escapeHtml(a.file_exclu_raison)}</span>`
+      : "";
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
@@ -416,6 +466,7 @@ async function load() {
           ${a.category ? `<span class="badge">${a.category}</span>` : ""}
           ${a.imprint ? `<span class="badge">${a.imprint}</span>` : ""}
           ${visuelBadge}
+          ${excluBadge}
         </div>
         <a class="title" href="${a.url}" target="_blank" rel="noopener"></a>
         <div class="summary"></div>
@@ -425,6 +476,7 @@ async function load() {
           <button data-status="used">📸 Posté</button>
           <button data-status="new">↩</button>
           <button class="gen-post">Générer le post</button>
+          ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
         </div>
       </div>`;
     card.querySelector(".title").textContent = a.title;
@@ -442,6 +494,26 @@ async function load() {
       };
     }
     card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target);
+    // Le retour en arriere de « 🚫 Sauter » -- et de toute exclusion posee par
+    // l'agent (gel, composition). Avant lui, le seul recours etait un UPDATE
+    // a la main en base.
+    const btnReintegrer = card.querySelector(".reintegrer");
+    if (btnReintegrer) {
+      btnReintegrer.onclick = async () => {
+        btnReintegrer.disabled = true;
+        try {
+          const reponse = await fetch(`/articles/${a.id}/reintegrer`, { method: "POST" });
+          if (!reponse.ok) {
+            const corps = await reponse.json().catch(() => ({}));
+            throw new Error(corps.detail || "HTTP " + reponse.status);
+          }
+          load();
+        } catch (erreur) {
+          alert("Remise dans la file refusée : " + erreur.message);
+          btnReintegrer.disabled = false;
+        }
+      };
+    }
     grid.appendChild(card);
   }
 }
@@ -520,6 +592,7 @@ async function loadSourcesPanel() {
       <option value="club">Club</option>
       <option value="autre">Autre</option>
       </select>
+      <span class="cat-etat"></span>
       <button class="toggle">${s.active ? "⏸ Désactiver" : "▶ Activer"}</button>`;
     row.querySelector(".nm").textContent = s.name;
     row.querySelector(".u").textContent = s.url;
@@ -534,18 +607,57 @@ async function loadSourcesPanel() {
       sante.textContent = "jamais lue avec succès";
     }
     const catSel = row.querySelector(".categorie");
+    const catEtat = row.querySelector(".cat-etat");
     catSel.value = s.categorie || "";
+    // Ce PATCH partait sans que PERSONNE ne lise la reponse : un refus
+    // ressemblait exactement a une reussite. Or cette categorie pilote les
+    // regles 5-6 du prompt de scoring, l'eligibilite reel, et la regle « jamais
+    // les visuels d'un compte media » -- se tromper sur sa valeur se paie en
+    // production, pas a l'ecran.
+    //
+    // Contrairement a son voisin `.toggle`, qui RECHARGE tout le panneau (il
+    // change l'ordre et l'opacite des lignes), on ne recharge pas ici : avec
+    // ~145 sources, perdre sa position de defilement a chaque classement rendrait
+    // le tri a la main impraticable. On affiche donc ce que le SERVEUR a retenu,
+    // sur la ligne meme.
     catSel.onchange = async () => {
-      await fetch(`/sources/${s.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categorie: catSel.value || null }),
-      });
+      const precedente = s.categorie || "";
+      catEtat.className = "cat-etat";
+      catEtat.textContent = "…";
+      try {
+        const reponse = await fetch(`/sources/${s.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ categorie: catSel.value || null }),
+        });
+        if (!reponse.ok) {
+          const corps = await reponse.json().catch(() => ({}));
+          throw new Error(typeof corps.detail === "string" ? corps.detail : "HTTP " + reponse.status);
+        }
+        const maj = await reponse.json();
+        s.categorie = maj.categorie || null;
+        catSel.value = s.categorie || "";
+        catEtat.textContent = "✓";
+      } catch (erreur) {
+        // Retour en arriere VISIBLE : le selecteur ne doit jamais afficher une
+        // valeur que la base n'a pas.
+        catSel.value = precedente;
+        catEtat.classList.add("ko");
+        catEtat.textContent = "⚠";
+        alert("Catégorie non enregistrée (" + erreur.message + ") — « "
+          + (s.name) + " » garde « " + (precedente || "inconnue") + " ».");
+      }
     };
     row.querySelector(".toggle").onclick = async () => {
-      await fetch(`/sources/${s.id}`, {
+      // Le rechargement rend un refus VISIBLE (la ligne ne bouge pas) mais muet :
+      // on dit aussi pourquoi, comme pour la categorie juste au-dessus.
+      const reponse = await fetch(`/sources/${s.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: !s.active }),
       });
+      if (!reponse.ok) {
+        const corps = await reponse.json().catch(() => ({}));
+        alert("Changement refusé : " + (typeof corps.detail === "string" ? corps.detail : reponse.status));
+      }
       loadSourcesPanel();
     };
     list.appendChild(row);
@@ -696,10 +808,10 @@ async function loadSchedulePanel() {
   let creneaux;
   try {
     const reponse = await fetch("/schedule");
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     creneaux = await reponse.json();
   } catch (erreur) {
-    list.innerHTML = '<div id="empty">Échec du chargement de la file.</div>';
+    afficherErreur(list, "Échec du chargement de la file : " + erreur.message, loadSchedulePanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -740,11 +852,18 @@ async function loadSchedulePanel() {
     pastille.textContent = enCours ? "Publication en cours" : (ETATS_CRENEAU[c.etat] || c.etat);
     if (CRENEAUX_MODIFIABLES.has(c.etat)) {
       const actions = row.querySelector(".slot-actions");
-      const bouton = (libelle, titre, donnees) => {
+      // `confirmer` est optionnel : seul le geste IRREVERSIBLE en demande un.
+      // Le budget de confirmation etait depense a l'envers -- supprimer un
+      // BROUILLON en demandait une, sortir un article de la file pour de bon
+      // n'en demandait aucune.
+      const bouton = (libelle, titre, donnees, confirmer) => {
         const b = document.createElement("button");
         b.textContent = libelle;
         b.title = titre;
-        b.onclick = () => modifierCreneau(c.id, donnees);
+        b.onclick = () => {
+          if (confirmer && !confirmer()) return;
+          modifierCreneau(c.id, donnees);
+        };
         actions.appendChild(b);
       };
       if (c.article_id) {
@@ -753,7 +872,17 @@ async function loadSchedulePanel() {
       bouton("✏️", "Remplacer par un autre article (identifiant)", c.format === "reel" ? "remplacer-reel" : "remplacer");
       if (c.article_id) {
         bouton("⏬", "Décaler au créneau suivant", { decaler: true });
-        bouton("🚫", "Sauter cet article", { sauter: true });
+        // La confirmation NOMME l'article : « Sauter cet article » ne disait pas
+        // lequel, et un clic sur une icone sans libelle l'ecartait de la file.
+        bouton(
+          "🚫",
+          "Sauter : l'article sort de la file (reversible depuis sa carte, « Remettre dans la file »)",
+          { sauter: true },
+          () => confirm(
+            "Sortir « " + (c.article_title || "article #" + c.article_id) + " » de la file ?\n\n"
+            + "Il ne sera plus jamais choisi pour un créneau. Pour l'y remettre : sa carte, "
+            + "bouton « ↩ Remettre dans la file »."),
+        );
       }
     }
     list.appendChild(row);
@@ -796,11 +925,10 @@ async function loadPostsPanel() {
   let posts;
   try {
     const reponse = await fetch(`/posts?${params}`);
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     posts = await reponse.json();
   } catch (erreur) {
-    alert('Échec du chargement des posts : ' + erreur.message);
-    list.innerHTML = '<div id="empty">Échec du chargement des posts.</div>';
+    afficherErreur(list, "Échec du chargement des posts : " + erreur.message, loadPostsPanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -839,6 +967,35 @@ async function enregistrerPost(postId, donnees) {
 }
 
 const detailEl = document.getElementById("post-detail");
+
+// --- Le tampon de la legende ----------------------------------------------
+//
+// `renderPostDetail` reconstruit TOUTE la fiche depuis la reponse du serveur, et
+// SIX gestes de cette meme fiche la rappellent sans rien enregistrer : choisir
+// une variante de cover, basculer POST/REELS, valider un fond, cocher un media,
+// approuver, marquer publie. Le geste editorial normal -- ecrire la legende,
+// puis choisir la cover qui va avec -- detruisait donc le texte en silence, et
+// la fermeture le jetait aussi.
+//
+// UN SEUL point de capture, l'evenement `input` des deux zones de texte : un
+// tampon rempli a la main dans chacun des six gestes serait a refaire au
+// septieme. Et un seul point de lecture, `textesAReinjecter`, qui est volontairement
+// PURE (pas de DOM) pour etre verifiable.
+let brouillonTexte = null; // { postId, caption, hashtags }
+
+function textesDuServeur(post) {
+  return { caption: post.caption || "", hashtags: (post.hashtags || []).join(" ") };
+}
+
+// Les textes a reinjecter apres un re-rendu, ou `null` quand il n'y a rien a
+// sauver : pas de tampon, tampon d'un AUTRE post, ou tampon identique a ce que
+// le serveur vient de rendre (donc deja enregistre).
+function textesAReinjecter(brouillon, post) {
+  if (!brouillon || brouillon.postId !== post.id) return null;
+  const serveur = textesDuServeur(post);
+  if (brouillon.caption === serveur.caption && brouillon.hashtags === serveur.hashtags) return null;
+  return { caption: brouillon.caption, hashtags: brouillon.hashtags };
+}
 
 // --- Predicat "video exploitable" reimplemente depuis app/content/media.py :
 // on ne peut pas importer du Python dans le navigateur. Toute modification de
@@ -889,6 +1046,8 @@ async function chargerCovers(postId) {
 }
 
 async function ouvrirPost(postId) {
+  // Le tampon est celui d'UNE fiche : ouvrir un autre post le perime.
+  if (brouillonTexte && brouillonTexte.postId !== postId) brouillonTexte = null;
   let post;
   try {
     post = await (await fetch(`/posts/${postId}`)).json();
@@ -1051,7 +1210,7 @@ function renderPostDetail(post, article, covers) {
 
       ${actifsSection}
       <div class="section-title">Médias de l'actu (carrousel)</div>
-      <div class="media-list">${mediaHtml}</div>
+      <div class="media-list" id="medias-actu">${mediaHtml}</div>
 
       <div class="field">
         <label>Légende</label>
@@ -1060,6 +1219,9 @@ function renderPostDetail(post, article, covers) {
       <div class="field">
         <label>Hashtags (séparés par des espaces)</label>
         <textarea id="edit-hashtags" rows="2">${escapeHtml((post.hashtags || []).join(" "))}</textarea>
+      </div>
+      <div class="render-warning" id="texte-non-enregistre" hidden>
+        ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
       </div>
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
@@ -1070,7 +1232,37 @@ function renderPostDetail(post, article, covers) {
       </div>
     </div>`;
   detailEl.querySelector("h2").textContent = post.article_title || "Post";
-  detailEl.querySelector(".close-btn").onclick = () => { detailEl.hidden = true; detailEl.innerHTML = ""; };
+
+  // Le texte en cours de frappe survit a ce re-rendu : il est repose AVANT tout
+  // le reste, pour qu'aucun chemin (y compris un `return` plus bas) ne puisse
+  // laisser la fiche afficher la version du serveur a la place de la saisie.
+  const captionEl = detailEl.querySelector("#edit-caption");
+  const hashtagsEl = detailEl.querySelector("#edit-hashtags");
+  const aReinjecter = textesAReinjecter(brouillonTexte, post);
+  if (aReinjecter) {
+    captionEl.value = aReinjecter.caption;
+    hashtagsEl.value = aReinjecter.hashtags;
+  }
+  const marquerNonEnregistre = () => {
+    detailEl.querySelector("#texte-non-enregistre").hidden =
+      textesAReinjecter(brouillonTexte, post) == null;
+  };
+  const capturerTextes = () => {
+    brouillonTexte = { postId: post.id, caption: captionEl.value, hashtags: hashtagsEl.value };
+    marquerNonEnregistre();
+  };
+  captionEl.oninput = capturerTextes;
+  hashtagsEl.oninput = capturerTextes;
+  marquerNonEnregistre();
+
+  const fermerDetail = () => {
+    if (textesAReinjecter(brouillonTexte, post)
+        && !confirm("La légende n'est pas enregistrée. Fermer et perdre ces modifications ?")) return;
+    brouillonTexte = null;
+    detailEl.hidden = true;
+    detailEl.innerHTML = "";
+  };
+  detailEl.querySelector(".close-btn").onclick = fermerDetail;
 
   // --- Selection d'une variante de cover ---
   for (const choix of detailEl.querySelectorAll(".cover-choice")) {
@@ -1143,9 +1335,21 @@ function renderPostDetail(post, article, covers) {
   };
 
   // --- Choix des medias du carrousel ---
-  for (const choix of detailEl.querySelectorAll(".media-choice")) {
+  //
+  // La recherche est BORNEE aux medias de l'actu (`#medias-actu`) : la section
+  // « Visuels retenus » produit elle aussi des `.media-choice`, mais SANS case a
+  // cocher et sans `data-index`. Un `querySelectorAll(".media-choice")` sur
+  // toute la fiche les ramassait donc aussi, et `choix.querySelector(
+  // ".media-check").onchange` levait un TypeError sur le premier d'entre eux --
+  // au milieu de `renderPostDetail`, donc AVANT `detailEl.hidden = false` et
+  // avant le branchement de « Enregistrer » : tout post portant des `assets`
+  // (c'est-a-dire tous ceux composes depuis la migration 0018) ne s'ouvrait
+  // PAS, et le clic sur la ligne ne faisait rien du tout. Meme sans le plantage,
+  // la liste des coches lisait `mediaList[NaN]` pour ces divs sans index.
+  const listeMedias = detailEl.querySelector("#medias-actu");
+  for (const choix of listeMedias.querySelectorAll(".media-choice")) {
     choix.querySelector(".media-check").onchange = async () => {
-      const coches = [...detailEl.querySelectorAll(".media-choice")]
+      const coches = [...listeMedias.querySelectorAll(".media-choice")]
         .filter((el) => el.querySelector(".media-check").checked)
         .map((el) => mediaList[Number(el.dataset.index)]);
       const slides = [cover, ...coches.map((m) => ({ kind: "media", ...m }))];
@@ -1163,6 +1367,8 @@ function renderPostDetail(post, article, covers) {
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
     try {
       const updated = await enregistrerPost(post.id, { caption, hashtags });
+      // Le serveur porte ce texte : plus rien a sauver, et l'avertissement tombe.
+      brouillonTexte = null;
       renderPostDetail(updated, article, covers);
     } catch (erreur) {
       alert("Échec de l'enregistrement : " + erreur.message);
@@ -1193,6 +1399,7 @@ function renderPostDetail(post, article, covers) {
       try {
         const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
         if (!reponse.ok) throw new Error(await reponse.text());
+        brouillonTexte = null;
         detailEl.hidden = true; detailEl.innerHTML = "";
         if (!postsPanelEl.hidden) loadPostsPanel();
       } catch (erreur) {
@@ -1244,10 +1451,10 @@ async function loadEventsPanel() {
   let events;
   try {
     const reponse = await fetch(`/events?sort=${sort}&limit=100`);
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     events = await reponse.json();
   } catch (erreur) {
-    list.innerHTML = '<div id="empty">Échec du chargement des événements.</div>';
+    afficherErreur(list, "Échec du chargement des événements : " + erreur.message, loadEventsPanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -1419,13 +1626,24 @@ function escapeHtml(str) {
 }
 
 (async () => {
-  const sources = await (await fetch("/sources")).json();
+  // La grille ne depend PAS de ce filtre, et son chargement ne doit donc jamais
+  // dependre de lui : `load()` etait la derniere instruction d'un bloc sans
+  // rattrapage, si bien qu'un `/sources` en echec laissait l'ecran d'accueil sur
+  // « Chargement… » pour toujours -- sans un mot, et sans que la grille,
+  // parfaitement joignable, soit meme tentee.
   const sel = document.getElementById("source");
-  for (const s of sources) {
-    sourceNames[s.id] = s.name;
-    const opt = document.createElement("option");
-    opt.value = s.id; opt.textContent = (s.active ? "" : "⏸ ") + s.name;
-    sel.appendChild(opt);
+  try {
+    const reponse = await fetch("/sources");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    for (const s of await reponse.json()) {
+      sourceNames[s.id] = s.name;
+      const opt = document.createElement("option");
+      opt.value = s.id; opt.textContent = (s.active ? "" : "⏸ ") + s.name;
+      sel.appendChild(opt);
+    }
+  } catch (erreur) {
+    // Inconnu, jamais « tout va bien » : le filtre dit qu'il n'a pas pu etre lu.
+    sel.querySelector("option").textContent = "⚠ sources illisibles (" + erreur.message + ")";
   }
   load();
 })();

@@ -70,6 +70,12 @@ class ArticleOut(BaseModel):
     genre: str | None
     status: ArticleStatus
     media: list[dict] | None
+    # L'EXCLUSION DE LA FILE, telle que l'ecrivent le dashboard (« saute »), le
+    # gel, la composition et la dedup d'archive. Elle etait en base depuis le
+    # debut et exposee par rien : la grille ne pouvait donc ni montrer qu'un
+    # article est hors file, ni dire pourquoi -- alors que c'est le champ qui
+    # refuse l'article PARTOUT (`store._articles_publiables`).
+    file_exclu_raison: str | None = None
 
     # Calcules par l'API (pas des colonnes) : l'origine du visuel a venir, la
     # raison de son absence, et si les medias propres sont interdits (compte
