@@ -138,6 +138,28 @@ def est_gabarit_de_source(
     return sum(1 for jetons in jetons_de_la_source if partage <= jetons) >= seuil
 
 
+def cibles_a_repointer(pointeurs, representant) -> list:
+    """La CEINTURE de `lier`, au point d'ecriture : jamais le representant
+    lui-meme (2026-10-02).
+
+    L'aplatissement anti-chaine de `lier` repointe vers `representant` tout
+    article qui pointait deja vers l'article qu'on vient de lier. Si le
+    representant est justement l'un de ceux-la -- c'est-a-dire si les deux
+    articles se pointent l'un l'autre --, ce geste ecrit
+    `representant.duplicate_of_id = representant.id` : l'article devient son
+    PROPRE doublon. Mesure en production ce jour-la : 3 articles sur 662 dans
+    cet etat, dont un (21599, Billboard) sans note depuis 28 h et qui n'en
+    aurait jamais eu, un doublon n'etant jamais score.
+
+    La garde PRINCIPALE est en amont, dans `resoudre` : un candidat qui vient
+    d'etre lie n'est plus un representant, donc l'etat mutuel ne se forme
+    jamais. Celle-ci est la ceinture au POINT D'ECRITURE, isolee en fonction
+    pure pour etre verifiable sans monter une session
+    (`tests/test_cluster_reflexif.py`).
+    """
+    return [pointeur for pointeur in pointeurs if pointeur.id != representant.id]
+
+
 def normalize_title(title: str) -> str:
     """Minuscules, sans accents ni ponctuation, traits d'union recollés."""
     folded = unicodedata.normalize("NFKD", title.lower())
@@ -743,6 +765,30 @@ def link_duplicates(
                 # lui-même : sans ce garde-fou, sa propre entrée matcherait à
                 # coup sûr (mêmes jetons) et le lierait à... lui-même.
                 continue
+            if rep_article.duplicate_of_id is not None:
+                # LA GARDE DU LIEN REFLEXIF (2026-10-02), et elle est posee ici
+                # parce que c'est ici que l'information existe : un candidat
+                # qui a ete LIE entre-temps n'est plus un representant.
+                #
+                # Un article DIFFERE en passe 1 reste dans `representatives`
+                # (pour ne pas se faire usurper sa place) ET il est RE-TRAITE
+                # en passe 2. Deux differes qui se repondent se liaient donc
+                # l'un a l'autre dans le meme passage -- mesure en production
+                # ce jour-la, trois fois, journal a l'appui : « Sia sells 50% »
+                # (21627) rattache a « Sia has sold a 50% stake » (21942), puis
+                # 21942 rattache a 21627 deux lignes plus loin. Le second
+                # `lier` aplatissait alors la chaine vers sa propre cible et
+                # 21627 devenait SON PROPRE doublon : plus jamais note (un
+                # doublon n'est pas score), plus jamais publiable, et rien ne
+                # le disait.
+                #
+                # Sauter ce candidat rend l'etat mutuel impossible par
+                # CONSTRUCTION, et rend la bonne reponse : le groupe existe
+                # deja avec l'autre a sa tete, il n'y a rien a lier. Au
+                # passage, plus aucun arbitrage n'est paye pour une paire dont
+                # un cote n'est plus un representant. `elire_representants`
+                # reste libre de changer la tete du groupe ensuite.
+                continue
             cle = cle_paire(article.id, rep_article.id)
             # `nouveaux_verdicts` d'ABORD que le cache disque : un verdict
             # rendu plus tôt dans CE passage (passe 1) n'est écrit sur disque
@@ -913,8 +959,13 @@ def link_duplicates(
         ce module ni la transaction en cours."""
         article.duplicate_of_id = representant.id
         db.flush()
-        repointes = list(
-            db.scalars(select(Article).where(Article.duplicate_of_id == article.id))
+        # `cibles_a_repointer` retire le representant LUI-MEME de la liste : un
+        # article ne peut pas devenir son propre doublon. C'est la ceinture du
+        # defaut du 2026-10-02 (voir cette fonction) ; la garde principale est
+        # en amont, dans `resoudre`.
+        repointes = cibles_a_repointer(
+            db.scalars(select(Article).where(Article.duplicate_of_id == article.id)),
+            representant,
         )
         for pointeur in repointes:
             pointeur.duplicate_of_id = representant.id

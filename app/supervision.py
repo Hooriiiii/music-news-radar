@@ -68,6 +68,22 @@ INGESTION_PANNE = dt.timedelta(hours=4)
 # `score_pending` note TOUS les articles en attente a chaque passage horaire,
 # sans limite. Un article ingere il y a plus de deux heures et toujours sans
 # note n'est donc pas un retard : c'est un scoring qui ne tourne plus.
+#
+# MAIS `fetched_at` n'est PAS la date a laquelle l'article est devenu notable,
+# et cette confusion faisait crier au loup (mesure du 2026-10-02 : le voyant
+# affichait « 4 article(s) attendent une note depuis plus de 2 h ... scoring
+# interrompu » alors que le passage precedent venait d'en noter 57 sans une
+# seule erreur). Les quatre etaient des DOUBLONS -- un doublon n'est jamais
+# score, c'est l'economie que `link_duplicates` existe pour faire -- dont le
+# representant venait d'etre PURGE : `articles.duplicate_of_id` est
+# `ON DELETE SET NULL`, donc la purge les a rendus notables a l'instant meme
+# ou elle s'est executee, c'est-a-dire APRES le scoring du meme passage. Leur
+# `fetched_at` avait 24 h, leur attente reelle quelques minutes, et le passage
+# suivant les a notes. Verifie sur les quatre : ils portaient tous une
+# `event_observations` creee par `cluster.lier`, donc ils avaient bien ete lies.
+# Rien dans le schema ne date « devenu notable » -- et l'ajouter ne vaut pas
+# une colonne. Le voyant mesure donc la PREUVE au lieu de la duree : voir
+# `articles_jamais_atteints_par_le_scoring`.
 RETARD_SCORING = dt.timedelta(hours=2)
 
 # Au-dela, un echec de composition appartient a l'histoire, plus a l'etat.
@@ -229,15 +245,85 @@ def voyant_mode(maintenant: dt.datetime) -> Voyant:
 # --- Composition et credits -------------------------------------------------
 
 
+def articles_jamais_atteints_par_le_scoring(db: Session, maintenant: dt.datetime) -> int:
+    """Les articles dont le scoring n'a PROUVABLEMENT jamais eu l'occasion.
+
+    Le voyant affirme « le scoring ne tourne plus ». La preuve de cette
+    affirmation n'est pas la duree d'attente d'un article (voir
+    `RETARD_SCORING` : `fetched_at` ne dit pas quand l'article est devenu
+    notable) mais ceci : `score_pending` prend les articles notables par
+    `fetched_at` CROISSANT et sans limite au passage horaire. Donc si un
+    article ingere a T a recu une note, le scoring a tourne apres T -- et tout
+    article notable ingere avant T aurait ete servi AVANT lui.
+
+    On ne compte donc que les articles sans note dont le `fetched_at` est
+    STRICTEMENT plus recent que le dernier `fetched_at` deja note. Un doublon
+    libere par la purge est, lui, plus ANCIEN que ce repere (c'est tout l'objet
+    du correctif) : il n'est pas compte, et le passage suivant le notera.
+
+    Rien de note du tout -> aucun repere, on compte tout : « on ne sait pas »
+    ne doit jamais se degrader en « tout va bien » (regle 1 du module).
+
+    Faux negatif assume : `run_veille` note au plus `veille_scoring_max` (20)
+    articles toutes les 5 min, donc un arriere peut faire avancer le repere
+    au-dela d'articles encore en attente. Le passage HORAIRE, lui, n'a pas de
+    limite et resorbe cet arriere dans l'heure -- un trou d'une heure vaut
+    mieux qu'un faux positif permanent, qui apprend a ne plus regarder le
+    bandeau.
+    """
+    repere = db.scalar(
+        select(func.max(Article.fetched_at)).where(Article.relevance_score.is_not(None))
+    )
+    stmt = (
+        select(func.count())
+        .select_from(Article)
+        .where(Article.relevance_score.is_(None))
+        .where(Article.duplicate_of_id.is_(None))
+        .where(Article.fetched_at <= maintenant - RETARD_SCORING)
+    )
+    if repere is not None:
+        stmt = stmt.where(Article.fetched_at > repere)
+    return db.scalar(stmt) or 0
+
+
+def articles_leur_propre_doublon(db: Session) -> int:
+    """Les articles dont `duplicate_of_id` pointe sur leur propre id.
+
+    Une CORRUPTION, pas un retard : un tel article se presente comme un
+    doublon, donc `score_pending` (qui filtre `duplicate_of_id IS NULL`) ne le
+    notera jamais et `store._articles_publiables` ne le proposera jamais. Il
+    disparaitra a la purge sans que rien ne l'ait dit -- c'est exactement ce
+    qui est arrive aux articles 21627, 21709 et 21599 le 2026-10-02 (voir
+    `cibles_a_repointer` dans `app/pipeline/cluster.py`).
+
+    Compte a part du retard de scoring, et SANS le filtre
+    `duplicate_of_id IS NULL` qui le ferait disparaitre : la cause du blocage
+    n'est pas le scoring, la reparation n'est pas d'attendre, et dire « scoring
+    interrompu » sur ce cas serait le genre de message faux que ce bandeau
+    existe pour ne plus produire. Le defaut est corrige a la source depuis le
+    2026-10-02 ; ce compteur est la vigie qui dirait qu'un autre chemin l'a
+    refait.
+    """
+    return db.scalar(
+        select(func.count())
+        .select_from(Article)
+        .where(Article.duplicate_of_id == Article.id)
+    ) or 0
+
+
 def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
     """La panne la plus couteuse de la semaine, et la plus silencieuse.
 
     Deux signaux deja ecrits, aucun appel : le dernier `Post` cree, et la
     derniere `creneaux.erreur` de composition -- dans laquelle le message exact
     de l'API Anthropic (« credit balance is too low ») se reconnait. Plus un
-    troisieme, indirect mais imparable : des articles ingeres il y a plus de
-    deux heures et toujours sans note, alors que chaque passage horaire note
-    TOUT ce qui attend.
+    troisieme, indirect mais imparable : des articles que le scoring n'a
+    PROUVABLEMENT jamais atteints
+    (`articles_jamais_atteints_par_le_scoring` -- et sa docstring dit pourquoi
+    « ingere il y a plus de deux heures » ne suffisait pas et faisait crier au
+    loup). Plus un quatrieme depuis le 2026-10-02 : les articles leur propre
+    doublon, bloques pour de bon et que le filtre `duplicate_of_id IS NULL` du
+    troisieme ne peut pas voir.
     """
     dernier_post = _utc(db.scalar(select(func.max(Post.created_at))))
     creneau = db.scalars(
@@ -254,13 +340,8 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
         and quand_erreur is not None
         and maintenant - quand_erreur <= FENETRE_COMPOSITION
     )
-    non_notes = db.scalar(
-        select(func.count())
-        .select_from(Article)
-        .where(Article.relevance_score.is_(None))
-        .where(Article.duplicate_of_id.is_(None))
-        .where(Article.fetched_at <= maintenant - RETARD_SCORING)
-    )
+    non_notes = articles_jamais_atteints_par_le_scoring(db, maintenant)
+    reflexifs = articles_leur_propre_doublon(db)
 
     details = [f"Dernier post composé : {_ecoule(maintenant, dernier_post)}"]
     if erreur is not None:
@@ -269,7 +350,14 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
         )
     if non_notes:
         details.append(
-            f"{non_notes} article(s) ingérés il y a plus de 2 h et toujours sans note"
+            f"{non_notes} article(s) ingérés il y a plus de 2 h que le scoring "
+            "n'a jamais atteints"
+        )
+    # Toujours en détail, même quand une branche plus grave prend le titre :
+    # une corruption ne doit jamais être masquée par une panne passagère.
+    if reflexifs:
+        details.append(
+            f"{reflexifs} article(s) sont leur propre doublon (lien de dédup corrompu)"
         )
 
     if recente and SIGNATURE_CREDITS in (erreur or "").lower():
@@ -290,6 +378,17 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             f"{non_notes} non notés",
             f"{non_notes} article(s) attendent une note depuis plus de 2 h alors que chaque "
             "passage horaire note tout : scoring interrompu (crédits, clé API ou réseau).",
+            details,
+        )
+    if reflexifs:
+        return Voyant(
+            "composition",
+            "Composition",
+            ATTENTION,
+            f"{reflexifs} doublon(s) de soi",
+            f"{reflexifs} article(s) pointent sur eux-mêmes comme doublon : ils ne seront "
+            "jamais notés ni publiés. Réparer avec "
+            "`uv run python -m scripts.reparer_doublons_reflexifs --apply`.",
             details,
         )
     if recente:
