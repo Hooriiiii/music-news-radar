@@ -1715,6 +1715,78 @@ verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le
 lien ouvre un 404, et l'identifiant brut reste lisible a cote. Le vrai remede
 serait de stocker le `permalink` que Meta renvoie a la publication.
 
+## La charte Kinda dans la console (2026-10-02)
+
+Le compte Instagram etait a la charte ; la console qui le pilote portait un
+violet `#7c5cff` sans rapport avec la marque. Le rose signature `#FB8AC2` est a
+un cheveu du `#FD8BC3` des gabarits de post (`app/content/layout.py`) : **la
+charte etait deja dans le produit PUBLIE, elle manquait seulement a l'outil**.
+
+**Le fond reste SOMBRE** (`#101014`), decision de l'utilisateur : la console se
+regarde des heures et le sombre sert la densite de donnees. La marque y entre en
+ACCENT, et la mesure le confirme -- le violet etait en dessous du seuil :
+
+| paire | contraste | |
+|---|---|---|
+| violet sur fond sombre | 4,37:1 | sous 4,5 |
+| **rose Kinda sur fond sombre** | **8,60:1** | presque le double |
+| blanc sur bouton violet plein | 4,35:1 | echouait |
+| blanc sur bouton rose plein | 2,21:1 | **interdit** |
+| **texte `#101014` sur bouton rose plein** | **8,60:1** | la correction |
+
+**Le bouton principal porte donc un texte SOMBRE sur le rose** (`--sur-accent`),
+jamais blanc. C'est contre-intuitif et c'est mesure. La meme regle a corrige le
+bouton rouge plein du mode `reel`, ou le blanc ne valait que 3,4:1.
+
+**Le ROSE NE SIGNALE JAMAIS UNE PANNE**, et c'est la propriete la plus fragile
+de ce chantier : rose (teinte 330) et rouge d'alerte sont voisins, une panne qui
+vire au rose ne CASSE rien -- la page reste belle, les tests de structure
+restent verts -- elle rend seulement la supervision aveugle, c'est-a-dire ce que
+l'audit UX a fait construire en premier. Les rouges sont donc ramenes a la
+teinte 0 EXACTE et montes en saturation (`#ff8a8a` etait a 0 mais aussi pale que
+le rose ; `#ff9aa5` penchait carrement vers lui, a 353) : `--alerte` `#ff7b7b`
+(7,57:1) et `--alerte-douce` `#ff8c8c` (8,48:1), tous deux au-dessus du seuil --
+une raison de panne ne perd jamais en lisibilite pour gagner en teinte.
+`tests/test_dashboard_marque.py` le verrouille par **deux preuves par
+mutation** : une alerte qui prend la teinte de l'accent, et une regle de panne
+qui s'ecrit `var(--accent)`. Une seule exception, ecrite plutot que devinee :
+`.zone-erreur .relance` est une ACTION dans un etat de panne, pas le signal de
+panne.
+
+Consequence sur un test existant : `test_dashboard_navigation.py` epinglait le
+literal `rgb(255, 138, 138)`. Un literal aurait rougi pour une AMELIORATION ; il
+verifie desormais l'intention (le jeton `--alerte`, une teinte rouge, un
+contraste suffisant sur son fond).
+
+**Typographie : aucune police web.** La charte demande une grotesque condensee ;
+le fichier est autonome et ne depend d'aucun CDN, propriete qu'on garde. La pile
+`--police-titre` part d'« Avenir Next Condensed » (presente sur macOS, et seule
+condensee locale a offrir quatre graisses REELLES, donc un 600 vrai et non
+synthetise), puis « DIN Condensed », puis des condensees Linux/Windows, et le
+dernier repli est exactement la pile d'aujourd'hui : une machine sans condensee
+rend la page telle qu'elle etait, jamais cassee. Elle ne s'applique qu'aux
+titres et aux tetes de ligne -- « pas de fantaisie dans le texte courant ».
+
+**Les deux signes de marque sont INLINES en `data:`**, pas servis. `app/main.py`
+rend le dashboard par un `FileResponse` UNIQUE et ne monte aucun `StaticFiles` :
+monter un repertoire statique pour deux PNG ajouterait une route, deux requetes
+au premier rendu (un logo qui apparait apres le texte) et un 404 muet de plus a
+pouvoir rater. Cout mesure et borne a **+15,7 ko** sur la page, parce que les
+deux images sont DERIVEES avant d'etre encodees (`scripts/inliner_marque.py`,
+idempotent, a relancer apres une refonte du logo) :
+- le **logo** est aplati a la creme EXACTE de la charte `#FEF1F7` -- l'original
+  portait 7 648 couleurs distinctes (un anticrenelage autour d'un `#FFF7FA` a
+  peine different) qui coutaient 30 ko de base64 pour rien ; a plat, 13,7 ko, et
+  la teinte devient celle de la charte. Il va dans le `src` d'une `<img
+  alt="Kinda">` : seul endroit ou un `alt` donne le nom accessible sans texte
+  masque a entretenir ;
+- l'**etoile** devient un MASQUE gris+alpha (1,9 ko) dans une variable CSS, donc
+  recoloree librement par `background-color`. Deux emplois seulement -- l'etat
+  vide et la variante retenue d'une cover : un outil de travail ne se decore
+  pas, il se signe.
+
+Les PNG de `app/static/marque/` restent la source de verite.
+
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
 57 % des articles arrivaient sans aucun média, et le déficit était concentré sur
