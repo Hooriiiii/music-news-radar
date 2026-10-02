@@ -55,6 +55,7 @@ def _vue(db: Session, creneau: Creneau) -> CreneauOut:
         epingle=creneau.epingle,
         article_id=creneau.article_id,
         article_title=article.title if article else None,
+        article_url=article.url if article else None,
         relevance=article.relevance_score if article else None,
         post_id=creneau.post_id,
         ig_media_id=creneau.ig_media_id,

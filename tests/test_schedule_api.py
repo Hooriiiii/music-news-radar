@@ -47,6 +47,18 @@ def test_la_file_montre_l_article_de_chaque_creneau(client, db_session):
     _creneau(db_session, 5, article)
     (vue,) = client.get("/schedule").json()
     assert (vue["article_title"], vue["relevance"], vue["etat"]) == ("Actu 0", 80, "programme")
+    # L'URL de l'actu, pour que « article #123 » soit un LIEN au dashboard et
+    # non un identifiant a recopier a la main. Zero requete de plus : l'article
+    # est deja charge pour en tirer titre et pertinence.
+    assert vue["article_url"] == "https://t/0"
+
+
+def test_un_creneau_sans_article_n_annonce_aucune_url(client, db_session):
+    """Le creneau est AUTONOME de son article (2026-09-30) : purge, il n'a plus
+    d'URL, et le renvoi doit redevenir du texte inerte plutot qu'un lien mort."""
+    _creneau(db_session, 5)
+    (vue,) = client.get("/schedule").json()
+    assert vue["article_id"] is None and vue["article_url"] is None
 
 
 def test_epingler(client, db_session):

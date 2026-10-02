@@ -290,7 +290,7 @@ def test_track_artist(client, db_session):
 
 def test_le_dashboard_porte_le_panneau_de_programmation(client):
     html = client.get("/").text
-    assert 'data-preset="schedule"' in html
+    assert 'data-panneau="schedule"' in html
     assert 'id="schedule-panel"' in html
     assert 'fetch("/schedule")' in html
 
@@ -363,9 +363,14 @@ def test_le_dashboard_affiche_toute_la_base(client):
 
 def test_le_dashboard_affiche_les_identifiants(client):
     """Sans eux, impossible de recopier un article dans la file ni de retrouver
-    un post publie sur Instagram."""
+    un post publie sur Instagram.
+
+    Ils sont desormais fabriques par les RENVOIS (`renvoiArticle`,
+    `renvoiInstagram`, `renvoiPost`) : toujours ecrits en clair, et en plus
+    cliquables -- voir `tests/test_dashboard_navigation.py`."""
     html = client.get("/").text
     assert "`#${a.id} · ${sourceName(a.source_id)}" in html
     assert "`créneau ${c.id}`" in html
-    assert "article #${c.article_id}" in html
-    assert "IG ${c.ig_media_id}" in html
+    assert "article #${articleId}" in html
+    assert "IG ${igMediaId}" in html
+    assert "post ${postId}" in html

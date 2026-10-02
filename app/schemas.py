@@ -249,6 +249,12 @@ class CreneauOut(BaseModel):
     epingle: bool
     article_id: int | None
     article_title: str | None = None
+    # L'URL de l'actu, pour que « article #123 » soit un LIEN et non un
+    # identifiant a recopier. Zero cout : `_vue` charge deja l'article pour en
+    # tirer le titre et la pertinence. `None` quand l'article a ete purge --
+    # le creneau est autonome de son article (2026-09-30), le renvoi redevient
+    # alors du texte inerte plutot qu'un lien mort.
+    article_url: str | None = None
     relevance: int | None = None
     post_id: int | None
     ig_media_id: str | None
@@ -302,6 +308,11 @@ class EventObservationOut(BaseModel):
     title: str
     url: str
     source_name: str
+    # Le post Kinda tire de cet article, s'il existe : une observation disait
+    # ce que la presse a publie, jamais ce que Kinda en a fait. Rempli par
+    # `GET /events/{id}` en UNE requete groupee (jamais une par observation),
+    # et `None` quand rien n'a ete compose -- ou quand l'article est purge.
+    post_id: int | None = None
 
 
 class EventOut(BaseModel):

@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Article, Event, EventObservation, Source, SourceRole
+from app.models import Article, Event, EventObservation, Post, Source, SourceRole
 from app.pipeline.event_archive import (
     ArchiveEvenements,
     charger_archive,
@@ -33,7 +33,7 @@ from app.pipeline.event_archive import (
     en_utc,
 )
 from app.pipeline.event_features import calculer_features
-from app.schemas import EventDetailOut, EventOut
+from app.schemas import EventDetailOut, EventObservationOut, EventOut
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -228,4 +228,35 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
         .where(EventObservation.event_id == event_id)
         .order_by(EventObservation.published_at.desc().nullslast(), EventObservation.id.desc())
     ).all()
-    return EventDetailOut(**base.model_dump(), observations=observations)
+    return EventDetailOut(
+        **base.model_dump(), observations=_vues_observations(db, observations)
+    )
+
+
+def _vues_observations(db: Session, observations) -> list[EventObservationOut]:
+    """Les observations, plus le post Kinda tire de chaque article quand il y
+    en a un.
+
+    UNE requete pour toute la liste, jamais une par observation : meme regle
+    que `_contexte` et `_relevances_representants`, ou un N+1 sur Neon se
+    payait en secondes.
+
+    Un article peut porter PLUSIEURS posts (un brouillon jete puis refait) :
+    le premier par identifiant gagne, comme `setdefault` le fait deja pour la
+    pertinence du representant. C'est un renvoi de navigation, pas un choix
+    editorial -- la fiche ouverte dit le reste."""
+    article_ids = [o.article_id for o in observations if o.article_id is not None]
+    posts_par_article: dict[int, int] = {}
+    if article_ids:
+        for article_id, post_id in db.execute(
+            select(Post.article_id, Post.id)
+            .where(Post.article_id.in_(article_ids))
+            .order_by(Post.id)
+        ):
+            posts_par_article.setdefault(article_id, post_id)
+    return [
+        EventObservationOut.model_validate(o).model_copy(
+            update={"post_id": posts_par_article.get(o.article_id)}
+        )
+        for o in observations
+    ]

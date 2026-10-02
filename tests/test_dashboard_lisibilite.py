@@ -124,7 +124,7 @@ def _mesurer_le_titre(html: str) -> dict[int, dict]:
             page = navigateur.new_page()
             page.goto(f"http://127.0.0.1:{port}/")
             page.wait_for_function("typeof loadEventsPanel === 'function'")
-            page.click('[data-preset="events"]')
+            page.click('[data-panneau="events"]')
             # `state="attached"` et non « visible » : dans la version fautive,
             # Chromium lui-meme considere ce titre comme INVISIBLE (largeur
             # nulle), et attendre sa visibilite ferait expirer la mutation au
