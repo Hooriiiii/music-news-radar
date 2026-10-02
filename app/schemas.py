@@ -26,6 +26,15 @@ class SourceOut(BaseModel):
     genre: str | None
     categorie: SourceCategorie | None
     active: bool
+    # La SANTE, tiree de `sources.state` (ecrit a chaque ingestion par
+    # `app/pipeline/health.py::marquer_sante`) : elle existait depuis le debut et
+    # n'etait exposee par rien -- ni l'API, ni l'ecran. Une source morte depuis
+    # trois semaines etait donc indetectable depuis le dashboard, alors que la
+    # trace etait en base. Ce ne sont pas des colonnes : l'endpoint les extrait
+    # (`app/api/sources.py::vue`), d'ou des defauts a None.
+    last_error: str | None = None
+    last_error_at: dt.datetime | None = None
+    last_ok_at: dt.datetime | None = None
 
 
 class SourceCreate(BaseModel):
@@ -341,3 +350,30 @@ class ModeOut(BaseModel):
 class ModeUpdate(BaseModel):
     mode: Literal["arret", "apercu", "reel"]
     confirmation: str | None = None
+
+
+class VoyantOut(BaseModel):
+    """Un voyant du bandeau de supervision.
+
+    `niveau` vaut `ok`, `attention`, `panne` ou `inconnu` -- et `inconnu` ne se
+    degrade JAMAIS en `ok` : une valeur qu'on n'a pas pu lire peut cacher une
+    panne (voir `app/supervision.py`). `raison` est un texte affichable a cote
+    du voyant, jamais seulement dans une infobulle.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    cle: str
+    libelle: str
+    niveau: Literal["ok", "attention", "panne", "inconnu"]
+    valeur: str
+    raison: str | None = None
+    details: list[str] = []
+
+
+class SupervisionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    niveau: Literal["ok", "attention", "panne", "inconnu"]
+    releve_le: dt.datetime
+    voyants: list[VoyantOut]

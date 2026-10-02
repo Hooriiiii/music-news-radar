@@ -66,6 +66,10 @@
   .src-row .grow { flex: 1; min-width: 0; }
   .src-row .tag { font-size: 10.5px; background: #23232d; color: var(--muted);
     border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  /* La sante de la source, sous son URL : `last_error` etait ecrit a chaque
+     ingestion et n'apparaissait nulle part. Meme rouge que .render-warning. */
+  .src-row .sante { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .src-row .sante.ko { color: #ff9aa5; }
   .src-row .toggle { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 
@@ -193,11 +197,63 @@
   .obs-row a:hover { color: #b9a6ff; }
   .obs-row .plateforme { font-size: 10.5px; background: #23232d; color: var(--muted);
     border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+  /* --- Bandeau de supervision (permanent, tous panneaux) ---
+     Les quatre niveaux reprennent les couleurs deja en service dans le
+     dashboard (.status-pill) : vert = publie, ambre = apercu, rouge = echec.
+     Le gris-bleu de « inconnu » est la seule teinte nouvelle, et elle est
+     volontairement DIFFERENTE du vert : une valeur qu'on n'a pas pu lire ne
+     doit jamais ressembler a « tout va bien ». */
+  .supervision { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: #14141a; padding: 8px 10px; }
+  .supervision.niv-panne { border-color: #5a2a2a; }
+  .supervision.niv-attention { border-color: #55501f; }
+  .supervision.niv-inconnu { border-color: #3a3a48; }
+  .supervision.niv-ok { border-color: #2a4a33; }
+  .sup-tete { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sup-global { font-size: 12.5px; font-weight: 600; }
+  .niv-ok > .sup-tete > .sup-global, .sup-global.niv-ok { color: #7ee2a0; }
+  .niv-attention > .sup-tete > .sup-global { color: #e8d27a; }
+  .niv-panne > .sup-tete > .sup-global { color: #ff9aa5; }
+  .niv-inconnu > .sup-tete > .sup-global { color: #b9b9c8; }
+  .sup-releve { color: var(--muted); font-size: 11px; }
+  .sup-plier { margin-left: auto; border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 8px; padding: 3px 10px; cursor: pointer; font-size: 11.5px; }
+  .sup-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .sup-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11.5px;
+    border-radius: 999px; padding: 3px 10px; background: #23232d; color: var(--muted);
+    border: 1px solid transparent; }
+  .sup-pill b { font-weight: 600; }
+  .sup-pill.niv-ok { background: #1d3325; color: #7ee2a0; }
+  .sup-pill.niv-attention { background: #33301d; color: #e8d27a; }
+  .sup-pill.niv-panne { background: #3d1f23; color: #ff9aa5; border-color: #5a2a2a; }
+  .sup-pill.niv-inconnu { background: #2d2d38; color: #b9b9c8; }
+  /* La raison est ADJACENTE et VISIBLE, jamais seulement dans un `title` :
+     c'est la force deja presente dans la fiche de post, etendue ici. */
+  .sup-raisons { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
+  .sup-raison { font-size: 12px; line-height: 1.35; }
+  .sup-raison.niv-attention { color: #e8d27a; }
+  .sup-raison.niv-panne { color: #ff9aa5; }
+  .sup-raison.niv-inconnu { color: #b9b9c8; }
+  .sup-raison b { font-weight: 600; }
+  .sup-details { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 7px;
+    display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11.5px; }
+  .sup-details[hidden] { display: none; }
+  .sup-details .sup-bloc b { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
 <header>
   <h1>🎧 Music News Radar <small id="count"></small></h1>
+  <section id="supervision" class="supervision niv-inconnu" aria-live="polite">
+    <div class="sup-tete">
+      <span class="sup-global" id="sup-global">Supervision…</span>
+      <span class="sup-releve" id="sup-releve"></span>
+      <button class="sup-plier" id="sup-plier" aria-expanded="false">Détails</button>
+    </div>
+    <div class="sup-pills" id="sup-pills"></div>
+    <div class="sup-raisons" id="sup-raisons"></div>
+    <div class="sup-details" id="sup-details" hidden></div>
+  </section>
   <div class="bar">
     <button class="chip on" data-preset="fresh">🔎 À traiter</button>
     <button class="chip" data-preset="digest">📰 Pertinents (≥60)</button>
@@ -451,6 +507,7 @@ async function loadSourcesPanel() {
       <div class="grow">
         <div class="nm"></div>
         <div class="u"></div>
+        <div class="sante"></div>
       </div>
       <span class="tag">${s.type}</span>
       ${s.genre ? `<span class="tag">${s.genre}</span>` : ""}
@@ -466,6 +523,16 @@ async function loadSourcesPanel() {
       <button class="toggle">${s.active ? "⏸ Désactiver" : "▶ Activer"}</button>`;
     row.querySelector(".nm").textContent = s.name;
     row.querySelector(".u").textContent = s.url;
+    // La raison en clair, adjacente : jamais un etat de sante en infobulle.
+    const sante = row.querySelector(".sante");
+    if (s.last_error) {
+      sante.classList.add("ko");
+      sante.textContent = `⚠ ${fmtDate(s.last_error_at)} — ${s.last_error}`;
+    } else if (s.last_ok_at) {
+      sante.textContent = `✓ lue ${fmtDate(s.last_ok_at)}`;
+    } else {
+      sante.textContent = "jamais lue avec succès";
+    }
     const catSel = row.querySelector(".categorie");
     catSel.value = s.categorie || "";
     catSel.onchange = async () => {
@@ -1251,6 +1318,101 @@ async function loadEventsPanel() {
   }
 }
 
+// --- Bandeau de supervision ---------------------------------------------
+// « La machine tourne-t-elle, et qu'a-t-elle fait en mon nom ? » Une seule
+// requete (GET /supervision), aucun appel paye, aucun appel reseau vers Meta ni
+// Anthropic : tout est deja ecrit en base et dans les fichiers d'etat.
+//
+// REGLE QUI GOUVERNE CE CODE : une valeur qu'on n'a pas pu lire s'affiche
+// INCONNUE, jamais « tout va bien ». Donc aucun defaut vert nulle part -- le
+// bandeau part en `inconnu`, une requete en echec le laisse en `inconnu` avec sa
+// raison, et le niveau global vient du serveur (jamais recalcule ici, ou un
+// `|| "ok"` bien intentionne le casserait).
+const SUP_ICONES = { ok: "✅", attention: "⚠️", panne: "⛔", inconnu: "❔" };
+const SUP_GLOBAL = {
+  ok: "✅ Tout tourne",
+  attention: "⚠️ À regarder",
+  panne: "⛔ Panne en cours",
+  inconnu: "❔ État inconnu",
+};
+let supDetailsOuverts = false;
+
+document.getElementById("sup-plier").onclick = () => {
+  supDetailsOuverts = !supDetailsOuverts;
+  const zone = document.getElementById("sup-details");
+  zone.hidden = !supDetailsOuverts;
+  document.getElementById("sup-plier").setAttribute("aria-expanded", String(supDetailsOuverts));
+};
+
+function supInconnu(raison) {
+  return {
+    niveau: "inconnu",
+    releve_le: null,
+    voyants: [{ cle: "supervision", libelle: "Supervision", niveau: "inconnu", valeur: "?", raison, details: [] }],
+  };
+}
+
+function rendreSupervision(etat) {
+  const bandeau = document.getElementById("supervision");
+  const niveau = SUP_ICONES[etat.niveau] ? etat.niveau : "inconnu";
+  bandeau.className = "supervision niv-" + niveau;
+  document.getElementById("sup-global").textContent = SUP_GLOBAL[niveau];
+  document.getElementById("sup-releve").textContent = etat.releve_le
+    ? "relevé " + fmtDate(etat.releve_le)
+    : "relevé : inconnu";
+
+  const voyants = Array.isArray(etat.voyants) ? etat.voyants : [];
+  const pills = document.getElementById("sup-pills");
+  pills.innerHTML = "";
+  for (const v of voyants) {
+    const niv = SUP_ICONES[v.niveau] ? v.niveau : "inconnu";
+    const pill = document.createElement("span");
+    pill.className = "sup-pill niv-" + niv;
+    pill.innerHTML = `${SUP_ICONES[niv]} <b></b> <span></span>`;
+    pill.querySelector("b").textContent = v.libelle;
+    pill.querySelector("span").textContent = v.valeur;
+    pills.appendChild(pill);
+  }
+
+  // Les raisons des voyants qui ne sont pas au vert : visibles, pas en infobulle.
+  const raisons = document.getElementById("sup-raisons");
+  raisons.innerHTML = "";
+  for (const v of voyants) {
+    if (v.niveau === "ok" || !v.raison) continue;
+    const niv = SUP_ICONES[v.niveau] ? v.niveau : "inconnu";
+    const ligne = document.createElement("div");
+    ligne.className = "sup-raison niv-" + niv;
+    ligne.innerHTML = `${SUP_ICONES[niv]} <b></b> — <span></span>`;
+    ligne.querySelector("b").textContent = v.libelle;
+    ligne.querySelector("span").textContent = v.raison;
+    raisons.appendChild(ligne);
+  }
+
+  const details = document.getElementById("sup-details");
+  details.innerHTML = "";
+  for (const v of voyants) {
+    if (!Array.isArray(v.details) || !v.details.length) continue;
+    const bloc = document.createElement("div");
+    bloc.className = "sup-bloc";
+    bloc.innerHTML = "<b></b>";
+    bloc.querySelector("b").textContent = v.libelle + " : ";
+    bloc.appendChild(document.createTextNode(v.details.join(" · ")));
+    details.appendChild(bloc);
+  }
+  details.hidden = !supDetailsOuverts;
+}
+
+async function chargerSupervision() {
+  try {
+    const reponse = await fetch("/supervision");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    rendreSupervision(await reponse.json());
+  } catch (erreur) {
+    rendreSupervision(supInconnu(
+      "supervision injoignable (" + erreur.message + ") : rien ne dit que la machine tourne."));
+  }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1267,6 +1429,11 @@ function escapeHtml(str) {
   }
   load();
 })();
+
+chargerSupervision();
+// Le bandeau vit sa vie : il doit rester vrai meme quand l'utilisateur laisse
+// l'onglet ouvert toute la journee sur un panneau.
+setInterval(chargerSupervision, 60000);
 </script>
 </body>
 </html>

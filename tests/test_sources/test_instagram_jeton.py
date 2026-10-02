@@ -180,3 +180,39 @@ def test_le_module_n_utilise_jamais_le_jeton_de_publication(jeton, monkeypatch):
     http = FauxHttp(corps=_debug(0))
     module.expiration_jeton_sourcing(http=http)
     assert "IGAA-publication" not in json.dumps(http.appels)
+
+
+# --- consignation de l'echeance (pour le bandeau de supervision) ---
+
+def test_l_echeance_est_consignee_meme_sans_alerte(jeton):
+    """Le bandeau de supervision ne doit RIEN couter : il ne peut donc pas
+    appeler `debug_token` lui-meme. Le passage horaire l'appelle de toute facon
+    -- il consigne donc l'echeance, loin de l'echeance comme pres d'elle."""
+    expire = MAINTENANT + dt.timedelta(days=42)
+    notifications = []
+    assert _surveiller(FauxHttp(corps=_debug(int(expire.timestamp()))), notifications) is None
+    assert notifications == []
+    etat = json.loads((settings.meta_token_path.parent / FICHIER_ALERTE).read_text())
+    assert dt.datetime.fromisoformat(etat["expire_le"]) == expire
+    assert dt.datetime.fromisoformat(etat["releve_le"]) == MAINTENANT
+
+
+def test_consigner_l_echeance_n_ecrase_pas_la_date_d_alerte(jeton):
+    """Sinon la discipline « une notification par jour » sauterait a chaque
+    passage horaire."""
+    proche = int((MAINTENANT + dt.timedelta(days=2)).timestamp())
+    notifications = []
+    _surveiller(FauxHttp(corps=_debug(proche)), notifications)
+    _surveiller(FauxHttp(corps=_debug(proche)), notifications, MAINTENANT + dt.timedelta(hours=1))
+    assert len(notifications) == 1
+    etat = json.loads((settings.meta_token_path.parent / FICHIER_ALERTE).read_text())
+    assert etat["alerte_envoyee_le"] == MAINTENANT.date().isoformat()
+    assert "expire_le" in etat
+
+
+def test_une_panne_reseau_ne_consigne_aucune_echeance(jeton):
+    """Ne pas savoir ne doit jamais s'ecrire comme un fait : le bandeau dirait
+    « expire dans 42 jours » sur une valeur perimee."""
+    chemin = settings.meta_token_path.parent / FICHIER_ALERTE
+    _surveiller(FauxHttp(exc=ConnectionError("boom")), [])
+    assert not chemin.exists()
