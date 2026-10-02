@@ -376,6 +376,11 @@ jamais touchés.
   `uv run python -m scripts.marquer_doublon_manuel --article-a ID --article-b ID
   (--different|--meme-actu) --raison "..."` — voir « Dédup à deux étages » pour
   pourquoi effacer `duplicate_of_id`/`file_exclu_raison` seul ne suffit pas.
+- Délier les articles devenus LEUR PROPRE doublon (3 lignes mesurées en
+  production le 2026-10-02) : `uv run python -m
+  scripts.reparer_doublons_reflexifs [--apply]` (sans `--apply` : le plan ;
+  idempotent ; les notes ne sont jamais touchées) — voir « Dédup à deux
+  étages » pour la cause et les deux gardes qui l'empêchent de revenir.
 
 ## Veille rapide (`app/pipeline/veille.py`, `scripts/run_veille.py`)
 
@@ -1639,6 +1644,57 @@ verrouillent aux quatre etages (agregation, lecteurs, enveloppe, JS).
 pastilles — jamais seulement dans un `title`. Les details (un bloc par voyant)
 sont derriere « Details ».
 
+**Le voyant « composition » criait au loup, et c'est la faute la plus grave
+qu'un bandeau puisse commettre** (2026-10-02). Il affichait « 4 article(s)
+attendent une note depuis plus de 2 h alors que chaque passage horaire note
+tout : scoring interrompu » **pendant que** le passage precedent notait 57
+articles sans une seule erreur. Les quatre etaient d'anciens DOUBLONS — un
+doublon n'est jamais note, c'est l'economie que `link_duplicates` existe pour
+faire — dont le representant venait d'etre PURGE : `articles.duplicate_of_id`
+est `ON DELETE SET NULL`, donc la purge les a rendus notables **apres** le
+scoring du meme passage. Leur `fetched_at` avait 24 h, leur attente reelle
+quelques minutes, et le passage suivant les a notes. Verifie sur les quatre :
+tous portaient une `event_observations` creee par `cluster.lier`, donc tous
+avaient bien ete lies.
+
+`fetched_at` n'est donc PAS la date a laquelle un article est devenu notable, et
+rien dans le schema ne la date — ce qui ne vaut pas une colonne. Le voyant
+mesure desormais la PREUVE au lieu de la duree
+(`articles_jamais_atteints_par_le_scoring`) : `score_pending` sert les articles
+notables par `fetched_at` CROISSANT et **sans limite** au passage horaire, donc
+un article note a T prouve que le scoring a tourne apres T, et qu'il aurait
+servi avant lui tout article notable plus ancien. On ne compte que les articles
+sans note dont le `fetched_at` depasse STRICTEMENT le dernier `fetched_at` deja
+note. Rien de note du tout = aucun repere = on compte tout (regle 1 du module :
+le doute ne se degrade jamais en vert). Faux negatif ASSUME : `run_veille` note
+au plus 20 articles toutes les 5 min, donc un arriere peut faire avancer le
+repere au-dela d'articles encore en attente — le passage horaire le resorbe dans
+l'heure, et un trou d'une heure vaut mieux qu'un faux positif permanent, qui
+apprend a ignorer le bandeau.
+
+**Et un article LEUR PROPRE doublon, lui, est reellement bloque** (meme jour,
+voir « Dedup a deux etages ») : il est compte a part
+(`articles_leur_propre_doublon`), **sans** le filtre `duplicate_of_id IS NULL`
+qui le rendait invisible, avec son propre message et la commande de reparation —
+dire « scoring interrompu » sur ce cas serait un autre message faux. Il figure
+TOUJOURS dans les details, meme quand une branche plus grave prend le titre :
+une corruption ne doit pas etre masquee par une panne passagere.
+
+**Deux populations mal cadrees restent CONNUES et non corrigees** (relevees le
+2026-10-02, hors perimetre du correctif ci-dessus) :
+- `voyant_creneaux` compte comme « en echec » un creneau en `ECHEC` dont
+  l'erreur est `RAISON_RECLAMATION` — or `app/api/posts.py` traite
+  deliberement ce meme etat comme « Publication en cours » tant que
+  `publier_a` est a moins de 20 min. Pendant les quelques minutes d'une
+  publication en vol, le bandeau annonce donc un echec qui n'en est pas un.
+  L'information pour les distinguer existe (`RECLAMATION_EN_COURS`).
+- `voyant_passage` ecrit « N source(s) en erreur **au dernier passage** », alors
+  que `sources.state.last_error` n'est PAS vieilli : une source qui n'a pas ete
+  APPELEE (pause de quota Graph) garde son erreur — c'est voulu cote pipeline
+  (« effacer l'ancienne trace ferait oublier une source reellement morte »),
+  mais la phrase, elle, est fausse. `last_error_at` est deja ecrit par
+  `app/pipeline/health.py` et n'est lu par personne.
+
 **Un endpoint dedie** plutot que cinq schemas elargis : la question est
 transversale, le niveau global doit se calculer a UN endroit (une regle negative
 repartie sur cinq vues n'est verrouillable nulle part), et le bandeau se
@@ -2237,6 +2293,62 @@ cover part sur l'image de secours du gabarit.
      — or un représentant d'archive est toujours `USED`, donc verrouillé
      (`representant_engage`). Un groupe rattaché à l'archive ne change donc
      jamais de tête par ce chemin.
+
+   **Et cet aplatissement a fabriqué des articles LEUR PROPRE doublon**
+   (2026-10-02). Mesure en production : sur 662 articles, 59 portaient un lien
+   de doublon et **3 pointaient sur leur propre `id`** (21627 MBW, 21709
+   Mixmag (IG), 21599 Billboard). Le journal donne la mécanique en deux lignes
+   consécutives du MÊME passage : « Sia sells 50% » (21627) rattaché à « Sia
+   has sold a 50% stake » (21942), puis 21942 rattaché à 21627. Les deux SENS
+   du même lien ont été posés dans un seul passage ; le second `lier` a alors
+   fait exactement ce que l'aplatissement lui demande — repointer vers la
+   cible finale tout article qui pointait vers l'article qu'on vient de lier —
+   sauf que cette cible finale ÉTAIT l'article repointé.
+
+   Comment les deux sens peuvent être posés dans un seul passage : un article
+   DIFFÉRÉ en passe 1 est ajouté à `representatives` (pour ne pas se faire
+   usurper sa place) **et** il est RE-TRAITÉ en passe 2. Deux différés qui se
+   répondent se lient donc l'un à l'autre.
+
+   Le dégât est SILENCIEUX et coûte de l'actualité : un article réflexif se
+   présente comme un doublon, donc `score_pending` (qui filtre
+   `duplicate_of_id IS NULL`) ne le note jamais et
+   `store._articles_publiables` ne le propose jamais. L'article 21599
+   attendait depuis 28 h sans note et n'en aurait jamais eu — il aurait
+   disparu à la purge sans que rien ne le dise.
+
+   **Deux gardes, dont une seule suffirait mais pas aux mêmes conditions.**
+   La PRINCIPALE est dans `resoudre`, là où l'information existe : un candidat
+   dont `duplicate_of_id` n'est plus `None` **n'est plus un représentant**, on
+   le saute. L'état mutuel ne se forme donc jamais, la bonne réponse est
+   rendue (le groupe existe déjà avec l'autre à sa tête), et plus aucun
+   arbitrage n'est payé pour une paire dont un côté n'est plus représentant.
+   La CEINTURE est au point d'écriture : `cibles_a_repointer` retire le
+   représentant lui-même de la liste à repointer, donc `lier` ne peut pas
+   écrire `x.duplicate_of_id = x.id`. Preuve par mutation
+   (`tests/test_cluster_reflexif.py`) : les deux gardes retirées, le lien
+   réflexif se reforme à l'identique ; la seule garde de `resoudre` retirée,
+   il reste un CYCLE à deux (chacun se présente comme un doublon, donc l'actu
+   disparaît tout entière) ; la seule ceinture retirée, le test unitaire de
+   `cibles_a_repointer` rougit.
+
+   Pas de contrainte `CHECK (duplicate_of_id <> id)` en base, et c'est un
+   choix : elle serait la garantie la plus forte, mais la migration échouerait
+   tant que les 3 lignes de production ne sont pas réparées, et un chemin non
+   prévu ferait tomber le passage horaire entier au lieu de perdre un article.
+
+   Réparer les lignes DÉJÀ en base (le correctif ne les touche pas) :
+   `uv run python -m scripts.reparer_doublons_reflexifs [--apply]` — plan sans
+   `--apply`, idempotent. Il efface le SEUL lien fautif : les notes ne sont
+   jamais touchées (21627 garde son 45, 21709 son 65 ; 21599, jamais noté,
+   sera noté par le passage suivant puisqu'il redevient notable), et
+   `file_exclu_raison` n'est effacée que si la dédup l'a posée
+   (`raison_de_doublon`, même filtre que l'auto-réparation d'un verdict
+   manuel). AUCUN verdict manuel n'est posé : la paire n'a jamais été un faux
+   rapprochement, c'est l'ÉCRITURE du lien qui était fautive — un
+   « différent » interdirait pour toujours un lien légitime. Le bandeau de
+   supervision compte désormais ces articles à part (voir « Bandeau de
+   supervision »).
 
    **La bande douteuse FRAÎCHE aussi** (Phase 2B, Task 3, 2026-09-24). La
    même machinerie — cache par paire, verdicts manuels prioritaires, plafond
