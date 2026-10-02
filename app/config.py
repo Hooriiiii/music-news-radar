@@ -709,11 +709,18 @@ class Settings(BaseSettings):
     # media_publish. Un intervalle de l'agent (600 s) plus une marge : sinon un
     # post pouvait partir jusqu'a 10 minutes apres l'heure du dashboard.
     publication_avance_s: int = 660
-    # Un tunnel rapide met parfois plus de 90 s a etre visible du DNS public. Un
-    # essai = un tunnel entier (nouveau sous-domaine a chaque lancement), budget
-    # de DELAI_JOIGNABLE_S chacun : trois essais bornent l'attente a ~4,5 min,
-    # bien en deca des 90 minutes de retard tolere.
+    # Nombre maximal de tunnels LANCES pour une publication. Ce n'est plus un
+    # nombre d'attentes de 90 s : depuis le 2026-10-02 on patiente longuement sur
+    # UN sous-domaine (hosting.DELAI_JOIGNABLE_S) et on ne relance que ce qui le
+    # merite (tunnel jamais demarre, ou sous-domaine resolu qui ne rend pas 200) --
+    # la propagation DNS mesuree (16 a 66 s) rendait chaque reessai contre-productif.
+    # Le plafond borne la lecture d'URL (DELAI_URL_S) comme avant.
     publication_tunnel_essais: int = 3
+    # Budget TOTAL de patience, toutes tentatives confondues : 3 x 90 s, c'est-a-dire
+    # exactement l'ancienne borne (~4,5 min), bien en deca des 90 minutes de retard
+    # tolere (publication_retard_max_minutes). Ne pas l'augmenter : c'est lui qui
+    # garantit qu'un passage ne mange pas le creneau suivant.
+    publication_tunnel_budget_s: int = 270
 
     # --- Reels automatiques (en plus des carrousels) ---
     # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =

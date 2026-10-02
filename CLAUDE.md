@@ -1334,14 +1334,44 @@ seulement, un mini-serveur local sert le dossier du post (sans listing) et un tu
 rapide `cloudflared` l'expose ; tout est fermé après `media_publish`. Le dashboard
 n'est jamais exposé. `cloudflared` est cherché hors du PATH de launchd, comme ffmpeg.
 
-**Un tunnel rapide est parfois lent à être visible** (deux publications refusées en
-14 h le 2026-09-18, alors qu'un essai isolé juste après répondait en 14,7 s).
-`heberger` fait donc jusqu'à `publication_tunnel_essais` (3) essais : un essai = un
-tunnel ENTIER, budget `DELAI_JOIGNABLE_S` (90 s) chacun — un quick tunnel reçoit un
+**Un tunnel rapide est parfois lent à être visible, et on PATIENTE plutôt qu'on
+ne recommence** (2026-10-02 ; la stratégie d'avant faisait trois essais de 90 s,
+chacun un tunnel ENTIER). Le raisonnement d'origine — « un quick tunnel reçoit un
 nouveau sous-domaine à chaque lancement, attendre plus longtemps sur celui qui ne
-répond pas n'a aucun sens. L'essai perdu est tué par GROUPE de processus
-(`start_new_session`), le serveur local vit pour tout le `with`. Total borné à ~4,5 min.
-Épuisés, ils lèvent `TunnelInjoignable` (sous-classe de `HebergementIndisponible`).
+répond pas n'a aucun sens » — est contredit par la mesure : l'attente est une
+**propagation DNS** (16 à 66 s, n=5, mesuré en direct), pas une panne. Chaque
+reprise jetait donc un sous-domaine probablement sur le point d'être visible et
+remettait le compteur à zéro, sur une cause qui est devenue la PREMIÈRE du
+tableau des créneaux manqués (11 des 19 manques des cinq derniers jours, 57
+échecs sur 57 avant 16:00 UTC).
+
+`heberger` attend donc `DELAI_JOIGNABLE_S` (**180 s**, soit 2,7 × la pire
+propagation mesurée) sur **UN** sous-domaine, et ne relance que ce qui le
+mérite :
+- le tunnel n'a **jamais démarré** (cloudflared mort au lancement, aucune URL) —
+  il n'y a aucune adresse dont attendre la visibilité, et le budget de patience
+  n'a rien payé ;
+- le sous-domaine est **résolu mais ne rend jamais 200** (`dns_resolu`, l'autre
+  moitié de la panne que le correctif du message avait séparée) — patienter ne
+  guérit ni cloudflared ni le serveur local, un tunnel neuf peut.
+
+Quand le DNS public n'a **jamais** vu le sous-domaine, la patience ÉTAIT le
+remède et elle a été épuisée : on abandonne le passage plutôt que d'offrir à un
+sous-domaine neuf un reste de budget trop court pour sa propre propagation — le
+runner retente dix minutes plus tard, sans exclure l'article.
+`cloudflared` introuvable (`CloudflaredIntrouvable`) remonte immédiatement :
+trois relancements ne l'installeraient pas.
+
+**Borne totale INCHANGÉE**, et c'est elle qui protège la limite des 90 minutes de
+retard : `publication_tunnel_budget_s` (**270 s** = les anciens 3 × 90) plafonne
+la SOMME des attentes, et `publication_tunnel_essais` (3) plafonne le nombre de
+tunnels lancés, donc la lecture d'URL (`DELAI_URL_S`) comme avant. Première
+tentative 180 s, relance éventuelle 90 s — exactement une ancienne fenêtre. Un
+test-sentinelle (`tests/test_publish_hosting.py::
+test_le_budget_total_de_patience_n_augmente_pas`) échoue si quelqu'un allonge une
+attente « juste un peu ». L'essai perdu est tué par GROUPE de processus
+(`start_new_session`), le serveur local vit pour tout le `with`. Épuisés, ils
+lèvent `TunnelInjoignable` (sous-classe de `HebergementIndisponible`).
 
 **Un tunnel injoignable n'exclut PAS l'article.** C'est une panne machine, la classe
 que la règle d'exclusion épargne. Rien n'est parti chez Meta : le conteneur n'est créé
@@ -1529,15 +1559,14 @@ depuis la base seule et ont donc ete reparees :
    temps du MUR (la boucle ne comptait que ses sommeils, donc « 90 s » n'etait
    pas la duree ecoulee) et `heberger` le transporte jusqu'a `creneaux.erreur`.
 
-**Ce qui n'a PAS ete touche, et pourquoi.** Le budget du tunnel reste a 3 essais
-de 90 s. Mesure en direct le 2026-10-02 : la propagation DNS d'un sous-domaine
-`trycloudflare` frais prend **16 a 66 s** (n=5), soit jusqu'a 73 % du budget —
-une marge mince, et le fait que chaque reessai ouvre un NOUVEAU sous-domaine
-repart de zero plutot que de profiter de la propagation en cours. Mais le regime
-en panne n'a pas pu etre reproduit, donc rien ne prouve qu'un budget plus long
-l'aurait franchi : c'est le correctif 2 qui dira, au prochain episode, laquelle
-des deux moities echoue. On ne change pas un parametre de publication sur une
-hypothese.
+**La STRATEGIE de reprise, elle, a ete corrigee le jour meme** (voir « Un tunnel
+rapide est parfois lent a etre visible » plus haut). Le diagnostic laissait le
+budget a 3 essais de 90 s, faute de pouvoir reproduire le regime en panne ; mais
+la mesure de propagation (**16 a 66 s**, n=5, jusqu'a 73 % du budget) suffit a
+condamner la REPRISE elle-meme, independamment du budget : ce qu'on attend est une
+propagation, et redemarrer jette un sous-domaine presque visible pour repartir de
+zero. A budget total INCHANGE (270 s), on patiente donc 180 s sur un seul
+sous-domaine et on ne relance que les pannes ou patienter n'est pas le remede.
 
 **Une observation a surveiller, deliberement non corrigee** : un post qui echoue
 est recompose sur le creneau suivant, et le post 140 a ainsi consomme **six
