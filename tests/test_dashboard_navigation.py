@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import test_dashboard_marque as marque
+
 DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
 PAGE = DASHBOARD.read_text(encoding="utf-8")
 
@@ -353,6 +355,12 @@ def test_les_filtres_reviennent_sur_la_grille():
 # --- 3) La hierarchie d'une ligne de creneau --------------------------------
 
 
+def _rgb(hexa: str) -> str:
+    """Le format que `getComputedStyle` rend."""
+    h = hexa.lstrip("#")
+    return "rgb({}, {}, {})".format(*(int(h[i : i + 2], 16) for i in (0, 2, 4)))
+
+
 @chromium_absent
 def test_la_ligne_de_creneau_hierarchise_heure_titre_et_panne():
     for largeur, m in _mesurer(PAGE).items():
@@ -367,7 +375,21 @@ def test_la_ligne_de_creneau_hierarchise_heure_titre_et_panne():
         # pleine largeur, dans le rouge d'alerte deja en service.
         assert m["alerte"]["visible"], (largeur, m["alerte"])
         assert "90 min de retard" in m["alerte"]["texte"], (largeur, m["alerte"])
-        assert m["alerte"]["couleur"] == "rgb(255, 138, 138)", (largeur, m["alerte"])
+        # Le rouge n'est plus EPINGLE a un triplet : la charte Kinda a ramene
+        # les alertes a la teinte rouge pure pour qu'on ne les confonde pas
+        # avec le rose d'accent (voir `tests/test_dashboard_marque.py`), et un
+        # literal aurait rougi ici pour une amelioration. Ce qu'on verifie est
+        # l'INTENTION : c'est bien le jeton d'alerte, c'est bien du rouge, et
+        # il reste lisible sur son fond.
+        assert m["alerte"]["couleur"] == _rgb(marque.jetons()["--alerte"]), (
+            largeur,
+            m["alerte"],
+        )
+        teinte = marque.teinte(marque.jetons()["--alerte"])
+        assert teinte <= 20 or teinte >= 345, (largeur, teinte)
+        assert marque.contraste(
+            marque.jetons()["--alerte"], marque.jetons()["--alerte-fond"]
+        ) >= 4.5
         assert m["alerte"]["largeur"] >= 0.95 * m["alerte"]["ligne"], (largeur, m["alerte"])
 
 
