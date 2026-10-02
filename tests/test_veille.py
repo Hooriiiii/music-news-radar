@@ -38,7 +38,13 @@ from app.sources.instagram import (
     comptes_surveilles,
 )
 
-T0 = dt.datetime(2026, 9, 18, 10, 0, tzinfo=dt.timezone.utc)
+# Une heure RONDE et RÉCENTE, jamais une date figée : `retention_days` vaut 2,
+# donc un article daté d'un 18 septembre en dur sort de la fenêtre dès que le
+# calendrier avance — l'item d'essai est alors sauté à l'ingestion, `nouveaux`
+# tombe à 0 et le test vire au rouge tout seul, sans qu'une ligne de code ait
+# bougé. C'est arrivé DEUX fois sur ce dépôt (2026-09-30 sur le test de
+# non-régression des événements, 2026-10-02 ici et sur le verrou de `run_veille`).
+T0 = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0) - dt.timedelta(hours=1)
 
 
 @pytest.fixture(autouse=True)
