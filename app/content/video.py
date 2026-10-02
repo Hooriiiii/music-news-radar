@@ -26,6 +26,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 # Specifications Reels. La resolution est la seule chose qu'Instagram n'ajustera
@@ -44,6 +46,7 @@ FLOU = 40
 # qu'une frame unique peut ne pas survivre -- si c'est le cas, augmenter ici.
 FRAMES_COVER = 1
 DELAI_MAX_S = 300
+MO = 1024 * 1024
 
 
 class AssemblageIndisponible(RuntimeError):
@@ -187,7 +190,8 @@ def _filtre(frames_cover: int, source_a_audio: bool) -> str:
 
 
 def assembler_reel(
-    cover_png: bytes, video: bytes, frames_cover: int = FRAMES_COVER
+    cover_png: bytes, video: bytes, frames_cover: int = FRAMES_COVER,
+    *, poids_max: int | None = None,
 ) -> bytes:
     """Cover + video -> un MP4 1080x1920 pret a publier."""
     ffmpeg = _exiger_ffmpeg("ffmpeg")
@@ -201,36 +205,156 @@ def assembler_reel(
         (base / "source.mp4").write_bytes(video)
         sortie = base / "reel.mp4"
 
-        commande = [
-            ffmpeg, "-y",
-            "-loop", "1", "-i", str(base / "cover.png"),
-            "-i", str(base / "source.mp4"),
-            # Deux silences : l'un pour la cover, l'autre melange a la source
-            # pour lui GARANTIR une piste meme quand elle n'en a pas.
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-filter_complex", _filtre(frames_cover, source_a_audio),
-            "-map", "[v]", "-map", "[a]",
-            *ENCODAGE_META,
-            str(sortie),
+        def commande(encodage: tuple[str, ...]) -> list[str]:
+            return [
+                ffmpeg, "-y",
+                "-loop", "1", "-i", str(base / "cover.png"),
+                "-i", str(base / "source.mp4"),
+                # Deux silences : l'un pour la cover, l'autre melange a la source
+                # pour lui GARANTIR une piste meme quand elle n'en a pas.
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-filter_complex", _filtre(frames_cover, source_a_audio),
+                "-map", "[v]", "-map", "[a]",
+                *encodage,
+                str(sortie),
+            ]
+
+        return _encoder_sous_plafond(commande, sortie, poids_max)
+
+
+def encodage_meta(*, debit_kbit: int | None = None) -> tuple[str, ...]:
+    """Les flags d'encodage communs au reel et a la video de carrousel.
+
+    La QUALITE est un reglage (`app/config.py`), pas une constante enfouie :
+    sans `-crf`, x264 appliquait son defaut de distribution web (23), que
+    personne n'avait choisi. Le raisonnement et la mesure sont dans la config,
+    a cote des valeurs.
+
+    `debit_kbit` n'est passe que par la REPRISE du garde-fou de poids (voir
+    `_encoder_sous_plafond`), et il REMPLACE alors le crf par un debit MOYEN
+    vise. Le cas nominal ne le voit jamais.
+
+    Pourquoi un debit moyen et non un « capped CRF » (crf + `-maxrate`), qui
+    aurait garde la qualite pilotee par le crf : mesure du 2026-10-02 sur du
+    bruit, le test `test_le_garde_fou_tient_sur_une_vraie_video_incompressible`
+    l'a attrape. Le VBV borne une FENETRE de `bufsize` bits, pas le fichier ;
+    sur une video COURTE, cette fenetre couvre tout le fichier et ne contraint
+    plus rien -- sortie de 22,7 Mo pour un plafond de 16,6 Mo. `-b:v` vise la
+    moyenne sur TOUTE la duree, ce qui est exactement la question posee (« tenir
+    sous N octets »), et `-maxrate`/`-bufsize` au meme debit empechent en plus un
+    pic local de manger le budget.
+    """
+    flags = ["-c:v", "libx264", "-preset", settings.encodage_preset]
+    if debit_kbit is None:
+        flags += ["-crf", str(settings.encodage_crf)]
+    else:
+        flags += [
+            "-b:v", f"{debit_kbit}k",
+            "-maxrate", f"{debit_kbit}k",
+            "-bufsize", f"{debit_kbit}k",
         ]
-        return _executer(commande, sortie)
+    flags += [
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", settings.encodage_audio_bitrate,
+        # Borne la sortie sur le flux video : sans elle, le silence infini
+        # d'anullsrc produirait un fichier qui ne se termine jamais.
+        "-shortest",
+        # GOP ferme et pas d'edit list : deux exigences ecrites de Meta pour
+        # les reels (2026-09-17). ffmpeg ecrit une edit list par defaut pour
+        # compenser l'amorcage AAC.
+        "-flags", "+cgop",
+        "-use_editlist", "0",
+        "-movflags", "+faststart",
+    ]
+    return tuple(flags)
 
 
-# Encodage commun au reel et a la video de carrousel.
-ENCODAGE_META = (
-    "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "128k",
-    # Borne la sortie sur le flux video : sans elle, le silence infini
-    # d'anullsrc produirait un fichier qui ne se termine jamais.
-    "-shortest",
-    # GOP ferme et pas d'edit list : deux exigences ecrites de Meta pour
-    # les reels (2026-09-17). ffmpeg ecrit une edit list par defaut pour
-    # compenser l'amorcage AAC.
-    "-flags", "+cgop",
-    "-use_editlist", "0",
-    "-movflags", "+faststart",
-)
+def _kbit(bitrate: str) -> int:
+    """« 192k » -> 192. Un reglage illisible retombe sur la valeur par defaut
+    plutot que de fausser le calcul du plafond."""
+    texte = bitrate.strip().lower().removesuffix("k")
+    try:
+        return int(float(texte))
+    except ValueError:
+        logger.warning("bitrate audio illisible (%r), 192k retenu", bitrate)
+        return 192
+
+
+def debit_sous_plafond(poids_max: int, duree: float) -> int | None:
+    """Le debit VIDEO, en kbit/s, qui tient un fichier de `duree` secondes sous
+    `poids_max` octets -- audio et marge deduits.
+
+    Rend None quand la question n'a pas de sens (duree inconnue ou nulle) :
+    l'appelant garde alors la sortie telle quelle plutot que d'inventer.
+    """
+    if poids_max <= 0 or duree <= 0:
+        return None
+    total = poids_max * settings.encodage_poids_marge * 8 / duree / 1000
+    video = int(total - _kbit(settings.encodage_audio_bitrate))
+    # Le plancher, plutot que renoncer : l'alternative est l'exclusion.
+    return max(video, settings.encodage_debit_min_kbit)
+
+
+def _encoder_sous_plafond(commande, sortie: Path, poids_max: int | None) -> bytes:
+    """Encode, et REENCODE sous un debit vise si la sortie est trop lourde.
+
+    C'est le garde-fou dont la violation coute une ACTU et non une image molle :
+    au-dela de `publication_reel_max_mo`, `preparation_reel.verifier_sortie`
+    leve `PreparationImpossible`, qui exclut l'article DEFINITIVEMENT de la file
+    (voir « Exclusion » dans CLAUDE.md). Baisser le crf de 23 a 20 reduit la
+    marge ; on ne laisse donc plus ce depassement se produire en silence.
+
+    La duree est MESUREE sur la sortie, jamais deduite de l'entree : la cover
+    ajoute ses frames devant, et une source peut mentir.
+
+    Et le debit vise ne suffit pas a lui seul : mesure du 2026-10-02, sur un clip
+    court x264 DEPASSE sa consigne de ~26 % (son controle de debit ne converge
+    pas en 60 frames). On CORRIGE donc proportionnellement au depassement mesure,
+    au plus `encodage_reprises_max` fois -- un garde-fou qui se verifie plutot
+    qu'un calcul auquel on fait confiance.
+
+    Le garde-fou epuise rend quand meme la sortie : il ne remplace jamais un
+    depassement par une exception, c'est `verifier_sortie` qui tranche.
+    """
+    plafond = settings.publication_reel_max_mo * MO if poids_max is None else poids_max
+    octets = _executer(commande(encodage_meta()), sortie)
+    if plafond <= 0 or len(octets) <= plafond:
+        return octets
+    try:
+        duree = float(sonder(octets).get("duration") or 0.0)
+    except (AssemblageIndisponible, KeyError, ValueError, TypeError):
+        duree = 0.0
+    debit = debit_sous_plafond(plafond, duree)
+    if debit is None:
+        # Duree inconnue : rien a calculer. On rend la sortie telle quelle et
+        # les controles d'aval tranchent, exactement comme avant ce garde-fou.
+        logger.warning(
+            "sortie de %.0f Mo au-dessus du plafond de %.0f Mo, duree inconnue : "
+            "pas de reprise possible", len(octets) / MO, plafond / MO,
+        )
+        return octets
+    vise = plafond * settings.encodage_poids_marge
+    for essai in range(1, max(settings.encodage_reprises_max, 1) + 1):
+        logger.warning(
+            "sortie de %.1f Mo au-dessus du plafond de %.0f Mo : reencodage %d/%d "
+            "a %d kbit/s", len(octets) / MO, plafond / MO, essai,
+            settings.encodage_reprises_max, debit,
+        )
+        octets = _executer(commande(encodage_meta(debit_kbit=debit)), sortie)
+        if len(octets) <= plafond:
+            return octets
+        # Correction proportionnelle au depassement CONSTATE.
+        suivant = max(int(debit * vise / len(octets)), settings.encodage_debit_min_kbit)
+        if suivant >= debit:
+            # Plancher atteint : insister ne ferait que bruler du temps.
+            break
+        debit = suivant
+    logger.warning(
+        "garde-fou de poids epuise : %.1f Mo pour un plafond de %.0f Mo",
+        len(octets) / MO, plafond / MO,
+    )
+    return octets
 
 
 def _executer(commande: list[str], sortie: Path) -> bytes:
@@ -246,7 +370,7 @@ def _executer(commande: list[str], sortie: Path) -> bytes:
     return sortie.read_bytes()
 
 
-def transcoder_carrousel(video: bytes) -> bytes:
+def transcoder_carrousel(video: bytes, *, poids_max: int | None = None) -> bytes:
     """Une video d'actu -> un element de carrousel 1080x1350, H.264/AAC, meme
     cadrage sur fond floute que le reel, piste audio garantie (silence si muette)."""
     ffmpeg = _exiger_ffmpeg("ffmpeg")
@@ -260,13 +384,15 @@ def transcoder_carrousel(video: bytes) -> bytes:
             if source_a_audio
             else "[1:a]asetpts=PTS-STARTPTS[a]"
         )
-        commande = [
-            ffmpeg, "-y",
-            "-i", str(base / "source.mp4"),
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-filter_complex", _cadre_floute("0:v", FORMAT_CARROUSEL, "v") + audio,
-            "-map", "[v]", "-map", "[a]",
-            *ENCODAGE_META,
-            str(sortie),
-        ]
-        return _executer(commande, sortie)
+        def commande(encodage: tuple[str, ...]) -> list[str]:
+            return [
+                ffmpeg, "-y",
+                "-i", str(base / "source.mp4"),
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-filter_complex", _cadre_floute("0:v", FORMAT_CARROUSEL, "v") + audio,
+                "-map", "[v]", "-map", "[a]",
+                *encodage,
+                str(sortie),
+            ]
+
+        return _encoder_sous_plafond(commande, sortie, poids_max)
