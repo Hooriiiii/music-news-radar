@@ -180,6 +180,43 @@ def jetons_de_resume(article: Article) -> set[str]:
     return significant_tokens(texte)
 
 
+def titre_pauvre(article: Article) -> bool:
+    """Vrai si ce titre ne porte PAS assez de contenu pour identifier une actu.
+
+    Meme seuil que `events.TITRE_JETONS_MIN` (3 jetons significatifs), et
+    volontairement la MEME constante : deux seuils divergeraient a la premiere
+    evolution des mots vides. Voir `paire_sans_titre_exploitable` pour l'usage.
+    """
+    return len(significant_tokens(article.title)) < events.TITRE_JETONS_MIN
+
+
+def paire_sans_titre_exploitable(gauche: Article, droite: Article) -> bool:
+    """Vrai si NI l'un NI l'autre des deux titres ne porte de contenu.
+
+    Le garde-fou de contenu de `events._evenement_deja_observe`, transpose ici
+    (2026-10-02). Un titre qui ne porte RIEN -- « Post Instagram », « This is
+    happening.. », « IVE EP » -- ne doit jamais servir de cle d'identite : la
+    meme mesure qui a fixe `TITRE_JETONS_MIN` a 3 pour la re-ingestion vaut
+    pour cette porte, et le seuil est volontairement le MEME (une seconde
+    constante divergerait a la premiere evolution des mots vides).
+
+    Mais la condition est « NI l'un NI l'autre », jamais « l'un des deux » :
+    le cas reel du 2026-10-02 est precisement une paire dont UN cote n'a pas de
+    titre (« This is happening.. », un jeton significatif) et dont l'autre en a
+    six. Exiger les deux reperdrait le defaut qu'on corrige. Ce que ce
+    garde-fou ecarte, c'est la paire ou AUCUN des deux titres ne dit rien :
+    l'arbitre n'aurait alors que deux resumes a comparer, et la porte du resume
+    serait son SEUL rempart.
+
+    Mesure du 2026-10-02 sur les 124 paires fraiches candidates a sh >= 6 :
+    UNE SEULE est ecartee, et c'est un faux positif -- « The Mix 125: Sam
+    Girling » contre « The Mix 123: Optimo » (deux editions d'une serie, dont
+    les resumes partagent la signature « Megan Townsend speaks about club
+    moments »). Zero vrai positif touche, des deux cotes de la porte.
+    """
+    return titre_pauvre(gauche) and titre_pauvre(droite)
+
+
 @dataclass
 class ArchiveTitres:
     """Les titres archives (`event_observations`), groupes par source.

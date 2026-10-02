@@ -213,14 +213,50 @@ class Settings(BaseSettings):
     # rapprochement ordinaire entre articles frais). Un article deja PUBLIE
     # (USED) sert de representant possible pour un nouvel article au-dela de
     # cette fenetre -- lui seul, jamais l'inverse (voir `link_duplicates`).
-    # 7 jours : une reprise d'actu ressort dans la SEMAINE ; au-dela, le risque
-    # de faux positif depasse le service rendu. Un mois avait d'abord ete pose,
-    # puis ramene a la semaine apres mesure (2026-09-21) : sur un feed centre
-    # sur quelques artistes recurrents, plus la fenetre est large, plus deux
-    # actus DIFFERENTES du meme artiste ont de chances de se croiser. Cette
-    # borne sert aussi au cout : les USED ne sont jamais purges, donc sans elle
-    # la comparaison (quadratique) grandirait avec l'age du projet.
-    cluster_archive_jours: int = 7
+    # 10 jours (2026-10-02), apres avoir ete a 30 puis ramene a 7 le 2026-09-21.
+    # L'histoire de cette valeur compte, parce qu'elle se lit dans les deux sens.
+    # Le passage de 30 a 7 n'etait PAS arbitraire : sur un feed centre sur
+    # quelques artistes recurrents, plus la fenetre est large, plus deux actus
+    # DIFFERENTES du meme artiste ont de chances de se croiser -- et un faux
+    # positif d'archive est irreversible en pratique. Mais 7 a RATE un cas reel
+    # le 2026-10-02 : « Calvin Harris DJs for 1.6 million people at
+    # record-breaking Sao Paulo show » (DJ Mag, 21/09) repris par Mixmag le
+    # 30/09, soit 8,99 jours plus tard -- la paire n'etait meme pas examinee.
+    #
+    # La valeur est donc MESUREE sur `event_observations`, la seule table qui
+    # porte des ecarts au-dela de la retention de 2 jours (jamais purgee) :
+    # 298 ecarts entre la premiere source d'un evenement et chacune de ses
+    # autres sources distinctes (152 evenements a >= 2 sources), le 2026-10-02.
+    #
+    #     <= 2 j  84,9 %    <= 7 j  97,7 %    <= 9 j  100,0 %
+    #     <= 3 j  89,3 %    mediane 0,53 j    p95 5,74 j    max 8,91 j
+    #
+    # La duree de vie editoriale REELLE d'une actu s'arrete a 8,91 jours sur ces
+    # donnees. 7 couvrait 97,7 % ; 10 couvre 100 % avec un jour de marge, et
+    # c'est la plus petite valeur qui le fait. On ne revient PAS a 30 : la queue
+    # mesuree est vide entre 9 et 30 jours, donc les 20 jours de plus
+    # n'ajouteraient aucun vrai positif et rouvriraient exactement le risque qui
+    # avait fait descendre la valeur.
+    #
+    # Cout mesure du meme jour : 11 representants USED a 7 jours, 19 a 10 jours,
+    # et ZERO paire de plus dans les bandes de TITRE (certaine >= 0,8 comme
+    # douteuse >= 0,65) a n'importe quelle profondeur jusqu'a 30 jours sur ce
+    # cliche. L'elargissement ne se paie donc, aujourd'hui, que sur la porte du
+    # RESUME ci-dessous, dont le budget est borne a part.
+    #
+    # Cette borne sert aussi au cout : les USED ne sont jamais purges, donc sans
+    # elle la comparaison (quadratique) grandirait avec l'age du projet.
+    #
+    # DEUX DEPENDANTS A CONNAITRE. (1) `events._evenement_deja_observe` lit
+    # cette valeur pour sa branche URL (detection de re-ingestion) : elle passe
+    # de 7 a 10 jours, ce qui est benin -- l'identite d'URL est bien plus forte
+    # que celle du titre, et un marronnier republie des mois plus tard sort de
+    # toute facon de la fenetre. (2) `event_features.NOUVEAUTE_HORIZON_HEURES`
+    # porte 7 * 24 EN DUR et ne suit PAS : cet horizon repond a une autre
+    # question (« quelle profondeur d'archive faut-il pour oser conclure a la
+    # nouveaute ? »), calibree sur sa propre mesure -- la faire bouger ici
+    # changerait une feature de la Phase 2C par effet de bord.
+    cluster_archive_jours: int = 10
     # Seuil PROPRE a l'archive, strictement plus haut que `DEFAULT_THRESHOLD`
     # (0,65) et sur une mesure differente (`archive_similarity_from_tokens` :
     # les mots partages rapportes au titre le plus LONG, la seule facon de
@@ -317,6 +353,54 @@ class Settings(BaseSettings):
     # cher des trois. Deux budgets se bornent chacun ; un budget commun se
     # ferait manger par le plus bavard.
     cluster_arbitrage_resume_max_par_passage: int = 10
+
+    # --- La meme porte, mais CONTRE L'ARCHIVE (2026-10-02) ---
+    # Le defaut constate ce jour-la : le compte s'appretait a republier DEUX
+    # actus deja publiees, et aucune des deux n'etait rattrapable par les
+    # mesures de titre.
+    #   1. « This is happening.. » (Charlotte de Witte, son propre compte,
+    #      publie le 29/09) contre « Charlotte de Witte and KI/KI announce
+    #      first-ever b2b set at Flanders Expo » (DJ Mag) : ZERO mot de titre
+    #      en commun, donc 0,00 aux deux mesures. Les RESUMES, eux, partagent
+    #      six mots (belgique, charlotte, expo, flanders, premier, witte).
+    #   2. « Calvin Harris DJs for 1.6 million people... » (DJ Mag, 21/09)
+    #      contre « Calvin Harris sets Guinness World Record... » (Mixmag,
+    #      30/09) : similarite d'archive 0,25, recouvrement 0,29, et CINQ mots
+    #      de resume partages (calvin, grand/million, harris, public, record).
+    # La porte sur le resume les attrapait tous les deux -- elle ne regardait
+    # simplement jamais l'archive. C'est l'extension que le module documentait
+    # comme « possible, a mesurer d'abord » ; la voila mesuree, en production.
+    # Coupe-circuit propre, comme les deux bandes precedentes : a false, aucune
+    # paire d'archive n'est candidate par son resume et le pipeline rend
+    # EXACTEMENT les decisions d'avant.
+    cluster_arbitrage_resume_archive_enabled: bool = True
+    # CINQ mots partages, et pas les six de la bande fraiche : le cas 2 ci-dessus
+    # est a cinq. Baisser le seuil ne pose aucun lien a tort -- c'est l'arbitre
+    # qui tranche, et contre l'archive il tranche TOUJOURS (il n'existe aucune
+    # bande « certaine » sur le resume) -- cela paie seulement des appels.
+    # Mesure du 2026-10-02 (592 articles frais x les representants USED de la
+    # fenetre, paires que les bandes de titre n'ont pas deja prises) :
+    #
+    #     fenetre   sh>=4   sh>=5   sh>=6   sh>=7
+    #        7 j      3       2       2       2
+    #       10 j     12       6       3       3
+    #       14 j     16       9       4       4
+    #
+    # A 10 jours et sh >= 5 : SIX paires, dont les TROIS vrais positifs connus
+    # (les deux cas ci-dessus, plus le meme record de Calvin Harris vu depuis
+    # son propre compte) ; les trois autres sont des annonces d'albums
+    # d'artistes differents qu'un arbitre ecarte sur les seuls titres. Descendre
+    # a 4 doublerait le nombre de paires sans ajouter un seul vrai positif
+    # mesure. Monter a 6 reperdrait le cas 2.
+    cluster_arbitrage_resume_archive_seuil: int = 5
+    # TROISIEME budget, et pour la meme raison qui en avait fait un second :
+    # l'archive est la seule bande dont un faux NEGATIF reposte une actu DEJA
+    # PUBLIEE. Un budget commun avec la porte fraiche (qui peut presenter des
+    # dizaines de paires au premier passage sur une fenetre pleine) la ferait
+    # affamer par le plus bavard des deux. Six paires mesurees au premier
+    # passage, et chacune n'est payee QU'UNE FOIS (cache par paire) : 10 est
+    # large.
+    cluster_arbitrage_resume_archive_max_par_passage: int = 10
     # --- Garde-fou de RECURRENCE (meme chantier) ---
     # Une PUBLICATION RECURRENTE (« Billboard Hot 100 Top 10 Countdown for
     # Sept. 26, 2026 ») raconte les memes faits qu'une vraie actu sans en etre

@@ -234,6 +234,15 @@ class ClusterStats:
     # PUBLICATION RECURRENTE de sa source (le « Billboard Hot 100 Top 10
     # Countdown » hebdomadaire). Comptees une fois par paire.
     recurrences_ecartees: int = 0
+    # Sous-ensemble d'`archive` : lien pose par la PORTE SUR LE RESUME contre
+    # un article DEJA PUBLIE (2026-10-02). Compte a part de `resumes_arbitres`
+    # (frais) comme de `arbitres` (bande douteuse de titre) : c'est le seul des
+    # trois dont un faux positif enterre une actu neuve sous une archive
+    # publiee, et le seul dont un faux negatif republie une actu deja postee.
+    resumes_archive_arbitres: int = 0
+    # Paires ecartees SANS rien payer parce qu'AUCUN des deux titres ne porte de
+    # contenu (`cluster_resume.paire_sans_titre_exploitable`). Comptees une fois.
+    titres_vides_ecartes: int = 0
     # Paires ecartees SANS rien payer parce que les DEUX articles sont sous le
     # seuil de pertinence : aucune publication a proteger, et un evenement a
     # deux observations est PERMANENT (`purger_evenements_sans_valeur`).
@@ -258,6 +267,8 @@ def link_duplicates(
     gabarit_min_articles: int | None = None,
     arbitrage_resume_min: int | None = None,
     arbitrage_resume_max: int | None = None,
+    arbitrage_resume_archive_min: int | None = None,
+    arbitrage_resume_archive_max: int | None = None,
     recurrence_min_titres: int | None = None,
     recurrence_part_min: float | None = None,
     recurrence_jours: int | None = None,
@@ -359,6 +370,27 @@ def link_duplicates(
     affamerait la bande archive, celle qui protège du repost d'une actu déjà
     publiée.
 
+    **Et la même porte CONTRE L'ARCHIVE** (2026-10-02). Le défaut constaté ce
+    jour-là : deux actus DÉJÀ PUBLIÉES étaient sur le point d'être republiées,
+    et aucune mesure de titre ne pouvait les voir -- « This is happening.. »
+    (Charlotte de Witte sur son propre compte) contre la reprise DJ Mag n'a
+    ZÉRO mot de titre en commun, et le record de Calvin Harris repris neuf
+    jours plus tard par Mixmag plafonne à 0,25 / 0,29. La porte sur le résumé
+    attrapait les deux ; elle ne regardait simplement jamais l'archive.
+    `arbitrage_resume_archive_min` l'ouvre (resté à `None` -- le DÉFAUT, donc
+    `run_veille` --, rien ne change), avec son propre seuil, son propre budget,
+    et trois différences portées par `porte_resume` : pas de bande « certaine »
+    (contre l'archive, seul l'arbitre lie), pas de garde-fou « les deux sous le
+    seuil de pertinence » (le représentant est `USED`, donc publié), et une
+    trace sur l'article (son représentant n'est jamais purgé). La fenêtre
+    d'archive passe de 7 à 10 jours dans le même mouvement, parce que le second
+    cas est à 8,99 jours -- voir `cluster_archive_jours` pour la mesure.
+
+    Avant de payer, une paire dont AUCUN des deux titres ne porte de contenu est
+    écartée (`cluster_resume.paire_sans_titre_exploitable`) : « Post Instagram »
+    ne doit jamais servir de clé d'identité, et sans ce garde-fou la porte du
+    résumé serait le seul rempart d'une telle paire.
+
     Avant de payer, une paire dont l'un des deux articles est une PUBLICATION
     RÉCURRENTE de sa source est écartée (`est_publication_recurrente`, qui
     porte la mesure) : l'arbitre a raison sur les faits d'un « Billboard Hot
@@ -394,6 +426,11 @@ def link_duplicates(
         settings.cluster_arbitrage_resume_max_par_passage
         if arbitrage_resume_max is None
         else arbitrage_resume_max
+    )
+    arbitrage_resume_archive_max = (
+        settings.cluster_arbitrage_resume_archive_max_par_passage
+        if arbitrage_resume_archive_max is None
+        else arbitrage_resume_archive_max
     )
     recurrence_min_titres = (
         settings.cluster_recurrence_min_titres
@@ -500,6 +537,14 @@ def link_duplicates(
     # `app/config.py`. Deux budgets se bornent chacun ; un budget commun se
     # ferait manger par le plus bavard des trois chemins.
     appels_resume_restants = arbitrage_resume_max
+    # TROISIEME budget, dedie aux paires d'ARCHIVE candidates par leur resume :
+    # la seule bande dont un faux negatif republie une actu deja postee ne doit
+    # pas etre affamee par la porte fraiche, qui peut presenter des dizaines de
+    # paires au premier passage sur une fenetre pleine. Meme raisonnement que
+    # celui qui avait deja separe le budget du resume de celui de l'archive.
+    appels_resume_archive_restants = arbitrage_resume_archive_max
+    # Paires ecartees par le garde-fou de contenu : comptees UNE fois.
+    titres_vides_vus: set[str] = set()
     # Paires ecartees par le garde-fou de recurrence : comptees UNE fois.
     recurrences_vues: set[str] = set()
     # Memoire de passage : `jetons_de_resume` nettoie et tokenise, et la
@@ -518,6 +563,18 @@ def link_duplicates(
             jetons = cluster_resume.jetons_de_resume(article)
             jetons_resume_par_article[article.id] = jetons
         return jetons
+
+    # Memoire de passage, meme motif que `jetons_resume_par_article` : la boucle
+    # est quadratique et `significant_tokens` serait sinon rappele des centaines
+    # de milliers de fois sur les memes titres.
+    titres_pauvres: dict[int, bool] = {}
+
+    def titre_pauvre(article: Article) -> bool:
+        verdict = titres_pauvres.get(article.id)
+        if verdict is None:
+            verdict = cluster_resume.titre_pauvre(article)
+            titres_pauvres[article.id] = verdict
+        return verdict
 
     def publication_recurrente(article: Article) -> bool:
         verdict = recurrents.get(article.id)
@@ -543,19 +600,56 @@ def link_duplicates(
         entree: EntreeArbitrage | None,
         *,
         autoriser_retentatives: bool,
+        archive: bool = False,
     ):
-        """La PORTE SUR LE RESUME, pour une paire FRAICHE que la bande de titre
-        n'a pas retenue. Rend un resultat a lier, `DIFFERE`, ou `None`.
+        """La PORTE SUR LE RESUME, pour une paire que la bande de titre n'a pas
+        retenue. Rend un resultat a lier, `DIFFERE`, ou `None`.
 
         Les titres de cette paire ne se rapprochent pas -- c'est exactement le
         cas ou la dedup par titre est aveugle, et ou de vrais memes-evenements
         lui echappent (voir `app/pipeline/cluster_resume.py`). On compte alors
         les mots significatifs partages de leurs RESUMES, en nombre ABSOLU :
         le recouvrement normalise sature sur les captions Instagram courtes.
+
+        `archive=True` : le representant est un article DEJA PUBLIE (`USED`).
+        La porte est la MEME -- meme cache par paire, meme verdict manuel
+        prioritaire, meme plafond de tentatives, meme arbitre -- et c'est
+        voulu : une seconde machinerie divergerait. Quatre differences, chacune
+        parce que l'archive n'est pas la bande fraiche (2026-10-02) :
+
+        1. **Son propre seuil** (`arbitrage_resume_archive_min`, 5 contre 6) et
+           **son propre budget** : voir `app/config.py` pour les deux mesures.
+        2. **Le garde-fou « les deux sous le seuil de pertinence » ne
+           s'applique pas.** Il existe parce qu'un lien entre deux articles qui
+           ne seront jamais publies ne protege aucune publication -- et parce
+           qu'il rendrait permanent un evenement de bruit. Contre l'archive, le
+           representant est `USED` : il EST publie, donc il y a toujours une
+           publication a proteger, et son evenement est de toute facon
+           permanent par construction (`election.articles_engages`).
+        3. **Aucune bande « certaine ».** Un lien d'archive est irreversible en
+           pratique (l'article sort de la file, le representant `USED` est
+           verrouille par `elire_representants`, rien ne remonte au dashboard).
+           Le nombre de mots de resume partages n'est donc JAMAIS une raison
+           suffisante a lui seul : sans arbitre, cette porte ne pose aucun lien
+           d'archive -- exactement comme la bande douteuse de titre.
+        4. **Une trace sur l'article** (`file_exclu_raison`), que `appliquer`
+           pose pour toute origine d'archive. Un lien FRAIS n'en pose pas, et
+           ce n'est pas une incoherence : son representant est purge a 2 jours
+           et la trace lui survivrait (voir `raison_de_doublon`). Celui d'une
+           archive est `USED`, donc jamais purge.
         """
-        nonlocal appels_resume_restants
-        if arbitrage_resume_min is None:
+        nonlocal appels_resume_restants, appels_resume_archive_restants
+        seuil = arbitrage_resume_archive_min if archive else arbitrage_resume_min
+        if seuil is None:
             return None  # porte coupee : aucun appel, aucun lien
+        # Le garde-fou de CONTENU, avant toute mesure et avant tout appel : une
+        # paire dont AUCUN des deux titres ne dit rien ne doit pas se decider
+        # sur les seuls resumes (voir `paire_sans_titre_exploitable`).
+        if titre_pauvre(article) and titre_pauvre(rep_article):
+            if cle not in titres_vides_vus:
+                titres_vides_vus.add(cle)
+                stats.titres_vides_ecartes += 1
+            return None
         jetons_a = jetons_resume(article)
         if len(jetons_a) < cluster_resume.MIN_JETONS_RESUME:
             return None
@@ -563,7 +657,7 @@ def link_duplicates(
         if len(jetons_b) < cluster_resume.MIN_JETONS_RESUME:
             return None
         partages = len(jetons_a & jetons_b)
-        if partages < arbitrage_resume_min:
+        if partages < seuil:
             return None
         # DEUX articles sous le seuil de pertinence : ni l'un ni l'autre ne
         # sera jamais publie, donc le lien ne protegerait AUCUNE publication.
@@ -591,7 +685,8 @@ def link_duplicates(
         # plus qu'on peut renoncer a reconnaitre un doublon. Chaque regle
         # penche du cote ou le doute coute le moins cher.
         if (
-            article.relevance_score is not None
+            not archive
+            and article.relevance_score is not None
             and rep_article.relevance_score is not None
             and article.relevance_score < settings.digest_relevance_threshold
             and rep_article.relevance_score < settings.digest_relevance_threshold
@@ -606,21 +701,26 @@ def link_duplicates(
                 recurrences_vues.add(cle)
                 stats.recurrences_ecartees += 1
             return None
+        origine = "arbitre_resume_archive" if archive else "arbitre_resume"
         if entree is not None:
             # Un verdict deja memorise fait foi sans nouvel appel. Le verdict
             # MANUEL, lui, a deja ete traite par l'appelant, avant toute mesure.
             if entree.meme_actu:
-                return (rep_article, float(partages), "arbitre_resume", entree.raison)
+                return (rep_article, float(partages), origine, entree.raison)
             return None
         deja_tentee = tentatives_travail.get(cle, 0)
         if deja_tentee >= tentatives_max:
             return None  # abandon definitif : jamais retentee, jamais memorisee
         if deja_tentee > 0 and not autoriser_retentatives:
             return DIFFERE
-        if arbitre is None or appels_resume_restants <= 0:
+        budget = appels_resume_archive_restants if archive else appels_resume_restants
+        if arbitre is None or budget <= 0:
             return None  # pas d'arbitre (run_veille) ou budget epuise -> le doute gagne
         verdict = arbitre(rep_article, article)
-        appels_resume_restants -= 1
+        if archive:
+            appels_resume_archive_restants -= 1
+        else:
+            appels_resume_restants -= 1
         if verdict is None:
             # Une panne n'est JAMAIS un verdict : rien n'est memorise.
             stats.arbitrage_pannes += 1
@@ -629,7 +729,7 @@ def link_duplicates(
         meme_actu, raison = verdict
         nouveaux_verdicts[cle] = EntreeArbitrage(meme_actu, raison, manuel=False)
         if meme_actu:
-            return (rep_article, float(partages), "arbitre_resume", raison)
+            return (rep_article, float(partages), origine, raison)
         return None
 
     def resoudre(article: Article, tokens: set[str], *, autoriser_retentatives: bool):
@@ -719,7 +819,27 @@ def link_duplicates(
 
             score_doute = title_similarity_from_tokens(tokens, rep_tokens)
             if score_doute < threshold:
-                continue  # bande "différent" : aucune mesure ne rapproche, aucun appel
+                # Bande « differente » DE TITRE contre l'archive. Avant le
+                # 2026-10-02, c'etait un `continue` sec -- et c'est par la que
+                # DEUX actus deja publiees etaient sur le point d'etre
+                # republiees : « This is happening.. » (zero mot de titre en
+                # commun avec la reprise DJ Mag) et le record de Calvin Harris
+                # (0,25 / 0,29). La porte sur le RESUME existait deja et les
+                # attrapait tous les deux ; elle ne regardait simplement jamais
+                # l'archive. C'est son seul point d'entree cote archive.
+                resultat_resume = porte_resume(
+                    article,
+                    rep_article,
+                    cle,
+                    entree,
+                    autoriser_retentatives=autoriser_retentatives,
+                    archive=True,
+                )
+                if resultat_resume is DIFFERE:
+                    differe = True
+                elif resultat_resume is not None:
+                    return resultat_resume
+                continue
 
             # Bande douteuse : un verdict Claude déjà mémorisé fait foi sans
             # nouvel appel -- "une paire n'est jamais redemandée".
@@ -806,7 +926,7 @@ def link_duplicates(
             representatives.append((article, tokens, False))
             return
         rep_article, score, origine, raison = resultat
-        if origine in ("arbitre", "arbitre_frais", "arbitre_resume"):
+        if origine in ("arbitre", "arbitre_frais", "arbitre_resume", "arbitre_resume_archive"):
             # Relecture juste AVANT de poser un lien tranché par Claude (tour
             # de correction 2/5, cas 2, LE défaut le plus important du
             # chantier) : entre l'appel à l'arbitre et cet instant, un verdict
@@ -856,6 +976,8 @@ def link_duplicates(
         stats.archive += 1
         if origine == "arbitre":
             stats.arbitres += 1
+        elif origine == "arbitre_resume_archive":
+            stats.resumes_archive_arbitres += 1
         # La trace, sur l'article lié lui-même. Sans elle, un faux positif
         # disparaît en silence : l'article sort de la file par le filtre
         # `duplicate_of_id IS NULL` et plus rien ne dit pourquoi.
@@ -869,6 +991,11 @@ def link_duplicates(
             detail = f"similarite {score:.2f}"
         elif origine == "arbitre":
             detail = f"tranche par Claude : {raison}"
+        elif origine == "arbitre_resume_archive":
+            # La mesure n'est PAS une similarite de titre ici : c'est un nombre
+            # ABSOLU de mots de resume partages. Le dire dans la trace, sinon
+            # « similarite 5.00 » se lirait comme un score de titre.
+            detail = f"tranche par Claude sur les resumes ({int(score)} mots) : {raison}"
         else:
             detail = "verdict manuel"
         article.file_exclu_raison = (

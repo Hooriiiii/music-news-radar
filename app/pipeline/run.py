@@ -53,6 +53,8 @@ class PipelineReport:
     # des deux est une PUBLICATION RECURRENTE de sa source.
     duplicates_resumes_arbitres: int = 0
     duplicates_recurrences_ecartees: int = 0
+    duplicates_resumes_archive_arbitres: int = 0
+    duplicates_titres_vides_ecartes: int = 0
     groupement_sources: GroupementStats | None = None
     # Phase 2B, Task 1 : les articles qui viennent d'entrer dans un evenement
     # (y compris seuls). `None` = etape jamais atteinte.
@@ -110,11 +112,21 @@ def dedupliquer_avec_arbitrage(db: Session) -> ClusterStats:
         if settings.cluster_arbitrage_resume_enabled
         else None
     )
+    # La meme porte CONTRE L'ARCHIVE (2026-10-02), meme convention encore : un
+    # PARAMETRE l'ouvre, jamais le nom de l'appelant. `run_veille` ne le passe
+    # pas ; `cluster_arbitrage_resume_archive_enabled` a false le laisse a None,
+    # ce qui rend au pipeline exactement les decisions d'avant ce correctif.
+    resume_archive_min = (
+        settings.cluster_arbitrage_resume_archive_seuil
+        if settings.cluster_arbitrage_resume_archive_enabled
+        else None
+    )
     return link_duplicates(
         db,
         arbitre=make_claude_arbitre(),
         arbitrage_frais_min=frais_min,
         arbitrage_resume_min=resume_min,
+        arbitrage_resume_archive_min=resume_archive_min,
     )
 
 
@@ -173,6 +185,8 @@ def run_pipeline(
     report.duplicates_gabarits_ecartes = doublons.gabarits_ecartes
     report.duplicates_resumes_arbitres = doublons.resumes_arbitres
     report.duplicates_recurrences_ecartees = doublons.recurrences_ecartees
+    report.duplicates_resumes_archive_arbitres = doublons.resumes_archive_arbitres
+    report.duplicates_titres_vides_ecartes = doublons.titres_vides_ecartes
     # AVANT le scoring : un doublon promu representant est note dans le meme run,
     # et un representant local de groupe >= 3 sources repasse chez Claude.
     report.election = elire(db)

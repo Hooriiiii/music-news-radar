@@ -295,14 +295,18 @@ def test_la_vraie_reprise_reste_attrapee_par_le_seuil_d_archive(db_session):
     assert reprise.duplicate_of_id == publie.id
 
 
-def test_la_fenetre_d_archive_par_defaut_est_d_une_semaine(db_session):
-    """Une reprise ressort dans la semaine ; au-dela, le risque de faux positif
-    depasse le service rendu."""
-    assert settings.cluster_archive_jours == 7
+def test_la_fenetre_d_archive_par_defaut_est_de_dix_jours(db_session):
+    """Dix jours depuis le 2026-10-02 (sept auparavant) : la duree de vie
+    editoriale REELLE d'une actu, mesuree sur 298 ecarts entre sources d'un
+    meme evenement dans `event_observations`, s'arrete a 8,91 jours -- 7
+    couvrait 97,7 %, 10 couvre 100 % avec un jour de marge. Au-dela la queue
+    mesuree est vide, donc elargir encore n'ajouterait aucun vrai positif et
+    rouvrirait le risque qui avait fait descendre la valeur de 30 a 7."""
+    assert settings.cluster_archive_jours == 10
     old_src = _src(db_session, "mixmag")
     new_src = _src(db_session, "tsugi")
     _art(db_session, old_src, n=1, title="Dour Festival unveils its 2027 lineup",
-         hours_ago=10 * 24, status=ArticleStatus.USED)
+         hours_ago=13 * 24, status=ArticleStatus.USED)
     reprise = _art(db_session, new_src, n=2, title="Dour Festival devoile son line-up 2027",
                    hours_ago=1)
 
