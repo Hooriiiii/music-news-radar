@@ -53,6 +53,14 @@ def main() -> None:
         print(f"  porte resume : {report.duplicates_resumes_arbitres} lien(s) tranche(s) "
               f"par Claude sur les resumes, {report.duplicates_recurrences_ecartees} "
               f"paire(s) ecartee(s) sans appel (publication recurrente)")
+    if report.duplicates_resumes_archive_arbitres or report.duplicates_titres_vides_ecartes:
+        # La meme porte CONTRE L'ARCHIVE (2026-10-02) : c'est la seule des trois
+        # bandes dont un lien empeche de REPUBLIER une actu deja postee. Elle a
+        # donc sa propre ligne, jamais fondue dans celle de la bande fraiche.
+        print(f"  porte resume (archive) : {report.duplicates_resumes_archive_arbitres} "
+              f"actu(s) deja publiee(s) reconnue(s) par Claude sur les resumes, "
+              f"{report.duplicates_titres_vides_ecartes} paire(s) ecartee(s) sans appel "
+              f"(aucun des deux titres ne porte de contenu)")
     if report.groupement_sources is not None and report.groupement_sources.sources_regroupees:
         print(
             f"  regroupement de sources : {report.groupement_sources.sources_regroupees} "

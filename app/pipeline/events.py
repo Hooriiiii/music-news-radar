@@ -282,7 +282,8 @@ def _evenement_deja_observe(db: Session, article: Article) -> Event | None:
     hebdomadaire : rater une fusion coûte un événement de trop, la faire à
     tort fabrique de la vélocité.
 
-    LA BRANCHE URL garde les 7 jours de `cluster_archive_jours` : l'identité
+    LA BRANCHE URL garde la fenêtre de `cluster_archive_jours` (10 jours depuis
+    le 2026-10-02, 7 auparavant -- voir `app/config.py` pour la mesure) : l'identité
     d'URL est bien plus forte que celle du titre -- vérifié en revue, aucune
     des 1 267 observations ne partage son URL avec une autre source. Un
     marronnier republié des mois plus tard sort de toute façon de la fenêtre
