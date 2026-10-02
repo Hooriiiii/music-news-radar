@@ -26,6 +26,15 @@ class SourceOut(BaseModel):
     genre: str | None
     categorie: SourceCategorie | None
     active: bool
+    # La SANTE, tiree de `sources.state` (ecrit a chaque ingestion par
+    # `app/pipeline/health.py::marquer_sante`) : elle existait depuis le debut et
+    # n'etait exposee par rien -- ni l'API, ni l'ecran. Une source morte depuis
+    # trois semaines etait donc indetectable depuis le dashboard, alors que la
+    # trace etait en base. Ce ne sont pas des colonnes : l'endpoint les extrait
+    # (`app/api/sources.py::vue`), d'ou des defauts a None.
+    last_error: str | None = None
+    last_error_at: dt.datetime | None = None
+    last_ok_at: dt.datetime | None = None
 
 
 class SourceCreate(BaseModel):
@@ -61,6 +70,12 @@ class ArticleOut(BaseModel):
     genre: str | None
     status: ArticleStatus
     media: list[dict] | None
+    # L'EXCLUSION DE LA FILE, telle que l'ecrivent le dashboard (« saute »), le
+    # gel, la composition et la dedup d'archive. Elle etait en base depuis le
+    # debut et exposee par rien : la grille ne pouvait donc ni montrer qu'un
+    # article est hors file, ni dire pourquoi -- alors que c'est le champ qui
+    # refuse l'article PARTOUT (`store._articles_publiables`).
+    file_exclu_raison: str | None = None
 
     # Calcules par l'API (pas des colonnes) : l'origine du visuel a venir, la
     # raison de son absence, et si les medias propres sont interdits (compte
@@ -234,6 +249,12 @@ class CreneauOut(BaseModel):
     epingle: bool
     article_id: int | None
     article_title: str | None = None
+    # L'URL de l'actu, pour que « article #123 » soit un LIEN et non un
+    # identifiant a recopier. Zero cout : `_vue` charge deja l'article pour en
+    # tirer le titre et la pertinence. `None` quand l'article a ete purge --
+    # le creneau est autonome de son article (2026-09-30), le renvoi redevient
+    # alors du texte inerte plutot qu'un lien mort.
+    article_url: str | None = None
     relevance: int | None = None
     post_id: int | None
     ig_media_id: str | None
@@ -287,6 +308,11 @@ class EventObservationOut(BaseModel):
     title: str
     url: str
     source_name: str
+    # Le post Kinda tire de cet article, s'il existe : une observation disait
+    # ce que la presse a publie, jamais ce que Kinda en a fait. Rempli par
+    # `GET /events/{id}` en UNE requete groupee (jamais une par observation),
+    # et `None` quand rien n'a ete compose -- ou quand l'article est purge.
+    post_id: int | None = None
 
 
 class EventOut(BaseModel):
@@ -341,3 +367,50 @@ class ModeOut(BaseModel):
 class ModeUpdate(BaseModel):
     mode: Literal["arret", "apercu", "reel"]
     confirmation: str | None = None
+
+
+class VoyantOut(BaseModel):
+    """Un voyant du bandeau de supervision.
+
+    `niveau` vaut `ok`, `attention`, `panne` ou `inconnu` -- et `inconnu` ne se
+    degrade JAMAIS en `ok` : une valeur qu'on n'a pas pu lire peut cacher une
+    panne (voir `app/supervision.py`). `raison` est un texte affichable a cote
+    du voyant, jamais seulement dans une infobulle.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    cle: str
+    libelle: str
+    niveau: Literal["ok", "attention", "panne", "inconnu"]
+    valeur: str
+    raison: str | None = None
+    details: list[str] = []
+
+
+class SupervisionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    niveau: Literal["ok", "attention", "panne", "inconnu"]
+    releve_le: dt.datetime
+    voyants: list[VoyantOut]
+
+
+class ReglagesOut(BaseModel):
+    """Les reglages que l'INTERFACE doit dire a l'utilisateur.
+
+    Trois textes du dashboard annoncaient des valeurs ecrites en dur, et deux
+    etaient devenus faux : « toutes les 2 h » (l'agent est horaire depuis le
+    2026-08-15) et « 14 jours de retention » (`retention_days` vaut 2 depuis le
+    2026-09-21, donc on envoyait chercher un article purge douze jours plus
+    tot). Un texte d'interface qui recopie un reglage ne reste vrai que par
+    chance : il est desormais DERIVE de la configuration.
+
+    Rien ici ne coute un appel reseau ni une requete : ce sont les champs de
+    `settings`, deja charges en memoire.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    retention_days: int
+    pipeline_intervalle_s: int

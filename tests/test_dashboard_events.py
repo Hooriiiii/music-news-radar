@@ -47,7 +47,9 @@ def test_le_panneau_evenements_affiche_tous_les_champs_d_observation():
 
 def test_le_panneau_evenements_existe():
     assert 'id="events-panel"' in PAGE
-    assert 'data-preset="events"' in PAGE
+    # Les panneaux sont une NAVIGATION (`data-panneau`), les filtres de la
+    # grille des pastilles (`data-preset`) : deux portees, deux rangees.
+    assert 'data-panneau="events"' in PAGE
     assert "loadEventsPanel" in PAGE
 
 

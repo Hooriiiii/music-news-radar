@@ -17,10 +17,40 @@
            padding: 14px 20px; }
   h1 { font-size: 17px; letter-spacing: .3px; }
   h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
-  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  /* --- Navigation et filtrage : DEUX PORTEES, donc deux rangees ----------
+     Les douze boutons de l'entete partageaient `.chip`, une rangee et une
+     apparence ; seul `data-preset` separait « change le filtre de la grille »
+     (portee grille) de « remplace tout l'ecran » (portee application). Ce
+     n'etait pas une redondance a supprimer -- deux portees ne sont pas une
+     repetition -- mais une COMPOSITION a ecrire : la navigation prend sa
+     rangee, titree, en onglets RECTANGULAIRES sur la ligne du titre ; les
+     filtres gardent la leur, en PASTILLES, et quittent l'ecran des qu'un
+     panneau non-grille est affiche. Deux formes distinctes pour deux portees
+     distinctes, et la hauteur d'entete rendue (la rangee de navigation
+     rejoint celle du titre au lieu de s'ajouter). */
+  .entete-haut { display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap; }
+  .rangee-titre { font-size: 10px; letter-spacing: .9px; text-transform: uppercase;
+          color: #6a6a78; }
+  nav.nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+  .onglet { border: 1px solid var(--border); background: #14141a; color: var(--muted);
+          border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+  .onglet:hover { color: var(--text); border-color: #3a3a48; }
+  .onglet.on { background: #241f3d; border-color: var(--accent); color: #d6cbff;
+          font-weight: 600; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+  /* `.bar` porte `display: flex`, qui l'emporterait sur l'attribut `hidden`. */
+  .bar[hidden] { display: none; }
   .chip { border: 1px solid var(--border); background: var(--panel); color: var(--text);
           border-radius: 999px; padding: 5px 13px; cursor: pointer; font-size: 12.5px; }
   .chip.on { border-color: var(--accent); background: #241f3d; }
+  /* --- Renvois entre panneaux ---------------------------------------------
+     « article #123 », « post 45 » et « IG 17894… » etaient du texte inerte :
+     chaque trajet d'un panneau a l'autre etait un copier-coller, sur l'outil
+     de travail quotidien. Souligne en pointille : un renvoi interne, pas un
+     titre d'actu. */
+  .ref { font: inherit; color: #b9a6ff; background: none; border: none; padding: 0;
+          cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+  .ref:hover { color: #d6cbff; }
   select { background: var(--panel); color: var(--text); border: 1px solid var(--border);
            border-radius: 8px; padding: 5px 8px; font-size: 12.5px; }
   main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 60px;
@@ -38,16 +68,27 @@
   .badge.hot-high { background: #3d1f1f; color: #ff8a8a; }
   .badge.visuel { background: #1f2d3d; color: #8ac4ff; }
   .badge.sans-visuel { background: #3d2a1f; color: #ffb38a; }
+  /* Hors file : meme rouge que .render-warning, le langage « attention » deja en
+     service. La raison est ECRITE a cote, pas seulement en infobulle. */
+  .badge.exclu { background: #3d1f1f; color: #ff8a8a; flex-basis: 100%;
+    line-height: 1.35; }
   a.title { color: var(--text); text-decoration: none; font-weight: 600; font-size: 14.5px; }
   a.title:hover { color: #b9a6ff; }
   .summary { color: var(--muted); font-size: 12.5px; }
   .meta { color: #6a6a78; font-size: 11px; margin-top: auto; }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .actions button.reintegrer { flex-basis: 100%; border-color: #5a2a2a; color: #ff8a8a; }
   .actions button { flex: 1; border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
   .actions button:hover { border-color: var(--accent); }
   #empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
-  .chip.right { margin-left: auto; }
+  /* Un etat d'ECHEC TERMINAL, avec sa raison et une relance. Sans relance, une
+     base lente (`attendre_base`) laissait « Chargement… » a l'ecran pour
+     toujours : indistinguable d'un chargement en cours. */
+  .zone-erreur { grid-column: 1/-1; text-align: center; padding: 50px 0; }
+  .zone-erreur .pourquoi { color: #ff9aa5; font-size: 13px; margin-bottom: 12px; }
+  .zone-erreur .relance { border: 1px solid var(--accent); background: #241f3d; color: #b9a6ff;
+    border-radius: 8px; padding: 7px 16px; cursor: pointer; font-size: 12.5px; }
   #sources-panel { max-width: 820px; margin: 0 auto; padding: 20px; }
   .src-form { display: grid; grid-template-columns: 1fr 160px; gap: 10px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
@@ -66,6 +107,14 @@
   .src-row .grow { flex: 1; min-width: 0; }
   .src-row .tag { font-size: 10.5px; background: #23232d; color: var(--muted);
     border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  /* La sante de la source, sous son URL : `last_error` etait ecrit a chaque
+     ingestion et n'apparaissait nulle part. Meme rouge que .render-warning. */
+  .src-row .sante { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .src-row .sante.ko { color: #ff9aa5; }
+  /* Le verdict de l'ecriture de categorie, a cote du selecteur : ce PATCH
+     partait sans que personne ne lise la reponse (cf. `catSel.onchange`). */
+  .src-row .cat-etat { font-size: 12px; color: #7ee2a0; width: 12px; text-align: center; }
+  .src-row .cat-etat.ko { color: #ff9aa5; }
   .src-row .toggle { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 
@@ -82,7 +131,33 @@
   .mode-choix.mode-reel.on { background: var(--hot); color: #fff; }
   .mode-explication { color: var(--muted); font-size: 11.5px; margin: 8px 0 16px; }
   .slot-actions { display: flex; gap: 4px; }
-  .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px; cursor: pointer; padding: 2px 6px; }
+  /* --- Une ligne de creneau HIERARCHISEE ---------------------------------
+     Constat a l'ecran : « (creneau libre) » occupait la position de titre sur
+     six lignes sur dix -- le texte le plus VISIBLE de la ligne etait une
+     non-information. Pendant ce temps la vraie information (« creneau manque :
+     gele mais jamais publie ») etait tassee en gris au milieu d'une phrase
+     jointe par des « · », ou une erreur se noie.
+     Remede en trois positions : l'HEURE prend la tete (c'est ce qu'un
+     calendrier porte en premier, et c'est la seule information qu'un creneau
+     libre possede vraiment) ; le titre la suit, efface quand il n'y en a pas ;
+     et l'ERREUR a sa PROPRE ligne, dans le rouge d'alerte deja en service
+     (.render-warning). Une panne y devient plus visible qu'avant, jamais
+     moins -- c'est la regle qui prime sur toute compacite. */
+  .slot-tete { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .slot-heure { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--text); white-space: nowrap; }
+  .slot-titre { font-size: 13.5px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .slot-titre.vide { font-weight: 400; font-style: italic; color: #6a6a78; }
+  .slot-alerte { background: #3d1f1f; color: #ff8a8a; border: 1px solid #5a2a2a;
+    border-radius: 8px; padding: 5px 10px; font-size: 12.5px; margin-top: 6px; }
+  .slot-alerte[hidden] { display: none; }
+  /* Les quatre gestes portent desormais un LIBELLE : « 📌 » et « 📍 » sont deux
+     actions OPPOSEES que seule l'inclinaison de l'icone distinguait, et un
+     `title` ne se lit ni au premier coup d'oeil ni au lecteur d'ecran. */
+  .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px;
+    cursor: pointer; padding: 3px 9px; color: var(--text); font-size: 12px; white-space: nowrap; }
+  .slot-actions button:hover { border-color: var(--accent); }
   .status-pill.libre { background: #23232d; color: var(--muted); }
   .status-pill.programme { background: #241f3d; color: #b9a6ff; }
   .status-pill.gele { background: #1f2f3d; color: #8fd0ff; }
@@ -114,6 +189,11 @@
     max-width: 960px; width: 100%; padding: 20px 22px 26px; }
   #post-detail .sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
   #post-detail .sheet-head h2 { font-size: 15.5px; flex: 1; }
+  /* `article_url` etait dans la reponse et n'etait utilise NULLE PART : le
+     titre de l'actu s'affichait en clair, et l'ouvrir se faisait a la main. */
+  #post-detail .sheet-head h2 a.titre-lien { color: inherit; text-decoration: none; }
+  #post-detail .sheet-head h2 a.titre-lien:hover { color: #b9a6ff; text-decoration: underline; }
+  #post-detail .sheet-head h2 .ref-article { font-size: 11.5px; font-weight: 400; margin-left: 8px; }
   #post-detail .close-btn { border: 1px solid var(--border); background: #20202a; color: var(--text);
     border-radius: 8px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
   #post-detail textarea { width: 100%; background: #0c0c10;
@@ -175,12 +255,19 @@
   #events-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
   .event-row { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 10px 14px; margin-bottom: 8px; }
-  .event-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-  .event-head .grow { flex: 1; min-width: 0; }
+  /* COMPOSITION, pas rustine : le titre a SA ligne, les metriques la leur.
+     `.event-head` etait un flex en rangee ou le titre portait `flex: 1` (donc
+     `flex-basis: 0`) pendant que les onze badges revendiquaient leur largeur
+     INTRINSEQUE -- le titre perdait l'arbitrage et tombait a zero de large (on
+     n'en voyait qu'un fragment de glyphe), et les metadonnees tombaient un mot
+     par ligne dans 40 px. Un titre et onze badges ne sont pas des pairs qui se
+     partagent une rangee : la pile verticale est la seule disposition ou la
+     largeur du titre ne depend pas du nombre de badges. */
+  .event-head { display: block; cursor: pointer; }
   .event-head .hl { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   .event-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
-  .event-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+  .event-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; margin-top: 8px; }
   /* Meme rouge d'alerte que .render-warning : sert a signaler l'ecart
      corroboration/pertinence, jamais a decider quoi que ce soit. */
   .badge.corrob { background: #23232d; color: var(--muted); }
@@ -193,12 +280,138 @@
   .obs-row a:hover { color: #b9a6ff; }
   .obs-row .plateforme { font-size: 10.5px; background: #23232d; color: var(--muted);
     border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+  /* Une observation disait ce que la PRESSE a publie et liait vers le web ;
+     elle ne disait jamais ce que KINDA en a fait. Les renvois sont a la fin
+     de la ligne, apres la source et la date, pour ne pas disputer la place au
+     titre. */
+  .obs-row .renvois { margin-left: auto; white-space: nowrap; }
+  /* --- Bandeau de supervision (permanent, tous panneaux) ---
+     Les quatre niveaux reprennent les couleurs deja en service dans le
+     dashboard (.status-pill) : vert = publie, ambre = apercu, rouge = echec.
+     Le gris-bleu de « inconnu » est la seule teinte nouvelle, et elle est
+     volontairement DIFFERENTE du vert : une valeur qu'on n'a pas pu lire ne
+     doit jamais ressembler a « tout va bien ». */
+  .supervision { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: #14141a; padding: 8px 10px; }
+  .supervision.niv-panne { border-color: #5a2a2a; }
+  .supervision.niv-attention { border-color: #55501f; }
+  .supervision.niv-inconnu { border-color: #3a3a48; }
+  .supervision.niv-ok { border-color: #2a4a33; }
+  .sup-tete { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sup-global { font-size: 12.5px; font-weight: 600; }
+  .niv-ok > .sup-tete > .sup-global, .sup-global.niv-ok { color: #7ee2a0; }
+  .niv-attention > .sup-tete > .sup-global { color: #e8d27a; }
+  .niv-panne > .sup-tete > .sup-global { color: #ff9aa5; }
+  .niv-inconnu > .sup-tete > .sup-global { color: #b9b9c8; }
+  .sup-releve { color: var(--muted); font-size: 11px; }
+  .sup-plier { margin-left: auto; border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 8px; padding: 3px 10px; cursor: pointer; font-size: 11.5px; }
+  .sup-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .sup-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11.5px;
+    border-radius: 999px; padding: 3px 10px; background: #23232d; color: var(--muted);
+    border: 1px solid transparent; }
+  .sup-pill b { font-weight: 600; }
+  .sup-pill.niv-ok { background: #1d3325; color: #7ee2a0; }
+  .sup-pill.niv-attention { background: #33301d; color: #e8d27a; }
+  .sup-pill.niv-panne { background: #3d1f23; color: #ff9aa5; border-color: #5a2a2a; }
+  .sup-pill.niv-inconnu { background: #2d2d38; color: #b9b9c8; }
+  /* La raison est ADJACENTE et VISIBLE, jamais seulement dans un `title` :
+     c'est la force deja presente dans la fiche de post, etendue ici. */
+  .sup-raisons { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
+  .sup-raison { font-size: 12px; line-height: 1.35; }
+  .sup-raison.niv-attention { color: #e8d27a; }
+  .sup-raison.niv-panne { color: #ff9aa5; }
+  .sup-raison.niv-inconnu { color: #b9b9c8; }
+  .sup-raison b { font-weight: 600; }
+  .sup-details { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 7px;
+    display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11.5px; }
+  .sup-details[hidden] { display: none; }
+  .sup-details .sup-bloc b { color: var(--text); font-weight: 600; }
+  /* Le repli des raisons. L'entete est `sticky` : cinq raisons lui faisaient
+     ~230 px et mangeaient autant de zone utile. Mais gagner de la place ne doit
+     JAMAIS faire disparaitre une panne -- le repli ne touche donc que les
+     raisons `attention`/`inconnu`, et le bouton DIT combien il en cache. */
+  .sup-reste[hidden] { display: none; }
+  .sup-raison-plus { align-self: flex-start; border: 1px solid var(--border);
+    background: #20202a; color: var(--muted); border-radius: 8px; padding: 2px 9px;
+    cursor: pointer; font-size: 11.5px; margin-top: 2px; }
+
+  /* --- Ancrage : l'entete est `sticky`, donc une ancre (`#post-...`, un lien
+     entre panneaux) atterrissait SOUS elle. `--entete-h` est mesuree en JS a
+     chaque changement de hauteur du bandeau : la valeur ne peut pas etre figee
+     en CSS puisque l'entete grandit avec le nombre de raisons affichees. */
+  html { scroll-padding-top: calc(var(--entete-h, 120px) + 12px); }
+
+  /* --- Responsive. Il n'existait AUCUNE media query : a 820 px le titre d'un
+     evenement disparaissait et la barre de l'entete eclatait en quatre rangees.
+     Deux paliers seulement -- tablette/petit portable, puis telephone. --- */
+  @media (max-width: 900px) {
+    header { padding: 10px 12px; }
+    h1 { font-size: 15.5px; }
+    .bar { gap: 6px; }
+    .chip { padding: 5px 10px; font-size: 12px; }
+    /* Un `select` a largeur intrinseque poussait la rangee de l'entete a
+       deborder ; ici il partage la place au lieu de la revendiquer. Limite a
+       `.bar` : les selecteurs d'un panneau sont seuls sur leur ligne et
+       n'ont aucune raison d'en occuper toute la largeur. */
+    .bar select { flex: 1 1 150px; min-width: 0; }
+    /* L'entete cesse d'etre `sticky` sous cette largeur. Mesure sur la page
+       reelle : 419 px de haut a 820 px de large, 705 px a 390 px -- soit la
+       moitie puis la TOTALITE de la hauteur utile d'un telephone. Une entete
+       collante plus haute que l'ecran qu'elle surplombe ne rend plus service,
+       elle le confisque ; elle defile donc avec la page, et rien n'est cache
+       pour autant. */
+    header { position: static; }
+    nav.nav { margin-left: 0; }
+    main { padding: 14px 12px 50px; grid-template-columns: 1fr; }
+    #sources-panel, #posts-panel, #schedule-panel, #events-panel { padding: 14px 12px; }
+    .posts-bar { flex-wrap: wrap; align-items: center; }
+    .mode-control { margin-left: 0; }
+    .reels-toggle { margin-left: 0; }
+    /* Une ligne de creneau porte desormais des libelles (et non quatre icones
+       muettes) : elle passe a la ligne plutot que d'ecraser son titre. */
+    .post-row { flex-wrap: wrap; }
+    .post-row .grow { flex: 1 1 100%; }
+    #post-detail { padding: 14px 8px; }
+    #post-detail .sheet { padding: 14px 14px 20px; }
+  }
+  @media (max-width: 560px) {
+    .bar { gap: 5px; }
+    .chip { padding: 5px 9px; font-size: 11.5px; }
+    .bar select { flex: 1 1 100%; }
+    .src-form { grid-template-columns: 1fr; }
+    .src-row { flex-wrap: wrap; }
+    .src-row .grow { flex: 1 1 100%; }
+    .detail-actions button, .detail-actions a { flex: 1 1 100%; text-align: center; }
+    .slot-actions { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>🎧 Music News Radar <small id="count"></small></h1>
-  <div class="bar">
+  <div class="entete-haut">
+    <h1>🎧 Music News Radar <small id="count"></small></h1>
+    <nav class="nav" id="nav-panneaux" aria-label="Panneaux">
+      <span class="rangee-titre">Vue</span>
+      <button class="onglet on" data-panneau="grille">🔎 Flux d'actus</button>
+      <button class="onglet" data-panneau="schedule">🗓 Programmation</button>
+      <button class="onglet" data-panneau="posts">🖼 Posts</button>
+      <button class="onglet" data-panneau="events">🕸 Événements</button>
+      <button class="onglet" data-panneau="sources">⚙️ Sources</button>
+    </nav>
+  </div>
+  <section id="supervision" class="supervision niv-inconnu" aria-live="polite">
+    <div class="sup-tete">
+      <span class="sup-global" id="sup-global">Supervision…</span>
+      <span class="sup-releve" id="sup-releve"></span>
+      <button class="sup-plier" id="sup-plier" aria-expanded="false">Détails</button>
+    </div>
+    <div class="sup-pills" id="sup-pills"></div>
+    <div class="sup-raisons" id="sup-raisons"></div>
+    <div class="sup-details" id="sup-details" hidden></div>
+  </section>
+  <div class="bar" id="barre-filtres" aria-label="Filtres du flux d'actus">
+    <span class="rangee-titre">Filtres</span>
     <button class="chip on" data-preset="fresh">🔎 À traiter</button>
     <button class="chip" data-preset="digest">📰 Pertinents (≥60)</button>
     <button class="chip" data-preset="hot">🔥 Hot (≥80)</button>
@@ -221,10 +434,6 @@
       <option value="relevance">Tri : pertinence</option>
       <option value="date">Tri : plus récent</option>
     </select>
-    <button class="chip" data-preset="schedule">🗓 Programmation</button>
-    <button class="chip" data-preset="posts">🖼 Posts</button>
-    <button class="chip" data-preset="events">🕸 Événements</button>
-    <button class="chip right" data-preset="sources">⚙️ Sources</button>
   </div>
 </header>
 <main id="grid"><div id="empty">Chargement…</div></main>
@@ -311,12 +520,94 @@ const PRESETS = {
   tout: {},
 };
 let preset = "fresh";
+// Le numero du chargement de grille en cours : voir la garde de `load()`.
+let generationGrille = 0;
 
 const grid = document.getElementById("grid");
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 
+// --- Les reglages que l'interface ANNONCE -------------------------------
+// Trois textes affirmaient des choses fausses, et deux recopiaient un reglage :
+// « toutes les 2 h » (l'agent `com.musicnewsradar.pipeline` est HORAIRE depuis
+// le 2026-08-15) et « 14 jours de retention » (`retention_days` vaut 2 depuis le
+// 2026-09-21 -- on envoyait donc chercher un article supprime douze jours plus
+// tot que annonce). Ils sont desormais DERIVES de `GET /reglages`.
+//
+// Meme regle que le bandeau de supervision : une valeur qu'on n'a pas pu lire
+// est INCONNUE. Reglages illisibles, la phrase perd son chiffre -- elle n'en
+// invente jamais un, et surtout ne retombe pas sur l'ancienne valeur en dur.
+let REGLAGES = null;
+
+async function chargerReglages() {
+  try {
+    const reponse = await fetch("/reglages");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    REGLAGES = await reponse.json();
+  } catch (erreur) {
+    REGLAGES = null;
+  }
+}
+
+function cadencePipeline() {
+  const s = REGLAGES && REGLAGES.pipeline_intervalle_s;
+  if (!s) return "";
+  if (s % 3600 === 0) {
+    const h = s / 3600;
+    return h === 1 ? " (toutes les heures)" : ` (toutes les ${h} h)`;
+  }
+  return ` (toutes les ${Math.round(s / 60)} min)`;
+}
+
+function retentionTexte() {
+  const j = REGLAGES && REGLAGES.retention_days;
+  return j
+    ? `probablement purgée — ${j} jour${j > 1 ? "s" : ""} de rétention`
+    : "probablement purgée (durée de rétention inconnue)";
+}
+
+// Un echec de chargement doit etre TERMINAL ET RELANCABLE : il porte sa raison
+// et un bouton. Sans ce bouton, la seule issue d'une panne passagere (Neon qui
+// demarre, `attendre_base()` qui patiente) etait de recharger la page entiere --
+// et avant lui, l'ecran restait sur « Chargement… » sans jamais rien dire.
+function afficherErreur(cible, message, relancer) {
+  cible.innerHTML = "";
+  const zone = document.createElement("div");
+  zone.className = "zone-erreur";
+  const pourquoi = document.createElement("div");
+  pourquoi.className = "pourquoi";
+  pourquoi.textContent = message;
+  const bouton = document.createElement("button");
+  bouton.className = "relance";
+  bouton.textContent = "↻ Réessayer";
+  bouton.onclick = relancer;
+  zone.appendChild(pourquoi);
+  zone.appendChild(bouton);
+  cible.appendChild(zone);
+}
+
 async function load() {
+  // CEINTURE DE PORTEE, et le point UNIQUE qui la tient. `load()` ecrit deux
+  // choses qui n'appartiennent qu'au panneau grille : la grille elle-meme et
+  // le compteur de l'entete. Tant qu'elle manquait, changer le tri pendant que
+  // la Programmation etait a l'ecran relancait toute la pagination,
+  // reconstruisait la grille CACHEE et reecrivait le compteur -- « 9 creneaux »
+  // devenait « 213 articles » sans cause visible.
+  //
+  // La garde est ICI et non chez chaque appelant : une garde par appelant
+  // serait a refaire au suivant, et les filtres ne sont pas les seuls a
+  // rappeler `load()` (un PATCH de statut, une remise dans la file, l'amorcage).
+  if (panneau !== "grille") return;
+  // La garde d'ENTREE ne suffit pas, et c'est une mesure sur donnees reelles
+  // qui l'a dit (2026-10-02, 201 articles sur Neon) : une pagination lancee
+  // depuis la grille se termine parfois APRES un changement de panneau, et son
+  // ecriture ecrase alors le compteur du panneau affiche -- « 24 creneaux »
+  // redevenait « 201 articles » tout seul, sans qu'aucun geste de filtrage ne
+  // soit en cause. Le jeton de generation ferme les deux cas d'un coup : le
+  // chargement perime par un changement de panneau, et celui perime par un
+  // chargement plus recent (deux clics rapides sur deux filtres).
+  const generation = ++generationGrille;
+  const perime = () => panneau !== "grille" || generation !== generationGrille;
   const params = new URLSearchParams({ limit: 200, sort: document.getElementById("sort").value });
   for (const [k, v] of Object.entries(PRESETS[preset])) params.set(k, v);
   const category = document.getElementById("category").value;
@@ -326,14 +617,26 @@ async function load() {
 
   // L'API plafonne une page a 200 : on enchaine les pages pour tout afficher.
   const articles = [];
-  for (let offset = 0; ; offset += 200) {
-    params.set("offset", offset);
-    const page = await (await fetch(`/articles?${params}`)).json();
-    articles.push(...page);
-    if (page.length < 200) break;
+  try {
+    for (let offset = 0; ; offset += 200) {
+      params.set("offset", offset);
+      const reponse = await fetch(`/articles?${params}`);
+      if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+      const page = await reponse.json();
+      articles.push(...page);
+      if (page.length < 200) break;
+    }
+  } catch (erreur) {
+    if (perime()) return;
+    document.getElementById("count").textContent = "";
+    afficherErreur(grid, "Échec du chargement des articles : " + erreur.message, load);
+    return;
   }
+  if (perime()) return;
   document.getElementById("count").textContent = `${articles.length} article${articles.length > 1 ? "s" : ""}`;
-  grid.innerHTML = articles.length ? "" : '<div id="empty">Rien ici — change de filtre ou attends le prochain run (toutes les 2 h).</div>';
+  grid.innerHTML = articles.length
+    ? ""
+    : `<div id="empty">Rien ici — change de filtre ou attends le prochain passage${cadencePipeline()}.</div>`;
 
   for (const a of articles) {
     const card = document.createElement("div");
@@ -351,6 +654,14 @@ async function load() {
       : a.raison_sans_visuel
         ? `<span class="badge sans-visuel" title="${escapeHtml(a.raison_sans_visuel)}">🚫 sans visuel</span>`
         : "";
+    // Hors file, et POURQUOI. Le champ refuse l'article partout (le gel, la
+    // composition et « Sauter » l'ecrivent) et n'etait affiche nulle part : un
+    // article invisible de la file semblait simplement ne jamais sortir.
+    const excluBadge = a.file_exclu_raison
+      ? `<span class="badge exclu" title="${escapeHtml(a.file_exclu_raison)}">⛔ hors file : ${escapeHtml(a.file_exclu_raison)}</span>`
+      : "";
+    // « ↩ » seul ne disait pas ou l'on revient : ce geste remet l'article en
+    // statut "new", c'est-a-dire dans la vue « A traiter ». D'ou son libelle.
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
@@ -360,6 +671,7 @@ async function load() {
           ${a.category ? `<span class="badge">${a.category}</span>` : ""}
           ${a.imprint ? `<span class="badge">${a.imprint}</span>` : ""}
           ${visuelBadge}
+          ${excluBadge}
         </div>
         <a class="title" href="${a.url}" target="_blank" rel="noopener"></a>
         <div class="summary"></div>
@@ -367,8 +679,9 @@ async function load() {
         <div class="actions">
           <button data-status="reviewed">✓ Vu</button>
           <button data-status="used">📸 Posté</button>
-          <button data-status="new">↩</button>
+          <button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>
           <button class="gen-post">Générer le post</button>
+          ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
         </div>
       </div>`;
     card.querySelector(".title").textContent = a.title;
@@ -386,6 +699,26 @@ async function load() {
       };
     }
     card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target);
+    // Le retour en arriere de « 🚫 Sauter » -- et de toute exclusion posee par
+    // l'agent (gel, composition). Avant lui, le seul recours etait un UPDATE
+    // a la main en base.
+    const btnReintegrer = card.querySelector(".reintegrer");
+    if (btnReintegrer) {
+      btnReintegrer.onclick = async () => {
+        btnReintegrer.disabled = true;
+        try {
+          const reponse = await fetch(`/articles/${a.id}/reintegrer`, { method: "POST" });
+          if (!reponse.ok) {
+            const corps = await reponse.json().catch(() => ({}));
+            throw new Error(corps.detail || "HTTP " + reponse.status);
+          }
+          load();
+        } catch (erreur) {
+          alert("Remise dans la file refusée : " + erreur.message);
+          btnReintegrer.disabled = false;
+        }
+      };
+    }
     grid.appendChild(card);
   }
 }
@@ -393,35 +726,142 @@ async function load() {
 let sourceNames = {};
 function sourceName(id) { return sourceNames[id] || "?"; }
 
+// --- Renvois entre panneaux ------------------------------------------------
+//
+// `article #123`, `post 45` et `IG 17894…` etaient du TEXTE INERTE partout :
+// lignes de creneau, lignes de post, fiche de post, lignes d'evenement. Le
+// code disait lui-meme pourquoi il affichait le dernier -- « il permet de
+// retrouver le post sur Instagram » -- pour un trajet que l'utilisateur
+// faisait donc a la main, plusieurs fois par jour.
+//
+// Trois destinations, une seule fabrique : un post ouvre SA FICHE (l'overlay
+// est global, donc depuis la Programmation comme depuis les Evenements), un
+// article mene a l'actu, un identifiant media ouvre la publication.
+
+const IG_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+// Le shortcode d'un post Instagram est son identifiant media (la part AVANT le
+// « _ », qui porte l'identifiant du compte) ecrit en base 64 avec cet
+// alphabet. Le lien est donc DEDUIT, sans un seul appel reseau : demander le
+// `permalink` a Graph serait un appel vers Meta a chaque affichage, ce que les
+// contraintes de ce chantier interdisent, et aucun permalien n'est stocke
+// apres `media_publish`. L'identifiant brut reste ecrit DANS le lien : si la
+// deduction se trompe, on garde exactement ce qu'on avait avant.
+function permalienInstagram(igMediaId) {
+  const pk = String(igMediaId || "").split("_")[0];
+  if (!/^[0-9]{6,25}$/.test(pk)) return null;
+  let reste = BigInt(pk);
+  let code = "";
+  while (reste > 0n) {
+    code = IG_ALPHABET[Number(reste % 64n)] + code;
+    reste /= 64n;
+  }
+  return code ? `https://www.instagram.com/p/${code}/` : null;
+}
+
+// `stopPropagation` : une ligne de post s'ouvre au clic sur la ligne entiere.
+// Sans lui, cliquer un renvoi declencherait AUSSI le geste de sa ligne.
+function renvoiLien(texte, href, titre, classe) {
+  const a = document.createElement("a");
+  a.className = classe || "ref";
+  a.textContent = texte;
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  if (titre) { a.title = titre; a.setAttribute("aria-label", titre); }
+  a.onclick = (evenement) => evenement.stopPropagation();
+  return a;
+}
+
+function renvoiPost(postId) {
+  const bouton = document.createElement("button");
+  bouton.type = "button";
+  bouton.className = "ref";
+  bouton.textContent = `post ${postId}`;
+  bouton.title = `Ouvrir la fiche du post ${postId}`;
+  bouton.setAttribute("aria-label", bouton.title);
+  bouton.onclick = (evenement) => { evenement.stopPropagation(); ouvrirPost(postId); };
+  return bouton;
+}
+
+// Sans URL -- l'article a ete purge (`retention_days`), et le creneau comme le
+// post lui survivent -- on rend du TEXTE : un identifiant inerte vaut mieux
+// qu'un lien mort.
+function renvoiArticle(articleId, url) {
+  const texte = `article #${articleId}`;
+  if (!url) return texte;
+  return renvoiLien(texte, url, `Ouvrir l'actu d'origine (article #${articleId})`);
+}
+
+function renvoiInstagram(igMediaId) {
+  const url = permalienInstagram(igMediaId);
+  const texte = `IG ${igMediaId}`;
+  if (!url) return texte;
+  return renvoiLien(
+    texte, url,
+    "Ouvrir la publication sur Instagram (lien deduit de l'identifiant media)");
+}
+
+// Une ligne de metadonnees dont certaines parties sont CLIQUABLES :
+// `textContent` les aurait aplaties en texte, et un `innerHTML` concatene
+// demanderait d'echapper a la main ce que le DOM echappe tout seul.
+function poserParties(zone, parties) {
+  zone.innerHTML = "";
+  parties.filter((partie) => partie != null && partie !== "").forEach((partie, rang) => {
+    if (rang) zone.appendChild(document.createTextNode(" · "));
+    zone.appendChild(partie instanceof Node ? partie : document.createTextNode(String(partie)));
+  });
+}
+
 const gridEl = document.getElementById("grid");
 const panelEl = document.getElementById("sources-panel");
 const postsPanelEl = document.getElementById("posts-panel");
 const schedulePanelEl = document.getElementById("schedule-panel");
 const eventsPanelEl = document.getElementById("events-panel");
+const barreFiltres = document.getElementById("barre-filtres");
 
-document.querySelectorAll(".chip").forEach((chip) => chip.onclick = () => {
-  document.querySelectorAll(".chip").forEach((c) => c.classList.remove("on"));
+// --- Deux portees, deux variables ----------------------------------------
+//
+// `panneau` dit CE QUI EST A L'ECRAN (portee application) ; `preset` dit
+// comment la grille est filtree (portee grille). Une seule variable portait
+// les deux, et le melange avait un prix mesurable : les trois `select` et les
+// huit pastilles restaient actifs sous un panneau non-grille.
+let panneau = "grille";
+
+function afficherPanneau(nom) {
+  panneau = nom;
+  for (const onglet of document.querySelectorAll(".onglet"))
+    onglet.classList.toggle("on", onglet.dataset.panneau === nom);
+  gridEl.hidden = nom !== "grille";
+  // Les filtres quittent l'ecran hors de la grille : ils n'y ont pas de sens,
+  // et ce qui n'est pas a l'ecran ne peut pas etre actionne par megarde. La
+  // garde de `load()` reste la ceinture -- celle-ci est la bretelle, et c'est
+  // elle qui rend aussi l'entete plus courte sous les autres panneaux.
+  barreFiltres.hidden = nom !== "grille";
+  panelEl.hidden = nom !== "sources";
+  postsPanelEl.hidden = nom !== "posts";
+  schedulePanelEl.hidden = nom !== "schedule";
+  eventsPanelEl.hidden = nom !== "events";
+  document.getElementById("count").textContent = "";
+  mesurerEntete();
+  if (nom === "sources") loadSourcesPanel();
+  else if (nom === "posts") loadPostsPanel();
+  else if (nom === "schedule") loadSchedulePanel();
+  else if (nom === "events") loadEventsPanel();
+  else load();
+}
+
+document.querySelectorAll(".onglet").forEach((onglet) => {
+  onglet.onclick = () => afficherPanneau(onglet.dataset.panneau);
+});
+
+// Les pastilles de filtre ne touchent QUE la grille : elles ne changent plus
+// de panneau, elles ne sont meme plus visibles ailleurs.
+document.querySelectorAll(".chip[data-preset]").forEach((chip) => chip.onclick = () => {
+  document.querySelectorAll(".chip[data-preset]").forEach((c) => c.classList.remove("on"));
   chip.classList.add("on");
   preset = chip.dataset.preset;
-  gridEl.hidden = true; panelEl.hidden = true; postsPanelEl.hidden = true; schedulePanelEl.hidden = true;
-  eventsPanelEl.hidden = true;
-  document.getElementById("count").textContent = "";
-  if (preset === "sources") {
-    panelEl.hidden = false;
-    loadSourcesPanel();
-  } else if (preset === "posts") {
-    postsPanelEl.hidden = false;
-    loadPostsPanel();
-  } else if (preset === "schedule") {
-    schedulePanelEl.hidden = false;
-    loadSchedulePanel();
-  } else if (preset === "events") {
-    eventsPanelEl.hidden = false;
-    loadEventsPanel();
-  } else {
-    gridEl.hidden = false;
-    load();
-  }
+  load();
 });
 for (const id of ["category", "source", "sort"])
   document.getElementById(id).onchange = load;
@@ -451,6 +891,7 @@ async function loadSourcesPanel() {
       <div class="grow">
         <div class="nm"></div>
         <div class="u"></div>
+        <div class="sante"></div>
       </div>
       <span class="tag">${s.type}</span>
       ${s.genre ? `<span class="tag">${s.genre}</span>` : ""}
@@ -463,22 +904,72 @@ async function loadSourcesPanel() {
       <option value="club">Club</option>
       <option value="autre">Autre</option>
       </select>
+      <span class="cat-etat"></span>
       <button class="toggle">${s.active ? "⏸ Désactiver" : "▶ Activer"}</button>`;
     row.querySelector(".nm").textContent = s.name;
     row.querySelector(".u").textContent = s.url;
+    // La raison en clair, adjacente : jamais un etat de sante en infobulle.
+    const sante = row.querySelector(".sante");
+    if (s.last_error) {
+      sante.classList.add("ko");
+      sante.textContent = `⚠ ${fmtDate(s.last_error_at)} — ${s.last_error}`;
+    } else if (s.last_ok_at) {
+      sante.textContent = `✓ lue ${fmtDate(s.last_ok_at)}`;
+    } else {
+      sante.textContent = "jamais lue avec succès";
+    }
     const catSel = row.querySelector(".categorie");
+    const catEtat = row.querySelector(".cat-etat");
     catSel.value = s.categorie || "";
+    // Ce PATCH partait sans que PERSONNE ne lise la reponse : un refus
+    // ressemblait exactement a une reussite. Or cette categorie pilote les
+    // regles 5-6 du prompt de scoring, l'eligibilite reel, et la regle « jamais
+    // les visuels d'un compte media » -- se tromper sur sa valeur se paie en
+    // production, pas a l'ecran.
+    //
+    // Contrairement a son voisin `.toggle`, qui RECHARGE tout le panneau (il
+    // change l'ordre et l'opacite des lignes), on ne recharge pas ici : avec
+    // ~145 sources, perdre sa position de defilement a chaque classement rendrait
+    // le tri a la main impraticable. On affiche donc ce que le SERVEUR a retenu,
+    // sur la ligne meme.
     catSel.onchange = async () => {
-      await fetch(`/sources/${s.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categorie: catSel.value || null }),
-      });
+      const precedente = s.categorie || "";
+      catEtat.className = "cat-etat";
+      catEtat.textContent = "…";
+      try {
+        const reponse = await fetch(`/sources/${s.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ categorie: catSel.value || null }),
+        });
+        if (!reponse.ok) {
+          const corps = await reponse.json().catch(() => ({}));
+          throw new Error(typeof corps.detail === "string" ? corps.detail : "HTTP " + reponse.status);
+        }
+        const maj = await reponse.json();
+        s.categorie = maj.categorie || null;
+        catSel.value = s.categorie || "";
+        catEtat.textContent = "✓";
+      } catch (erreur) {
+        // Retour en arriere VISIBLE : le selecteur ne doit jamais afficher une
+        // valeur que la base n'a pas.
+        catSel.value = precedente;
+        catEtat.classList.add("ko");
+        catEtat.textContent = "⚠";
+        alert("Catégorie non enregistrée (" + erreur.message + ") — « "
+          + (s.name) + " » garde « " + (precedente || "inconnue") + " ».");
+      }
     };
     row.querySelector(".toggle").onclick = async () => {
-      await fetch(`/sources/${s.id}`, {
+      // Le rechargement rend un refus VISIBLE (la ligne ne bouge pas) mais muet :
+      // on dit aussi pourquoi, comme pour la categorie juste au-dessus.
+      const reponse = await fetch(`/sources/${s.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: !s.active }),
       });
+      if (!reponse.ok) {
+        const corps = await reponse.json().catch(() => ({}));
+        alert("Changement refusé : " + (typeof corps.detail === "string" ? corps.detail : reponse.status));
+      }
       loadSourcesPanel();
     };
     list.appendChild(row);
@@ -629,10 +1120,10 @@ async function loadSchedulePanel() {
   let creneaux;
   try {
     const reponse = await fetch("/schedule");
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     creneaux = await reponse.json();
   } catch (erreur) {
-    list.innerHTML = '<div id="empty">Échec du chargement de la file.</div>';
+    afficherErreur(list, "Échec du chargement de la file : " + erreur.message, loadSchedulePanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -646,25 +1137,49 @@ async function loadSchedulePanel() {
     const row = document.createElement("div");
     row.className = "post-row";
     row.innerHTML = `
-      <div class="grow"><div class="hl"></div><div class="sub"></div></div>
+      <div class="grow">
+        <div class="slot-tete">
+          <span class="slot-heure"></span>
+          <span class="slot-titre"></span>
+        </div>
+        <div class="slot-alerte" hidden></div>
+        <div class="sub"></div>
+      </div>
       <span class="format-pill"></span>
       <span class="status-pill"></span>
       <span class="slot-actions"></span>`;
-    row.querySelector(".hl").textContent = c.article_title || "(créneau libre)";
-    // Les identifiants sont affiches parce qu'ils servent : `article_id` se
-    // recopie dans « remplacer », `ig_media_id` retrouve le post sur Instagram.
-    const details = [fmtDate(c.publier_a), `créneau ${c.id}`];
-    if (c.article_id != null) details.push(`article #${c.article_id}`);
-    if (c.post_id != null) details.push(`post ${c.post_id}`);
-    if (c.ig_media_id) details.push(`IG ${c.ig_media_id}`);
-    if (c.relevance != null) details.push(`pertinence ${c.relevance}`);
-    if (c.epingle) details.push("📌 épinglé");
+    // L'HEURE en tete : c'est ce qu'un calendrier porte en premier, et la
+    // seule information qu'un creneau LIBRE possede vraiment. Le titre la
+    // suit, et s'efface (poids normal, italique, gris) quand il n'y en a pas
+    // -- « (creneau libre) » occupait la position de titre sur six lignes sur
+    // dix, le texte le plus visible de la ligne etant une non-information.
+    row.querySelector(".slot-heure").textContent = fmtDate(c.publier_a) || "heure inconnue";
+    const titreCreneau = row.querySelector(".slot-titre");
+    titreCreneau.textContent = c.article_title || "créneau libre";
+    if (!c.article_title) titreCreneau.classList.add("vide");
     // Reclame par l'agent il y a peu : conteneur en creation ou attente de
     // l'heure affichee, pas un echec (voir RAISON_RECLAMATION, runner.py).
     const enCours = c.etat === "echec" && c.erreur === "publication interrompue avant confirmation"
       && new Date(c.publier_a).getTime() > Date.now() - 20 * 60 * 1000;
-    if (c.erreur && !enCours) details.push(`⚠ ${c.erreur}`);
-    row.querySelector(".sub").textContent = details.join(" · ");
+    // L'ERREUR a sa PROPRE ligne, dans le rouge d'alerte deja en service :
+    // elle etait tassee en gris au milieu d'une phrase jointe par des « · »,
+    // ou une panne se noie. Plus visible qu'avant, jamais moins.
+    const alerte = row.querySelector(".slot-alerte");
+    if (c.erreur && !enCours) {
+      alerte.hidden = false;
+      alerte.textContent = `⚠ ${c.erreur}`;
+    }
+    // Les identifiants servent, et servent MIEUX en liens : `article_id`
+    // mene a l'actu, `post_id` ouvre sa fiche, `ig_media_id` ouvre la
+    // publication. Ils restent lisibles et recopiables pour « Remplacer ».
+    poserParties(row.querySelector(".sub"), [
+      `créneau ${c.id}`,
+      c.article_id != null ? renvoiArticle(c.article_id, c.article_url) : null,
+      c.post_id != null ? renvoiPost(c.post_id) : null,
+      c.ig_media_id ? renvoiInstagram(c.ig_media_id) : null,
+      c.relevance != null ? `pertinence ${c.relevance}` : null,
+      c.epingle ? "📌 épinglé" : null,
+    ]);
     const formatPill = row.querySelector(".format-pill");
     formatPill.classList.add(c.format);
     formatPill.textContent = FORMATS_CRENEAU[c.format] || c.format;
@@ -673,20 +1188,51 @@ async function loadSchedulePanel() {
     pastille.textContent = enCours ? "Publication en cours" : (ETATS_CRENEAU[c.etat] || c.etat);
     if (CRENEAUX_MODIFIABLES.has(c.etat)) {
       const actions = row.querySelector(".slot-actions");
-      const bouton = (libelle, titre, donnees) => {
+      // `confirmer` est optionnel : seul le geste IRREVERSIBLE en demande un.
+      // Le budget de confirmation etait depense a l'envers -- supprimer un
+      // BROUILLON en demandait une, sortir un article de la file pour de bon
+      // n'en demandait aucune.
+      // `libelle` est VISIBLE, `titre` reste l'explication longue. Quatre icones
+      // nues ne disaient rien -- et « 📌 » / « 📍 » sont deux actions opposees
+      // que seule l'inclinaison du dessin separait.
+      const bouton = (libelle, titre, donnees, confirmer) => {
         const b = document.createElement("button");
         b.textContent = libelle;
         b.title = titre;
-        b.onclick = () => modifierCreneau(c.id, donnees);
+        b.setAttribute("aria-label", titre);
+        b.onclick = () => {
+          if (confirmer && !confirmer()) return;
+          modifierCreneau(c.id, donnees);
+        };
         actions.appendChild(b);
       };
       if (c.article_id) {
-        bouton(c.epingle ? "📍" : "📌", c.epingle ? "Désépingler" : "Épingler", { epingle: !c.epingle });
+        bouton(
+          c.epingle ? "📍 Désépingler" : "📌 Épingler",
+          c.epingle
+            ? "Désépingler : ce créneau redevient arbitrable par le pipeline"
+            : "Épingler : l'arbitrage ne touchera plus ce créneau",
+          { epingle: !c.epingle },
+        );
       }
-      bouton("✏️", "Remplacer par un autre article (identifiant)", c.format === "reel" ? "remplacer-reel" : "remplacer");
+      bouton(
+        "✏️ Remplacer",
+        "Remplacer par un autre article (identifiant)",
+        c.format === "reel" ? "remplacer-reel" : "remplacer",
+      );
       if (c.article_id) {
-        bouton("⏬", "Décaler au créneau suivant", { decaler: true });
-        bouton("🚫", "Sauter cet article", { sauter: true });
+        bouton("⏬ Décaler", "Décaler au créneau suivant", { decaler: true });
+        // La confirmation NOMME l'article : « Sauter cet article » ne disait pas
+        // lequel, et un clic sur une icone sans libelle l'ecartait de la file.
+        bouton(
+          "🚫 Sauter",
+          "Sauter : l'article sort de la file (reversible depuis sa carte, « Remettre dans la file »)",
+          { sauter: true },
+          () => confirm(
+            "Sortir « " + (c.article_title || "article #" + c.article_id) + " » de la file ?\n\n"
+            + "Il ne sera plus jamais choisi pour un créneau. Pour l'y remettre : sa carte, "
+            + "bouton « ↩ Remettre dans la file »."),
+        );
       }
     }
     list.appendChild(row);
@@ -729,11 +1275,10 @@ async function loadPostsPanel() {
   let posts;
   try {
     const reponse = await fetch(`/posts?${params}`);
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     posts = await reponse.json();
   } catch (erreur) {
-    alert('Échec du chargement des posts : ' + erreur.message);
-    list.innerHTML = '<div id="empty">Échec du chargement des posts.</div>';
+    afficherErreur(list, "Échec du chargement des posts : " + erreur.message, loadPostsPanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -754,8 +1299,14 @@ async function loadPostsPanel() {
       </div>
       <span class="status-pill ${p.status}">${STATUS_LABELS[p.status] || p.status}</span>`;
     row.querySelector(".hl").textContent = headline.replace(/\*\*/g, "");
-    row.querySelector(".sub").textContent =
-      `post ${p.id}${p.article_id != null ? ` · article #${p.article_id}` : ""} · ${p.source_name || "?"} · ${fmtDate(p.created_at)}`;
+    // `post ${p.id}` reste du texte : c'est la ligne entiere qui ouvre cette
+    // fiche-la. L'article, lui, devient un lien vers l'actu.
+    poserParties(row.querySelector(".sub"), [
+      `post ${p.id}`,
+      p.article_id != null ? renvoiArticle(p.article_id, p.article_url) : null,
+      p.source_name || "?",
+      fmtDate(p.created_at),
+    ]);
     row.onclick = () => ouvrirPost(p.id);
     list.appendChild(row);
   }
@@ -772,6 +1323,35 @@ async function enregistrerPost(postId, donnees) {
 }
 
 const detailEl = document.getElementById("post-detail");
+
+// --- Le tampon de la legende ----------------------------------------------
+//
+// `renderPostDetail` reconstruit TOUTE la fiche depuis la reponse du serveur, et
+// SIX gestes de cette meme fiche la rappellent sans rien enregistrer : choisir
+// une variante de cover, basculer POST/REELS, valider un fond, cocher un media,
+// approuver, marquer publie. Le geste editorial normal -- ecrire la legende,
+// puis choisir la cover qui va avec -- detruisait donc le texte en silence, et
+// la fermeture le jetait aussi.
+//
+// UN SEUL point de capture, l'evenement `input` des deux zones de texte : un
+// tampon rempli a la main dans chacun des six gestes serait a refaire au
+// septieme. Et un seul point de lecture, `textesAReinjecter`, qui est volontairement
+// PURE (pas de DOM) pour etre verifiable.
+let brouillonTexte = null; // { postId, caption, hashtags }
+
+function textesDuServeur(post) {
+  return { caption: post.caption || "", hashtags: (post.hashtags || []).join(" ") };
+}
+
+// Les textes a reinjecter apres un re-rendu, ou `null` quand il n'y a rien a
+// sauver : pas de tampon, tampon d'un AUTRE post, ou tampon identique a ce que
+// le serveur vient de rendre (donc deja enregistre).
+function textesAReinjecter(brouillon, post) {
+  if (!brouillon || brouillon.postId !== post.id) return null;
+  const serveur = textesDuServeur(post);
+  if (brouillon.caption === serveur.caption && brouillon.hashtags === serveur.hashtags) return null;
+  return { caption: brouillon.caption, hashtags: brouillon.hashtags };
+}
 
 // --- Predicat "video exploitable" reimplemente depuis app/content/media.py :
 // on ne peut pas importer du Python dans le navigateur. Toute modification de
@@ -801,7 +1381,7 @@ function raisonPasDeReel(media) {
   return "aucune vidéo exploitable";
 }
 
-// Un post survit a la purge de son article (14 jours) : GET peut donc
+// Un post survit a la purge de son article (`retention_days`) : GET peut donc
 // legitimement rendre 404, pas seulement en cas de panne reseau -- dans les
 // deux cas on degrade a null plutot que de casser l'ouverture du detail.
 async function fetchArticleById(id) {
@@ -822,6 +1402,8 @@ async function chargerCovers(postId) {
 }
 
 async function ouvrirPost(postId) {
+  // Le tampon est celui d'UNE fiche : ouvrir un autre post le perime.
+  if (brouillonTexte && brouillonTexte.postId !== postId) brouillonTexte = null;
   let post;
   try {
     post = await (await fetch(`/posts/${postId}`)).json();
@@ -879,7 +1461,7 @@ function renderPostDetail(post, article, covers) {
   const reelDisabled = raisonReel != null;
   const reasonHtml = reelDisabled
     ? `<div class="reel-reason" id="reel-reason">${escapeHtml(
-        article ? raisonReel : "actu introuvable (probablement purgée -- 14 jours de rétention)"
+        article ? raisonReel : "actu introuvable (" + retentionTexte() + ")"
       )}</div>`
     : "";
 
@@ -940,14 +1522,23 @@ function renderPostDetail(post, article, covers) {
 
   // D'où vient le FOND de la cover. Posé à la composition (`variants.fond`),
   // jamais déduit : une fois l'URL dans la slide, plus rien ne dirait si elle
-  // vient de l'actu, du compte qui l'a publiée, d'un artiste cité — ou si tout
-  // était une affiche et que la cover est partie sur l'aplat Kinda.
+  // vient de l'actu, du compte qui l'a publiée, d'un artiste cité, ou du web.
+  //
+  // Deux de ces libellés décrivaient un comportement RETIRÉ. `kinda` disait
+  // « mieux vaut l'aplat sombre » : depuis la Tâche 5 du chantier visuels
+  // (2026-09-21), une composition neuve ne pose plus jamais cet aplat, elle
+  // SAUTE le créneau — un brouillon qui porte encore cette origine est donc un
+  // vestige, et le dire évite de chercher à comprendre pourquoi un post part
+  // sur un fond uni. Et `web` promettait un crédit du site, retiré le même
+  // jour : le crédit de la légende ne porte plus que des comptes (@artiste).
   const ORIGINES_FOND = {
     article: "📰 photo de l'actu",
     compte: "📸 photo du compte qui a publié l'actu (l'actu n'offrait qu'une affiche)",
     artiste: "🎤 photo d'un artiste suivi cité (l'actu n'offrait qu'une affiche)",
-    web: "🌐 image trouvée sur le web (dernier recours) — le crédit cite le site",
-    kinda: "🎨 fond Kinda — tout était une affiche, mieux vaut l'aplat sombre",
+    web: "🌐 image trouvée sur le web (dernier recours) — le site n'est pas crédité",
+    kinda: "🎨 aplat Kinda — brouillon composé avant le 2026-09-21 : aucune photo"
+      + " n'avait été trouvée. Une composition d'aujourd'hui sauterait le créneau"
+      + " au lieu de publier cet aplat.",
   };
   const origineFond = ((post.variants || {}).fond || {}).origine;
   const fondSection = origineFond
@@ -984,7 +1575,7 @@ function renderPostDetail(post, article, covers) {
 
       ${actifsSection}
       <div class="section-title">Médias de l'actu (carrousel)</div>
-      <div class="media-list">${mediaHtml}</div>
+      <div class="media-list" id="medias-actu">${mediaHtml}</div>
 
       <div class="field">
         <label>Légende</label>
@@ -994,6 +1585,9 @@ function renderPostDetail(post, article, covers) {
         <label>Hashtags (séparés par des espaces)</label>
         <textarea id="edit-hashtags" rows="2">${escapeHtml((post.hashtags || []).join(" "))}</textarea>
       </div>
+      <div class="render-warning" id="texte-non-enregistre" hidden>
+        ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
+      </div>
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
         <button id="btn-approve">Valider le statut</button>
@@ -1002,8 +1596,54 @@ function renderPostDetail(post, article, covers) {
         ${post.status === "draft" ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
       </div>
     </div>`;
-  detailEl.querySelector("h2").textContent = post.article_title || "Post";
-  detailEl.querySelector(".close-btn").onclick = () => { detailEl.hidden = true; detailEl.innerHTML = ""; };
+  // `article_url` etait dans la reponse de l'API et n'etait lu NULLE PART :
+  // le titre s'affichait en clair, et ouvrir l'actu se faisait a la main.
+  const titreFiche = detailEl.querySelector("h2");
+  const libelleFiche = post.article_title || "Post";
+  if (post.article_url) {
+    titreFiche.textContent = "";
+    titreFiche.appendChild(renvoiLien(
+      libelleFiche, post.article_url, "Ouvrir l'actu d'origine", "titre-lien"));
+    if (post.article_id != null) {
+      const petit = document.createElement("small");
+      petit.className = "ref-article";
+      petit.appendChild(renvoiArticle(post.article_id, post.article_url));
+      titreFiche.appendChild(petit);
+    }
+  } else {
+    titreFiche.textContent = libelleFiche;
+  }
+
+  // Le texte en cours de frappe survit a ce re-rendu : il est repose AVANT tout
+  // le reste, pour qu'aucun chemin (y compris un `return` plus bas) ne puisse
+  // laisser la fiche afficher la version du serveur a la place de la saisie.
+  const captionEl = detailEl.querySelector("#edit-caption");
+  const hashtagsEl = detailEl.querySelector("#edit-hashtags");
+  const aReinjecter = textesAReinjecter(brouillonTexte, post);
+  if (aReinjecter) {
+    captionEl.value = aReinjecter.caption;
+    hashtagsEl.value = aReinjecter.hashtags;
+  }
+  const marquerNonEnregistre = () => {
+    detailEl.querySelector("#texte-non-enregistre").hidden =
+      textesAReinjecter(brouillonTexte, post) == null;
+  };
+  const capturerTextes = () => {
+    brouillonTexte = { postId: post.id, caption: captionEl.value, hashtags: hashtagsEl.value };
+    marquerNonEnregistre();
+  };
+  captionEl.oninput = capturerTextes;
+  hashtagsEl.oninput = capturerTextes;
+  marquerNonEnregistre();
+
+  const fermerDetail = () => {
+    if (textesAReinjecter(brouillonTexte, post)
+        && !confirm("La légende n'est pas enregistrée. Fermer et perdre ces modifications ?")) return;
+    brouillonTexte = null;
+    detailEl.hidden = true;
+    detailEl.innerHTML = "";
+  };
+  detailEl.querySelector(".close-btn").onclick = fermerDetail;
 
   // --- Selection d'une variante de cover ---
   for (const choix of detailEl.querySelectorAll(".cover-choice")) {
@@ -1076,9 +1716,21 @@ function renderPostDetail(post, article, covers) {
   };
 
   // --- Choix des medias du carrousel ---
-  for (const choix of detailEl.querySelectorAll(".media-choice")) {
+  //
+  // La recherche est BORNEE aux medias de l'actu (`#medias-actu`) : la section
+  // « Visuels retenus » produit elle aussi des `.media-choice`, mais SANS case a
+  // cocher et sans `data-index`. Un `querySelectorAll(".media-choice")` sur
+  // toute la fiche les ramassait donc aussi, et `choix.querySelector(
+  // ".media-check").onchange` levait un TypeError sur le premier d'entre eux --
+  // au milieu de `renderPostDetail`, donc AVANT `detailEl.hidden = false` et
+  // avant le branchement de « Enregistrer » : tout post portant des `assets`
+  // (c'est-a-dire tous ceux composes depuis la migration 0018) ne s'ouvrait
+  // PAS, et le clic sur la ligne ne faisait rien du tout. Meme sans le plantage,
+  // la liste des coches lisait `mediaList[NaN]` pour ces divs sans index.
+  const listeMedias = detailEl.querySelector("#medias-actu");
+  for (const choix of listeMedias.querySelectorAll(".media-choice")) {
     choix.querySelector(".media-check").onchange = async () => {
-      const coches = [...detailEl.querySelectorAll(".media-choice")]
+      const coches = [...listeMedias.querySelectorAll(".media-choice")]
         .filter((el) => el.querySelector(".media-check").checked)
         .map((el) => mediaList[Number(el.dataset.index)]);
       const slides = [cover, ...coches.map((m) => ({ kind: "media", ...m }))];
@@ -1096,6 +1748,8 @@ function renderPostDetail(post, article, covers) {
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
     try {
       const updated = await enregistrerPost(post.id, { caption, hashtags });
+      // Le serveur porte ce texte : plus rien a sauver, et l'avertissement tombe.
+      brouillonTexte = null;
       renderPostDetail(updated, article, covers);
     } catch (erreur) {
       alert("Échec de l'enregistrement : " + erreur.message);
@@ -1126,6 +1780,7 @@ function renderPostDetail(post, article, covers) {
       try {
         const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
         if (!reponse.ok) throw new Error(await reponse.text());
+        brouillonTexte = null;
         detailEl.hidden = true; detailEl.innerHTML = "";
         if (!postsPanelEl.hidden) loadPostsPanel();
       } catch (erreur) {
@@ -1177,10 +1832,10 @@ async function loadEventsPanel() {
   let events;
   try {
     const reponse = await fetch(`/events?sort=${sort}&limit=100`);
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     events = await reponse.json();
   } catch (erreur) {
-    list.innerHTML = '<div id="empty">Échec du chargement des événements.</div>';
+    afficherErreur(list, "Échec du chargement des événements : " + erreur.message, loadEventsPanel);
     document.getElementById("count").textContent = "";
     return;
   }
@@ -1196,10 +1851,8 @@ async function loadEventsPanel() {
     row.className = "event-row";
     row.innerHTML = `
       <div class="event-head">
-        <div class="grow">
-          <div class="hl"></div>
-          <div class="sub"></div>
-        </div>
+        <div class="hl"></div>
+        <div class="sub"></div>
         <div class="event-metrics"></div>
       </div>
       <div class="event-observations" hidden></div>`;
@@ -1235,13 +1888,43 @@ async function loadEventsPanel() {
         const reponse = await fetch(`/events/${ev.id}`);
         if (!reponse.ok) throw new Error(await reponse.text());
         const detail = await reponse.json();
-        obsZone.innerHTML = (detail.observations || []).map((o) => `
-          <div class="obs-row">
-            <span class="plateforme">${escapeHtml(PLATEFORMES_LABELS[o.platform] || o.platform)}</span>
-            <span class="plateforme">${escapeHtml(ROLES_LABELS[o.source_role] || o.source_role)}</span>
-            <a href="${escapeHtml(o.url)}" target="_blank" rel="noopener">${escapeHtml(o.title)}</a>
-            <span>· ${escapeHtml(o.source_name)} · ${fmtDate(o.published_at) || "?"}${o.article_id == null ? " · archivé" : ""}</span>
-          </div>`).join("") || '<div class="obs-row">Aucune observation.</div>';
+        // Construit en DOM et non par concatenation : les renvois sont des
+        // elements CLIQUABLES. Une observation liait jusqu'ici vers le web et
+        // rien d'autre -- elle disait ce que la presse a publie, jamais ce que
+        // Kinda en a fait.
+        obsZone.innerHTML = "";
+        const observations = detail.observations || [];
+        if (!observations.length) {
+          const vide = document.createElement("div");
+          vide.className = "obs-row";
+          vide.textContent = "Aucune observation.";
+          obsZone.appendChild(vide);
+        }
+        for (const o of observations) {
+          const ligne = document.createElement("div");
+          ligne.className = "obs-row";
+          ligne.innerHTML = `
+            <span class="plateforme"></span>
+            <span class="plateforme"></span>
+            <a target="_blank" rel="noopener"></a>
+            <span class="apres"></span>
+            <span class="renvois"></span>`;
+          const [plateforme, role] = ligne.querySelectorAll(".plateforme");
+          plateforme.textContent = PLATEFORMES_LABELS[o.platform] || o.platform;
+          role.textContent = ROLES_LABELS[o.source_role] || o.source_role;
+          const lien = ligne.querySelector("a");
+          lien.href = o.url;
+          lien.textContent = o.title;
+          ligne.querySelector(".apres").textContent =
+            `· ${o.source_name} · ${fmtDate(o.published_at) || "?"}`;
+          // `article_id` a NULL veut dire purge : l'observation survit a son
+          // article (ON DELETE SET NULL), le renvoi ne peut donc pas exister.
+          poserParties(ligne.querySelector(".renvois"), [
+            o.article_id != null ? renvoiArticle(o.article_id, o.url) : "archivé",
+            o.post_id != null ? renvoiPost(o.post_id) : null,
+          ]);
+          obsZone.appendChild(ligne);
+        }
       } catch (erreur) {
         obsZone.textContent = "Échec du chargement des observations.";
         charge = false;
@@ -1251,22 +1934,182 @@ async function loadEventsPanel() {
   }
 }
 
+// --- Bandeau de supervision ---------------------------------------------
+// « La machine tourne-t-elle, et qu'a-t-elle fait en mon nom ? » Une seule
+// requete (GET /supervision), aucun appel paye, aucun appel reseau vers Meta ni
+// Anthropic : tout est deja ecrit en base et dans les fichiers d'etat.
+//
+// REGLE QUI GOUVERNE CE CODE : une valeur qu'on n'a pas pu lire s'affiche
+// INCONNUE, jamais « tout va bien ». Donc aucun defaut vert nulle part -- le
+// bandeau part en `inconnu`, une requete en echec le laisse en `inconnu` avec sa
+// raison, et le niveau global vient du serveur (jamais recalcule ici, ou un
+// `|| "ok"` bien intentionne le casserait).
+const SUP_ICONES = { ok: "✅", attention: "⚠️", panne: "⛔", inconnu: "❔" };
+const SUP_GLOBAL = {
+  ok: "✅ Tout tourne",
+  attention: "⚠️ À regarder",
+  panne: "⛔ Panne en cours",
+  inconnu: "❔ État inconnu",
+};
+let supDetailsOuverts = false;
+// Au-dela de deux raisons NON BLOQUANTES, le surplus se replie : l'entete est
+// `sticky` et sa hauteur se paie en zone utile. Les pannes, elles, ne se
+// replient jamais.
+const SUP_RAISONS_DEPLIEES = 2;
+let supRaisonsOuvertes = false;
+
+document.getElementById("sup-plier").onclick = () => {
+  supDetailsOuverts = !supDetailsOuverts;
+  const zone = document.getElementById("sup-details");
+  zone.hidden = !supDetailsOuverts;
+  document.getElementById("sup-plier").setAttribute("aria-expanded", String(supDetailsOuverts));
+};
+
+function supInconnu(raison) {
+  return {
+    niveau: "inconnu",
+    releve_le: null,
+    voyants: [{ cle: "supervision", libelle: "Supervision", niveau: "inconnu", valeur: "?", raison, details: [] }],
+  };
+}
+
+function rendreSupervision(etat) {
+  const bandeau = document.getElementById("supervision");
+  const niveau = SUP_ICONES[etat.niveau] ? etat.niveau : "inconnu";
+  bandeau.className = "supervision niv-" + niveau;
+  document.getElementById("sup-global").textContent = SUP_GLOBAL[niveau];
+  document.getElementById("sup-releve").textContent = etat.releve_le
+    ? "relevé " + fmtDate(etat.releve_le)
+    : "relevé : inconnu";
+
+  const voyants = Array.isArray(etat.voyants) ? etat.voyants : [];
+  const pills = document.getElementById("sup-pills");
+  pills.innerHTML = "";
+  for (const v of voyants) {
+    const niv = SUP_ICONES[v.niveau] ? v.niveau : "inconnu";
+    const pill = document.createElement("span");
+    pill.className = "sup-pill niv-" + niv;
+    pill.innerHTML = `${SUP_ICONES[niv]} <b></b> <span></span>`;
+    pill.querySelector("b").textContent = v.libelle;
+    pill.querySelector("span").textContent = v.valeur;
+    pills.appendChild(pill);
+  }
+
+  // Les raisons des voyants qui ne sont pas au vert : visibles, pas en infobulle.
+  //
+  // REPLI, parce que l'entete est `sticky` : cinq raisons lui faisaient ~230 px
+  // et mangeaient autant de zone utile. Mais gagner de la place ne doit jamais
+  // faire disparaitre une panne -- une PANNE est toujours rendue, le repli ne
+  // touche que les raisons `attention`/`inconnu`, et le bouton dit combien il
+  // en cache, ce qui n'est donc pas un masquage mais un pli.
+  const raisons = document.getElementById("sup-raisons");
+  raisons.innerHTML = "";
+  const ligneRaison = (v) => {
+    const niv = SUP_ICONES[v.niveau] ? v.niveau : "inconnu";
+    const ligne = document.createElement("div");
+    ligne.className = "sup-raison niv-" + niv;
+    ligne.innerHTML = `${SUP_ICONES[niv]} <b></b> — <span></span>`;
+    ligne.querySelector("b").textContent = v.libelle;
+    ligne.querySelector("span").textContent = v.raison;
+    return ligne;
+  };
+  const aRaison = voyants.filter((v) => v.niveau !== "ok" && v.raison);
+  const pannes = aRaison.filter((v) => v.niveau === "panne");
+  const secondaires = aRaison.filter((v) => v.niveau !== "panne");
+  for (const v of pannes) raisons.appendChild(ligneRaison(v));
+  const replie = secondaires.length > SUP_RAISONS_DEPLIEES && !supRaisonsOuvertes;
+  const montrees = replie ? secondaires.slice(0, SUP_RAISONS_DEPLIEES) : secondaires;
+  for (const v of montrees) raisons.appendChild(ligneRaison(v));
+  if (secondaires.length > SUP_RAISONS_DEPLIEES) {
+    const caches = secondaires.length - montrees.length;
+    const plus = document.createElement("button");
+    plus.className = "sup-raison-plus";
+    plus.setAttribute("aria-expanded", String(!replie));
+    plus.textContent = replie
+      ? `+ ${caches} autre${caches > 1 ? "s" : ""} point${caches > 1 ? "s" : ""} à regarder`
+      : "Replier les points à regarder";
+    plus.onclick = () => {
+      supRaisonsOuvertes = !supRaisonsOuvertes;
+      rendreSupervision(etat);
+    };
+    raisons.appendChild(plus);
+  }
+
+  const details = document.getElementById("sup-details");
+  details.innerHTML = "";
+  for (const v of voyants) {
+    if (!Array.isArray(v.details) || !v.details.length) continue;
+    const bloc = document.createElement("div");
+    bloc.className = "sup-bloc";
+    bloc.innerHTML = "<b></b>";
+    bloc.querySelector("b").textContent = v.libelle + " : ";
+    bloc.appendChild(document.createTextNode(v.details.join(" · ")));
+    details.appendChild(bloc);
+  }
+  details.hidden = !supDetailsOuverts;
+  mesurerEntete();
+}
+
+// `scroll-padding-top` ne peut pas etre fige en CSS : le bandeau grandit avec le
+// nombre de raisons affichees, et une ancre atterrirait sous l'entete `sticky`.
+// On publie donc la hauteur REELLE dans `--entete-h`.
+function mesurerEntete() {
+  const entete = document.querySelector("header");
+  if (!entete) return;
+  document.documentElement.style.setProperty("--entete-h", entete.offsetHeight + "px");
+}
+
+async function chargerSupervision() {
+  try {
+    const reponse = await fetch("/supervision");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    rendreSupervision(await reponse.json());
+  } catch (erreur) {
+    rendreSupervision(supInconnu(
+      "supervision injoignable (" + erreur.message + ") : rien ne dit que la machine tourne."));
+  }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 (async () => {
-  const sources = await (await fetch("/sources")).json();
+  // La grille ne depend PAS de ce filtre, et son chargement ne doit donc jamais
+  // dependre de lui : `load()` etait la derniere instruction d'un bloc sans
+  // rattrapage, si bien qu'un `/sources` en echec laissait l'ecran d'accueil sur
+  // « Chargement… » pour toujours -- sans un mot, et sans que la grille,
+  // parfaitement joignable, soit meme tentee.
+  // Les reglages d'abord : ils n'alimentent que des TEXTES, et leur echec est
+  // deja traite (la phrase perd son chiffre). `await` ici plutot qu'en
+  // parallele, pour que le premier rendu de la grille porte deja la bonne
+  // cadence au lieu d'une phrase amputee reparee au rafraichissement suivant.
+  await chargerReglages();
   const sel = document.getElementById("source");
-  for (const s of sources) {
-    sourceNames[s.id] = s.name;
-    const opt = document.createElement("option");
-    opt.value = s.id; opt.textContent = (s.active ? "" : "⏸ ") + s.name;
-    sel.appendChild(opt);
+  try {
+    const reponse = await fetch("/sources");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    for (const s of await reponse.json()) {
+      sourceNames[s.id] = s.name;
+      const opt = document.createElement("option");
+      opt.value = s.id; opt.textContent = (s.active ? "" : "⏸ ") + s.name;
+      sel.appendChild(opt);
+    }
+  } catch (erreur) {
+    // Inconnu, jamais « tout va bien » : le filtre dit qu'il n'a pas pu etre lu.
+    sel.querySelector("option").textContent = "⚠ sources illisibles (" + erreur.message + ")";
   }
   load();
 })();
+
+mesurerEntete();
+addEventListener("resize", mesurerEntete);
+
+chargerSupervision();
+// Le bandeau vit sa vie : il doit rester vrai meme quand l'utilisateur laisse
+// l'onglet ouvert toute la journee sur un panneau.
+setInterval(chargerSupervision, 60000);
 </script>
 </body>
 </html>

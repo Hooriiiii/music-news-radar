@@ -85,11 +85,44 @@ def alerte_jeton_sourcing(expire_le: dt.datetime | None, maintenant: dt.datetime
     )
 
 
+def _lire_etat(chemin) -> dict:
+    """L'etat sur disque, ou un dict vide -- ne leve jamais."""
+    try:
+        donnees = json.loads(chemin.read_text())
+    except Exception:  # noqa: BLE001 -- absent, tronque, illisible
+        return {}
+    return donnees if isinstance(donnees, dict) else {}
+
+
 def _deja_alerte_le(chemin) -> dt.date | None:
     try:
-        return dt.date.fromisoformat(json.loads(chemin.read_text())["alerte_envoyee_le"])
+        return dt.date.fromisoformat(_lire_etat(chemin)["alerte_envoyee_le"])
     except Exception:  # noqa: BLE001 -- absent ou illisible : on previent
         return None
+
+
+def consigner_echeance(chemin, expire_le: dt.datetime | None, maintenant: dt.datetime) -> None:
+    """Ecrit l'echeance RELEVEE, meme quand elle est loin et qu'on ne notifie pas.
+
+    POURQUOI. Cette echeance ne se lit que chez Meta, et le bandeau de
+    supervision (`app/supervision.py`) ne doit RIEN couter : il ne peut donc pas
+    la demander lui-meme. Le passage horaire, lui, appelle `debug_token` de
+    toute facon -- la consigner ici ne coute pas un appel de plus, et c'est le
+    seul moyen d'afficher a l'ecran une echeance qui n'existait jusqu'ici que
+    dans une notification macOS, sept jours avant l'echeance.
+
+    On FUSIONNE : `alerte_envoyee_le` porte la discipline « une notification par
+    jour », l'ecraser ferait notifier a chaque passage horaire. Ne leve jamais.
+    """
+    try:
+        etat = _lire_etat(chemin)
+        etat["expire_le"] = expire_le.isoformat() if expire_le is not None else None
+        etat["releve_le"] = maintenant.isoformat()
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        chemin.write_text(json.dumps(etat))
+    except OSError:
+        # Sans cette trace, le bandeau dira « inconnu » -- jamais « tout va bien ».
+        logger.warning("Echeance du jeton de sourcing non consignee (%s)", chemin)
 
 
 def surveiller_jeton_sourcing(
@@ -110,16 +143,20 @@ def surveiller_jeton_sourcing(
         logger.warning("Echeance du jeton de sourcing Instagram illisible (%s)", type(exc).__name__)
         return None
 
+    chemin = settings.meta_token_path.parent / FICHIER_ALERTE
+    consigner_echeance(chemin, expire_le, maintenant)
+
     alerte = alerte_jeton_sourcing(expire_le, maintenant)
     if alerte is None:
         return None
-    chemin = settings.meta_token_path.parent / FICHIER_ALERTE
     if _deja_alerte_le(chemin) == maintenant.date():
         return alerte
     try:
         notifier("Kinda", alerte)
+        etat = _lire_etat(chemin)
+        etat["alerte_envoyee_le"] = maintenant.date().isoformat()
         chemin.parent.mkdir(parents=True, exist_ok=True)
-        chemin.write_text(json.dumps({"alerte_envoyee_le": maintenant.date().isoformat()}))
+        chemin.write_text(json.dumps(etat))
     except Exception:  # noqa: BLE001 -- le canal d'alerte ne casse jamais le run
         logger.exception("Notification d'echeance du jeton de sourcing impossible")
     return alerte

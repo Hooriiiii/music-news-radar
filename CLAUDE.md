@@ -1594,6 +1594,61 @@ republication, limitation de l'IP résidentielle — démarrer en `apercu`.
 soit « Gelé » (publié, aperçu ou manqué), puis descendre. Sinon un reel gelé
 perdrait en cours de route son format et son crédit obligatoire.
 
+## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
+
+Un bandeau permanent en tete du dashboard, visible quel que soit le panneau, qui
+repond a une seule question : **« la machine tourne-t-elle, et qu'a-t-elle fait
+en mon nom ? »** Neuf voyants : mode de publication, composition/credits,
+creneaux du jour, dernier passage, sante des sources, quota Graph, pauses
+(yt-dlp, visuels sautes), et les DEUX jetons Meta.
+
+**Pourquoi.** Semaine du 2026-09-26 au 2026-10-02 : credits Anthropic epuises
+deux fois (plus une seule composition pendant deux jours), 46 % des creneaux
+manques dont 25 sur 37 sans raison, 751 erreurs de quota Graph avec 80 % des
+comptes Instagram plus lus, et une actu deja publiee sur le point de repartir —
+**aucun de ces incidents n'etait visible a l'ecran**, et chacun a ete decouvert
+par hasard. Le signal existait a chaque fois (`sources.state.last_error`,
+`creneaux.erreur`, les fichiers d'etat a cote du jeton) ; rien ne le lisait.
+
+**Ca ne coute RIEN** : aucun appel paye, aucun appel reseau vers Meta ou
+Anthropic a l'affichage. Une requete sur la base locale et quatre fichiers JSON.
+Seule exception traitee a la source : l'echeance du jeton de SOURCING ne se lit
+que chez Meta, donc `surveiller_jeton_sourcing` la **consigne** desormais dans
+`sourcing_token_alert.json` (`expire_le`, `releve_le`) a chaque passage horaire —
+il appelle `debug_token` de toute facon, ca ne coute pas un appel de plus — et le
+bandeau la relit. Tant qu'aucun passage ne l'a consignee, le voyant dit
+« inconnu ».
+
+**La regle qui gouverne tout le module : une valeur qu'on n'a pas pu lire
+s'affiche INCONNUE, jamais « tout va bien ».** Un voyant vert par defaut sur une
+machine en panne est pire que pas de voyant — il apprend a ne plus regarder.
+D'ou `lire_json`, qui distingue **trois** issues (absent / lisible / illisible)
+la ou les lecteurs d'etat du pipeline (`app/publish/mode.py`,
+`app/pipeline/quota_graph.py`) les confondent VOLONTAIREMENT en une seule : eux
+doivent continuer a tourner sans fichier, celui-ci doit DIRE ce qu'il ne sait
+pas. D'ou aussi `niveau_global`, ou l'inconnu passe devant l'attention (une
+valeur non lue peut cacher une panne), et l'enveloppe de `superviser` : une
+exception imprevue devient un voyant « inconnu » qui porte le type de
+l'exception — jamais un voyant ABSENT (une case vide se lit « rien a signaler »)
+ni une 500 qui viderait le bandeau. Propriete NEGATIVE, donc facile a casser par
+un `or "ok"` bien intentionne sans qu'aucun autre test ne rougisse :
+`tests/test_supervision.py` et `tests/test_dashboard_supervision.py` la
+verrouillent aux quatre etages (agregation, lecteurs, enveloppe, JS).
+
+**Chaque voyant porte sa raison en clair**, adjacente et visible sous les
+pastilles — jamais seulement dans un `title`. Les details (un bloc par voyant)
+sont derriere « Details ».
+
+**Un endpoint dedie** plutot que cinq schemas elargis : la question est
+transversale, le niveau global doit se calculer a UN endroit (une regle negative
+repartie sur cinq vues n'est verrouillable nulle part), et le bandeau se
+rafraichit toutes les 60 s quel que soit le panneau.
+
+`SourceOut` expose desormais la sante (`last_error`, `last_error_at`,
+`last_ok_at`, extraits de `sources.state` par `app/api/sources.py::vue`) : elle
+etait ecrite a chaque ingestion depuis le debut et n'etait exposee par rien. Le
+panneau Sources l'imprime sous chaque URL.
+
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
 57 % des articles arrivaient sans aucun média, et le déficit était concentré sur

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.content.visuels import origine_interdite
 from app.db import get_db
 from app.models import Article, ArticleStatus, Source, SourceType
+from app.pipeline.cluster import raison_de_doublon
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.schedule.store import etiquette_visuel, raison_sans_visuel
 from app.schemas import ArticleOut
@@ -88,6 +89,43 @@ def get_article(article_id: int, db: Session = Depends(get_db)):
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
+    return _avec_visuel(article, construire_index(db))
+
+
+@router.post("/{article_id}/reintegrer", response_model=ArticleOut)
+def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
+    """Leve `file_exclu_raison` : l'article redevient candidat a la file.
+
+    C'etait le seul champ sans retour en arriere de tout le dashboard. « Sauter »
+    l'ecrit en un clic, le gel et la composition l'ecrivent tout seuls sur un
+    echec -- et AUCUN endpoint ne le remettait a NULL : le seul recours etait un
+    UPDATE a la main en base.
+
+    Une exclusion posee par la DEDUP D'ARCHIVE est refusee, et ce n'est pas un
+    scrupule : `link_duplicates` relie l'article au passage suivant, donc
+    effacer la raison seule ne tient pas (CLAUDE.md, « Reparer un faux positif
+    exige un verdict MANUEL »). On nomme donc l'outil qui, lui, tient.
+    """
+    article = db.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    if article.file_exclu_raison is None:
+        # Idempotent : reclamer deux fois la meme remise en file n'est pas une
+        # erreur, et l'UI peut avoir une grille d'une seconde en retard.
+        return _avec_visuel(article, construire_index(db))
+    if raison_de_doublon(article.file_exclu_raison):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "exclusion posee par la dedup d'archive : effacer la raison ne tient pas "
+                "(le lien se reforme au passage suivant). Utiliser "
+                "`uv run python -m scripts.marquer_doublon_manuel --article-a ID "
+                "--article-b ID --different --raison \"...\"`."
+            ),
+        )
+    article.file_exclu_raison = None
+    db.commit()
+    db.refresh(article)
     return _avec_visuel(article, construire_index(db))
 
 

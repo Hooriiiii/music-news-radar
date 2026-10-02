@@ -31,9 +31,11 @@ logger = logging.getLogger(__name__)
 
 # Le message exact que rend l'API Anthropic quand la facturation bloque. On le
 # reconnaît pour NOMMER la panne : sans ça elle passe pour une erreur réseau
-# parmi d'autres, ce qui est précisément ce qui l'a rendue invisible.
+# parmi d'autres, ce qui est précisément ce qui l'a rendue invisible. Public
+# parce que le bandeau de supervision (`app/supervision.py`) reconnaît la même
+# signature dans `creneaux.erreur` : une seule chaîne, deux lecteurs.
 CREDITS_EPUISES = "crédits API épuisés"
-_SIGNATURE_CREDITS = "credit balance is too low"
+SIGNATURE_CREDITS = "credit balance is too low"
 
 
 def marquer_sante(source: Source, stats: "IngestStats") -> None:
@@ -91,7 +93,7 @@ def diagnostiquer(
 
     if scoring is not None and scoring.errors:
         derniere = getattr(scoring, "derniere_erreur", None) or ""
-        if _SIGNATURE_CREDITS in derniere:
+        if SIGNATURE_CREDITS in derniere:
             problemes.append(f"{CREDITS_EPUISES} — le scoring est arrêté")
         else:
             problemes.append(f"scoring en échec sur {scoring.errors} article(s)")

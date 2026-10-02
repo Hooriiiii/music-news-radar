@@ -141,6 +141,40 @@ def test_get_event_avec_ses_observations(client, db_session):
     assert corps["observations"][0]["source_name"] == "Mixmag"
 
 
+def test_une_observation_porte_le_post_kinda_tire_de_son_article(client, db_session):
+    """Une observation disait ce que la PRESSE a publie et liait vers le web ;
+    elle ne disait jamais ce que KINDA en a fait -- le trajet se faisait a la
+    main. `post_id` est resolu en UNE requete groupee, jamais une par
+    observation (meme regle que `_contexte`)."""
+    from app.models import Post
+
+    db_session.autoflush = False
+    src = _src(db_session, name="DJMag")
+    article = _article(db_session, src, n=3)
+    db_session.add(
+        Post(article_id=article.id, article_title=article.title, article_url=article.url,
+             caption="L", slides=[])
+    )
+    db_session.commit()
+    post_id = db_session.query(Post).one().id
+    event = _event(db_session, titre="Une actu publiee")
+    _observation(db_session, event, src, n=3, article=article)
+
+    (vue,) = client.get(f"/events/{event.id}").json()["observations"]
+    assert vue["post_id"] == post_id
+
+
+def test_une_observation_sans_post_le_dit_plutot_que_de_l_inventer(client, db_session):
+    db_session.autoflush = False
+    src = _src(db_session, name="Tsugi")
+    article = _article(db_session, src, n=4)
+    event = _event(db_session, titre="Jamais publiee")
+    _observation(db_session, event, src, n=4, article=article)
+
+    (vue,) = client.get(f"/events/{event.id}").json()["observations"]
+    assert vue["post_id"] is None
+
+
 def test_get_event_inconnu_404(client, db_session):
     db_session.autoflush = False
     assert client.get("/events/999999").status_code == 404
