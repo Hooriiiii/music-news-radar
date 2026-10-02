@@ -1649,6 +1649,72 @@ rafraichit toutes les 60 s quel que soit le panneau.
 etait ecrite a chaque ingestion depuis le debut et n'etait exposee par rien. Le
 panneau Sources l'imprime sous chaque URL.
 
+## Le dashboard, apres la refonte UX du 2026-10-02
+
+Audit mene avec le skill `ux-audit`, couches code ET captures. Sa conclusion
+gouverne la refonte : **c'etait une console pour un robot qui publie six fois
+par jour, et elle ne savait RIEN dire du robot**. Tous les incidents de la
+semaine du 26/09 au 02/10 -- credits epuises deux fois, 46 % de creneaux
+manques, 751 erreurs de quota, une actu deja publiee sur le point de repartir --
+etaient invisibles a l'ecran. L'utilisateur decouvrait les pannes par hasard.
+
+**Le defaut le plus grave n'etait dans aucune liste** : `renderPostDetail`
+appelait `querySelectorAll(".media-choice")` sur toute la fiche, or la section
+« Visuels retenus » produit la meme classe SANS case a cocher -- `TypeError`
+avant `detailEl.hidden = false`. **126 posts sur 157 (80 %) ne s'ouvraient pas
+du tout**, silencieusement : le clic ne faisait rien. Present depuis la
+migration 0018. Aucune lecture de code ne l'a trouve ; il a fallu ouvrir un
+VRAI post dans un navigateur. La recherche est bornee a `#medias-actu`, avec un
+test de regression.
+
+**Trois regles de conception sorties de l'audit**, chacune verrouillee par un
+test :
+1. **Une valeur qu'on n'a pas pu lire s'affiche INCONNUE, jamais verte.** Un
+   voyant au vert sur une machine en panne est pire que pas de voyant. Quatre
+   mutations le verifient, dont `GRAVITE[INCONNU] = 0`.
+2. **Une information de PANNE ne devient jamais moins visible** pour gagner de
+   la place. Le repli du bandeau plie ce qui va bien, jamais une raison.
+3. **Deux controles qui semblent redondants sont une question de COMPOSITION,
+   pas de soustraction.** Navigation et filtres partageaient une classe et une
+   rangee : portees differentes (application contre grille), donc deux formes
+   (onglets contre pastilles), jamais une fusion.
+
+**Ce qui etait casse a l'ecran et ne se voyait dans aucun test** : le panneau
+Evenements avait son titre ecrase a zero de large (`.event-head` en flex, titre
+a `flex: 1` contre sept badges a largeur intrinseque) -- Chromium le comptait
+lui-meme comme *hidden*. Recompose en blocs empiles ; un test mesure la
+LARGEUR RENDUE (>= 95 % de la ligne a 1280/820/390 px), pas une propriete CSS.
+Aucune media query n'existait : l'entete faisait **705 px sur un telephone**,
+plus que l'ecran, en `sticky`. Elle cesse de l'etre sous 900 px.
+
+**Quatre textes de l'interface affirmaient des choses fausses** (« toutes les
+2 h » quand le passage est horaire, « 14 jours de retention » quand elle est a
+**2**, l'aplat Kinda decrit comme une issue publiable, le credit web presente
+comme actif). Les deux premiers sont desormais **derives de la config** via
+`GET /reglages` -- un nombre recopie dans une chaine d'interface derive au
+premier changement de reglage.
+
+**Remettre un article dans la file** : `POST /articles/{id}/reintegrer`
+(bouton « ↩ Remettre dans la file » sur la carte, pastille « ⛔ hors file »
+depuis `ArticleOut.file_exclu_raison`). Il **refuse (409) une exclusion posee
+par la dedup d'archive** et renvoie vers `scripts.marquer_doublon_manuel` :
+effacer la raison seule ne tient pas, `link_duplicates` relierait l'article au
+passage suivant (voir « Dedup a deux etages »). Une exclusion de gel sur un
+article par ailleurs doublon se leve, elle : c'est la RAISON qui decide, pas le
+statut de doublon.
+
+**Une legende tapee survit desormais a un re-rendu de la fiche.** Six gestes
+reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et
+detruisaient le texte en cours de frappe -- le geste editorial normal (ecrire
+la legende, puis choisir la cover qui va avec) perdait la legende. Un tampon a
+UN seul point de capture (l'evenement `input`) et UN seul point de lecture
+(`textesAReinjecter`, pure), plus une garde a la fermeture.
+
+**Le lien vers Instagram est DEDUIT** du shortcode (base 64 de l'id media), pas
+verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le
+lien ouvre un 404, et l'identifiant brut reste lisible a cote. Le vrai remede
+serait de stocker le `permalink` que Meta renvoie a la publication.
+
 ## Illustration des articles (`app/pipeline/illustrations.py`)
 
 57 % des articles arrivaient sans aucun média, et le déficit était concentré sur
