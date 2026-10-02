@@ -217,49 +217,152 @@ def _tunnel_compte(ouverts, fermes):
     return faux_tunnel
 
 
-def test_heberger_reessaie_avec_un_nouveau_tunnel_quand_le_premier_est_injoignable(tmp_path, monkeypatch):
+def _injoignable_dns(url, **kwargs):
+    """La panne ou patienter ETAIT le remede : le DNS public n'a jamais vu le
+    sous-domaine. Consomme toute la patience accordee."""
+    delai = kwargs.get("delai", mod.DELAI_JOIGNABLE_S)
+    raise mod.TunnelInjoignable(
+        f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s : DNS public ne l'a jamais vu",
+        dns_resolu=False,
+        ecoule=delai,
+    )
+
+
+def _injoignable_sans_200(url, **kwargs):
+    """La panne ou patienter ne guerit RIEN : sous-domaine resolu, jamais de 200."""
+    delai = kwargs.get("delai", mod.DELAI_JOIGNABLE_S)
+    raise mod.TunnelInjoignable(
+        f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s :"
+        " DNS public l'a vu en 12 s mais aucune reponse 200 (dernier refus : HTTP 530)",
+        dns_resolu=True,
+        ecoule=delai,
+    )
+
+
+def test_heberger_patiente_sur_un_seul_sous_domaine_quand_le_dns_ne_propage_pas(tmp_path, monkeypatch):
+    """Mesure du 2026-10-02 : la propagation DNS d'un sous-domaine frais prend 16 a
+    66 s, et chaque reessai JETAIT une adresse probablement sur le point d'etre
+    visible pour repartir de zero. Un seul tunnel, longuement attendu."""
     (tmp_path / "a.jpg").write_bytes(b"x")
-    ouverts, fermes, verifies = [], [], []
+    ouverts, fermes, patiences = [], [], []
     monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
 
     def verifier(url, **kwargs):
-        verifies.append(url)
-        if len(verifies) == 1:
-            raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres 90 s")
+        patiences.append(kwargs["delai"])
+        _injoignable_dns(url, **kwargs)
 
     monkeypatch.setattr(mod, "attendre_joignable", verifier)
+    with pytest.raises(mod.TunnelInjoignable, match="1 tunnel"):
+        with mod.heberger(tmp_path, "a.jpg", essais=3):
+            raise AssertionError("aucun tunnel n'etait joignable")
+    assert ouverts == ["https://t1.trycloudflare.com"]
+    assert fermes == ouverts
+    # Une seule attente, et longue : jamais trois departs de 90 s.
+    assert patiences == [mod.DELAI_JOIGNABLE_S]
+    assert mod.DELAI_JOIGNABLE_S >= 2 * 66, "66 s = pire propagation mesuree (n=5)"
+
+
+def test_heberger_relance_un_tunnel_qui_n_a_jamais_demarre(tmp_path, monkeypatch):
+    """Tout n'est pas une propagation lente : cloudflared peut mourir au
+    lancement. Il n'y a alors AUCUNE adresse dont attendre la visibilite, et le
+    budget de patience n'a rien a payer -- on relance."""
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes, patiences = [], [], []
+    vrai_tunnel = _tunnel_compte(ouverts, fermes)
+
+    @contextlib.contextmanager
+    def tunnel_capricieux(port):
+        if not ouverts:
+            ouverts.append("mort-nee")
+            raise HebergementIndisponible("cloudflared s'est arrete avant d'ouvrir le tunnel")
+        with vrai_tunnel(port) as url:
+            yield url
+
+    monkeypatch.setattr(mod, "tunnel", tunnel_capricieux)
+    monkeypatch.setattr(mod, "attendre_joignable", lambda url, **kwargs: patiences.append(kwargs["delai"]))
 
     with mod.heberger(tmp_path, "a.jpg", essais=3) as url:
+        assert url == "https://t2.trycloudflare.com"
+    # Le tunnel mort-ne n'a consomme aucune patience : la seconde attente garde
+    # tout le budget.
+    assert patiences == [mod.DELAI_JOIGNABLE_S]
+
+
+def test_cloudflared_absent_n_est_jamais_reessaye(tmp_path, monkeypatch):
+    """Trois relancements ne l'installeraient pas, et le message dit quoi faire."""
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    lances = []
+
+    @contextlib.contextmanager
+    def tunnel_sans_binaire(port):
+        lances.append(port)
+        raise mod.CloudflaredIntrouvable("cloudflared est introuvable. ... brew install cloudflared")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mod, "tunnel", tunnel_sans_binaire)
+    with pytest.raises(mod.CloudflaredIntrouvable, match="brew install"):
+        with mod.heberger(tmp_path, "a.jpg", essais=3):
+            raise AssertionError("pas de binaire, pas de tunnel")
+    assert len(lances) == 1
+
+
+def test_heberger_relance_quand_le_sous_domaine_resolu_ne_rend_jamais_200(tmp_path, monkeypatch):
+    """L'autre moitie de la panne (correctif du 2026-10-02 sur le message) :
+    l'adresse est VUE du DNS public mais la sonde ne rend jamais 200. Patienter ne
+    guerit pas cloudflared ni le serveur local -- un tunnel neuf peut."""
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes, patiences = [], [], []
+    monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
+
+    def verifier(url, **kwargs):
+        patiences.append(kwargs["delai"])
+        if len(patiences) == 1:
+            _injoignable_sans_200(url, **kwargs)
+
+    monkeypatch.setattr(mod, "attendre_joignable", verifier)
+    with mod.heberger(tmp_path, "a.jpg", essais=3, budget=270) as url:
         assert url == "https://t2.trycloudflare.com"
         # Le premier tunnel est ferme AVANT d'en ouvrir un second.
         assert fermes == ["https://t1.trycloudflare.com"]
     assert ouverts == ["https://t1.trycloudflare.com", "https://t2.trycloudflare.com"]
     assert fermes == ouverts
-    assert verifies == ["https://t1.trycloudflare.com/a.jpg", "https://t2.trycloudflare.com/a.jpg"]
+    # La seconde tentative n'a que le RESTE du budget : 270 - 180 = 90 s, soit
+    # exactement une ancienne fenetre.
+    assert patiences == [180.0, 90.0]
 
 
-def test_heberger_abandonne_apres_le_nombre_d_essais_et_ferme_tout(tmp_path, monkeypatch):
+def test_le_budget_total_de_patience_n_augmente_pas(tmp_path, monkeypatch):
+    """La propriete qui protege les 90 minutes de retard : quoi qu'il arrive, la
+    somme des attentes ne depasse pas l'ancienne borne (3 x 90 s). Allonger la
+    patience « juste un peu » sans toucher au budget fait echouer ce test."""
     (tmp_path / "a.jpg").write_bytes(b"x")
-    ouverts, fermes = [], []
+    ouverts, fermes, patiences = [], [], []
     monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
-
     def verifier(url, **kwargs):
-        raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres 90 s")
+        # dns_resolu : le cas le plus gourmand, celui qui relance jusqu'au plafond.
+        patiences.append(kwargs["delai"])
+        _injoignable_sans_200(url, **kwargs)
 
     monkeypatch.setattr(mod, "attendre_joignable", verifier)
-    with pytest.raises(mod.TunnelInjoignable, match="3 essai"):
-        with mod.heberger(tmp_path, "a.jpg", essais=3):
+
+    budget = mod.settings.publication_tunnel_budget_s
+    assert budget == 3 * 90, "l'ancienne borne : 3 essais de 90 s"
+    with pytest.raises(mod.TunnelInjoignable):
+        with mod.heberger(tmp_path, "a.jpg"):
             raise AssertionError("aucun tunnel n'etait joignable")
-    assert len(ouverts) == 3
-    assert fermes == ouverts
+    assert sum(patiences) <= budget
+    assert len(ouverts) <= mod.settings.publication_tunnel_essais
+    # Et la borne reste tres loin du retard au-dela duquel le creneau est MANQUE.
+    assert budget < mod.settings.publication_retard_max_minutes * 60
 
 
-def test_heberger_prend_le_nombre_d_essais_dans_la_configuration(tmp_path, monkeypatch):
+def test_heberger_plafonne_le_nombre_de_tunnels_par_la_configuration(tmp_path, monkeypatch):
     (tmp_path / "a.jpg").write_bytes(b"x")
     ouverts, fermes = [], []
     monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
-    monkeypatch.setattr(mod, "attendre_joignable", _injoignable)
+    monkeypatch.setattr(mod, "attendre_joignable", _injoignable_sans_200)
     monkeypatch.setattr(mod.settings, "publication_tunnel_essais", 2)
+    monkeypatch.setattr(mod.settings, "publication_tunnel_budget_s", 10_000)
     with pytest.raises(mod.TunnelInjoignable):
         with mod.heberger(tmp_path, "a.jpg"):
             pass

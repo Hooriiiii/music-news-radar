@@ -7,8 +7,9 @@ n'expose PAS le dashboard (le port 8000 porte toute l'API, y compris
 1. un mini-serveur local ne sert QUE le dossier du post, sans listing ;
 2. un tunnel rapide `cloudflared` (sous-domaine aleatoire de trycloudflare.com,
    sans compte ni domaine) l'expose ;
-3. on attend que l'URL reponde vraiment (le DNS du sous-domaine suit avec
-   quelques secondes de retard) ;
+3. on attend que l'URL reponde vraiment -- PATIEMMENT : la propagation DNS d'un
+   sous-domaine frais prend 16 a 66 s (mesure du 2026-10-02), et relancer le
+   tunnel jetterait une adresse presque visible (voir `heberger`) ;
 4. tout est ferme des la publication terminee.
 """
 
@@ -39,7 +40,14 @@ logger = logging.getLogger(__name__)
 EMPLACEMENTS_CONNUS = ("/opt/homebrew/bin", "/usr/local/bin")
 _URL_TUNNEL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 DELAI_URL_S = 45.0
-DELAI_JOIGNABLE_S = 90.0
+# Patience accordee a UN sous-domaine. Mesure du 2026-10-02 (n=5, en direct) : la
+# propagation DNS d'un sous-domaine trycloudflare frais prend 16 a 66 s, soit
+# jusqu'a 73 % de l'ancien budget de 90 s -- et les 57 echecs mesures tombaient
+# tous sous ces 90 s. Attendre une propagation n'est pas attendre une panne :
+# 180 s, c'est 2,7 fois la pire propagation mesuree. Le reste du budget total
+# (270 s, inchange) finance un RELANCEMENT, reserve aux pannes ou patienter n'est
+# pas le remede (voir `heberger`).
+DELAI_JOIGNABLE_S = 180.0
 PAS_JOIGNABLE_S = 3.0
 URL_DOH = "https://1.1.1.1/dns-query"
 
@@ -53,16 +61,32 @@ class HebergementIndisponible(RuntimeError):
     """
 
 
+class CloudflaredIntrouvable(HebergementIndisponible):
+    """Le binaire manque sur la machine. Rien a reessayer : trois relancements ne
+    l'installeraient pas. `heberger` la relaie telle quelle, immediatement."""
+
+
 class TunnelInjoignable(HebergementIndisponible):
     """Le tunnel s'est ouvert mais son URL n'a pas repondu dans le budget.
 
-    Panne transitoire observee deux fois en 14 h : un tunnel rapide met parfois
-    plus que le budget a etre visible du DNS public, surtout quand plusieurs
-    sont ouverts a la suite (un essai isole, juste apres, repondait en 14,7 s).
-    D'ou les reessais de `heberger`, et surtout la garantie du runner : rien
+    Panne transitoire : un tunnel rapide met parfois plus que le budget a etre
+    visible du DNS public. La garantie du runner tient dans tous les cas : rien
     n'est parti chez Meta (le conteneur n'est cree qu'une fois le tunnel
     debout), donc retenter ne peut pas publier deux fois.
+
+    Deux attributs portent la DECISION de `heberger`, et pas seulement le
+    message : `dns_resolu` dit laquelle des deux pannes a eu lieu (le DNS public
+    n'a jamais vu le sous-domaine -> patienter etait le remede, et il a ete
+    epuise ; le sous-domaine est resolu mais ne rend jamais 200 -> c'est
+    cloudflared ou le serveur local, patienter ne guerit rien, relancer peut).
+    `ecoule` est le temps de patience consomme, pour que le budget total ne
+    puisse pas etre depasse par une suite de reessais.
     """
+
+    def __init__(self, message: str, *, dns_resolu: bool = False, ecoule: float = 0.0):
+        super().__init__(message)
+        self.dns_resolu = dns_resolu
+        self.ecoule = ecoule
 
 
 def chemin_cloudflared() -> str:
@@ -73,7 +97,7 @@ def chemin_cloudflared() -> str:
             None,
         )
     if chemin is None:
-        raise HebergementIndisponible(
+        raise CloudflaredIntrouvable(
             "cloudflared est introuvable. La publication en a besoin pour exposer les "
             "images a Meta : `brew install cloudflared`."
         )
@@ -237,43 +261,98 @@ def attendre_joignable(
                 f" (dernier refus : {dernier_refus or 'aucun'})"
             )
         mur = time.monotonic() - depart
-        raise TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres {mur:.0f} s : {cause}")
+        raise TunnelInjoignable(
+            f"tunnel ouvert mais {url} injoignable apres {mur:.0f} s : {cause}",
+            dns_resolu=resolu_en is not None,
+            # Le temps COMPTE (somme des sommeils), pas l'horloge murale : c'est
+            # lui qui borne le budget de `heberger`, et il reste exact quand les
+            # tests injectent `dormir`.
+            ecoule=ecoule,
+        )
     finally:
         if propre:
             client.close()
 
 
 @contextlib.contextmanager
-def heberger(dossier: Path, temoin: str, *, essais: int | None = None, delai: float = DELAI_JOIGNABLE_S):
+def heberger(
+    dossier: Path,
+    temoin: str,
+    *,
+    essais: int | None = None,
+    delai: float = DELAI_JOIGNABLE_S,
+    budget: float | None = None,
+):
     """Le dossier expose derriere un tunnel JOIGNABLE, ou rien.
 
-    Un essai = un tunnel entier (un tunnel rapide recoit un nouveau sous-domaine
-    a chaque lancement, donc rien ne sert d'attendre plus longtemps sur celui qui
-    ne repond pas). L'essai perdu est ferme proprement avant d'en ouvrir un autre ;
-    le serveur local, lui, vit pour toute la duree du `with`. Duree bornee :
-    `essais` x `delai`.
+    PATIENCE plutot que reessais (2026-10-02). L'ancienne strategie ouvrait trois
+    tunnels ENTIERS de 90 s, donc trois sous-domaines : chaque reessai jetait une
+    adresse probablement sur le point d'etre visible et repartait de zero. Or la
+    mesure dit que l'attente est une PROPAGATION DNS (16 a 66 s, n=5), pas une
+    panne -- la reprise travaillait contre elle-meme. Desormais on attend
+    longuement sur UN sous-domaine (`delai`, 180 s) et on ne relance que ce qui le
+    merite :
+
+    - le tunnel n'a JAMAIS demarre (cloudflared mort au lancement, aucune URL) :
+      il n'y a pas d'adresse a attendre, on relance sans toucher au budget ;
+    - le sous-domaine est RESOLU mais ne rend jamais 200 (`dns_resolu`) :
+      patienter ne guerit pas cette panne-la, un tunnel neuf peut.
+
+    Quand le DNS public n'a jamais vu le sous-domaine, en revanche, la patience
+    ETAIT le remede et elle a ete epuisee : on abandonne le passage plutot que
+    d'offrir a un sous-domaine neuf un reste de budget trop court pour sa propre
+    propagation. Le runner retentera au passage suivant, sans exclure l'article.
+
+    Borne de temps INCHANGEE : le budget total de patience vaut
+    `essais` x `delai` d'avant (3 x 90 = 270 s), et le nombre de tunnels lances
+    reste plafonne a `essais` -- donc la lecture d'URL (`DELAI_URL_S`) est bornee
+    comme avant elle aussi. Rien ne peut faire deborder les 90 minutes de retard
+    au-dela desquelles un creneau devient MANQUE.
+
+    Le serveur local vit pour tout le `with` ; seul le tunnel est relance. Le
+    conteneur Meta n'est cree que DANS ce `with`, donc apres qu'un tunnel repond :
+    un relancement ne peut jamais publier deux fois.
     """
     essais = essais if essais is not None else settings.publication_tunnel_essais
+    tunnels_max = max(essais, 1)
+    budget = budget if budget is not None else settings.publication_tunnel_budget_s
+    reste = float(budget)
     # Le detail du DERNIER essai voyage jusqu'au message final : c'est lui que le
     # runner inscrit dans `creneaux.erreur`, donc la seule trace qui survivra a la
     # rotation des logs. Sans lui, la base disait « aucun tunnel joignable » et il
     # fallait recroiser `publication.err.log` pour savoir ce qui avait echoue.
     dernier: str | None = None
+    lances = 0
     with serveur_local(dossier) as port:
-        for essai in range(1, max(essais, 1) + 1):
+        while lances < tunnels_max and reste > 0:
+            lances += 1
             with contextlib.ExitStack() as ouvert:
-                url = ouvert.enter_context(tunnel(port))
                 try:
-                    attendre_joignable(f"{url}/{temoin}", delai=delai)
-                except TunnelInjoignable as exc:
-                    # Sortie de l'ExitStack : le tunnel est tue avant le suivant.
-                    logger.warning("tunnel essai %d/%d : %s", essai, essais, exc)
+                    url = ouvert.enter_context(tunnel(port))
+                except CloudflaredIntrouvable:
+                    # Rien a reessayer : le binaire ne va pas apparaitre.
+                    raise
+                except HebergementIndisponible as exc:
+                    # Jamais demarre : aucune adresse n'attend sa propagation.
+                    logger.warning("tunnel %d/%d non demarre : %s", lances, tunnels_max, exc)
                     dernier = str(exc)
                     continue
-                logger.info("tunnel joignable a l'essai %d/%d : %s", essai, essais, url)
+                patience = min(delai, reste)
+                try:
+                    attendre_joignable(f"{url}/{temoin}", delai=patience)
+                except TunnelInjoignable as exc:
+                    # Sortie de l'ExitStack : le tunnel est tue (par GROUPE) avant
+                    # le suivant.
+                    logger.warning("tunnel %d/%d : %s", lances, tunnels_max, exc)
+                    dernier = str(exc)
+                    reste -= exc.ecoule or patience
+                    if exc.dns_resolu:
+                        continue
+                    break
+                logger.info("tunnel joignable au tunnel %d/%d : %s", lances, tunnels_max, url)
                 yield url
                 return
     detail = f" ; dernier essai : {dernier}" if dernier else ""
     raise TunnelInjoignable(
-        f"aucun tunnel joignable apres {essais} essai(s) de {delai:.0f} s{detail}"
+        f"aucun tunnel joignable : {lances} tunnel(s), {budget:.0f} s de patience{detail}"
     )
