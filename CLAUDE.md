@@ -134,6 +134,10 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - Passage de veille rapide (les seuls comptes de `VEILLE_COMPTES`) :
   `uv run python -m scripts.run_veille` — voir « Veille rapide »
+- Pourquoi les créneaux de publication sont manqués, avec des effectifs :
+  `uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]`
+  (lecture seule ; croise la base et les logs pour séparer une PANNE d'une
+  ABSENCE de la machine — voir « Publication automatique »)
 - **Scheduler : UN SEUL ordonnanceur, launchd, TOUT EN LOCAL sur le Mac**
   (2026-08-15). Plus rien n'est planifié dans le cloud.
 
@@ -1477,7 +1481,81 @@ perte editoriale. Restent deux causes distinctes et hors perimetre : les tunnels
 `cloudflared` injoignables (8 creneaux) et le solde de credits Anthropic epuise,
 qui fait echouer toute composition depuis le matin du 30/09.
 
+**Ce que les creneaux manques coutent vraiment : le TUNNEL, pas le code**
+(2026-10-02, mesure complete sur les 97 creneaux aboutis en base, 44 manques
+contre 45 publies). L'enquete du 30/09 avait corrige un trou de conception ; le
+taux a pourtant EMPIRE. La mesure, reproductible par
+`scripts/diagnostiquer_creneaux.py`, croise la base et les trois logs :
+
+| cause | n | part |
+|---|---|---|
+| ABSENCE : aucun passage de l'agent dans la fenetre de rattrapage | 25 | 57 % |
+| TUNNEL `cloudflared` injoignable | 11 | 25 % |
+| yt-dlp : video Instagram indisponible | 3 | 7 % |
+| GELE, l'agent est passe, cause inconnue | 3 | 7 % |
+| aucun post compose / post jamais gele | 2 | 5 % |
+
+Mais **ces deux causes ne vivent pas a la meme epoque**, et c'est tout le
+resultat. Sur les cinq derniers jours (28/09 → 02/10) : 6 publies sur 29, et
+**11 manques sur 19 viennent du tunnel contre 7 d'une absence**. Avant, c'etait
+l'inverse. La degradation recente n'est donc PAS le Mac qui dort — l'agent a
+tourne davantage que jamais ces jours-la (24, 16, 43, 31, 28 passages
+journalises par jour) — c'est `cloudflared`.
+
+**Ce n'est pas non plus un probleme de FENETRES.** Aucune heure de la grille
+n'est systematiquement morte : le taux de publication va de 30 % a 75 % selon
+l'heure, sans creux franc, et les absences sont des journees entieres (4 manques
+le 25/09, 4 le 01/10) et non une heure qui tomberait toujours pendant la veille.
+Deplacer les fenetres ne reglerait rien. En revanche les echecs de tunnel, eux,
+ont une heure : **57 sur 57 avant 16:00 UTC, zero apres**, alors que l'agent
+publie sans incident le soir (24 publications entre 16 h et 20 h UTC). C'est une
+caracteristique du reseau en journee, pas du code.
+
+**Ce qui a ete corrige, et rien de plus.** La publication elle-meme n'a pas
+bouge : la mesure n'exigeait aucun changement de comportement, et publier est
+irreversible. Deux pannes MUETTES, en revanche, rendaient l'enquete impossible
+depuis la base seule et ont donc ete reparees :
+1. `_raison_manque` ECRASAIT la cause deja inscrite sur le creneau
+   (« hebergement indisponible : ... ») par un generique qui dit l'etat atteint
+   et jamais la cause. Elle la conserve maintenant, en TETE (le voyant de
+   composition de `app/supervision.py` filtre par `erreur.like("composition%")`,
+   un prefixe le rendrait aveugle) et y ajoute l'etat. Sans ce correctif, les 11
+   manques de tunnel n'ont pu etre retrouves qu'en recroisant `publication.log`.
+2. `hosting.attendre_joignable` confondait DEUX pannes sous « injoignable apres
+   90 s » : le DNS public qui ne voit pas encore le sous-domaine, et le
+   sous-domaine resolu dont la sonde ne rend jamais 200. Les remedes sont
+   opposes (patienter / regarder cloudflared et le serveur local), et 57 echecs
+   complets n'avaient rien appris la-dessus. Le message les distingue, donne le
+   temps du MUR (la boucle ne comptait que ses sommeils, donc « 90 s » n'etait
+   pas la duree ecoulee) et `heberger` le transporte jusqu'a `creneaux.erreur`.
+
+**Ce qui n'a PAS ete touche, et pourquoi.** Le budget du tunnel reste a 3 essais
+de 90 s. Mesure en direct le 2026-10-02 : la propagation DNS d'un sous-domaine
+`trycloudflare` frais prend **16 a 66 s** (n=5), soit jusqu'a 73 % du budget —
+une marge mince, et le fait que chaque reessai ouvre un NOUVEAU sous-domaine
+repart de zero plutot que de profiter de la propagation en cours. Mais le regime
+en panne n'a pas pu etre reproduit, donc rien ne prouve qu'un budget plus long
+l'aurait franchi : c'est le correctif 2 qui dira, au prochain episode, laquelle
+des deux moities echoue. On ne change pas un parametre de publication sur une
+hypothese.
+
+**Une observation a surveiller, deliberement non corrigee** : un post qui echoue
+est recompose sur le creneau suivant, et le post 140 a ainsi consomme **six
+creneaux d'affilee** (93, 94, 96, 98, 102, 104) sans jamais partir — a chaque
+fois le tunnel. Retenter EST le bon geste pour une panne machine ; borner ce
+nombre de reprises traiterait le symptome et risquerait d'enterrer une actu pour
+une coupure passagere. Le script le signale (« un meme post sur plusieurs
+creneaux ») plutot que le code ne le decide.
+
+Enfin, **19 passages ont eu lieu sans atteindre Neon** (« base injoignable apres
+5 essais espaces de 6 s »), tous au bord d'un trou de veille : `attendre_base()`
+accorde 30 s, parfois trop court au reveil. Compte avec les absences, pas comme
+une panne distincte.
+
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
+Pourquoi les creneaux sont manques, avec des effectifs :
+`uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]`
+(lecture seule, aucun appel reseau).
 
 **Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
 migration 0017) ; fenêtres reel propres (`PUBLICATION_REEL_FENETRES`, défaut
