@@ -195,11 +195,26 @@ def attendre_joignable(
     hote, chemin = morceaux.hostname, morceaux.path or "/"
     propre = client is None
     client = client or httpx.Client(timeout=10)
+    # DEUX pannes se cachaient sous le meme message « injoignable apres 90 s » :
+    # le DNS public qui ne voit toujours pas le sous-domaine, et le sous-domaine
+    # resolu dont la requete ne rend jamais 200. Elles n'appellent pas la meme
+    # reponse -- patienter plus longtemps d'un cote, regarder cloudflared et le
+    # serveur local de l'autre -- et 57 echecs complets en deux semaines
+    # (mesure du 2026-10-02, 11 creneaux manques) n'avaient rien appris la-dessus.
+    # Le temps annonce est desormais celui du MUR : la boucle ne compte que ses
+    # sommeils, donc « apres 90 s » n'etait pas la duree reellement ecoulee.
+    depart = time.monotonic()
+    interrogations = 0
+    resolu_en: float | None = None
+    dernier_refus: str | None = None
     try:
         ecoule = 0.0
         while ecoule < delai:
             adresses = resoudre_publiquement(hote, client=client)
+            interrogations += 1
             if adresses:
+                if resolu_en is None:
+                    resolu_en = time.monotonic() - depart
                 try:
                     reponse = client.request(
                         "GET",
@@ -209,11 +224,20 @@ def attendre_joignable(
                     )
                     if reponse.status_code == 200:
                         return
-                except httpx.HTTPError:
-                    pass
+                    dernier_refus = f"HTTP {reponse.status_code}"
+                except httpx.HTTPError as exc:
+                    dernier_refus = type(exc).__name__
             dormir(PAS_JOIGNABLE_S)
             ecoule += PAS_JOIGNABLE_S
-        raise TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres {delai:.0f} s")
+        if resolu_en is None:
+            cause = f"DNS public ne l'a jamais vu ({interrogations} interrogation(s))"
+        else:
+            cause = (
+                f"DNS public l'a vu en {resolu_en:.0f} s mais aucune reponse 200"
+                f" (dernier refus : {dernier_refus or 'aucun'})"
+            )
+        mur = time.monotonic() - depart
+        raise TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres {mur:.0f} s : {cause}")
     finally:
         if propre:
             client.close()
@@ -230,6 +254,11 @@ def heberger(dossier: Path, temoin: str, *, essais: int | None = None, delai: fl
     `essais` x `delai`.
     """
     essais = essais if essais is not None else settings.publication_tunnel_essais
+    # Le detail du DERNIER essai voyage jusqu'au message final : c'est lui que le
+    # runner inscrit dans `creneaux.erreur`, donc la seule trace qui survivra a la
+    # rotation des logs. Sans lui, la base disait « aucun tunnel joignable » et il
+    # fallait recroiser `publication.err.log` pour savoir ce qui avait echoue.
+    dernier: str | None = None
     with serveur_local(dossier) as port:
         for essai in range(1, max(essais, 1) + 1):
             with contextlib.ExitStack() as ouvert:
@@ -239,10 +268,12 @@ def heberger(dossier: Path, temoin: str, *, essais: int | None = None, delai: fl
                 except TunnelInjoignable as exc:
                     # Sortie de l'ExitStack : le tunnel est tue avant le suivant.
                     logger.warning("tunnel essai %d/%d : %s", essai, essais, exc)
+                    dernier = str(exc)
                     continue
                 logger.info("tunnel joignable a l'essai %d/%d : %s", essai, essais, url)
                 yield url
                 return
+    detail = f" ; dernier essai : {dernier}" if dernier else ""
     raise TunnelInjoignable(
-        f"aucun tunnel joignable apres {essais} essai(s) de {delai:.0f} s"
+        f"aucun tunnel joignable apres {essais} essai(s) de {delai:.0f} s{detail}"
     )

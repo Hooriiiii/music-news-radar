@@ -1054,3 +1054,50 @@ def test_un_tunnel_injoignable_trop_tard_finit_en_manque(db_session, article):
     outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
     assert _creneau_h0(db_session).etat == EtatCreneau.MANQUE
     assert db_session.get(Article, article.id).file_exclu_raison is None
+
+
+def test_un_manque_garde_la_cause_deja_inscrite_au_lieu_de_l_ecraser(db_session, article):
+    """Mesure du 2026-10-02 : 11 des 44 creneaux manques venaient d'un tunnel
+    cloudflared injoignable, et les plus recents ne le disaient plus -- il a
+    fallu recroiser `publication.log` pour le retrouver. `_raison_manque`
+    ecrasait « hebergement indisponible : ... » par un generique qui dit l'etat
+    atteint et jamais la cause. On conserve la cause, en TETE (le voyant de
+    composition de `app/supervision.py` repere les pannes par
+    `erreur.like("composition%")`), et on y ajoute l'etat."""
+    # `autoflush=False` est le reglage de PRODUCTION (app/db.py) : quatre
+    # defauts de ce depot se sont caches derriere un flush implicite de test.
+    db_session.autoflush = False
+    outils = Outils()
+    outils.erreur_publication = TunnelInjoignable(
+        "aucun tunnel joignable apres 3 essai(s) de 90 s ; dernier essai : DNS public ne l'a jamais vu"
+    )
+    _jusqu_a_publication(outils, db_session, H0)
+    creneau = _creneau_h0(db_session)
+    assert creneau.etat == EtatCreneau.GELE and "DNS public" in creneau.erreur
+
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
+    creneau = _creneau_h0(db_session)
+    assert creneau.etat == EtatCreneau.MANQUE
+    assert creneau.erreur.startswith("hebergement indisponible :")
+    assert "DNS public ne l'a jamais vu" in creneau.erreur
+    assert "creneau manque : gele mais jamais publie" in creneau.erreur
+
+
+def test_un_manque_sans_cause_prealable_garde_la_raison_generique(db_session, article):
+    """Le generique reste la quand rien n'avait ete inscrit : un creneau manque
+    porte TOUJOURS une raison (defaut mesure le 2026-09-30, 25 manques muets)."""
+    db_session.autoflush = False
+    outils = Outils()
+    # Compose et gele, mais jamais publie : aucune etape n'a inscrit d'erreur.
+    for decalage in (-180, -60):
+        outils.tourner(db_session, H0 + dt.timedelta(minutes=decalage))
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.erreur) == (EtatCreneau.GELE, None)
+
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
+    creneau = _creneau_h0(db_session)
+    assert creneau.etat == EtatCreneau.MANQUE
+    assert creneau.erreur == (
+        "creneau manque : gele mais jamais publie, plus de "
+        f"{settings.publication_retard_max_minutes} min de retard"
+    )

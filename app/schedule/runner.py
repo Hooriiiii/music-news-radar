@@ -333,7 +333,21 @@ def _raison_manque(creneau: Creneau, formats_actifs: set) -> str:
     (mesure du 2026-09-30). Ce depot a une longue histoire de pannes muettes :
     `_marquer_manques` ecrivait `etat = MANQUE` sans jamais toucher `erreur`,
     qui valait donc None des que la derniere etape reussie etait une
-    composition ou une reattribution."""
+    composition ou une reattribution.
+
+    Mais cette raison est GENERIQUE : elle dit l'etat atteint, jamais la cause.
+    Or le creneau porte souvent deja la cause, ecrite par l'etape qui a echoue
+    (« hebergement indisponible : aucun tunnel joignable ... », « gel differe :
+    yt-dlp en pause ... », « composition differee : ... »). L'ecraser detruit
+    la seule trace qui survivait a la purge des logs : mesure du 2026-10-02,
+    11 des 44 manques venaient d'un tunnel cloudflared injoignable, et les plus
+    recents ne le disaient plus -- il a fallu recroiser `publication.log` pour
+    le retrouver. On CONSERVE donc l'erreur existante et on lui AJOUTE l'etat
+    atteint ; le generique ne reste seul que si rien n'avait ete inscrit.
+
+    L'erreur existante passe en TETE, pas en queue : `app/supervision.py` repere
+    les pannes de composition par `Creneau.erreur.like("composition%")`, et un
+    prefixe la rendrait invisible."""
     retard = settings.publication_retard_max_minutes
     if creneau.format not in formats_actifs:
         return (
@@ -341,10 +355,17 @@ def _raison_manque(creneau: Creneau, formats_actifs: set) -> str:
             "(reels coupes ?), rien n'a ete publie"
         )
     if creneau.etat == EtatCreneau.GELE:
-        return f"creneau manque : gele mais jamais publie, plus de {retard} min de retard"
-    if creneau.post_id is None:
-        return f"creneau manque : aucun post compose a l'heure dite, plus de {retard} min de retard"
-    return f"creneau manque : post compose mais jamais gele, plus de {retard} min de retard"
+        etat = f"gele mais jamais publie, plus de {retard} min de retard"
+    elif creneau.post_id is None:
+        etat = f"aucun post compose a l'heure dite, plus de {retard} min de retard"
+    else:
+        etat = f"post compose mais jamais gele, plus de {retard} min de retard"
+    precedente = (creneau.erreur or "").strip()
+    # « creneau manque » dans la raison precedente : deja passe ici (reprise
+    # manuelle au dashboard, par exemple). Ne pas empiler deux fois le meme etat.
+    if precedente and "creneau manque" not in precedente:
+        return f"{precedente} — creneau manque : {etat}"
+    return f"creneau manque : {etat}"
 
 
 def _completer_credit(db, post: Post, article: Article | None) -> None:

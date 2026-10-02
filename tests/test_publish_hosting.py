@@ -300,3 +300,43 @@ def test_le_tunnel_est_tue_par_groupe_de_processus(monkeypatch):
         pass
     assert options["start_new_session"] is True
     assert tues == [(4242, mod.signal.SIGTERM)]
+
+
+def test_le_message_distingue_un_dns_qui_ne_suit_pas_d_une_sonde_qui_refuse():
+    """Mesure du 2026-10-02 : 57 echecs complets de tunnel en deux semaines, 11
+    creneaux manques, et le message « injoignable apres 90 s » ne disait jamais
+    LAQUELLE des deux pannes avait eu lieu -- un DNS public qui ne voit pas
+    encore le sous-domaine (patienter) ou un sous-domaine resolu qui ne rend
+    jamais 200 (regarder cloudflared et le serveur local). Deux remedes
+    opposes sous un seul message."""
+    dns_muet = FauxClientDns(sequence_dns=[_reponse_dns([]) for _ in range(10)])
+    with pytest.raises(mod.TunnelInjoignable, match="DNS public ne l'a jamais vu"):
+        attendre_joignable(
+            "https://x.trycloudflare.com/a.jpg", client=dns_muet, dormir=lambda s: None, delai=9
+        )
+
+    resolu = FauxClientDns(
+        sequence_dns=[_reponse_dns(["203.0.113.9"]) for _ in range(10)],
+        sequence_sondes=[httpx.Response(530) for _ in range(10)],
+    )
+    with pytest.raises(mod.TunnelInjoignable, match="aucune reponse 200.*HTTP 530"):
+        attendre_joignable(
+            "https://x.trycloudflare.com/a.jpg", client=resolu, dormir=lambda s: None, delai=9
+        )
+
+
+def test_heberger_transporte_le_detail_du_dernier_essai_dans_son_message(tmp_path, monkeypatch):
+    """C'est ce message que le runner inscrit dans `creneaux.erreur` : la seule
+    trace qui survit a la rotation des logs. Sans le detail, la base disait
+    « aucun tunnel joignable » et il fallait recroiser publication.err.log."""
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    ouverts, fermes = [], []
+    monkeypatch.setattr(mod, "tunnel", _tunnel_compte(ouverts, fermes))
+
+    def verifier(url, **kwargs):
+        raise mod.TunnelInjoignable(f"tunnel ouvert mais {url} injoignable apres 93 s : DNS public ne l'a jamais vu (31 interrogation(s))")
+
+    monkeypatch.setattr(mod, "attendre_joignable", verifier)
+    with pytest.raises(mod.TunnelInjoignable, match="dernier essai : .*DNS public ne l'a jamais vu"):
+        with mod.heberger(tmp_path, "a.jpg", essais=2):
+            raise AssertionError("aucun tunnel n'etait joignable")
