@@ -548,6 +548,46 @@ Le cadrage est un **fond flouté** : la vidéo entière au centre, sur elle-mêm
 agrandie et floutée. Rien n'est perdu de l'image, contrairement au recadrage
 centré — sur une vidéo de concert, ce qui compte est souvent hors du centre.
 
+**La qualité d'encodage est un RÉGLAGE, et elle est partagée** (2026-10-02,
+`encodage_meta()` dans `app/content/video.py`, réglages dans `app/config.py`).
+`ENCODAGE_META` ne portait ni `-crf` ni `-b:v` : x264 appliquait donc son défaut
+de distribution web, `crf 23`, que personne n'avait choisi. Or la perte est
+**composée** — Instagram encode quand l'artiste publie, Kinda réencode,
+Instagram réencode une troisième fois à la réception : on lui donne la meilleure
+source possible. Mesuré sur un vrai reel du pipeline (1080×1920, 23,8 s,
+4,3 Mbit/s), VMAF contre la source : `crf 23` + audio 128k → 11,80 Mo / 96,81 ;
+**`crf 20` + audio 192k → 14,22 Mo / 97,56** (+0,75, retenu, et à temps
+d'encodage égal — à CRF explicite x264 cherche moins) ; `crf 18` preset `slow` →
+15,78 Mo / 98,00 (+1,28, trop cher). 192k parce que c'est de la musique.
+`encodage_meta()` est partagé par le reel et la vidéo de carrousel : le réglage
+vaut pour les deux.
+
+**Baisser le CRF réduit la marge de POIDS, et c'est la seule propriété dont la
+violation coûte une ACTU.** Au-delà de `publication_reel_max_mo` (100),
+`preparation_reel.verifier_sortie` lève `PreparationImpossible`, qui **exclut
+l'article définitivement** de la file (voir « Exclusion »). Le garde-fou est donc
+explicite : `video._encoder_sous_plafond` **réencode** une sortie trop lourde
+sous un débit moyen calculé depuis le poids visé et la durée MESURÉE sur la
+sortie (jamais déduite de l'entrée : la cover ajoute ses frames devant). Deux
+mesures l'ont façonné, et chacune a cassé une version plus simple. (1) Le
+« capped CRF » (`-crf` + `-maxrate`) **ne tient pas** : le VBV borne une fenêtre
+de `bufsize` bits, qui sur une vidéo courte couvre tout le fichier — 22,7 Mo
+pour un plafond de 16,6 Mo. D'où `-b:v`, qui vise la moyenne sur toute la durée,
+c'est-à-dire exactement la question posée. (2) x264 **dépasse** sa consigne de
+~26 % sur un clip court (son contrôle de débit ne converge pas en 60 frames) :
+d'où une correction proportionnelle au dépassement CONSTATÉ, au plus
+`encodage_reprises_max` (3) fois. Un garde-fou qui se vérifie, pas un calcul
+auquel on fait confiance. La dégradation ne touche donc que les passages qui,
+sinon, seraient perdus — le cas nominal ne voit jamais ce second encodage. Et le
+garde-fou épuisé **rend quand même la sortie** : il ne remplace jamais un
+dépassement par une exception, `verifier_sortie` tranche comme avant.
+
+Limite mesurée et assumée : une vidéo assez pathologique pour franchir le
+plafond à 90 s (du bruit pur) franchit D'ABORD `DELAI_MAX_S` (300 s) au premier
+encodage — ce qui lève `subprocess.TimeoutExpired`, donc `PreparationDifferee`
+(on retente), jamais une exclusion. La borne de temps échoue du bon côté ; c'est
+la borne de poids qui échouait du mauvais, et c'est elle qu'on a traitée.
+
 La cover ne dure qu'**une frame** : elle sert de vignette de couverture, pas de
 carton d'introduction. `frames_cover` est paramétrable parce qu'Instagram
 réencode à l'import et qu'une frame unique peut ne pas survivre. Pour les reels

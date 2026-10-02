@@ -739,6 +739,49 @@ class Settings(BaseSettings):
     # Poids max de la video source telechargee, et du reel assemble (Meta : 300 Mo).
     publication_reel_source_max_mo: int = 100
     publication_reel_max_mo: int = 100
+    # --- Qualite d'encodage, PARTAGEE par le reel et la video de carrousel ---
+    # (`app/content/video.py::encodage_meta`).
+    #
+    # La perte est COMPOSEE : Instagram encode deja la video quand l'artiste la
+    # publie, on la reencode, et Instagram la reencode une troisieme fois a la
+    # reception. On lui donne donc la meilleure source possible.
+    #
+    # Sans `-crf`, x264 applique son defaut de distribution web (crf 23) --
+    # personne ne l'avait choisi. Mesure du 2026-10-02 sur un vrai reel du
+    # pipeline (1080x1920, 23,8 s, 4,3 Mbit/s), VMAF contre la source :
+    #
+    #   crf implicite 23, audio 128k : 11,80 Mo, VMAF 96,81   (l'ancien defaut)
+    #   crf 20, audio 192k           : 14,22 Mo, VMAF 97,56   (+0,75, retenu)
+    #   crf 18 preset slow, 192k     : 15,78 Mo, VMAF 98,00   (+1,28, trop cher)
+    #
+    # 20 prend 60 % du gain pour 60 % du surpoids, a temps d'encodage egal (6 s
+    # dans les deux cas : a crf explicite, x264 cherche moins). 192k parce que
+    # c'est de la musique.
+    encodage_crf: int = 20
+    encodage_preset: str = "medium"
+    encodage_audio_bitrate: str = "192k"
+    # Le garde-fou de POIDS, et c'est la propriete dont la violation coute une
+    # ACTU : au-dela de `publication_reel_max_mo`, `preparation_reel.
+    # verifier_sortie` leve `PreparationImpossible`, qui EXCLUT l'article a vie.
+    # Baisser le crf reduit la marge, donc le garde-fou est explicite : si la
+    # sortie depasse, on REENCODE sous un debit moyen vise, calcule depuis le
+    # poids vise et la duree MESUREE, au lieu de laisser lever. La degradation
+    # n'arrive donc que sur les passages qui, sinon, seraient perdus -- jamais
+    # sur le cas nominal, qui ne voit pas ce second encodage.
+    # `encodage_poids_marge` paie le depassement de consigne de x264 et les
+    # entetes du conteneur.
+    encodage_poids_marge: float = 0.90
+    # Plancher de debit video : sous cette valeur le plafond calcule n'a plus de
+    # sens (une source tres longue et tres chargee). On encode quand meme a ce
+    # plancher -- l'alternative est l'exclusion definitive de l'article.
+    encodage_debit_min_kbit: int = 300
+    # Combien de fois on corrige. x264 DEPASSE sa consigne de debit sur un clip
+    # court (~26 % mesure le 2026-10-02 sur 2 s : son controle de debit ne
+    # converge pas en 60 frames), d'ou une correction proportionnelle au
+    # depassement CONSTATE plutot qu'un calcul auquel on fait confiance. Chaque
+    # reprise coute un encodage de plus, mais seulement sur un contenu qui,
+    # sinon, serait perdu.
+    encodage_reprises_max: int = 3
     # Le reel apparait aussi dans la grille du compte.
     publication_reel_share_to_feed: bool = True
     # Coupe-circuit de yt-dlp SEUL (app/publish/ytdlp.py) : a false, seules les
