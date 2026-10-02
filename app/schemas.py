@@ -383,3 +383,23 @@ class SupervisionOut(BaseModel):
     niveau: Literal["ok", "attention", "panne", "inconnu"]
     releve_le: dt.datetime
     voyants: list[VoyantOut]
+
+
+class ReglagesOut(BaseModel):
+    """Les reglages que l'INTERFACE doit dire a l'utilisateur.
+
+    Trois textes du dashboard annoncaient des valeurs ecrites en dur, et deux
+    etaient devenus faux : « toutes les 2 h » (l'agent est horaire depuis le
+    2026-08-15) et « 14 jours de retention » (`retention_days` vaut 2 depuis le
+    2026-09-21, donc on envoyait chercher un article purge douze jours plus
+    tot). Un texte d'interface qui recopie un reglage ne reste vrai que par
+    chance : il est desormais DERIVE de la configuration.
+
+    Rien ici ne coute un appel reseau ni une requete : ce sont les champs de
+    `settings`, deja charges en memoire.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    retention_days: int
+    pipeline_intervalle_s: int

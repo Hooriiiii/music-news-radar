@@ -41,6 +41,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.config import settings
+
 # Le label reprend le nom `pipeline` -- celui de l'agent de juillet, retire en
 # aout puis ressuscite ici -- parce que c'est de nouveau exactement ce qu'il
 # fait. Le renommage depuis `ingest` n'est donc pas cosmetique : c'est LE piege
@@ -62,7 +64,10 @@ LABELS_OBSOLETES = ("com.musicnewsradar.ingest", "com.musicnewsradar.digest")
 
 # Une heure. Le run score desormais a chaque passage (appels Claude payes) et
 # plus rien n'a besoin d'etre temps reel : les alertes Discord sont coupees.
-INTERVALLE_PIPELINE = 3600
+# La valeur elle-meme vit dans `app.config` : le dashboard doit l'ANNONCER a
+# l'utilisateur (« attends le prochain passage, toutes les N min »), et un
+# reglage recopie a deux endroits finit toujours par mentir d'un cote.
+INTERVALLE_PIPELINE = settings.pipeline_intervalle_s
 
 # Dix minutes : c'est la precision de l'heure de publication. L'agent ne coute
 # rien a ce rythme -- il ne score pas, et ne compose qu'a J-1.

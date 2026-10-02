@@ -273,7 +273,9 @@ def test_la_categorie_d_une_source_n_est_plus_une_ecriture_muette():
 
 
 def test_sauter_demande_une_confirmation_qui_nomme_l_article():
-    bloc = PAGE.split('bouton(\n          "🚫"', 1)[1].split("}\n", 1)[0]
+    # Le libelle du bouton porte desormais un mot (« 🚫 Sauter ») : le decoupage
+    # suit l'emoji seul, pour ne pas rougir au prochain ajustement de libelle.
+    bloc = PAGE.split('"🚫', 1)[1].split("}\n", 1)[0]
     assert "confirm(" in bloc
     assert "c.article_title" in bloc
     assert "Remettre dans la file" in bloc

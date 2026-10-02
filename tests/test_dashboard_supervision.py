@@ -46,8 +46,23 @@ def test_un_niveau_inconnu_du_serveur_est_respecte_tel_quel():
 def test_chaque_voyant_non_vert_imprime_sa_raison_a_l_ecran():
     """Adjacente et visible, jamais seulement dans un `title`."""
     html = DASHBOARD.read_text()
-    assert 'if (v.niveau === "ok" || !v.raison) continue;' in html
+    assert 'voyants.filter((v) => v.niveau !== "ok" && v.raison)' in html
     assert "ligne.querySelector(\"span\").textContent = v.raison;" in html
+
+
+def test_le_repli_des_raisons_ne_touche_jamais_une_panne():
+    """Task 3 : l'entete est `sticky`, donc sa hauteur se paie en zone utile --
+    mais gagner de la place ne doit pas rendre une PANNE invisible. Le repli ne
+    porte que sur les raisons non bloquantes, et il annonce ce qu'il cache."""
+    html = DASHBOARD.read_text()
+    bloc = html.split("const aRaison = ", 1)[1].split("const details =", 1)[0]
+    # Les pannes sont rendues AVANT tout calcul de repli, sans condition.
+    assert 'const pannes = aRaison.filter((v) => v.niveau === "panne");' in bloc
+    assert "for (const v of pannes) raisons.appendChild(ligneRaison(v));" in bloc
+    # Et le repli ne regarde que les autres.
+    assert 'const secondaires = aRaison.filter((v) => v.niveau !== "panne");' in bloc
+    assert "secondaires.length > SUP_RAISONS_DEPLIEES" in bloc
+    assert "pannes.slice" not in bloc and "aRaison.slice" not in bloc
 
 
 def test_le_panneau_sources_affiche_la_sante_de_chaque_source():

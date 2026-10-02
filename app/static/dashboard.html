@@ -102,7 +102,12 @@
   .mode-choix.mode-reel.on { background: var(--hot); color: #fff; }
   .mode-explication { color: var(--muted); font-size: 11.5px; margin: 8px 0 16px; }
   .slot-actions { display: flex; gap: 4px; }
-  .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px; cursor: pointer; padding: 2px 6px; }
+  /* Les quatre gestes portent desormais un LIBELLE : « 📌 » et « 📍 » sont deux
+     actions OPPOSEES que seule l'inclinaison de l'icone distinguait, et un
+     `title` ne se lit ni au premier coup d'oeil ni au lecteur d'ecran. */
+  .slot-actions button { background: none; border: 1px solid #2c2c38; border-radius: 6px;
+    cursor: pointer; padding: 3px 9px; color: var(--text); font-size: 12px; white-space: nowrap; }
+  .slot-actions button:hover { border-color: var(--accent); }
   .status-pill.libre { background: #23232d; color: var(--muted); }
   .status-pill.programme { background: #241f3d; color: #b9a6ff; }
   .status-pill.gele { background: #1f2f3d; color: #8fd0ff; }
@@ -195,12 +200,19 @@
   #events-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
   .event-row { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     padding: 10px 14px; margin-bottom: 8px; }
-  .event-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-  .event-head .grow { flex: 1; min-width: 0; }
+  /* COMPOSITION, pas rustine : le titre a SA ligne, les metriques la leur.
+     `.event-head` etait un flex en rangee ou le titre portait `flex: 1` (donc
+     `flex-basis: 0`) pendant que les onze badges revendiquaient leur largeur
+     INTRINSEQUE -- le titre perdait l'arbitrage et tombait a zero de large (on
+     n'en voyait qu'un fragment de glyphe), et les metadonnees tombaient un mot
+     par ligne dans 40 px. Un titre et onze badges ne sont pas des pairs qui se
+     partagent une rangee : la pile verticale est la seule disposition ou la
+     largeur du titre ne depend pas du nombre de badges. */
+  .event-head { display: block; cursor: pointer; }
   .event-head .hl { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   .event-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
-  .event-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+  .event-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; margin-top: 8px; }
   /* Meme rouge d'alerte que .render-warning : sert a signaler l'ecart
      corroboration/pertinence, jamais a decider quoi que ce soit. */
   .badge.corrob { background: #23232d; color: var(--muted); }
@@ -255,6 +267,64 @@
     display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11.5px; }
   .sup-details[hidden] { display: none; }
   .sup-details .sup-bloc b { color: var(--text); font-weight: 600; }
+  /* Le repli des raisons. L'entete est `sticky` : cinq raisons lui faisaient
+     ~230 px et mangeaient autant de zone utile. Mais gagner de la place ne doit
+     JAMAIS faire disparaitre une panne -- le repli ne touche donc que les
+     raisons `attention`/`inconnu`, et le bouton DIT combien il en cache. */
+  .sup-reste[hidden] { display: none; }
+  .sup-raison-plus { align-self: flex-start; border: 1px solid var(--border);
+    background: #20202a; color: var(--muted); border-radius: 8px; padding: 2px 9px;
+    cursor: pointer; font-size: 11.5px; margin-top: 2px; }
+
+  /* --- Ancrage : l'entete est `sticky`, donc une ancre (`#post-...`, un lien
+     entre panneaux) atterrissait SOUS elle. `--entete-h` est mesuree en JS a
+     chaque changement de hauteur du bandeau : la valeur ne peut pas etre figee
+     en CSS puisque l'entete grandit avec le nombre de raisons affichees. */
+  html { scroll-padding-top: calc(var(--entete-h, 120px) + 12px); }
+
+  /* --- Responsive. Il n'existait AUCUNE media query : a 820 px le titre d'un
+     evenement disparaissait et la barre de l'entete eclatait en quatre rangees.
+     Deux paliers seulement -- tablette/petit portable, puis telephone. --- */
+  @media (max-width: 900px) {
+    header { padding: 10px 12px; }
+    h1 { font-size: 15.5px; }
+    .bar { gap: 6px; }
+    .chip { padding: 5px 10px; font-size: 12px; }
+    /* Un `select` a largeur intrinseque poussait la rangee de l'entete a
+       deborder ; ici il partage la place au lieu de la revendiquer. Limite a
+       `.bar` : les selecteurs d'un panneau sont seuls sur leur ligne et
+       n'ont aucune raison d'en occuper toute la largeur. */
+    .bar select { flex: 1 1 150px; min-width: 0; }
+    /* L'entete cesse d'etre `sticky` sous cette largeur. Mesure sur la page
+       reelle : 419 px de haut a 820 px de large, 705 px a 390 px -- soit la
+       moitie puis la TOTALITE de la hauteur utile d'un telephone. Une entete
+       collante plus haute que l'ecran qu'elle surplombe ne rend plus service,
+       elle le confisque ; elle defile donc avec la page, et rien n'est cache
+       pour autant. */
+    header { position: static; }
+    .chip.right { margin-left: 0; }
+    main { padding: 14px 12px 50px; grid-template-columns: 1fr; }
+    #sources-panel, #posts-panel, #schedule-panel, #events-panel { padding: 14px 12px; }
+    .posts-bar { flex-wrap: wrap; align-items: center; }
+    .mode-control { margin-left: 0; }
+    .reels-toggle { margin-left: 0; }
+    /* Une ligne de creneau porte desormais des libelles (et non quatre icones
+       muettes) : elle passe a la ligne plutot que d'ecraser son titre. */
+    .post-row { flex-wrap: wrap; }
+    .post-row .grow { flex: 1 1 100%; }
+    #post-detail { padding: 14px 8px; }
+    #post-detail .sheet { padding: 14px 14px 20px; }
+  }
+  @media (max-width: 560px) {
+    .bar { gap: 5px; }
+    .chip { padding: 5px 9px; font-size: 11.5px; }
+    .bar select { flex: 1 1 100%; }
+    .src-form { grid-template-columns: 1fr; }
+    .src-row { flex-wrap: wrap; }
+    .src-row .grow { flex: 1 1 100%; }
+    .detail-actions button, .detail-actions a { flex: 1 1 100%; text-align: center; }
+    .slot-actions { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
@@ -388,6 +458,45 @@ const grid = document.getElementById("grid");
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
 
+// --- Les reglages que l'interface ANNONCE -------------------------------
+// Trois textes affirmaient des choses fausses, et deux recopiaient un reglage :
+// « toutes les 2 h » (l'agent `com.musicnewsradar.pipeline` est HORAIRE depuis
+// le 2026-08-15) et « 14 jours de retention » (`retention_days` vaut 2 depuis le
+// 2026-09-21 -- on envoyait donc chercher un article supprime douze jours plus
+// tot que annonce). Ils sont desormais DERIVES de `GET /reglages`.
+//
+// Meme regle que le bandeau de supervision : une valeur qu'on n'a pas pu lire
+// est INCONNUE. Reglages illisibles, la phrase perd son chiffre -- elle n'en
+// invente jamais un, et surtout ne retombe pas sur l'ancienne valeur en dur.
+let REGLAGES = null;
+
+async function chargerReglages() {
+  try {
+    const reponse = await fetch("/reglages");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    REGLAGES = await reponse.json();
+  } catch (erreur) {
+    REGLAGES = null;
+  }
+}
+
+function cadencePipeline() {
+  const s = REGLAGES && REGLAGES.pipeline_intervalle_s;
+  if (!s) return "";
+  if (s % 3600 === 0) {
+    const h = s / 3600;
+    return h === 1 ? " (toutes les heures)" : ` (toutes les ${h} h)`;
+  }
+  return ` (toutes les ${Math.round(s / 60)} min)`;
+}
+
+function retentionTexte() {
+  const j = REGLAGES && REGLAGES.retention_days;
+  return j
+    ? `probablement purgée — ${j} jour${j > 1 ? "s" : ""} de rétention`
+    : "probablement purgée (durée de rétention inconnue)";
+}
+
 // Un echec de chargement doit etre TERMINAL ET RELANCABLE : il porte sa raison
 // et un bouton. Sans ce bouton, la seule issue d'une panne passagere (Neon qui
 // demarre, `attendre_base()` qui patiente) etait de recharger la page entiere --
@@ -433,7 +542,9 @@ async function load() {
     return;
   }
   document.getElementById("count").textContent = `${articles.length} article${articles.length > 1 ? "s" : ""}`;
-  grid.innerHTML = articles.length ? "" : '<div id="empty">Rien ici — change de filtre ou attends le prochain run (toutes les 2 h).</div>';
+  grid.innerHTML = articles.length
+    ? ""
+    : `<div id="empty">Rien ici — change de filtre ou attends le prochain passage${cadencePipeline()}.</div>`;
 
   for (const a of articles) {
     const card = document.createElement("div");
@@ -457,6 +568,8 @@ async function load() {
     const excluBadge = a.file_exclu_raison
       ? `<span class="badge exclu" title="${escapeHtml(a.file_exclu_raison)}">⛔ hors file : ${escapeHtml(a.file_exclu_raison)}</span>`
       : "";
+    // « ↩ » seul ne disait pas ou l'on revient : ce geste remet l'article en
+    // statut "new", c'est-a-dire dans la vue « A traiter ». D'ou son libelle.
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
@@ -474,7 +587,7 @@ async function load() {
         <div class="actions">
           <button data-status="reviewed">✓ Vu</button>
           <button data-status="used">📸 Posté</button>
-          <button data-status="new">↩</button>
+          <button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>
           <button class="gen-post">Générer le post</button>
           ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
         </div>
@@ -856,10 +969,14 @@ async function loadSchedulePanel() {
       // Le budget de confirmation etait depense a l'envers -- supprimer un
       // BROUILLON en demandait une, sortir un article de la file pour de bon
       // n'en demandait aucune.
+      // `libelle` est VISIBLE, `titre` reste l'explication longue. Quatre icones
+      // nues ne disaient rien -- et « 📌 » / « 📍 » sont deux actions opposees
+      // que seule l'inclinaison du dessin separait.
       const bouton = (libelle, titre, donnees, confirmer) => {
         const b = document.createElement("button");
         b.textContent = libelle;
         b.title = titre;
+        b.setAttribute("aria-label", titre);
         b.onclick = () => {
           if (confirmer && !confirmer()) return;
           modifierCreneau(c.id, donnees);
@@ -867,15 +984,25 @@ async function loadSchedulePanel() {
         actions.appendChild(b);
       };
       if (c.article_id) {
-        bouton(c.epingle ? "📍" : "📌", c.epingle ? "Désépingler" : "Épingler", { epingle: !c.epingle });
+        bouton(
+          c.epingle ? "📍 Désépingler" : "📌 Épingler",
+          c.epingle
+            ? "Désépingler : ce créneau redevient arbitrable par le pipeline"
+            : "Épingler : l'arbitrage ne touchera plus ce créneau",
+          { epingle: !c.epingle },
+        );
       }
-      bouton("✏️", "Remplacer par un autre article (identifiant)", c.format === "reel" ? "remplacer-reel" : "remplacer");
+      bouton(
+        "✏️ Remplacer",
+        "Remplacer par un autre article (identifiant)",
+        c.format === "reel" ? "remplacer-reel" : "remplacer",
+      );
       if (c.article_id) {
-        bouton("⏬", "Décaler au créneau suivant", { decaler: true });
+        bouton("⏬ Décaler", "Décaler au créneau suivant", { decaler: true });
         // La confirmation NOMME l'article : « Sauter cet article » ne disait pas
         // lequel, et un clic sur une icone sans libelle l'ecartait de la file.
         bouton(
-          "🚫",
+          "🚫 Sauter",
           "Sauter : l'article sort de la file (reversible depuis sa carte, « Remettre dans la file »)",
           { sauter: true },
           () => confirm(
@@ -1025,7 +1152,7 @@ function raisonPasDeReel(media) {
   return "aucune vidéo exploitable";
 }
 
-// Un post survit a la purge de son article (14 jours) : GET peut donc
+// Un post survit a la purge de son article (`retention_days`) : GET peut donc
 // legitimement rendre 404, pas seulement en cas de panne reseau -- dans les
 // deux cas on degrade a null plutot que de casser l'ouverture du detail.
 async function fetchArticleById(id) {
@@ -1105,7 +1232,7 @@ function renderPostDetail(post, article, covers) {
   const reelDisabled = raisonReel != null;
   const reasonHtml = reelDisabled
     ? `<div class="reel-reason" id="reel-reason">${escapeHtml(
-        article ? raisonReel : "actu introuvable (probablement purgée -- 14 jours de rétention)"
+        article ? raisonReel : "actu introuvable (" + retentionTexte() + ")"
       )}</div>`
     : "";
 
@@ -1166,14 +1293,23 @@ function renderPostDetail(post, article, covers) {
 
   // D'où vient le FOND de la cover. Posé à la composition (`variants.fond`),
   // jamais déduit : une fois l'URL dans la slide, plus rien ne dirait si elle
-  // vient de l'actu, du compte qui l'a publiée, d'un artiste cité — ou si tout
-  // était une affiche et que la cover est partie sur l'aplat Kinda.
+  // vient de l'actu, du compte qui l'a publiée, d'un artiste cité, ou du web.
+  //
+  // Deux de ces libellés décrivaient un comportement RETIRÉ. `kinda` disait
+  // « mieux vaut l'aplat sombre » : depuis la Tâche 5 du chantier visuels
+  // (2026-09-21), une composition neuve ne pose plus jamais cet aplat, elle
+  // SAUTE le créneau — un brouillon qui porte encore cette origine est donc un
+  // vestige, et le dire évite de chercher à comprendre pourquoi un post part
+  // sur un fond uni. Et `web` promettait un crédit du site, retiré le même
+  // jour : le crédit de la légende ne porte plus que des comptes (@artiste).
   const ORIGINES_FOND = {
     article: "📰 photo de l'actu",
     compte: "📸 photo du compte qui a publié l'actu (l'actu n'offrait qu'une affiche)",
     artiste: "🎤 photo d'un artiste suivi cité (l'actu n'offrait qu'une affiche)",
-    web: "🌐 image trouvée sur le web (dernier recours) — le crédit cite le site",
-    kinda: "🎨 fond Kinda — tout était une affiche, mieux vaut l'aplat sombre",
+    web: "🌐 image trouvée sur le web (dernier recours) — le site n'est pas crédité",
+    kinda: "🎨 aplat Kinda — brouillon composé avant le 2026-09-21 : aucune photo"
+      + " n'avait été trouvée. Une composition d'aujourd'hui sauterait le créneau"
+      + " au lieu de publier cet aplat.",
   };
   const origineFond = ((post.variants || {}).fond || {}).origine;
   const fondSection = origineFond
@@ -1470,10 +1606,8 @@ async function loadEventsPanel() {
     row.className = "event-row";
     row.innerHTML = `
       <div class="event-head">
-        <div class="grow">
-          <div class="hl"></div>
-          <div class="sub"></div>
-        </div>
+        <div class="hl"></div>
+        <div class="sub"></div>
         <div class="event-metrics"></div>
       </div>
       <div class="event-observations" hidden></div>`;
@@ -1543,6 +1677,11 @@ const SUP_GLOBAL = {
   inconnu: "❔ État inconnu",
 };
 let supDetailsOuverts = false;
+// Au-dela de deux raisons NON BLOQUANTES, le surplus se replie : l'entete est
+// `sticky` et sa hauteur se paie en zone utile. Les pannes, elles, ne se
+// replient jamais.
+const SUP_RAISONS_DEPLIEES = 2;
+let supRaisonsOuvertes = false;
 
 document.getElementById("sup-plier").onclick = () => {
   supDetailsOuverts = !supDetailsOuverts;
@@ -1582,17 +1721,43 @@ function rendreSupervision(etat) {
   }
 
   // Les raisons des voyants qui ne sont pas au vert : visibles, pas en infobulle.
+  //
+  // REPLI, parce que l'entete est `sticky` : cinq raisons lui faisaient ~230 px
+  // et mangeaient autant de zone utile. Mais gagner de la place ne doit jamais
+  // faire disparaitre une panne -- une PANNE est toujours rendue, le repli ne
+  // touche que les raisons `attention`/`inconnu`, et le bouton dit combien il
+  // en cache, ce qui n'est donc pas un masquage mais un pli.
   const raisons = document.getElementById("sup-raisons");
   raisons.innerHTML = "";
-  for (const v of voyants) {
-    if (v.niveau === "ok" || !v.raison) continue;
+  const ligneRaison = (v) => {
     const niv = SUP_ICONES[v.niveau] ? v.niveau : "inconnu";
     const ligne = document.createElement("div");
     ligne.className = "sup-raison niv-" + niv;
     ligne.innerHTML = `${SUP_ICONES[niv]} <b></b> — <span></span>`;
     ligne.querySelector("b").textContent = v.libelle;
     ligne.querySelector("span").textContent = v.raison;
-    raisons.appendChild(ligne);
+    return ligne;
+  };
+  const aRaison = voyants.filter((v) => v.niveau !== "ok" && v.raison);
+  const pannes = aRaison.filter((v) => v.niveau === "panne");
+  const secondaires = aRaison.filter((v) => v.niveau !== "panne");
+  for (const v of pannes) raisons.appendChild(ligneRaison(v));
+  const replie = secondaires.length > SUP_RAISONS_DEPLIEES && !supRaisonsOuvertes;
+  const montrees = replie ? secondaires.slice(0, SUP_RAISONS_DEPLIEES) : secondaires;
+  for (const v of montrees) raisons.appendChild(ligneRaison(v));
+  if (secondaires.length > SUP_RAISONS_DEPLIEES) {
+    const caches = secondaires.length - montrees.length;
+    const plus = document.createElement("button");
+    plus.className = "sup-raison-plus";
+    plus.setAttribute("aria-expanded", String(!replie));
+    plus.textContent = replie
+      ? `+ ${caches} autre${caches > 1 ? "s" : ""} point${caches > 1 ? "s" : ""} à regarder`
+      : "Replier les points à regarder";
+    plus.onclick = () => {
+      supRaisonsOuvertes = !supRaisonsOuvertes;
+      rendreSupervision(etat);
+    };
+    raisons.appendChild(plus);
   }
 
   const details = document.getElementById("sup-details");
@@ -1607,6 +1772,16 @@ function rendreSupervision(etat) {
     details.appendChild(bloc);
   }
   details.hidden = !supDetailsOuverts;
+  mesurerEntete();
+}
+
+// `scroll-padding-top` ne peut pas etre fige en CSS : le bandeau grandit avec le
+// nombre de raisons affichees, et une ancre atterrirait sous l'entete `sticky`.
+// On publie donc la hauteur REELLE dans `--entete-h`.
+function mesurerEntete() {
+  const entete = document.querySelector("header");
+  if (!entete) return;
+  document.documentElement.style.setProperty("--entete-h", entete.offsetHeight + "px");
 }
 
 async function chargerSupervision() {
@@ -1631,6 +1806,11 @@ function escapeHtml(str) {
   // rattrapage, si bien qu'un `/sources` en echec laissait l'ecran d'accueil sur
   // « Chargement… » pour toujours -- sans un mot, et sans que la grille,
   // parfaitement joignable, soit meme tentee.
+  // Les reglages d'abord : ils n'alimentent que des TEXTES, et leur echec est
+  // deja traite (la phrase perd son chiffre). `await` ici plutot qu'en
+  // parallele, pour que le premier rendu de la grille porte deja la bonne
+  // cadence au lieu d'une phrase amputee reparee au rafraichissement suivant.
+  await chargerReglages();
   const sel = document.getElementById("source");
   try {
     const reponse = await fetch("/sources");
@@ -1647,6 +1827,9 @@ function escapeHtml(str) {
   }
   load();
 })();
+
+mesurerEntete();
+addEventListener("resize", mesurerEntete);
 
 chargerSupervision();
 // Le bandeau vit sa vie : il doit rester vrai meme quand l'utilisateur laisse

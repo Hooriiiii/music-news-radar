@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     # jamais purgés (archive éditoriale), voir `pipeline/retention.py`.
     retention_days: int = 2
 
+    # Cadence du passage de `run_pipeline` (agent launchd
+    # `com.musicnewsradar.pipeline`). Elle ne vivait que dans
+    # `scripts/install_agents.py`, et le dashboard annonçait « toutes les 2 h »
+    # en dur -- faux depuis que l'agent est horaire. Un texte d'interface qui
+    # recopie un réglage finit toujours par mentir : la valeur vit donc ici,
+    # `install_agents` la lit, et l'interface la DÉRIVE (`GET /reglages`).
+    pipeline_intervalle_s: int = 3600
+
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
     scoring_model: str = "claude-haiku-4-5"
