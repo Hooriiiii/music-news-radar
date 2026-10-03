@@ -288,6 +288,11 @@ le label a besoin** — ne jamais revenir à un axe unique. Priorité explicite 
 artistes français / à la scène locale sur l'axe emergence.
 API : `GET /articles?sort=emergence&min_emergence=...`.
 
+**La note est juste, son ATTRIBUTION l'était pas** (2026-10-03) : la note
+d'émergence d'un article était recopiée sur chaque artiste cité, donc le parrain
+célèbre montait comme son filleul inconnu. Ne pas toucher au prompt pour ça — voir
+« Mémoire A&R ».
+
 ## Qui parle : `sources.categorie` (décision du 2026-09-17)
 
 Le feed priorise les posts des COMPTES D'ARTISTES (électro, musiques dures — hard
@@ -467,6 +472,85 @@ dans `run_pipeline`) et `rising_artists()` (shortlist A&R). Les mentions sont
 DÉNORMALISÉES (titre, url, scores) et le FK vers l'article est `ON DELETE SET NULL` :
 la purge casse le lien, jamais l'historique. API : `GET /artists`,
 `GET /artists/{id}/mentions`, `PATCH /artists/{id}` (suivi manuel `tracked`).
+
+**Le signal était FAUX, et silencieusement** (réparé le 2026-10-03). `rising_artists`
+rendait Stray Kids, aespa, Charli XCX, BTS, **Taylor Swift**, Ed Sheeran, Madonna :
+un panneau A&R construit là-dessus proposait de signer Taylor Swift. Deux défauts
+distincts, de tailles très inégales — tout est mesuré dans l'en-tête de
+`app/pipeline/artists.py`, qui est la référence.
+
+1. **Le CLASSEMENT faisait tout le dégât.** Le tri était le VOLUME de citations,
+   ce qui remonte mécaniquement les artistes les plus couverts — l'inverse de « on
+   commence à en parler » —, et le départage `max_emergence`, un CLIQUET qu'une
+   seule note de parrainage remplit à vie (250 artistes à 60 ou plus, dont 15 avec
+   une moyenne sous 20 : BTS, 24 citations, max 75, **moyenne 3,1**). On classe
+   désormais sur l'**émergence MOYENNE des citations principales de la fenêtre**,
+   puis sur l'accélération, puis sur le volume. `rising_artists` rend un
+   `SignalArtiste` (citations, citations principales, moyenne, `velocity` et
+   `acceleration` empruntées à `app/pipeline/event_features.py` — les formules déjà
+   calibrées de la couche événements, rien n'est réinventé) plutôt qu'un `Artist`
+   nu : un panneau de tri ne peut pas reconstituer ce qu'un score composite a
+   écrasé. Plancher `CITATIONS_MIN_DEFAUT` = **3** : sans lui les huit premiers
+   sont huit artistes cités UNE fois, tous à 75 ex æquo.
+   Nouvelle tête de liste sur les vraies données : Surusinghe, FRÈJUS, G2G,
+   UNIIQU3, Ahadadream, Jennifer Loveless, Eoin DJ — **zéro star installée**,
+   y compris sous `min_emergence=60`.
+
+2. **« DÉJÀ SUIVI » N'EST PAS UNE DÉCOUVERTE.** `rising_artists(exclure_suivis=True)`
+   (le défaut ; `?inclure_suivis=true` les ramène) écarte les artistes dont
+   `Artist.source_instagram_id` désigne un compte suivi : la question « mérite-t-il
+   d'être suivi par Kinda ? » est alors déjà RÉPONDUE — un fait, pas un jugement de
+   notoriété. C'est exactement la population que `min_emergence=60` remontait
+   (Skrillex 85, David Guetta 75, Lady Gaga 60, Tiësto 60 : 18 des 409 citations à
+   60 ou plus).
+
+3. **L'ATTRIBUTION, réelle mais marginale — et il faut le dire.** `record_mentions`
+   recopiait la note d'émergence de l'ARTICLE sur CHAQUE artiste cité : un article
+   à 75 sur un jeune talent parrainé faisait monter le parrain déjà célèbre
+   exactement comme l'inconnu qu'il parraine. `est_citation_principale` tranche
+   désormais (rang 0, ou nom dans le titre, ou **aucun autre cité nommé dans le
+   titre**) et seule une citation principale fait monter `max_emergence` ;
+   `artist_mentions.principal` (migration **0020**, `NULL` = inconnu et vaut
+   PRINCIPAL partout — règle du doute) **persiste la décision à l'enregistrement**,
+   parce que le rang n'existe que sur l'article et que la purge à 2 jours l'efface.
+   Mais la mesure interdit de lui prêter plus que ce qu'elle fait : **155 citations
+   sur 5 178** (3 %) de la fenêtre sont détectées secondaires, et le correctif ne
+   change qu'**UNE ligne du top 15**, parce que 4 544 des 5 178 citations ont déjà
+   perdu leur article. C'est un correctif de qualité d'ARCHIVE, pour les mois à
+   venir, pas un correctif de classement.
+
+   **La troisième règle est un garde-fou trouvé par la MESURE, pas par le
+   raisonnement**, et sans elle le remède détruisait ce qu'il protège : le premier
+   jet, qui ne regardait que le rang et le titre, dégradait 14 des 15 artistes de
+   « Les dates de nos artistes en octobre ! » (techno FR, émergence 65) et 10 des
+   11 d'une sélection Fip — des line-ups d'artistes tous réellement émergents,
+   c'est-à-dire la meilleure matière A&R de la base. Un titre qui ne nomme personne
+   ne désigne pas de sujet, donc ne relègue personne. Corollaire : **ne jamais**
+   diluer la note par le NOMBRE d'artistes cités, pour la même raison.
+
+   Ce que l'attribution ne résout PAS : un parrain **nommé dans le titre** reste
+   principal (« Dance Up-And-Comer of the Month: Tatyana Jane … Gotten Lessons
+   From Skrillex » laisse Skrillex à 85). C'est le point 2 qui l'écarte — les deux
+   étages se complètent, aucun ne prétend suffire.
+
+Rattrapage de l'archive (13 310 citations), à passer une fois après la migration :
+`uv run python -m scripts.recalculer_attribution_artistes [--apply]` (sans
+`--apply` : le plan ; idempotent, aucun appel payé). Plan mesuré le 2026-10-03 :
+47 citations secondaires avérées, 27 fiches dont `max_emergence` change, et
+12 801 citations sans article dont le rang est perdu pour toujours — elles restent
+`NULL`, jamais dégradées à tort.
+
+**`Artist.tracked` est une colonne MORTE** : écrite par `PATCH /artists/{id}`, lue
+par PERSONNE. Ce que le pipeline appelle « artiste suivi » — l'exception au
+pré-filtre (`scoring.ContexteScoring`) et la réserve de visuels
+(`content/choix_visuels.py`) — est `comptes_artistes.IndexComptes`, c'est-à-dire
+les **sources Instagram actives de catégorie artiste** (88 en production), jamais
+`tracked`. `scripts/etat_notion.py` affirmait l'inverse (« 0 artiste suivi sur
+4 684 : les chemins qui en dépendent ne se déclenchent jamais ») : une alerte
+FAUSSE, pire que pas d'alerte parce qu'elle fait chercher la panne ailleurs. Elle
+compte désormais les comptes, et ne crie que sur la vraie condition de panne —
+plus aucun compte d'artiste suivi (`tests/test_etat_notion.py`). `tracked` reste en
+place : la supprimer ou la câbler enfin est un autre chantier.
 
 Positionnement vs le marché : inutile de concurrencer Chartmetric/Viberate/Soundcharts
 sur les signaux plateformes (vélocité TikTok, ajouts playlist). Le signal propre de

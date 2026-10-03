@@ -5,23 +5,34 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Artist, ArtistMention, Source, SourceCategorie, SourceType
-from app.pipeline.artists import rising_artists
-from app.schemas import ArtistMentionOut, ArtistOut
+from app.pipeline.artists import CITATIONS_MIN_DEFAUT, rising_artists
+from app.schemas import ArtistMentionOut, ArtistOut, SignalArtisteOut
 
 router = APIRouter(prefix="/artists", tags=["artists"])
 
 
-@router.get("", response_model=list[ArtistOut])
+@router.get("", response_model=list[SignalArtisteOut])
 def list_rising_artists(
     window_days: int = Query(30, ge=1, le=365),
     min_emergence: int | None = Query(None, ge=0, le=100),
     limit: int = Query(20, ge=1, le=200),
+    citations_min: int = Query(CITATIONS_MIN_DEFAUT, ge=1, le=50),
+    inclure_suivis: bool = Query(False),
     db: Session = Depends(get_db),
 ):
-    """La shortlist A&R : les artistes les plus cités sur la fenêtre demandée.
-    `min_emergence` écarte les artistes déjà installés."""
+    """La shortlist A&R : « on commence a en parler », jamais « on en parle
+    beaucoup » — classee par emergence MOYENNE des citations principales, pas
+    par volume (voir l'en-tete de `app/pipeline/artists.py`).
+
+    `inclure_suivis` ramene les artistes dont Kinda suit deja le compte
+    Instagram : ecartes par defaut, leur question A&R est deja repondue."""
     return rising_artists(
-        db, window_days=window_days, min_emergence=min_emergence, limit=limit
+        db,
+        window_days=window_days,
+        min_emergence=min_emergence,
+        limit=limit,
+        citations_min=citations_min,
+        exclure_suivis=not inclure_suivis,
     )
 
 

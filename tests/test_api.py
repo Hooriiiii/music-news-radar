@@ -235,7 +235,7 @@ def test_patch_source_404(client):
 # --- Endpoints A&R : la shortlist artistes ---
 
 
-def _seed_artist(db, *, name, mentions=1, emergence=70, days_ago=1):
+def _seed_artist(db, *, name, mentions=3, emergence=70, days_ago=1):
     import datetime as dt
 
     from app.models import Artist, ArtistMention
@@ -259,17 +259,29 @@ def _seed_artist(db, *, name, mentions=1, emergence=70, days_ago=1):
 
 
 def test_list_rising_artists(client, db_session):
-    _seed_artist(db_session, name="Montant", mentions=3)
-    _seed_artist(db_session, name="Discret", mentions=1)
+    """Le classement n'est plus le VOLUME mais l'emergence MOYENNE : la star
+    tres citee et peu emergente passe derriere la jeune pousse."""
+    _seed_artist(db_session, name="Jeune Pousse", mentions=3, emergence=70)
+    _seed_artist(db_session, name="Star", mentions=12, emergence=2)
     body = client.get("/artists").json()
-    assert [a["name"] for a in body] == ["Montant", "Discret"]
+    assert [a["artist"]["name"] for a in body] == ["Jeune Pousse", "Star"]
+    assert body[0]["emergence_moyenne"] == 70.0
+    assert body[0]["citations"] == 3
+    assert body[0]["deja_suivi"] is False
+
+
+def test_list_rising_artists_ignore_une_citation_unique(client, db_session):
+    _seed_artist(db_session, name="Trois Fois", mentions=3)
+    _seed_artist(db_session, name="Un Seul Coup", mentions=1, emergence=100)
+    body = client.get("/artists").json()
+    assert [a["artist"]["name"] for a in body] == ["Trois Fois"]
 
 
 def test_list_rising_artists_filters_on_emergence(client, db_session):
     _seed_artist(db_session, name="Jeune", emergence=80)
     _seed_artist(db_session, name="Star", emergence=10)
     body = client.get("/artists", params={"min_emergence": 50}).json()
-    assert [a["name"] for a in body] == ["Jeune"]
+    assert [a["artist"]["name"] for a in body] == ["Jeune"]
 
 
 def test_artist_mentions_history(client, db_session):

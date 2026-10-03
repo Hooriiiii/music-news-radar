@@ -99,6 +99,28 @@ class ArtistOut(BaseModel):
     source_instagram_id: int | None = None
 
 
+class SignalArtisteOut(BaseModel):
+    """Un artiste de la shortlist A&R, avec les chiffres qui justifient son rang.
+
+    Le classement ne tient plus au VOLUME de citations (il remontait les stars)
+    ni a `max_emergence` seul (un cliquet qu'une seule note de parrainage
+    remplissait) : il tient a l'emergence MOYENNE des citations principales de
+    la fenetre. Les trois mesures sont rendues pour qu'un panneau puisse trier
+    autrement sans redemander la base.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    artist: ArtistOut
+    citations: int
+    citations_principales: int
+    emergence_moyenne: float | None
+    emergence_max_principale: int | None
+    velocite: float | None
+    acceleration: float | None
+    deja_suivi: bool
+
+
 class ArtistMentionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -111,6 +133,9 @@ class ArtistMentionOut(BaseModel):
     emergence_score: int | None
     title: str
     url: str
+    # `None` = inconnu (citation anterieure a la migration 0020), lu comme
+    # PRINCIPAL partout : la regle du doute.
+    principal: bool | None = None
 
 
 class DigestOut(BaseModel):
