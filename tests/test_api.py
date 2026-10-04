@@ -294,10 +294,18 @@ def test_artist_mentions_404(client):
     assert client.get("/artists/999/mentions").status_code == 404
 
 
-def test_track_artist(client, db_session):
+def test_la_fiche_artiste_ne_porte_plus_de_suivi_manuel(client, db_session):
+    """`Artist.tracked` etait ecrite ici et lue par personne (migration 0021).
+
+    Un champ ignore en silence est ce qui lui a permis de vivre sans lecteur :
+    l'API le REFUSE donc explicitement, plutot que de repondre 200 sans rien
+    ecrire. Et la fiche rendue ne l'expose plus du tout.
+    """
     artist = _seed_artist(db_session, name="Pepite")
-    body = client.patch(f"/artists/{artist.id}", json={"tracked": True}).json()
-    assert body["tracked"] is True
+    assert client.patch(f"/artists/{artist.id}", json={"tracked": True}).status_code == 422
+    corps = client.patch(f"/artists/{artist.id}", json={}).json()
+    assert "tracked" not in corps
+    assert corps["source_instagram_id"] is None
 
 
 def test_le_dashboard_porte_le_panneau_de_programmation(client):

@@ -372,6 +372,85 @@
      de la ligne, apres la source et la date, pour ne pas disputer la place au
      titre. */
   .obs-row .renvois { margin-left: auto; white-space: nowrap; }
+
+  /* --- Panneau Artistes : la moitie DETECTION de Kinda ---------------------
+     `artists` / `artist_mentions` sont « l'actif de Kinda » (CLAUDE.md) et le
+     flux scoré est « le deal-flow du label ». 4 752 artistes et 13 533
+     citations archivees depuis des semaines, et jusqu'ici AUCUNE interface ne
+     les montrait : l'API existait, testee, sans un seul consommateur.
+
+     Trois choses doivent se lire d'un coup d'oeil, parce que ce sont elles qui
+     separent une DECOUVERTE d'une star : la TENDANCE (« on commence a en
+     parler » contre « on en parle beaucoup »), le fait qu'un compte soit DEJA
+     SUIVI (la question A&R est alors deja repondue, c'est un fait et non un
+     jugement), et les CITATIONS elles-memes, titre et source -- juger sur
+     pieces plutot que sur un score.
+
+     Meme lecon qu'`.event-head` : des blocs EMPILES, jamais un titre en
+     `flex: 1` face a des badges a largeur intrinseque -- Chromium comptait
+     alors le titre lui-meme comme masque. */
+  #artistes-panel { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .artiste-row { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 8px; }
+  .artiste-head { display: block; cursor: pointer; }
+  .artiste-head .rang { color: #6a6a78; font-size: 11.5px; font-variant-numeric: tabular-nums;
+    font-family: var(--police-titre); }
+  .artiste-head .nom { font-weight: 600; font-size: 16px; font-family: var(--police-titre);
+    letter-spacing: .2px; }
+  .artiste-head .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .artiste-metrics { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; margin-top: 8px;
+    align-items: center; }
+  /* La MOYENNE d'emergence est la cle de tri : elle porte donc l'accent, et
+     elle est la seule a le porter. */
+  .badge.moyenne { background: var(--accent-doux); color: var(--accent-clair); font-weight: 600; }
+  /* Une valeur NON MESUREE. Gris-bleu, la teinte deja en service pour
+     « inconnu » dans le bandeau de supervision -- volontairement differente du
+     vert comme de l'accent : ne pas savoir n'est ni une bonne ni une mauvaise
+     nouvelle. */
+  .badge.inconnu { background: #1f2630; color: #9fb0c4; font-style: italic; }
+  /* La TENDANCE, le signal que ce panneau existe pour montrer. Trois etats
+     possibles PLUS l'inconnu, et l'inconnu n'emprunte la couleur d'aucun des
+     trois. */
+  .badge.tendance { font-weight: 600; }
+  .badge.tendance.monte { background: var(--accent-doux); color: var(--accent-clair); }
+  .badge.tendance.stable { background: #23232d; color: var(--muted); }
+  .badge.tendance.retombe { background: #2b2420; color: #ffb38a; }
+  /* « Deja suivi » n'est PAS une alerte : c'est une reponse. Le vert deja en
+     service pour « publie » (.status-pill), jamais le rouge. */
+  .badge.suivi { background: #1f3d2a; color: #7ee2a0; }
+  .badge.a-decouvrir { background: #23232d; color: var(--muted); }
+  .artiste-citations { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 6px; }
+  .artiste-citations[hidden] { display: none; }
+  .cit-row { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: baseline;
+    flex-wrap: wrap; }
+  .cit-row a { color: var(--text); text-decoration: none; }
+  .cit-row a:hover { color: var(--accent-clair); }
+  .cit-row .tete { font-size: 10.5px; background: #23232d; color: var(--muted);
+    border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+  .cit-row .tete.passage { background: #2b2420; color: #ffb38a; }
+  .cit-row .titre { flex: 1 1 260px; min-width: 0; }
+  .cit-row .renvois { margin-left: auto; white-space: nowrap; }
+  /* Le lien a la main vers un compte suivi : le seul geste d'ecriture du
+     panneau (`PATCH /artists/{id}`), et la raison pour laquelle
+     `source_instagram_id` reste quand `tracked` disparait. Un controle
+     DESACTIVE imprime sa raison a cote -- jamais un selecteur gris et muet. */
+  .lier-compte { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+  .lier-compte select { font-size: 11.5px; max-width: 260px; }
+  .lier-compte .pourquoi-desactive { color: var(--alerte-douce); }
+  .lier-compte .verdict { width: 12px; text-align: center; color: #7ee2a0; }
+  .lier-compte .verdict.ko { color: var(--alerte-douce); }
+  /* La barre de reglages du panneau : des `select` et une case, comme les
+     autres panneaux (`.posts-bar`). Ni `.onglet` ni `.chip` -- ces deux formes
+     appartiennent a la navigation (portee application) et aux filtres de la
+     grille (portee grille) ; melanger les trois est exactement la confusion de
+     portees que la refonte du 2026-10-02 a demontee. */
+  .artistes-reglages { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 12px; }
+  .artistes-reglages label { color: var(--muted); font-size: 11.5px; display: flex;
+    gap: 5px; align-items: center; }
+  .artistes-aide { color: var(--muted); font-size: 11.5px; margin-bottom: 14px; line-height: 1.5; }
   /* --- Bandeau de supervision (permanent, tous panneaux) ---
      Les quatre niveaux reprennent les couleurs deja en service dans le
      dashboard (.status-pill) : vert = publie, ambre = apercu, rouge = echec.
@@ -453,7 +532,8 @@
     header { position: static; }
     nav.nav { margin-left: 0; }
     main { padding: 14px 12px 50px; grid-template-columns: 1fr; }
-    #sources-panel, #posts-panel, #schedule-panel, #events-panel { padding: 14px 12px; }
+    #sources-panel, #posts-panel, #schedule-panel, #events-panel,
+    #artistes-panel { padding: 14px 12px; }
     .posts-bar { flex-wrap: wrap; align-items: center; }
     .mode-control { margin-left: 0; }
     .reels-toggle { margin-left: 0; }
@@ -473,6 +553,12 @@
     .src-row .grow { flex: 1 1 100%; }
     .detail-actions button, .detail-actions a { flex: 1 1 100%; text-align: center; }
     .slot-actions { flex-wrap: wrap; }
+    /* Le selecteur de liaison et les reglages du panneau Artistes prennent
+       toute la largeur : a 390 px, un `select` a cote de son libelle les
+       ecrasait tous les deux. */
+    .artistes-reglages label { flex: 1 1 100%; }
+    .artistes-reglages label select { flex: 1; min-width: 0; }
+    .lier-compte select { flex: 1 1 100%; max-width: none; }
   }
 </style>
 </head>
@@ -486,6 +572,7 @@
       <button class="onglet" data-panneau="schedule">🗓 Programmation</button>
       <button class="onglet" data-panneau="posts">🖼 Posts</button>
       <button class="onglet" data-panneau="events">🕸 Événements</button>
+      <button class="onglet" data-panneau="artistes">🎤 Artistes</button>
       <button class="onglet" data-panneau="sources">⚙️ Sources</button>
     </nav>
   </div>
@@ -590,6 +677,49 @@
     </select>
   </div>
   <div id="events-list"></div>
+</section>
+
+<section id="artistes-panel" hidden>
+  <div class="artistes-reglages">
+    <label>Fenêtre
+      <select id="art-fenetre">
+        <option value="7">7 jours</option>
+        <option value="30" selected>30 jours</option>
+        <option value="90">90 jours</option>
+        <option value="365">1 an</option>
+      </select>
+    </label>
+    <label title="Deux citations ne sont pas une courbe : sous trois, la tête de liste est du bruit (artistes cités une fois, tous à 75 ex æquo). 1 sert à fouiller un primo-signal.">Au moins
+      <select id="art-citations-min">
+        <option value="1">1 citation</option>
+        <option value="2">2 citations</option>
+        <option value="3" selected>3 citations</option>
+        <option value="5">5 citations</option>
+        <option value="10">10 citations</option>
+      </select>
+    </label>
+    <label title="Filtre sur le pic d'émergence historique de la fiche (Artist.max_emergence), pas sur la moyenne de la fenêtre.">Pic ≥
+      <select id="art-min-emergence">
+        <option value="">sans minimum</option>
+        <option value="40">40</option>
+        <option value="60">60</option>
+        <option value="80">80</option>
+      </select>
+    </label>
+    <label>Montrer
+      <select id="art-limite">
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+    </label>
+    <label title="Un artiste dont Kinda suit déjà le compte Instagram n'est pas une découverte : sa question A&R est déjà répondue.">
+      <input type="checkbox" id="art-inclure-suivis"> Inclure les comptes déjà suivis
+    </label>
+  </div>
+  <div class="artistes-aide" id="artistes-aide"></div>
+  <div id="artistes-list"></div>
 </section>
 
 <div id="post-detail" hidden></div>
@@ -907,6 +1037,7 @@ const panelEl = document.getElementById("sources-panel");
 const postsPanelEl = document.getElementById("posts-panel");
 const schedulePanelEl = document.getElementById("schedule-panel");
 const eventsPanelEl = document.getElementById("events-panel");
+const artistesPanelEl = document.getElementById("artistes-panel");
 const barreFiltres = document.getElementById("barre-filtres");
 
 // --- Deux portees, deux variables ----------------------------------------
@@ -931,12 +1062,14 @@ function afficherPanneau(nom) {
   postsPanelEl.hidden = nom !== "posts";
   schedulePanelEl.hidden = nom !== "schedule";
   eventsPanelEl.hidden = nom !== "events";
+  artistesPanelEl.hidden = nom !== "artistes";
   document.getElementById("count").textContent = "";
   mesurerEntete();
   if (nom === "sources") loadSourcesPanel();
   else if (nom === "posts") loadPostsPanel();
   else if (nom === "schedule") loadSchedulePanel();
   else if (nom === "events") loadEventsPanel();
+  else if (nom === "artistes") loadArtistesPanel();
   else load();
 }
 
@@ -2022,6 +2155,324 @@ async function loadEventsPanel() {
     list.appendChild(row);
   }
 }
+
+
+// --- Panneau Artistes : la moitie DETECTION de Kinda -----------------------
+//
+// `CLAUDE.md` appelle la courbe des citations « l'actif de Kinda » et le flux
+// scoré « le deal-flow du label ». En production : 4 752 artistes et 13 533
+// citations archivees depuis des semaines, et jusqu'au 2026-10-04 aucune
+// interface ne les montrait -- `GET /artists` existait, teste, sans un seul
+// consommateur. L'audit UX du 02/10 l'avait releve.
+//
+// Ce panneau n'aurait PAS du etre construit plus tot, et c'est important : le
+// signal etait faux jusqu'au 03/10 (la shortlist rendait Taylor Swift et BTS,
+// parce qu'elle triait par VOLUME de citations). Un panneau pose sur cet ancien
+// signal aurait propose de signer Taylor Swift.
+
+// REGLE QUI GOUVERNE CE BLOC, et la plus facile a casser par un `|| 0` bien
+// intentionne : une valeur qu'on n'a PAS PU MESURER ne s'affiche jamais comme un
+// zero. `velocite` vaut `None` sous deux citations datees, `acceleration` sous
+// trois (c'est `app/pipeline/event_features.py` qui le decide, et qui explique
+// pourquoi : couper en deux une fenetre d'une minute ne compare rien), et 17 %
+// des citations de la base ne portent aucune note d'emergence. Une acceleration
+// inconnue affichee « 0 » se lit « cet artiste stagne » : c'est une affirmation
+// fausse sur la seule grandeur qui separe une decouverte d'une star.
+//
+// UN SEUL point de passage, donc une seule chose a muter pour verifier la regle
+// (`tests/test_dashboard_artistes.py`).
+function mesure(valeur, decimales) {
+  return valeur == null ? null : Number(valeur).toFixed(decimales);
+}
+
+// `classe` met en avant la CLE DE TRI (l'emergence moyenne) et rien d'autre.
+// Elle ne s'applique jamais au cas inconnu : une valeur qu'on n'a pas pu lire
+// n'a pas a porter l'accent de la marque, qui se lirait comme une promesse.
+function badgeMesure(nom, valeur, decimales, aide, classe) {
+  const t = mesure(valeur, decimales);
+  return t == null
+    ? `<span class="badge inconnu" title="${escapeHtml(aide)} — pas assez de matière pour mesurer">${nom} inconnue</span>`
+    : `<span class="badge${classe ? " " + classe : ""}" title="${escapeHtml(aide)}">${nom} ${t}</span>`;
+}
+
+// Les deux seuils de la TENDANCE, et pourquoi ils ne sont pas symetriques.
+//
+// `acceleration` est bornee dans [-1, +1] et porte un BIAIS STRUCTUREL que son
+// propre docstring documente : un nombre IMPAIR de citations regulierement
+// espacees penche de +1/n, donc TROIS citations equidistantes valent +0,33 et
+// non 0. Or trois est precisement le plancher par defaut (`citations_min`). Un
+// seuil « monte » place sous 0,33 qualifierait donc de montee la regularite la
+// plus plate possible du cas le plus frequent. On exige 0,34, strictement
+// au-dessus de ce plancher : au-dela de trois citations le biais ne fait que
+// diminuer, le seuil est donc conservateur dans le bon sens -- on prefere ne pas
+// annoncer une montee que l'annoncer a tort.
+const ACCELERATION_MONTE = 0.34;
+const ACCELERATION_RETOMBE = -0.2;
+
+// « On commence a en parler » contre « on en parle beaucoup » : c'est LA lecture
+// que ce panneau existe pour rendre immediate. Le libelle porte le sens, le
+// nombre reste a cote -- un mot sans sa mesure n'est pas verifiable.
+function badgeTendance(acceleration) {
+  const t = mesure(acceleration, 2);
+  if (t == null) {
+    return '<span class="badge tendance inconnu" title="L\'accélération compare la densité de la seconde moitié de la fenêtre à celle de la première. Elle demande au moins trois citations datées et un étalement suffisant : ici la matière manque.">tendance inconnue</span>';
+  }
+  const v = Number(acceleration);
+  const [classe, libelle] = v >= ACCELERATION_MONTE
+    ? ["monte", "↗ on commence à en parler"]
+    : v <= ACCELERATION_RETOMBE
+      ? ["retombe", "↘ ça retombe"]
+      : ["stable", "→ régulier"];
+  return `<span class="badge tendance ${classe}" title="Accélération : densité de la seconde moitié de la fenêtre contre la première, bornée dans [-1, +1]. Seuil « monte » à ${ACCELERATION_MONTE} — au-dessous, trois citations régulières suffiraient à le franchir sans qu\'il monte.">${libelle} ${t}</span>`;
+}
+
+// Les comptes auxquels une fiche peut etre liee a la main : sources Instagram
+// ACTIVES de categorie artiste, c'est-a-dire exactement ce que le pipeline
+// appelle « artiste suivi » (`comptes_artistes.IndexComptes`). Lu une fois par
+// chargement du panneau, et son ECHEC est une information : le selecteur est
+// alors desactive AVEC SA RAISON ecrite a cote, jamais gris et muet.
+let comptesSuivis = null;        // [{id, name}] ou null si illisible
+let comptesSuivisRaison = "";
+
+async function chargerComptesSuivis() {
+  try {
+    const reponse = await fetch("/sources");
+    if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+    const sources = await reponse.json();
+    comptesSuivis = sources
+      .filter((s) => s.type === "instagram" && s.categorie === "artiste" && s.active)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    comptesSuivisRaison = comptesSuivis.length
+      ? ""
+      : "aucune source Instagram active de catégorie artiste en base";
+  } catch (erreur) {
+    comptesSuivis = null;
+    comptesSuivisRaison = "sources illisibles (" + erreur.message + ")";
+  }
+}
+
+function reglagesArtistes() {
+  const params = new URLSearchParams({
+    window_days: document.getElementById("art-fenetre").value,
+    citations_min: document.getElementById("art-citations-min").value,
+    limit: document.getElementById("art-limite").value,
+  });
+  const pic = document.getElementById("art-min-emergence").value;
+  if (pic) params.set("min_emergence", pic);
+  if (document.getElementById("art-inclure-suivis").checked) params.set("inclure_suivis", "true");
+  return params;
+}
+
+async function loadArtistesPanel() {
+  const list = document.getElementById("artistes-list");
+  list.innerHTML = "Chargement…";
+  document.getElementById("artistes-aide").textContent =
+    "Classé par émergence MOYENNE des citations principales de la fenêtre, puis par "
+    + "accélération, puis par volume — jamais par volume seul, qui remonte "
+    + "mécaniquement les artistes les plus couverts, donc les plus célèbres. "
+    + "Clique une ligne pour lire les citations : juger sur pièces, pas sur un score.";
+  const params = reglagesArtistes();
+  await chargerComptesSuivis();
+  let signaux;
+  try {
+    const reponse = await fetch(`/artists?${params}`);
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
+    signaux = await reponse.json();
+  } catch (erreur) {
+    if (panneau !== "artistes") return;
+    afficherErreur(list, "Échec du chargement des artistes : " + erreur.message, loadArtistesPanel);
+    document.getElementById("count").textContent = "";
+    return;
+  }
+  // Meme lecon que `load()` : un chargement qui se termine APRES un changement
+  // de panneau ne doit pas reecrire le compteur de l'entete.
+  if (panneau !== "artistes") return;
+  document.getElementById("count").textContent =
+    `${signaux.length} artiste${signaux.length > 1 ? "s" : ""}`;
+  if (!signaux.length) {
+    list.innerHTML = '<div id="empty">Aucun artiste ne passe ces réglages — baisse le plancher de citations, élargis la fenêtre, ou inclus les comptes déjà suivis.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  signaux.forEach((s, rang) => list.appendChild(ligneArtiste(s, rang + 1)));
+}
+
+function ligneArtiste(s, rang) {
+  const row = document.createElement("div");
+  row.className = "artiste-row";
+  row.innerHTML = `
+    <div class="artiste-head">
+      <div><span class="rang"></span> <span class="nom"></span></div>
+      <div class="sub"></div>
+      <div class="artiste-metrics"></div>
+    </div>
+    <div class="lier-compte" hidden></div>
+    <div class="artiste-citations" hidden></div>`;
+  row.querySelector(".rang").textContent = `#${rang}`;
+  row.querySelector(".nom").textContent = s.artist.name;
+  // `mentions_count` est le TOTAL DEPUIS TOUJOURS (les citations ne sont jamais
+  // purgees), `citations` le total de la FENETRE : deux nombres differents qu'il
+  // ne faut pas confondre, d'ou deux libelles explicites.
+  row.querySelector(".sub").textContent =
+    `fiche #${s.artist.id} · ${s.artist.slug} · cité du ${fmtDate(s.artist.first_seen_at)} `
+    + `au ${fmtDate(s.artist.last_seen_at)} · ${s.artist.mentions_count} citation`
+    + `${s.artist.mentions_count > 1 ? "s" : ""} depuis toujours`;
+
+  // « Deja suivi » est un FAIT, pas un jugement de notorieté : si Kinda suit
+  // deja le compte, la question « merite-t-il d'etre suivi ? » est repondue.
+  // C'est l'action implicite du panneau, donc elle se lit en premier.
+  const suivi = s.deja_suivi
+    ? `<span class="badge suivi" title="Kinda suit déjà ce compte Instagram (source #${s.artist.source_instagram_id} — ${escapeHtml(sourceName(s.artist.source_instagram_id))}) : sa question A&amp;R est déjà répondue.">✓ déjà suivi — ${escapeHtml(sourceName(s.artist.source_instagram_id))}</span>`
+    : '<span class="badge a-decouvrir" title="Aucun compte Instagram suivi n\'est rattaché à cette fiche.">à découvrir</span>';
+  row.querySelector(".artiste-metrics").innerHTML = `
+    ${badgeTendance(s.acceleration)}
+    ${suivi}
+    ${badgeMesure("émergence moyenne", s.emergence_moyenne, 1, "moyenne des notes d'émergence des citations PRINCIPALES de la fenêtre — la clé de tri", "moyenne")}
+    <span class="badge">${s.citations} citation${s.citations > 1 ? "s" : ""} sur la fenêtre</span>
+    <span class="badge" title="Une citation est principale si l'artiste porte l'actu, et non s'il n'est qu'un nom de passage (rang, titre, ou titre qui ne singularise personne).">${s.citations_principales} principale${s.citations_principales > 1 ? "s" : ""}</span>
+    ${badgeMesure("pic fenêtre", s.emergence_max_principale, 0, "meilleure note d'émergence d'une citation principale DANS la fenêtre")}
+    ${badgeMesure("pic historique", s.artist.max_emergence, 0, "Artist.max_emergence : un cliquet, la meilleure note d'émergence principale jamais vue")}
+    ${badgeMesure("vélocité", s.velocite, 2, "citations par heure sur l'étalement de la fenêtre")}`;
+
+  posterLiaison(row.querySelector(".lier-compte"), s);
+
+  const zone = row.querySelector(".artiste-citations");
+  let charge = false;
+  row.querySelector(".artiste-head").onclick = async () => {
+    zone.hidden = !zone.hidden;
+    if (zone.hidden || charge) return;
+    charge = true;
+    zone.textContent = "Chargement…";
+    try {
+      const reponse = await fetch(`/artists/${s.artist.id}/mentions?limit=100`);
+      if (!reponse.ok) throw new Error("HTTP " + reponse.status);
+      remplirCitations(zone, await reponse.json());
+    } catch (erreur) {
+      zone.textContent = "Échec du chargement des citations : " + erreur.message;
+      charge = false;
+    }
+  };
+  return row;
+}
+
+// Les citations, titre et source : c'est ce qui permet de juger sur pieces
+// plutot que sur un score. Construit en DOM, parce que les renvois sont des
+// elements cliquables (`renvoiArticle`).
+function remplirCitations(zone, mentions) {
+  zone.innerHTML = "";
+  if (!mentions.length) {
+    const vide = document.createElement("div");
+    vide.className = "cit-row";
+    vide.textContent = "Aucune citation.";
+    zone.appendChild(vide);
+    return;
+  }
+  for (const m of mentions) {
+    const ligne = document.createElement("div");
+    ligne.className = "cit-row";
+    ligne.innerHTML = `
+      <span class="tete"></span>
+      <span class="titre"><a target="_blank" rel="noopener"></a></span>
+      <span class="apres"></span>
+      <span class="renvois"></span>`;
+    // `principal` a NULL = inconnu (citations anterieures a la migration 0020)
+    // et vaut PRINCIPAL partout : la regle du doute du depot. On ne l'affiche
+    // donc pas comme « de passage », mais on ne pretend pas non plus l'avoir
+    // mesure.
+    const tete = ligne.querySelector(".tete");
+    if (m.principal === false) {
+      tete.classList.add("passage");
+      tete.textContent = "de passage";
+      tete.title = "L'artiste n'est pas le sujet de cette actu : sa note d'émergence ne compte pas pour lui.";
+    } else {
+      tete.textContent = m.principal === true ? "principale" : "principale ?";
+      tete.title = m.principal === true
+        ? "L'artiste porte cette actu."
+        : "Rang perdu (citation antérieure à la migration 0020) : lue comme principale, règle du doute.";
+    }
+    const lien = ligne.querySelector("a");
+    lien.href = m.url;
+    lien.textContent = m.title;
+    ligne.querySelector(".apres").textContent =
+      `· ${sourceName(m.source_id)} · ${fmtDate(m.mentioned_at) || "?"}`
+      + ` · pertinence ${m.relevance_score ?? "inconnue"}`
+      + ` · émergence ${m.emergence_score ?? "inconnue"}`;
+    // `article_id` a NULL : l'article a ete purge (2 jours de retention), la
+    // citation lui survit (ON DELETE SET NULL). C'est tout l'interet de cette
+    // table, et le renvoi ne peut alors pas exister.
+    poserParties(ligne.querySelector(".renvois"), [
+      m.article_id != null ? renvoiArticle(m.article_id, m.url) : "archivée",
+    ]);
+    zone.appendChild(ligne);
+  }
+}
+
+// Le SEUL geste d'ecriture du panneau : rattacher une fiche a son compte suivi
+// quand le nom ne suffit pas (« Guy-Man » et son compte). C'est la raison pour
+// laquelle `PATCH /artists/{id}` garde `source_instagram_id` apres la
+// disparition de `tracked` (migration 0021).
+function posterLiaison(zone, s) {
+  zone.hidden = false;
+  zone.innerHTML = `
+    <span class="libelle">Compte Instagram suivi :</span>
+    <select></select>
+    <span class="verdict"></span>
+    <span class="pourquoi-desactive"></span>`;
+  const sel = zone.querySelector("select");
+  const verdict = zone.querySelector(".verdict");
+  const pourquoi = zone.querySelector(".pourquoi-desactive");
+  const vide = document.createElement("option");
+  vide.value = "";
+  vide.textContent = "— aucun —";
+  sel.appendChild(vide);
+  // Un controle DESACTIVE imprime sa raison : un selecteur gris et muet ne dit
+  // pas s'il manque des comptes ou si la lecture a echoue.
+  if (comptesSuivis === null || !comptesSuivis.length) {
+    sel.disabled = true;
+    pourquoi.textContent = "liaison impossible — " + comptesSuivisRaison;
+    return;
+  }
+  for (const compte of comptesSuivis) {
+    const opt = document.createElement("option");
+    opt.value = compte.id;
+    opt.textContent = compte.name;
+    sel.appendChild(opt);
+  }
+  sel.value = s.artist.source_instagram_id == null ? "" : String(s.artist.source_instagram_id);
+  sel.onclick = (evenement) => evenement.stopPropagation();
+  sel.onchange = async () => {
+    const precedente = s.artist.source_instagram_id == null ? "" : String(s.artist.source_instagram_id);
+    verdict.className = "verdict";
+    verdict.textContent = "…";
+    try {
+      const reponse = await fetch(`/artists/${s.artist.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_instagram_id: sel.value ? Number(sel.value) : null }),
+      });
+      if (!reponse.ok) {
+        const corps = await reponse.json().catch(() => ({}));
+        throw new Error(typeof corps.detail === "string" ? corps.detail : "HTTP " + reponse.status);
+      }
+      const maj = await reponse.json();
+      s.artist.source_instagram_id = maj.source_instagram_id;
+      verdict.textContent = "✓";
+      // Le lien change la reponse A&R de cette ligne (« deja suivi » contre « a
+      // decouvrir »), et l'exclusion par defaut de la shortlist : on recharge.
+      loadArtistesPanel();
+    } catch (erreur) {
+      // Retour en arriere VISIBLE : le selecteur ne doit jamais afficher une
+      // valeur que la base n'a pas.
+      sel.value = precedente;
+      verdict.classList.add("ko");
+      verdict.textContent = "⚠";
+      alert("Lien non enregistré (" + erreur.message + ") — « " + s.artist.name + " » est inchangé.");
+    }
+  };
+}
+
+for (const id of ["art-fenetre", "art-citations-min", "art-min-emergence", "art-limite", "art-inclure-suivis"])
+  document.getElementById(id).onchange = loadArtistesPanel;
 
 // --- Bandeau de supervision ---------------------------------------------
 // « La machine tourne-t-elle, et qu'a-t-elle fait en mon nom ? » Une seule

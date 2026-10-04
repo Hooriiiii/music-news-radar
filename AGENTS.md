@@ -204,7 +204,8 @@ Ce qui intéresse un label n'est pas « qui est cité aujourd'hui » mais « dep
 dans `run_pipeline`) et `rising_artists()` (shortlist A&R). Les mentions sont
 DÉNORMALISÉES (titre, url, scores) et le FK vers l'article est `ON DELETE SET NULL` :
 la purge casse le lien, jamais l'historique. API : `GET /artists`,
-`GET /artists/{id}/mentions`, `PATCH /artists/{id}` (suivi manuel `tracked`).
+`GET /artists/{id}/mentions`, `PATCH /artists/{id}` (le lien vers le compte
+Instagram suivi ; `tracked` a ete supprimee par la migration 0021).
 
 Positionnement vs le marché : inutile de concurrencer Chartmetric/Viberate/Soundcharts
 sur les signaux plateformes (vélocité TikTok, ajouts playlist). Le signal propre de

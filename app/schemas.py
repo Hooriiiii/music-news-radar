@@ -95,7 +95,8 @@ class ArtistOut(BaseModel):
     last_seen_at: dt.datetime
     mentions_count: int
     max_emergence: int | None
-    tracked: bool
+    # Pas de `tracked` : la colonne est tombee avec la migration 0021 (ecrite
+    # par l'API, lue par personne -- voir `app/models.py`, classe `Artist`).
     source_instagram_id: int | None = None
 
 

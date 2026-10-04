@@ -471,7 +471,10 @@ Ce qui intéresse un label n'est pas « qui est cité aujourd'hui » mais « dep
 dans `run_pipeline`) et `rising_artists()` (shortlist A&R). Les mentions sont
 DÉNORMALISÉES (titre, url, scores) et le FK vers l'article est `ON DELETE SET NULL` :
 la purge casse le lien, jamais l'historique. API : `GET /artists`,
-`GET /artists/{id}/mentions`, `PATCH /artists/{id}` (suivi manuel `tracked`).
+`GET /artists/{id}/mentions`, `PATCH /artists/{id}` (le lien vers le compte
+Instagram suivi, et rien d'autre depuis la migration 0021 — voir plus bas).
+**Panneau Artistes du dashboard** (2026-10-04) : la restitution, voir « Le
+dashboard » plus bas.
 
 **Le signal était FAUX, et silencieusement** (réparé le 2026-10-03). `rising_artists`
 rendait Stray Kids, aespa, Charli XCX, BTS, **Taylor Swift**, Ed Sheeran, Madonna :
@@ -540,17 +543,33 @@ Rattrapage de l'archive (13 310 citations), à passer une fois après la migrati
 12 801 citations sans article dont le rang est perdu pour toujours — elles restent
 `NULL`, jamais dégradées à tort.
 
-**`Artist.tracked` est une colonne MORTE** : écrite par `PATCH /artists/{id}`, lue
-par PERSONNE. Ce que le pipeline appelle « artiste suivi » — l'exception au
-pré-filtre (`scoring.ContexteScoring`) et la réserve de visuels
-(`content/choix_visuels.py`) — est `comptes_artistes.IndexComptes`, c'est-à-dire
-les **sources Instagram actives de catégorie artiste** (88 en production), jamais
-`tracked`. `scripts/etat_notion.py` affirmait l'inverse (« 0 artiste suivi sur
-4 684 : les chemins qui en dépendent ne se déclenchent jamais ») : une alerte
-FAUSSE, pire que pas d'alerte parce qu'elle fait chercher la panne ailleurs. Elle
-compte désormais les comptes, et ne crie que sur la vraie condition de panne —
-plus aucun compte d'artiste suivi (`tests/test_etat_notion.py`). `tracked` reste en
-place : la supprimer ou la câbler enfin est un autre chantier.
+**`Artist.tracked` a été SUPPRIMÉE** (migration **0021**, 2026-10-04). C'était une
+colonne morte : écrite par `PATCH /artists/{id}`, lue par PERSONNE — aucune lecture
+dans `app/`, aucune dans `scripts/`, aucune requête qui la filtre ou la trie
+(vérifié exhaustivement avant de descendre). Ce que le pipeline appelle « artiste
+suivi » — l'exception au pré-filtre (`scoring.ContexteScoring`) et la réserve de
+visuels (`content/choix_visuels.py`) — est `comptes_artistes.IndexComptes`,
+c'est-à-dire les **sources Instagram actives de catégorie artiste** (88 en
+production), jamais `tracked`.
+
+Elle avait déjà coûté : `scripts/etat_notion.py` la comptait pour conclure « 0
+artiste suivi sur 4 684 : les chemins qui en dépendent ne se déclenchent jamais »
+— FAUX, relayé à l'utilisateur puis écrit dans sa documentation. Une alerte fausse
+est pire que pas d'alerte : elle fait chercher la panne ailleurs. Une colonne
+qu'on peut confondre avec une vraie est pire qu'une colonne absente, d'où la
+suppression plutôt qu'un commentaire de plus.
+
+Ce qui RESTE est le geste utile : `artists.source_instagram_id` (migration 0018),
+qui rattache une fiche à son compte suivi quand le nom ne suffit pas. C'est
+désormais le SEUL champ que `PATCH /artists/{id}` accepte, et le corps est
+`extra="forbid"` : un appelant qui enverrait encore `tracked` reçoit un **422**
+plutôt qu'un 200 silencieux où rien n'est écrit — c'est précisément le succès
+silencieux qui a permis à cette colonne de vivre sans lecteur.
+
+Le `downgrade` recrée la colonne avec son défaut `false`, donc un suivi posé à la
+main avant la migration ne revient pas. Sans conséquence mesurée : `PATCH` n'a
+jamais été appelé depuis une interface (le panneau Artistes n'existait pas), la
+colonne ne portait que des `false`.
 
 Positionnement vs le marché : inutile de concurrencer Chartmetric/Viberate/Soundcharts
 sur les signaux plateformes (vélocité TikTok, ajouts playlist). Le signal propre de
@@ -2096,6 +2115,64 @@ UN seul point de capture (l'evenement `input`) et UN seul point de lecture
 verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le
 lien ouvre un 404, et l'identifiant brut reste lisible a cote. Le vrai remede
 serait de stocker le `permalink` que Meta renvoie a la publication.
+
+### Le panneau Artistes (2026-10-04)
+
+La moitie DETECTION de Kinda etait INVISIBLE. `artists` / `artist_mentions` sont
+« l'actif de Kinda » et le flux score « le deal-flow du label » ; en production,
+**4 752 artistes et 13 533 citations archivees depuis des semaines**, et aucune
+interface ne les montrait — `GET /artists` existait, teste, **sans un seul
+consommateur**. L'audit UX du 02/10 l'avait releve.
+
+**Ce panneau ne pouvait PAS etre construit plus tot**, et c'est le point le plus
+important a retenir : le signal etait faux jusqu'au 03/10 (tri par VOLUME de
+citations, donc Taylor Swift et BTS en tete). Pose sur cet ancien signal, le
+panneau aurait propose de signer Taylor Swift. Il arrive apres la reparation,
+pas avant.
+
+Trois choses se lisent d'un coup d'oeil, parce que ce sont elles qui separent
+une decouverte d'une star :
+- **la TENDANCE** (`acceleration`) — « ↗ on commence a en parler », « → regulier »,
+  « ↘ ca retombe », ou **« tendance inconnue »** ;
+- **« deja suivi » contre « a decouvrir »**, avec le NOM du compte — l'action
+  implicite du panneau, et un FAIT (une source Instagram active de categorie
+  artiste liee a la fiche), jamais un jugement de notoriete ;
+- **les CITATIONS elles-memes** au clic sur la ligne (titre, source, date,
+  pertinence, emergence, renvoi vers l'actu) : juger sur pieces, pas sur un score.
+
+Reglages manipulables dans la barre du panneau, en `select` et non en `.chip` —
+les pastilles appartiennent a la grille, les onglets a l'application, et melanger
+les trois est la confusion de portees que la refonte du 02/10 a demontee :
+fenetre, `citations_min` (3 pour une shortlist, **1 pour fouiller un
+primo-signal**), `min_emergence`, nombre affiche, et « inclure les comptes deja
+suivis ».
+
+**Le seuil de la tendance est mesure, pas arrondi.** `ACCELERATION_MONTE` vaut
+**0,34** et non 0,3 : `acceleration` porte un biais structurel de **+1/n** pour un
+nombre IMPAIR de citations regulierement espacees (son propre docstring le dit),
+donc **trois citations equidistantes valent +0,33**, et trois est le plancher par
+defaut. Un seuil sous 0,33 qualifierait de montee la regularite la plus plate du
+cas le plus frequent. Verifie sur les donnees REELLES le 2026-10-04 : FRÈJUS et
+G2G sont exactement a 0,3333 et se lisent « → regulier » ; Ahadadream a 0,43 se
+lit « ↗ on commence a en parler ». Au-dela de trois citations le biais ne fait
+que diminuer : le seuil est conservateur dans le bon sens.
+
+**La regle « inconnue, jamais zero » est ici la plus couteuse du dashboard**, et
+elle passe par UN SEUL point (`mesure()` dans `app/static/dashboard.html`).
+`velocite` vaut `None` sous deux citations datees, `acceleration` sous trois, et
+17 % des citations n'ont aucune note d'emergence : une acceleration inconnue
+affichee « 0 » se lit **« cet artiste stagne »**, une affirmation fausse sur la
+seule grandeur qui separe une decouverte d'une star. Preuve par mutation sur
+Chromium reel (`tests/test_dashboard_artistes.py`) : on remplace le garde-fou par
+le `|| 0` exact qu'un contributeur presse ecrirait, et la ligne doit afficher
+« → regulier 0.00 » — la mesure refuse. L'inconnu porte sa propre teinte
+(gris-bleu, celle de la supervision), jamais celle d'un des trois verdicts ni
+l'accent de la marque, qui se lirait comme une promesse.
+
+Le seul geste d'ECRITURE du panneau est `PATCH /artists/{id}` avec
+`source_instagram_id` : rattacher une fiche a son compte quand le nom ne suffit
+pas. Sans compte lisible, le selecteur est desactive **avec sa raison ecrite a
+cote** — jamais gris et muet.
 
 ## La charte Kinda dans la console (2026-10-02)
 
