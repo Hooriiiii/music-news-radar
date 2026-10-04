@@ -1399,9 +1399,23 @@ def _draft_168(textes=None):
     )
 
 
-def test_la_legende_du_post_168_passe_tous_les_controles_de_legende():
-    """Le point exact du trou : rien dans la LEGENDE n'etait a redire."""
-    assert probleme_de_legende(_LEGENDE_168) is None
+def test_la_legende_du_post_168_passe_les_controles_de_forme():
+    """Le point exact du trou d'accentuation : rien dans la LEGENDE n'etait a
+    redire COTE FORME -- elle est accentuee, bornee en emojis, et ne finit pas par
+    une question. (Le controle de repere temporel, lui, la signale a bon droit :
+    elle dit « sort la semaine prochaine », ce que le test suivant verrouille.)"""
+    assert probleme_emojis(_LEGENDE_168) is None
+    assert probleme_accents(_LEGENDE_168) is None
+    assert probleme_cloture_question(_LEGENDE_168) is None
+
+
+def test_la_legende_du_post_168_est_signalee_pour_son_repere_relatif():
+    """Verifie que le nouveau controle ne manque pas ce cas reel : le post 168
+    etait publie 4,8 h apres sa composition, donc « la semaine prochaine » etait
+    encore vrai -- mais c'est a la COMPOSITION qu'on preferait une date absolue."""
+    probleme = probleme_de_legende(_LEGENDE_168)
+    assert probleme is not None
+    assert "la semaine prochaine" in probleme
 
 
 def test_le_post_168_est_desormais_signale_par_ses_textes_de_cover():

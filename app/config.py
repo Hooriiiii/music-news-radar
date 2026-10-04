@@ -722,6 +722,19 @@ class Settings(BaseSettings):
     publication_composition_heures: int = 24
     # Gel a T-2h : rendu et telechargements faits d'avance.
     publication_gel_heures: int = 2
+    # Un brouillon dont le texte situe l'actu par un repere RELATIF (« ce soir »,
+    # « demain », « ce week-end ») et qui a franchi la frontiere de calendrier de ce
+    # repere depuis sa composition est traite comme PERIME : le creneau lache le
+    # post, et la composition suivante en refait un (post 153, publie 45,9 h apres
+    # sa composition en annoncant « sort ce soir a minuit » pour un morceau sorti
+    # deux jours plus tot). Le critere n'est PAS un nombre d'heures et c'est mesure :
+    # le post 101 etait FAUX a 10,8 h d'ecart (« demain » a franchi minuit) quand le
+    # post 115 restait VRAI a 19,5 h (« vendredi prochain », meme semaine) -- aucun
+    # seuil en heures ne les separe. Voir `app/content/reperes.py`.
+    # Cout mesure : 2 recompositions sur les 52 posts publies de la base (3,8 %),
+    # soit ~0,2 appel `composer_model` de plus par jour a six publications. Mettre a
+    # false rend exactement le comportement d'avant.
+    publication_reperes_relus: bool = True
     # Au-dela, on ne publie pas : un Mac rouvert le soir lacherait sinon la
     # journee entiere d'un coup.
     publication_retard_max_minutes: int = 90

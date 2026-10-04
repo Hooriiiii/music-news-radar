@@ -71,6 +71,7 @@ from app.content.choix_visuels import (
 from app.content.compose import CompositionError, appeler_compositeur, create_post, resoudre_fond
 from app.content.credit import credit_video
 from app.content.legende import texte_legende
+from app.content.reperes import Repere, repere_perime, repere_relatif
 from app.content.visuels import (
     FOND_KINDA,
     fond_de_cover,
@@ -312,6 +313,38 @@ def _differer(
     return False
 
 
+# Marque, sur le creneau, qu'une recomposition pour texte perime a DEJA ete tentee
+# et a echoue : le gel ne relache pas une seconde fois ce post. Sans cette borne,
+# gel et composition se renvoyaient la balle a chaque passage de l'agent (10 min) --
+# jusqu'a trois appels Sonnet par passage sur une panne qui ne guerit pas.
+RAISON_TEXTE_PERIME = "texte perime"
+
+
+def _replier(db, creneau: Creneau, attendu: tuple, post_id: int, raison: str) -> bool:
+    """Rend au creneau le brouillon PERIME qu'on venait de lui retirer pour le
+    recomposer, quand la recomposition a echoue.
+
+    « Une recomposition qui echoue ne doit jamais faire perdre le creneau : on
+    publie l'ancien texte plutot que rien, en le journalisant. » Un brouillon
+    perime pour son TEXTE est par ailleurs intact -- visuels copies en local,
+    credit, palette, legende --, donc publiable tel quel. C'est la seule difference
+    avec un brouillon perime pour ses VISUELS, qui ne partirait pas de toute facon
+    et dont le rejet n'a donc pas de repli.
+
+    Rend True si le repli est pose (l'appelant passe au creneau suivant sans
+    exclure ni liberer), False si le dashboard a bouge entre-temps -- son choix
+    prime, et l'appelant reprend son traitement d'erreur normal.
+    """
+    erreur = f"{RAISON_TEXTE_PERIME}, recomposition impossible : {raison}"[:1000]
+    if not _ecrire_si(db, creneau, attendu, post_id=post_id, erreur=erreur):
+        return False
+    logger.warning(
+        "recomposition impossible pour le creneau %s : le post %s repart avec son "
+        "texte perime (%s)", creneau.id, post_id, raison,
+    )
+    return True
+
+
 def _compter_manque(creneau: Creneau, attendu: tuple, formats_actifs: set, rapport: RapportPublication) -> None:
     # Un creneau REELLEMENT vide -- ni article ni post -- n'est pas une
     # publication manquee : rien n'attendait de partir. Un creneau qui porte un
@@ -386,12 +419,54 @@ def _choix_sans_lecture(db, article, format_, maintenant):
     return choisir_visuels(db, article, format_=format_, maintenant=maintenant)
 
 
+def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
+    """Le premier repere temporel du post que le temps a rendu FAUX ; None sinon.
+
+    On relit ce que le post VA PUBLIER -- la cover retenue (`slides[0]`) et la
+    legende --, jamais les quatre variantes : trois d'entre elles ne partiront
+    jamais, et recomposer pour un « demain » qui dort dans une variante non
+    retenue serait payer Sonnet pour rien.
+
+    La reference de temps est `post.created_at` contre `maintenant`, jamais contre
+    `creneau.publier_a`, et c'est ce qui rend la regle SURE : un brouillon compose
+    ce soir pour un creneau de demain matin serait sinon perime a la seconde ou on
+    l'ecrit, donc recompose a chaque passage de l'agent (toutes les 10 minutes)
+    jusqu'a minuit. Avec `maintenant`, un brouillon frais n'est jamais perime, et
+    une recomposition pose un `created_at` du jour de lecture : au plus une
+    recomposition par frontiere franchie, jamais une boucle. L'ecart entre
+    `maintenant` (le gel, T-2h) et l'heure de publication ne change rien : les
+    fenetres de publication vivent entre 08h30 et 22h30 heure de Paris, donc un gel
+    tombe toujours le jour meme de son creneau.
+    """
+    if not settings.publication_reperes_relus:
+        return None
+    textes = []
+    for slide in post.slides or []:
+        if slide.get("kind") == "cover":
+            textes += [(slide.get(cle), False) for cle in ("headline", "title", "subtitle")]
+            break
+    textes.append((post.caption, True))
+    for texte, prose in textes:
+        repere = repere_relatif(texte, prose=prose)
+        if repere is not None and repere_perime(repere, post.created_at, maintenant):
+            return repere
+    return None
+
+
 def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
     """Un brouillon dont les visuels ne sont plus publiables : compose avant la
     regle du 2026-09-17 sur un compte media (`assets` NULL), compose SANS aucun
     visuel autorise (`assets == []`, un post fait a la main au dashboard),
     portant l'actif d'un compte d'artiste passe `media` depuis la composition, ou
     dont le fond de cover a ete efface a la main au dashboard.
+
+    Le TEXTE vieilli (« sort ce soir » publie deux jours plus tard) est un critere
+    VOISIN mais separe, `_reperes_perimes` : les deux font recomposer par le meme
+    chemin -- le creneau lache le post, la composition suivante en refait un --,
+    mais un brouillon perime pour son texte reste PUBLIABLE (ses visuels, son
+    credit et sa palette sont intacts), donc il sert de REPLI si la recomposition
+    echoue, et sa raison au dashboard n'est pas la meme. Ce sont ses deux
+    appelants, et non cette fonction, qui portent cette distinction.
 
     Le cas sans fond est le plus sournois : le brouillon existe, la file le
     trouve deja compose et le gel partirait sur le fond de secours. La file ne
@@ -489,13 +564,21 @@ def _composer(
                 _liberer(db, creneau, attendu, f"reel impossible : {raison}")
                 continue
         post_id = post_a_reprendre(db, article.id, template)
+        # Le brouillon perime pour son seul TEXTE reste un REPLI : il est
+        # publiable (visuels, credit, palette intacts), seule sa date a vieilli.
+        # Si la recomposition echoue, il repart tel quel plutot que de perdre le
+        # creneau -- un « ce soir » date d'hier vaut mieux que rien.
+        repli_id: int | None = None
         if post_id is not None:
             brouillon = db.get(Post, post_id, populate_existing=True)
             if _brouillon_perime(db, brouillon, article):
                 # Compose avant la regle du 2026-09-17, ou sur un compte passe
                 # media depuis : un nouveau brouillon est compose avec des
-                # visuels autorises.
+                # visuels autorises. Aucun repli : il ne partirait pas.
                 post_id = None
+            elif brouillon is not None and _reperes_perimes(brouillon, maintenant) is not None:
+                repli_id, post_id = post_id, None
+                _completer_credit(db, brouillon, article)
             else:
                 _completer_credit(db, brouillon, article)
         if post_id is None:
@@ -504,10 +587,14 @@ def _composer(
             try:
                 visuels = choisir(db, article, creneau.format, maintenant)
             except VisuelsDifferes as exc:
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
                 if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
                     exclusions = True
                 continue
             except AucunVisuel as exc:
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
                 exclusions = True
                 continue
@@ -523,6 +610,8 @@ def _composer(
                 # quota) -- un report, jamais un saut : sans cette distinction,
                 # une simple coupure reseau mettait l'article en pause pour
                 # rien. `_differer` borne neanmoins la SUITE de reports.
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
                 if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
                     exclusions = True
                 continue
@@ -535,6 +624,8 @@ def _composer(
                 # l'arbitrage), sautait encore, jusqu'a MANQUE -- une seule
                 # mauvaise image pouvait ainsi faire taire tout le compte une
                 # journee entiere.
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
                 marquer_saute(article.id, maintenant)
                 _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
                 rapport.sautes += 1
@@ -553,6 +644,8 @@ def _composer(
                     composer, article, compte_du_visuel(visuels, creneau.format)
                 )
             except CompositionError as exc:
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
                 exclusions = True
                 continue
@@ -561,6 +654,12 @@ def _composer(
                 rapport.erreurs.append(erreur)
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
                 _prevenir(notifier, erreur)
+                if repli_id is not None:
+                    # Panne systemique (credits, reseau) : le creneau repart avec
+                    # son texte perime plutot que d'attendre une recomposition qui
+                    # n'arrivera pas de la journee (solde Anthropic epuise le
+                    # 2026-09-30) et de finir en MANQUE.
+                    _replier(db, creneau, attendu, repli_id, str(exc))
                 # Inutile d'enchainer les appels sur une panne qui touchera tous les articles.
                 break
             post_id = create_post(
@@ -643,6 +742,36 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         # et leur video (`posts.assets`), les copies locales des visuels, la
         # palette, les textes. Liberer ici, c'etait jeter un reel PRET pour une
         # information absente, et enterrer le creneau en MANQUE sans raison.
+        deja_tente = (creneau.erreur or "").startswith(RAISON_TEXTE_PERIME)
+        repere = (
+            _reperes_perimes(post, maintenant)
+            if article is not None and not deja_tente
+            else None
+        )
+        if repere is not None:
+            # Dernier moment ou l'on peut encore agir (T-2h). Le creneau lache le
+            # post, la composition du passage suivant en refait un avec une date
+            # absolue -- ni exclusion ni creneau perdu : l'article n'y est pour
+            # rien, c'est le TEXTE qui a vieilli. Message distinct de celui des
+            # visuels : une raison fausse au dashboard coute une enquete.
+            # SEULEMENT quand l'article est encore la (`article is not None`) :
+            # purge passee, le creneau est AUTONOME (`store.
+            # porte_un_post_orphelin`) et personne ne pourra recomposer -- lacher
+            # le post rendrait alors le creneau invisible de la composition comme
+            # du gel, jusqu'a MANQUE. C'est le cas MEME du post 153, dont
+            # l'article avait ete purge : on publie son texte perime plutot que
+            # de perdre le creneau, et c'est le controle de composition (remede 1)
+            # qui empeche ce texte d'exister.
+            # Et une seule fois (`deja_tente`) : un post rendu par `_replier` apres
+            # une recomposition en echec repart tel quel plutot que de refaire le
+            # tour a chaque passage.
+            erreur = (
+                f"gel refuse : le texte dit « {repere.expression} », "
+                "ce qui n'est plus vrai depuis la composition"
+            )
+            rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
+            _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
+            continue
         if _brouillon_perime(db, post, article):
             # Relu au gel, APRES la regle reel : la source d'un actif d'artiste
             # est reprise par son article (compte passe `media` depuis la
