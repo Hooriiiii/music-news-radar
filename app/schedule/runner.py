@@ -83,6 +83,7 @@ from app.publish.hosting import HebergementIndisponible
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
 from app.publish.preparation_reel import ReelInadapte
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
+from app.schedule.relecture import RAISON_RELECTURE, deja_annonce, marquer_annonce
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -124,6 +125,10 @@ class RapportPublication:
     # se tait sans rien dire est le pire des deux mondes (CLAUDE.md), et un
     # report qui se prolonge doit se VOIR avant de devenir un saut.
     reportes: int = 0
+    # Les creneaux pour lesquels on vient de PREVENIR qu'un post attend un oeil.
+    # Ce n'est ni une faute ni une attente : l'app publie quand meme a l'heure si
+    # personne ne relit (voir `app/schedule/relecture.py`).
+    annonces_relecture: int = 0
     erreurs: list[str] = field(default_factory=list)
 
 
@@ -446,6 +451,48 @@ def _marquer_manques(
             _effacer_dossier(creneau)
 
 
+def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportPublication) -> None:
+    """Previent qu'un post attend un oeil -- et NE RETIENT RIEN.
+
+    C'est le defaut n° 1 du chantier : un post gele attendait deux heures et
+    personne ne le savait ; l'utilisateur devait ouvrir le dashboard par hasard au
+    bon moment. Le canal est la notification macOS, le seul du projet (ni mail ni
+    Discord : CLAUDE.md interdit de re-proposer SMTP, et les alertes Discord sont
+    debranchees).
+
+    DECLENCHEE PAR L'HORLOGE, jamais par le gel, et c'est la mesure qui l'impose
+    (voir `app/schedule/relecture.py`) : 21 % des creneaux reellement geles l'ont
+    ete a moins de 30 min de leur depart et 14 % a moins de 5 min -- une annonce
+    accrochee au gel aurait donc donne zero minute de relecture a un creneau sur
+    sept, exactement ceux dont la journee a derape.
+
+    AU PLUS UNE PAR CRENEAU (`relecture.json`). Six annonces par post, c'est la
+    facon la plus sure d'apprendre a ignorer les notifications -- le depot a deja
+    paye cette lecon sur les alertes de quota.
+
+    Ne leve jamais rien d'utile a l'appelant : elle est de toute facon enveloppee
+    par `etape`, donc une annonce en panne ne peut pas emporter une publication.
+    """
+    from app.api.relecture import creneaux_a_relire
+
+    attendus = creneaux_a_relire(db, maintenant)
+    nouveaux = [(c, p) for c, p in attendus if not deja_annonce(c.id, maintenant)]
+    if not nouveaux:
+        return
+    for creneau, _post in nouveaux:
+        marquer_annonce(creneau.id, maintenant)
+    rapport.annonces_relecture = len(nouveaux)
+    premier, post = nouveaux[0]
+    accroche = ((post.slides or [{}])[0] or {}).get("headline") or ""
+    accroche = accroche.replace("**", "").strip()
+    reste = f" (+{len(nouveaux) - 1} autre(s))" if len(nouveaux) > 1 else ""
+    _prevenir(
+        notifier,
+        f"relecture : « {accroche[:70] or f'post {post.id}'} » part a "
+        f"{_heure_locale(premier.publier_a)}{reste} — dashboard, panneau Posts",
+    )
+
+
 def _composer(
     db, maintenant: dt.datetime, composer, notifier, rapport: RapportPublication, formats: set, choisir
 ) -> bool:
@@ -593,6 +640,16 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         if creneau.format in formats_en_panne:
             continue
         attendu = _attendu(creneau)
+        # Creneau ROUVERT a la main pour relecture (`app/api/schedule.py`). Lu
+        # AVANT toute ecriture de ce passage : les chemins ci-dessous reecrivent
+        # `creneau.erreur`, et le marqueur y vit (meme procede que
+        # `RAISON_RECLAMATION`). Il change une seule chose, et c'est la demande
+        # « ne perds pas le post » : un gel IMPOSSIBLE apres une edition manuelle
+        # libere le creneau au lieu d'exclure l'article a vie. Une accroche
+        # rallongee d'un caractere de trop (cover qui deborde) ne doit pas bruler
+        # l'actu -- c'est l'utilisateur qui vient de l'editer, pas l'article qui
+        # est en defaut.
+        rouvert = RAISON_RELECTURE in (creneau.erreur or "")
         preparer = preparateurs.get(creneau.format)
         if preparer is None:
             erreur = f"aucun preparateur pour le format {creneau.format.value}"
@@ -660,7 +717,14 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             # Pause ou budget de yt-dlp : le creneau attend le passage suivant.
             # Ni exclusion ni notification (la panne l'a deja ete, une fois), et
             # le format n'est pas suspendu : un reel a video directe peut geler.
+            #
+            # Le marqueur de relecture passe en TETE, comme `_raison_manque`
+            # conserve la cause precedente : sans ca, un premier gel differe
+            # effacerait la protection et le second echec exclurait l'article que
+            # l'utilisateur vient d'editer.
             erreur = f"gel differe : {exc}"[:1000]
+            if rouvert:
+                erreur = f"{RAISON_RELECTURE} — {erreur}"[:1000]
             if creneau.erreur != erreur:
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
@@ -691,6 +755,17 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
                 rapport.sautes += 1
             continue
         except PreparationImpossible as exc:
+            if rouvert:
+                # « Ne perds pas le post » : le creneau se libere, l'article RESTE
+                # eligible, et le POST survit (les posts ne sont jamais purges) --
+                # l'utilisateur corrige son edition et le reprend. Une exclusion
+                # ici brulerait une actu pour une faute de frappe.
+                rapport.erreurs.append(
+                    f"{_heure_locale(creneau.publier_a)} : gel refuse apres relecture : {exc}"
+                )
+                _liberer(db, creneau, attendu, f"{RAISON_RELECTURE} — gel refuse : {exc}")
+                exclusions = True
+                continue
             _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)
             exclusions = True
             continue
@@ -1100,6 +1175,10 @@ def tourner(
 
     formats_actifs = set(preparateurs) & set(publieurs)
     etape("retards", lambda: _marquer_manques(db, maintenant, rapport, formats_actifs))
+    # Isolee comme les autres, et volontairement APRES les retards : on ne
+    # previent jamais pour un creneau qui vient de passer en MANQUE. Elle ne
+    # retient rien -- si personne ne relit, la suite du passage publie a l'heure.
+    etape("relecture", lambda: _annoncer_relecture(db, maintenant, notifier, rapport))
     etape("menage", lambda: _menage(db, maintenant))
     etape("publication", publication)
     etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))

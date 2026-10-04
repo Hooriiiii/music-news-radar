@@ -287,6 +287,35 @@
   .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .field textarea { min-height: 70px; }
   .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+
+  /* --- Relecture avant publication -----------------------------------------
+     Pas de rouge par defaut : un post qui attend une relecture n'est PAS une
+     alerte, il part quand meme a l'heure. Le rouge (var(--alerte)) reste
+     reserve a ce que personne d'autre ne rattrapera -- une cover qui deborde. */
+  .relecture-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .relecture-row { display: flex; align-items: center; gap: 12px; background: var(--panel);
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+  .relecture-row:hover { border-color: var(--accent); }
+  .relecture-row .grow { flex: 1; min-width: 0; }
+  .relecture-row .quand { font-family: var(--police-titre); font-weight: 600; font-size: 13px;
+    white-space: nowrap; }
+  .relecture-row .hl { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .relecture-row .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .relecture-row.deborde { border-left-color: var(--alerte); }
+  /* « Ce qui va partir » : du texte PRE, parce que les retours a la ligne et les
+     lignes vides que `aerer_legende` fabrique sont justement ce qu'on relit. */
+  .depart-apercu { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5;
+    max-height: 260px; overflow: auto; }
+  .depart-mesures { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .depart-mesures span { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 9px; }
+  .depart-mesures span.limite { color: var(--alerte); border-color: var(--alerte-bord); }
+  /* L'inconnu porte sa propre teinte, celle de la supervision : jamais celle d'un
+     verdict, qui se lirait comme une promesse (regle du panneau Artistes). */
+  .depart-mesures span.inconnu { color: var(--muted); border-style: dashed; }
   .detail-actions button, .detail-actions a { border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 12.5px;
     text-decoration: none; }
@@ -641,6 +670,11 @@
 </section>
 
 <section id="posts-panel" hidden>
+  <!-- La relecture AVANT la liste des posts : c'est ce qui part bientot, donc la
+       seule chose dont l'heure impose de s'occuper maintenant. Elle ne retient
+       rien -- un post non relu part quand meme a son heure. -->
+  <div class="section-title">À relire avant publication</div>
+  <div id="relecture-list" class="relecture-list"></div>
   <div class="posts-bar">
     <select id="post-status">
       <option value="">Tous statuts</option>
@@ -1488,9 +1522,88 @@ document.getElementById("schedule-rebuild").onclick = async () => {
   loadSchedulePanel();
 };
 
+// --- Relecture avant publication -------------------------------------------
+//
+// Ce que `GET /relecture` apporte et que la fiche de post ne savait PAS dire :
+// quand ce post part, et CE QUI PARTIRA -- `texte_legende` aere les paragraphes,
+// remet le diese sur les hashtags, les deduplique, ajoute le credit obligatoire
+// et tronque a 2150 points de code. La legende editee n'est pas la legende
+// publiee, et `posts.credit` n'etait affiche nulle part.
+//
+// Un cache par post, rempli par la liste, pour que la fiche ouverte depuis cette
+// liste n'ait pas a refaire la requete. `null` = on n'a pas pu lire : la section
+// dit alors « inconnu », elle n'invente rien (regle du bandeau de supervision).
+let departsParPost = null;
+
+async function chargerDeparts() {
+  try {
+    const reponse = await fetch("/relecture");
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status}`);
+    const lignes = await reponse.json();
+    departsParPost = new Map(lignes.map((d) => [d.post_id, d]));
+    return lignes;
+  } catch {
+    // Degrade sans casser : la fiche et la liste des posts restent utilisables.
+    departsParPost = null;
+    return null;
+  }
+}
+
+function minutesLisibles(minutes) {
+  if (minutes < 0) return "dépassé";
+  if (minutes < 60) return `dans ${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  return `dans ${h} h ${String(minutes % 60).padStart(2, "0")}`;
+}
+
+const ETATS_DEPART = { programme: "programmé", gele: "gelé", echec: "publication en cours" };
+
+async function loadRelectureList() {
+  const zone = document.getElementById("relecture-list");
+  if (!zone) return;
+  const lignes = await chargerDeparts();
+  if (lignes === null) {
+    // « Inconnu, jamais vert » : on ne dit surtout pas « rien a relire ».
+    zone.innerHTML = '<div class="media-empty">Liste de relecture injoignable — on ne sait pas'
+      + " ce qui attend une relecture.</div>";
+    return;
+  }
+  if (!lignes.length) {
+    zone.innerHTML = '<div class="media-empty">Aucun post composé en attente de départ.</div>';
+    return;
+  }
+  zone.innerHTML = "";
+  for (const d of lignes) {
+    const row = document.createElement("div");
+    row.className = "relecture-row" + (d.deborde ? " deborde" : "");
+    row.innerHTML = `
+      <span class="quand"></span>
+      <div class="grow"><div class="hl"></div><div class="sub"></div></div>`;
+    row.querySelector(".quand").textContent =
+      `${fmtDate(d.publier_a) || "?"} · ${minutesLisibles(d.minutes_restantes)}`;
+    row.querySelector(".hl").textContent = d.accroche || `post ${d.post_id}`;
+    const parties = [
+      d.format === "reel" ? "REELS" : "POST",
+      ETATS_DEPART[d.etat] || d.etat,
+      `${d.legende_longueur}/${d.legende_maximum} car.`,
+      `${d.hashtags_publies.length}/${d.hashtags_maximum} #`,
+    ];
+    // Une cover qui deborde est la seule chose que personne d'autre ne
+    // rattrapera : elle s'ecrit, et en rouge.
+    if (d.deborde) parties.push("⚠ cover qui déborde");
+    if (!d.editable) parties.push(d.raison_non_editable);
+    poserParties(row.querySelector(".sub"), parties);
+    row.onclick = () => ouvrirPost(d.post_id);
+    zone.appendChild(row);
+  }
+}
+
 async function loadPostsPanel() {
   const list = document.getElementById("posts-list");
   list.innerHTML = "Chargement…";
+  // Rafraichie avec le panneau : la file avance toutes les 10 minutes, un creneau
+  // gele entre deux ouvertures de l'onglet.
+  loadRelectureList();
   const params = new URLSearchParams({ limit: 100 });
   const status = document.getElementById("post-status").value;
   if (status) params.set("status", status);
@@ -1636,6 +1749,11 @@ async function ouvrirPost(postId) {
 
   const article = await fetchArticleById(post.article_id);
 
+  // Ce qui va REELLEMENT partir (legende apres `texte_legende`, credit, elements
+  // figes). Une seule requete, sans appel paye ni reseau sortant. Un echec
+  // degrade la section en « inconnu » et n'empeche jamais d'ouvrir la fiche.
+  await chargerDeparts();
+
   // Un seul Chromium pour l'apercu, pas deux : `/covers` rend les 4 variantes
   // sur le fond du post et renvoie l'`overflow` de chacune (CoversOut) -- la
   // variante retenue (ou la premiere par defaut) y est deja, donc le meme
@@ -1767,6 +1885,68 @@ function renderPostDetail(post, article, covers) {
     ? `<div class="reel-reason">${escapeHtml(ORIGINES_FOND[origineFond] || origineFond)}</div>`
     : "";
 
+  // --- « Ce qui va partir » -------------------------------------------------
+  //
+  // Trois choses que la fiche ne disait pas, et dont l'absence est ce qui a
+  // laisse passer les defauts reperes a l'oeil sur le compte : le texte EXACT
+  // (apres aeration, normalisation des hashtags, credit, troncature a 2150), le
+  // CREDIT (`posts.credit`, affiche nulle part jusqu'ici), et l'heure de depart.
+  //
+  // `departsParPost === null` veut dire qu'on n'a PAS PU lire : on l'ecrit. Une
+  // valeur non lue s'affiche inconnue, jamais verte.
+  const depart = departsParPost ? departsParPost.get(post.id) : undefined;
+  let departSection;
+  if (departsParPost === null) {
+    departSection = `
+      <div class="section-title">Ce qui va partir</div>
+      <div class="media-empty">Aperçu du texte publié injoignable — on ne sait pas ce qui partira.</div>`;
+  } else if (!depart) {
+    departSection = `
+      <div class="section-title">Ce qui va partir</div>
+      <div class="media-empty">Ce post n'est sur aucun créneau à venir : rien ne partira tout seul.</div>`;
+  } else {
+    const mesures = [];
+    const trop = depart.legende_longueur > depart.legende_maximum;
+    mesures.push(`<span class="${trop ? "limite" : ""}">${depart.legende_longueur} / `
+      + `${depart.legende_maximum} caractères${trop ? " — sera tronquée" : ""}</span>`);
+    mesures.push(`<span>${depart.hashtags_publies.length} / ${depart.hashtags_maximum} hashtags</span>`);
+    mesures.push(depart.credit
+      ? `<span>crédit ${escapeHtml(depart.credit)}</span>`
+      : `<span class="inconnu">aucun crédit de compte</span>`);
+    mesures.push(depart.elements_figes != null
+      ? `<span>${depart.elements_figes} élément(s) figé(s)</span>`
+      : `<span class="inconnu">éléments pas encore figés</span>`);
+    // Le debordement de la cover : `null` = aucun rendu ne l'a mesure. Un
+    // « ça tient » par defaut serait un faux feu vert sur le seul signal qui doit
+    // empecher une publication en defaut.
+    mesures.push(depart.deborde == null
+      ? `<span class="inconnu">débordement de la cover inconnu (aucun rendu enregistré)</span>`
+      : depart.deborde
+        ? `<span class="limite">⚠ la cover déborde et partira ainsi</span>`
+        : `<span>cover mesurée : elle tient</span>`);
+    // Le bouton n'apparait QUE sur un creneau gele : ailleurs il n'y a rien a
+    // rouvrir, et un controle desactive sur une porte deja ouverte n'imprime pas
+    // une raison utile, il encombre. La regle « un controle desactive imprime sa
+    // raison » suppose que le controle soit PERTINENT.
+    const boutonRouvrir = depart.etat === "gele"
+      ? `
+      <div class="detail-actions">
+        <button id="btn-rouvrir" ${depart.reouvrable ? "" : "disabled"}>↻ Rouvrir pour modification</button>
+      </div>
+      ${depart.reouvrable
+        ? `<div class="reel-reason">Rouvrir jette les fichiers figés ; l'agent les refait au passage`
+          + ` suivant (10 min). La légende et les hashtags, eux, se modifient sans rouvrir.</div>`
+        : `<div class="reel-reason">${escapeHtml(depart.raison_non_reouvrable || "")}</div>`}`
+      : "";
+    departSection = `
+      <div class="section-title">Ce qui va partir — ${escapeHtml(fmtDate(depart.publier_a) || "?")}`
+      + ` · ${escapeHtml(minutesLisibles(depart.minutes_restantes))}</div>
+      <div class="depart-apercu">${escapeHtml(depart.legende_publiee)}</div>
+      <div class="depart-mesures">${mesures.join("")}</div>
+      ${depart.raison_non_editable ? `<div class="reel-reason">${escapeHtml(depart.raison_non_editable)}</div>` : ""}
+      ${boutonRouvrir}`;
+  }
+
   detailEl.innerHTML = `
     <div class="sheet">
       <div class="sheet-head">
@@ -1810,6 +1990,7 @@ function renderPostDetail(post, article, covers) {
       <div class="render-warning" id="texte-non-enregistre" hidden>
         ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
       </div>
+      ${departSection}
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
         <button id="btn-approve">Valider le statut</button>
@@ -1908,6 +2089,8 @@ function renderPostDetail(post, article, covers) {
     } catch (erreur) {
       alert("Format changé, mais l'aperçu des covers a échoué : " + erreur.message);
     }
+    // Le gabarit change le pictogramme du credit (📸 / 🎥), donc le texte publie.
+    await chargerDeparts();
     renderPostDetail(updated, article, nouvellesCovers);
   };
   detailEl.querySelector("#tpl-post").onclick = () => basculerTemplate("kinda_post");
@@ -1965,6 +2148,35 @@ function renderPostDetail(post, article, covers) {
     };
   }
 
+  // --- Rouvrir un creneau gele ---
+  //
+  // Deux `try` DISTINCTS, meme motif que `basculerTemplate` : la reouverture est
+  // persistee cote serveur meme si le re-rendu de la fiche echoue, et l'UI ne
+  // doit pas le cacher. Elle ne republie RIEN et ne peut pas doubler une
+  // publication : le creneau passe GELE -> PROGRAMME par ecriture
+  // CONDITIONNELLE, et `_publier` ne selectionne que les creneaux GELE.
+  const btnRouvrir = detailEl.querySelector("#btn-rouvrir");
+  if (btnRouvrir && depart && depart.reouvrable) {
+    btnRouvrir.onclick = async () => {
+      if (!confirm("Rouvrir ce créneau ? Les fichiers déjà figés sont jetés ; l'agent les refait"
+          + " au passage suivant (environ 10 minutes), puis publie à l'heure prévue.")) return;
+      try {
+        const reponse = await fetch(`/schedule/${depart.creneau_id}/rouvrir`, { method: "POST" });
+        if (!reponse.ok) throw new Error(await reponse.text());
+      } catch (erreur) {
+        alert("Échec de la réouverture : " + erreur.message);
+        return;
+      }
+      await chargerDeparts();
+      let rafraichi = post;
+      try {
+        rafraichi = await (await fetch(`/posts/${post.id}`)).json();
+      } catch { /* la fiche reste sur ce qu'on a : la reouverture, elle, est faite */ }
+      renderPostDetail(rafraichi, article, covers);
+      if (!document.getElementById("schedule-panel").hidden) loadSchedulePanel();
+    };
+  }
+
   detailEl.querySelector("#btn-save").onclick = async () => {
     const caption = detailEl.querySelector("#edit-caption").value;
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
@@ -1972,6 +2184,10 @@ function renderPostDetail(post, article, covers) {
       const updated = await enregistrerPost(post.id, { caption, hashtags });
       // Le serveur porte ce texte : plus rien a sauver, et l'avertissement tombe.
       brouillonTexte = null;
+      // La legende PUBLIEE change avec le texte tape : sans ce rechargement,
+      // « Ce qui va partir » montrerait l'ancienne version -- exactement le
+      // genre d'ecart que cette section existe pour supprimer.
+      await chargerDeparts();
       renderPostDetail(updated, article, covers);
     } catch (erreur) {
       alert("Échec de l'enregistrement : " + erreur.message);

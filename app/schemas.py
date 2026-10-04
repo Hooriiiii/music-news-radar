@@ -440,3 +440,63 @@ class ReglagesOut(BaseModel):
 
     retention_days: int
     pipeline_intervalle_s: int
+
+
+class DepartOut(BaseModel):
+    """CE QUI VA REELLEMENT PARTIR sur un creneau, et non ce qui est en base.
+
+    L'audit UX du 2026-10-02 l'avait releve et personne ne l'avait comble : la
+    legende EDITEE n'est pas la legende PUBLIEE. `app/content/legende.py::
+    texte_legende` -- le seul goulot que traversent la publication automatique,
+    l'export zip et `tester_publication` -- aere les paragraphes, remet le diese
+    sur les hashtags, les deduplique, les plafonne a 30, ajoute la ligne de
+    credit obligatoire et tronque l'ensemble a 2150 points de code. Et
+    `posts.credit` n'etait affiche NULLE PART. Un utilisateur qui relit avant
+    publication relit donc ce champ-ci, pas `posts.caption`.
+
+    Regle du bandeau de supervision, appliquee telle quelle : une valeur qu'on
+    n'a pas pu lire vaut INCONNUE, jamais « tout va bien ». `deborde` est
+    `None` tant qu'aucun rendu n'a mesure la cover -- un `false` par defaut
+    serait un faux feu vert sur le seul signal qui doit empecher une
+    publication en defaut.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    creneau_id: int
+    publier_a: dt.datetime
+    format: FormatCreneau
+    etat: EtatCreneau
+    post_id: int
+    accroche: str
+    article_title: str | None = None
+    article_url: str | None = None
+    # Le texte exact, apres `texte_legende` : c'est lui qui part chez Meta.
+    legende_publiee: str
+    # Mesures contre les limites de Meta, pour qu'un depassement se VOIE avant
+    # la troncature silencieuse plutot qu'apres coup sur le compte.
+    legende_longueur: int
+    legende_maximum: int
+    hashtags_publies: list[str]
+    hashtags_maximum: int
+    # Obligatoire sur un reel, jamais coupe de la legende. `None` = aucun compte
+    # a crediter (photo de presse, image du web).
+    credit: str | None = None
+    # Le fond de la cover et son origine (`variants.fond.origine`), figes a la
+    # composition : une fois l'URL dans la slide, plus rien ne dirait d'ou elle
+    # vient.
+    fond: str | None = None
+    fond_origine: str | None = None
+    # Nombre d'elements du carrousel une fois geles (cover comprise). `None`
+    # avant le gel : on ne devine pas ce que le gel va ecarter.
+    elements_figes: int | None = None
+    # La cover deborde-t-elle ? `None` = aucun rendu ne l'a mesure (inconnu).
+    deborde: bool | None = None
+    # Editable maintenant ? Et, sinon, POURQUOI -- un controle desactive
+    # imprime toujours sa raison (regle de la refonte du 2026-10-02).
+    editable: bool
+    raison_non_editable: str | None = None
+    # Rouvrir un creneau gele est possible tant qu'il reste de quoi re-geler.
+    reouvrable: bool
+    raison_non_reouvrable: str | None = None
+    minutes_restantes: int

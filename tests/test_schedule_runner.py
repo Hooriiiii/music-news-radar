@@ -61,6 +61,15 @@ class Outils:
     def notifier(self, titre, message):
         self.notifications.append(message)
 
+    # Les notifications HORS annonce de relecture. L'annonce (« un post part a
+    # 14:37, va le relire ») est un canal LATERAL ajoute le 2026-10-04 : elle part
+    # du meme `notifier`, mais ces tests-ci decrivent des PANNES, et compter
+    # l'annonce avec elles ne mesurerait plus rien. Un filtre a UN endroit plutot
+    # que des bornes relachees dans chaque test.
+    @property
+    def alertes(self):
+        return [m for m in self.notifications if not m.startswith("relecture :")]
+
     def tourner(self, db, maintenant, mode="reel", horloge=None):
         # Horloge fraiche figee sur `maintenant` : l'horloge reelle ferait
         # basculer ces tests en MANQUE une fois leur date passee.
@@ -271,7 +280,7 @@ def test_une_publication_refusee_previent(db_session, article):
     creneau = _creneau_h0(db_session)
     assert creneau.etat == EtatCreneau.ECHEC
     assert "jeton expire" in creneau.erreur
-    assert len(outils.notifications) == 1 and "jeton expire" in outils.notifications[0]
+    assert len(outils.alertes) == 1 and "jeton expire" in outils.alertes[0]
 
 
 def test_une_composition_impossible_exclut_l_article(db_session, article):
@@ -361,7 +370,7 @@ def test_un_gel_en_panne_systemique_n_exclut_pas_l_article(db_session, article):
     assert db_session.get(Article, article.id).file_exclu_raison is None
     assert (creneau.etat, creneau.article_id) == (EtatCreneau.PROGRAMME, article.id)
     assert "disque plein" in creneau.erreur and rapport.erreurs
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
 
     outils.erreur_preparation = None
     outils.tourner(db_session, H0 - dt.timedelta(minutes=50))
@@ -378,7 +387,7 @@ def test_un_gel_en_panne_systemique_s_arrete_au_premier_creneau(db_session, arti
     outils.erreur_preparation = OSError("disque plein")
     outils.tourner(db_session, H0 - dt.timedelta(hours=1))
     assert len(outils.prepares) == 1
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
 
 
 def test_en_apercu_la_file_avance(db_session, article):
@@ -414,7 +423,7 @@ def test_une_panne_systemique_de_composition_previent(db_session, article):
     outils = Outils()
     outils.erreur_composition = RuntimeError("Your credit balance is too low")
     outils.tourner(db_session, H0 - dt.timedelta(hours=3))
-    assert len(outils.notifications) == 1 and "credit" in outils.notifications[0]
+    assert len(outils.alertes) == 1 and "credit" in outils.alertes[0]
 
 
 def test_une_notification_en_panne_n_interrompt_pas_le_passage(db_session, article):
@@ -440,7 +449,7 @@ def test_chromium_absent_au_gel_n_exclut_pas_l_article(db_session, article, monk
     assert db_session.get(Article, article.id).file_exclu_raison is None
     assert (creneau.etat, creneau.article_id) == (EtatCreneau.PROGRAMME, article.id)
     assert "Chromium" in creneau.erreur
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
     assert len(outils.prepares) == 1
 
 
@@ -649,7 +658,7 @@ def test_un_manque_previent(db_session, article):
     outils = Outils()
     outils.tourner(db_session, H0 - dt.timedelta(hours=3))
     outils.tourner(db_session, H0 + dt.timedelta(minutes=120))
-    assert len(outils.notifications) == 1 and "manque" in outils.notifications[0]
+    assert len(outils.alertes) == 1 and "manque" in outils.alertes[0]
 
 
 def test_une_panne_inattendue_de_composition_ne_bloque_pas_un_creneau_gele(db_session, article, monkeypatch):
@@ -666,7 +675,7 @@ def test_une_panne_inattendue_de_composition_ne_bloque_pas_un_creneau_gele(db_se
     rapport = outils.tourner(db_session, H0 + dt.timedelta(minutes=20))
     assert _creneau_h0(db_session).etat == EtatCreneau.PUBLIE
     assert any("bug inattendu" in erreur for erreur in rapport.erreurs)
-    assert any("bug inattendu" in message for message in outils.notifications)
+    assert any("bug inattendu" in message for message in outils.alertes)
 
 
 def test_un_arbitrage_en_panne_ne_bloque_pas_un_creneau_gele(db_session, article, monkeypatch):
@@ -866,7 +875,7 @@ def test_un_mac_endormi_pendant_l_attente_donne_un_manque_sans_publication(tmp_p
     assert (creneau.etat, rapport.manques, rapport.publies) == (EtatCreneau.MANQUE, 1, 0)
     assert db_session.get(Article, article.id).file_exclu_raison is None
     assert not _dossier_de(creneau).exists()
-    assert outils.notifications
+    assert outils.alertes
 
 
 def test_un_creneau_du_relit_mode_et_retard_juste_avant_media_publish(db_session, article):
@@ -1033,7 +1042,7 @@ def test_un_tunnel_injoignable_ne_exclut_pas_l_article_et_rend_le_creneau_gele(d
     assert creneau.etat == EtatCreneau.GELE
     assert "injoignable" in creneau.erreur
     assert creneau.article_id == article.id and creneau.post_id is not None
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
 
     outils.erreur_publication = None
     outils.tourner(db_session, H0 + dt.timedelta(minutes=20))

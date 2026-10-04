@@ -743,6 +743,21 @@ class Settings(BaseSettings):
     # garantit qu'un passage ne mange pas le creneau suivant.
     publication_tunnel_budget_s: int = 270
 
+    # --- Relecture humaine avant publication (2026-10-04) ---
+    # Combien de temps AVANT le depart on annonce qu'un post attend un oeil.
+    # 120 min = la meme avance que le gel, mais l'annonce est declenchee par
+    # l'HORLOGE et non par le gel : mesure du 2026-10-04 sur les 85 creneaux
+    # reellement geles en base, l'ecart gel -> heure prevue a une mediane de
+    # 105 min mais 21 % des gels se font a moins de 30 min du depart et 14 % a
+    # moins de 5 min (passages rattrapes au reveil du Mac). Une annonce accrochee
+    # au gel aurait donc donne zero minute de relecture a un creneau sur sept.
+    publication_relecture_avance_minutes: int = 120
+    # Rouvrir un creneau GELE invalide ses fichiers figes : le gel doit avoir le
+    # temps de les refaire avant l'heure. Deux passages de l'agent (2 x 10 min),
+    # pour qu'un premier gel differe (pause yt-dlp, un telechargement par
+    # passage) ne soit pas fatal.
+    publication_relecture_regel_minutes: int = 20
+
     # --- Reels automatiques (en plus des carrousels) ---
     # Fenetres propres, heure de Paris, separees par des virgules : une fenetre =
     # un reel par jour. Elles ne doivent chevaucher ni les fenetres carrousel ni

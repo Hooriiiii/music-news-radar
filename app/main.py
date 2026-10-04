@@ -10,6 +10,7 @@ from app.api import (
     events,
     posts,
     reglages,
+    relecture,
     schedule,
     sources,
     supervision,
@@ -23,6 +24,7 @@ app.include_router(digests.router)
 app.include_router(events.router)
 app.include_router(posts.router)
 app.include_router(reglages.router)
+app.include_router(relecture.router)
 app.include_router(schedule.router)
 app.include_router(sources.router)
 app.include_router(supervision.router)

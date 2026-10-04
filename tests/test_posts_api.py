@@ -685,21 +685,43 @@ def _post_sur_un_creneau(db, etat, erreur=None, dans=dt.timedelta(hours=1)):
 
 
 @pytest.mark.parametrize("modification", [
-    {"caption": "Autre legende"},
-    {"hashtags": ["#pop"]},
     {"variante_retenue": 1},
     {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**"}]},
     {"template": "kinda_reel"},
 ])
-def test_un_post_gele_ne_se_modifie_plus(client, db_session, modification):
-    """Les fichiers et la legende du creneau gele sont ceux qui partiront : une
-    edition apres le gel publierait autre chose que ce que l'utilisateur voit."""
+def test_la_cover_d_un_post_gele_ne_se_modifie_pas_sans_rouvrir(client, db_session, modification):
+    """`creneaux.fichiers` PORTE la cover rendue et les medias telecharges : les
+    changer sans refaire ces fichiers publierait autre chose que ce qu'on voit.
+
+    Le refus nomme le remede (`POST /schedule/{id}/rouvrir`, 2026-10-04) plutot
+    que de laisser l'utilisateur devant une porte fermee -- c'est exactement la
+    fenetre ou il veut corriger."""
     post = _post_sur_un_creneau(db_session, "gele")
     reponse = client.patch(f"/posts/{post.id}", json=modification)
     assert reponse.status_code == 409
+    assert "rouvrir" in reponse.json()["detail"]
     db_session.refresh(post)
-    assert post.caption == "Une legende." and post.hashtags == ["#electro"]
     assert post.template == "kinda_post"
+
+
+@pytest.mark.parametrize("modification", [
+    {"caption": "Autre legende"},
+    {"hashtags": ["#pop"]},
+])
+def test_la_legende_d_un_post_gele_se_modifie_encore(client, db_session, modification):
+    """CHANGEMENT DELIBERE du 2026-10-04. Ces deux champs ne sont PAS figes :
+    `runner._publier` appelle `texte_legende(post)` juste avant l'appel a Meta, en
+    lisant la base. Le 409 qui les bloquait etait une SUR-PORTEE -- il fermait la
+    porte exactement dans les deux heures ou l'utilisateur veut relire et corriger
+    (« modifier la description »), alors que rien dans le gel n'en depend.
+
+    Ce qui reste refuse pendant une publication EN VOL est teste juste en dessous :
+    la legende a alors deja ete lue et est partie avec le conteneur."""
+    post = _post_sur_un_creneau(db_session, "gele")
+    assert client.patch(f"/posts/{post.id}", json=modification).status_code == 200
+    db_session.refresh(post)
+    for champ, valeur in modification.items():
+        assert getattr(post, champ) == valeur
 
 
 def test_un_post_programme_non_gele_se_modifie(client, db_session):
