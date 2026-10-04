@@ -1,7 +1,7 @@
 import base64
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,8 @@ from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
 from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
+from app.publish.preparation import candidats_editables
+from app.publish.televersement import TAILLE_MAX_OCTETS, DepotRefuse, accepter
 from app.schedule.store import utc
 from app.schemas import CoversOut, PostOut, PostUpdate
 
@@ -273,6 +275,85 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
 
     db.commit()
     return post
+
+
+def _trop_lourd() -> HTTPException:
+    return HTTPException(
+        status_code=413,
+        detail=f"fichier trop lourd (maximum {TAILLE_MAX_OCTETS // 1024 // 1024} Mo)",
+    )
+
+
+async def _lire_sous_plafond(request: Request) -> bytes:
+    """Le corps de la requete, borne AVANT d'etre tenu en memoire.
+
+    Deux gardes, et la premiere ne lit pas un octet : un `Content-Length` annonce
+    au-dela du plafond est refuse tout de suite. La seconde lit le flux morceau
+    par morceau et s'arrete au premier depassement -- un en-tete peut mentir, et
+    un envoi en `chunked` n'en porte pas. `await request.body()` aurait tout
+    accumule avant qu'on puisse dire non.
+    """
+    annonce = request.headers.get("content-length")
+    if annonce and annonce.isdigit() and int(annonce) > TAILLE_MAX_OCTETS:
+        raise _trop_lourd()
+    octets = bytearray()
+    async for morceau in request.stream():
+        octets += morceau
+        if len(octets) > TAILLE_MAX_OCTETS:
+            raise _trop_lourd()
+    return bytes(octets)
+
+
+@router.post("/posts/{post_id}/visuels", status_code=201)
+async def televerser_visuel(post_id: int, request: Request, db: Session = Depends(get_db)):
+    """Depose un visuel du disque et le rend comme UN CANDIDAT DE PLUS.
+
+    Tout ce que fait cet endpoint : verifier le fichier, le copier dans
+    `visuels_cache_dir`, l'ajouter a `posts.assets`. Il ne touche NI `slides` NI
+    les fichiers figes -- mettre le visuel dans la liste publiee est le geste
+    suivant, et il passe par `PATCH /posts/{id}` (`slides` +
+    `carrousel_explicite`), qui rouvre deja le creneau tout seul. Un seul chemin
+    d'ecriture pour la liste, un seul endroit ou le re-gel se decide, et rien ici
+    qui approche Meta.
+
+    LE CORPS EST LE FICHIER BRUT, pas un `multipart/form-data` : aucun nom de
+    fichier n'arrive donc jusqu'ici (voir `app/publish/televersement.py` : le nom
+    sur disque se derive du CONTENU), et le depot n'ajoute aucune dependance
+    Python -- `python-multipart` n'est pas installe, et un formulaire
+    n'apporterait rien d'autre qu'un nom qu'on refuserait d'utiliser.
+
+    `Content-Type` n'est pas lu : le type REEL vient du decodage de l'image.
+    """
+    post = _post_ou_404(db, post_id)
+    if _publication_en_vol(db, post):
+        # Le conteneur est parti chez Meta avec son contenu : accepter un visuel
+        # laisserait croire qu'il peut encore entrer dans ce post.
+        raise HTTPException(
+            status_code=409,
+            detail="Publication en cours : le conteneur est cree chez Meta, le post ne se modifie plus",
+        )
+    octets = await _lire_sous_plafond(request)
+    try:
+        nouvel_actif = accepter(octets)
+    except DepotRefuse as exc:
+        # 422 et non 400 : la requete est bien formee, c'est son CONTENU qui ne
+        # peut pas etre publie -- et le message est fait pour etre affiche tel quel.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # Reassignation ENTIERE : une mutation in place ne serait pas persistee sur la
+    # colonne JSON.
+    post.assets = [*(post.assets or []), nouvel_actif]
+    db.commit()
+    # On rend le candidat tel que `GET /relecture` le rendra -- meme fonction,
+    # donc meme forme : le dashboard l'ajoute a la liste sans recroiser deux
+    # reponses ni deviner la forme attendue par `PATCH /posts/{id}`.
+    article = db.get(Article, post.article_id) if post.article_id else None
+    nouveau = next(
+        (c for c in candidats_editables(post, article) if c.get("url") == nouvel_actif["url"]),
+        None,
+    )
+    if nouveau is None:  # pragma: no cover -- invariant de construction
+        raise HTTPException(status_code=500, detail="visuel depose mais absent de la reserve")
+    return nouveau
 
 
 def _post_ou_404(db: Session, post_id: int) -> Post:

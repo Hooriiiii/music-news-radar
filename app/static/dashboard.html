@@ -349,6 +349,23 @@
     .element-ligne .quoi { flex-basis: 100%; order: 3; }
     .element-ligne .gestes { flex-basis: 100%; order: 4; justify-content: flex-start; }
   }
+  /* --- Deposer un visuel depuis le disque ------------------------------------
+     Le dernier recours quand aucun barreau de l'echelle (medias de l'actu, compte
+     source, artiste cite, web) n'a donne l'image que l'utilisateur voulait
+     montrer. Le refus s'imprime ICI, a cote du controle, jamais dans une alerte
+     qui disparait : on le relit pendant qu'on choisit un autre fichier. */
+  .depot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .depot input[type=file] { flex: 1; min-width: 160px; font-size: 12px; color: var(--muted); }
+  .depot input[type=file]::file-selector-button { border: 1px solid var(--border);
+    background: #20202a; color: var(--text); border-radius: 6px; padding: 6px 12px;
+    cursor: pointer; font-size: 12.5px; margin-right: 10px; }
+  .depot input[type=file]:disabled { opacity: .5; }
+  .depot input[type=file]:disabled::file-selector-button { opacity: .4; cursor: not-allowed; }
+  .depot-motif { font-size: 11.5px; margin-top: 4px; color: var(--muted); }
+  /* Une raison de refus est une information de PANNE : teinte d'alerte, jamais
+     l'accent de la marque (rose et rouge sont voisins -- une panne qui vire au
+     rose ne casse rien et rend la lecture aveugle). */
+  .depot-motif.erreur { color: var(--alerte); }
   .detail-actions button, .detail-actions a { border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 12.5px;
     text-decoration: none; }
@@ -1853,6 +1870,7 @@ const ORIGINES_ELEMENT = {
   kinda: "🎨 aplat Kinda",
   api: "🎬 vidéo donnée par l'API Meta",
   ytdlp: "🎬 vidéo récupérée par yt-dlp",
+  depot: "📁 fichier déposé depuis le disque",
 };
 
 // Les elements MEDIA sur lesquels l'edition porte. La cover n'en est pas : elle
@@ -1978,9 +1996,14 @@ function renderPostDetail(post, article, covers) {
 
   const actifsHtml = (post.assets || []).map((x) => {
     const vignette = x.preview_url || (x.type === "photo" ? x.url : null);
-    const origine = x.origine === "artiste"
-      ? `📸 ${escapeHtml(x.compte || "?")} · post du ${fmtDate(x.publie_le) || "?"}`
-      : (x.compte ? `📸 ${escapeHtml(x.compte)}` : "📸 photo de presse");
+    // Un fichier DEPOSE a la main n'est ni une photo de presse ni le post d'un
+    // artiste : le dire, sinon la seule provenance que l'utilisateur a choisie
+    // lui-meme serait la seule qu'on lui annonce de travers.
+    const origine = x.origine === "depot"
+      ? ORIGINES_ELEMENT.depot
+      : x.origine === "artiste"
+        ? `📸 ${escapeHtml(x.compte || "?")} · post du ${fmtDate(x.publie_le) || "?"}`
+        : (x.compte ? `📸 ${escapeHtml(x.compte)}` : "📸 photo de presse");
     const lien = x.permalink
       ? `<a href="${escapeHtml(x.permalink)}" target="_blank" rel="noopener">voir le post</a>` : "";
     return `
@@ -2097,7 +2120,8 @@ function renderPostDetail(post, article, covers) {
   const optionsReserve = reserve.map((c, i) => {
     const dims = c.width && c.height ? ` ${c.width}×${c.height}` : "";
     const marque = dejaDansLaListe.has(c.url) ? " (déjà dans la liste)" : "";
-    return `<option value="${i}">${escapeHtml(`${c.type}${dims} · ${c.compte || c.origine || "?"}${marque}`)}</option>`;
+    const qui = c.compte || ORIGINES_ELEMENT[c.origine] || c.origine || "?";
+    return `<option value="${i}">${escapeHtml(`${c.type}${dims} · ${qui}${marque}`)}</option>`;
   }).join("");
   const lignesElements = [
     // La cover d'abord, toujours : elle n'est ni supprimable ni déplaçable, et le
@@ -2162,7 +2186,15 @@ function renderPostDetail(post, article, covers) {
         </select>
       </div>
       ${reserve.length ? "" : `<div class="reel-reason">Aucun visuel disponible à ajouter :`
-        + ` l'actu est purgée ou ses visuels sont interdits (compte média).</div>`}`;
+        + ` l'actu est purgée ou ses visuels sont interdits (compte média).</div>`}
+      <div class="depot">
+        <input type="file" id="el-depot" ${editableListe ? "" : "disabled"}
+          accept="image/jpeg,image/png,image/webp,image/gif,image/bmp,image/tiff">
+      </div>
+      <div class="depot-motif" id="el-depot-motif">${editableListe
+        ? `Ou déposez une image de votre disque — JPEG, PNG, WebP… 25 Mo au maximum. Elle sera`
+          + ` recadrée en 1080×1350 (le haut de l'image est conservé) et ajoutée en fin de liste.`
+        : escapeHtml(depart.raison_non_editable || depart.raison_non_reouvrable || "")}</div>`;
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -2430,6 +2462,48 @@ function renderPostDetail(post, article, covers) {
     ajouter.onchange = () => {
       if (ajouter.value === "") return;
       ecrireListe([...slidesCourantes(), { kind: "media", ...reserve[Number(ajouter.value)] }]);
+    };
+  }
+
+  // --- Déposer un visuel depuis le disque -----------------------------------
+  //
+  // Le fichier part en CORPS BRUT (`body: fichier`), pas en `multipart` : le
+  // serveur ne reçoit donc aucun nom de fichier, et le nom sur disque se dérive
+  // du contenu — une traversée de chemin est impossible par construction.
+  //
+  // Le dépôt rend UN CANDIDAT, et c'est `ecrireListe` — le chemin ORDINAIRE,
+  // celui des cinq autres gestes — qui le met dans la liste et déclenche le
+  // re-gel. Aucun second chemin d'écriture.
+  const depot = detailEl.querySelector("#el-depot");
+  if (depot) {
+    const motifDepot = detailEl.querySelector("#el-depot-motif");
+    depot.onchange = async () => {
+      const fichier = depot.files && depot.files[0];
+      if (!fichier) return;
+      motifDepot.className = "depot-motif";
+      motifDepot.textContent = `Vérification de ${fichier.name}…`;
+      depot.disabled = true;
+      let candidat = null;
+      try {
+        const reponse = await fetch(`/posts/${post.id}/visuels`, { method: "POST", body: fichier });
+        const corps = await reponse.json().catch(() => null);
+        if (!reponse.ok) {
+          // LA raison, imprimée à côté du contrôle : c'est tout l'intérêt de
+          // trancher au dépôt plutôt qu'au gel, où elle arriverait à T-2h.
+          motifDepot.className = "depot-motif erreur";
+          motifDepot.textContent = "Refusé : " + ((corps && corps.detail) || `HTTP ${reponse.status}`);
+          depot.value = "";
+          depot.disabled = false;
+          return;
+        }
+        candidat = corps;
+      } catch (erreur) {
+        motifDepot.className = "depot-motif erreur";
+        motifDepot.textContent = "Échec du dépôt : " + erreur.message;
+        depot.disabled = false;
+        return;
+      }
+      await ecrireListe([...slidesCourantes(), { kind: "media", ...candidat }]);
     };
   }
 
