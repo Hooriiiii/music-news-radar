@@ -234,8 +234,17 @@ class Artist(Base):
     # Meilleur score d'émergence jamais vu : un artiste repéré une fois comme très
     # prometteur le reste, même si les mentions suivantes sont anodines
     max_emergence: Mapped[int | None] = mapped_column(Integer, index=True)
-    # Suivi manuel : l'artiste est entré dans le radar A&R de Kinda
-    tracked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Il n'y a PAS de colonne « suivi manuel » ici, et c'est une decision :
+    # `tracked` a vecu de la migration 0007 a la 0021, ecrite par
+    # `PATCH /artists/{id}` et lue par PERSONNE. Ce que le pipeline appelle
+    # « artiste suivi » -- l'exception au pre-filtre (`scoring.ContexteScoring`)
+    # et la reserve de visuels (`content/choix_visuels.py`) -- est
+    # `comptes_artistes.IndexComptes`, c'est-a-dire les sources Instagram ACTIVES
+    # de categorie artiste, jamais un booleen sur la fiche. La colonne morte a
+    # deja coute une fausse alerte relayee a l'utilisateur
+    # (`scripts/etat_notion.py` concluait « 0 artiste suivi, les chemins qui en
+    # dependent ne se declenchent jamais » alors que 88 comptes tournaient).
+    # Le lien UTILE est celui-ci, juste en dessous.
     # Le compte Instagram suivi de cet artiste, quand le nom ne suffit pas a le
     # retrouver (« Guy-Man » et son compte). Pose automatiquement par
     # `lier_artistes_comptes`, corrigeable au dashboard (PATCH /artists/{id}).

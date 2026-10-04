@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -52,20 +52,30 @@ def list_artist_mentions(
 
 
 class ArtistUpdate(BaseModel):
-    tracked: bool | None = None
+    """Le SEUL geste utile sur une fiche artiste : corriger a la main le lien
+    vers son compte Instagram suivi, quand le nom ne suffit pas a le retrouver
+    (« Guy-Man » et son compte).
+
+    `extra="forbid"` plutot que le defaut tolerant : `tracked` a disparu avec la
+    migration 0021, et un appelant qui l'enverrait encore doit recevoir un 422
+    plutot qu'un succes silencieux ou rien n'a ete ecrit. Un champ ignore en
+    silence est exactement ce qui a permis a cette colonne de vivre trois ans
+    sans lecteur.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     source_instagram_id: int | None = None
 
 
 @router.patch("/{artist_id}", response_model=ArtistOut)
 def update_artist_tracking(artist_id: int, payload: ArtistUpdate, db: Session = Depends(get_db)):
-    """Suivi A&R manuel, et lien vers le compte Instagram suivi de l'artiste
-    (sert a la cascade de scoring et aux visuels quand le nom ne suffit pas)."""
+    """Lien vers le compte Instagram suivi de l'artiste (sert a la cascade de
+    scoring et aux visuels quand le nom ne suffit pas)."""
     artist = db.get(Artist, artist_id)
     if artist is None:
         raise HTTPException(status_code=404, detail="Artist not found")
     champs = payload.model_fields_set
-    if "tracked" in champs and payload.tracked is not None:
-        artist.tracked = payload.tracked
     if "source_instagram_id" in champs:
         source_id = payload.source_instagram_id
         if source_id is not None:

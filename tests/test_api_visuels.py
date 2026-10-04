@@ -59,9 +59,10 @@ def test_lier_une_fiche_artiste_a_un_compte_suivi(client, db_session):
     db_session.commit()
 
     corps = client.patch(f"/artists/{artist.id}", json={"source_instagram_id": fred.id}).json()
-    assert (corps["source_instagram_id"], corps["tracked"]) == (fred.id, False)
+    assert corps["source_instagram_id"] == fred.id
     assert client.patch(f"/artists/{artist.id}", json={"source_instagram_id": media.id}).status_code == 422
-    assert client.patch(f"/artists/{artist.id}", json={"tracked": True}).json()["source_instagram_id"] == fred.id
+    # Un PATCH qui ne nomme PAS le champ ne l'efface pas (`model_fields_set`).
+    assert client.patch(f"/artists/{artist.id}", json={}).json()["source_instagram_id"] == fred.id
     assert client.patch(f"/artists/{artist.id}", json={"source_instagram_id": None}).json()["source_instagram_id"] is None
 
 

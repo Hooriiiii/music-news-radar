@@ -34,6 +34,16 @@ def test_une_seule_tete_et_des_revisions_uniques():
     assert len(prefixes) == len(set(prefixes)), sorted(prefixes)
 
 
-def test_la_tete_est_la_citation_principale():
+def test_la_tete_est_la_revision_la_plus_haute_du_dossier():
+    """La tete doit etre la DERNIERE revision posee, pas une revision du milieu.
+
+    Ce test epinglait un numero en dur (« 0020 »), ce qui le faisait rougir a
+    chaque migration pour une raison qui n'est pas un defaut -- et invitait donc
+    a le mettre a jour machinalement, geste sous lequel une vraie anomalie
+    passerait. La propriete VOULUE est derivee du dossier : si une revision est
+    ajoutee sans chainer son `down_revision` sur la precedente, elle ne devient
+    pas la tete et ce test le dit, sans rien a maintenir.
+    """
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
-    assert script.get_current_head() == "0020"
+    fichiers = sorted((RACINE / "alembic" / "versions").glob("[0-9]*.py"))
+    assert script.get_current_head() == fichiers[-1].name.split("_", 1)[0]
