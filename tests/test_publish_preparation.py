@@ -15,9 +15,20 @@ from app.publish.preparation import (
     PreparationImpossible,
     PreparationSautee,
     medias_du_carrousel,
-    preparer_fichiers,
     verifier_fond,
 )
+from app.publish.preparation import preparer_fichiers as _figer
+
+
+def preparer_fichiers(*args, **kwargs):
+    """Les NOMS des fichiers figes seuls.
+
+    `preparation.preparer_fichiers` rend desormais un `Figement` : les noms ET le
+    manifeste de ce qui part (2026-10-04). Ces tests-ci portent sur le CONTENU du
+    gel, et ce desemballage les garde lisibles ; le manifeste a ses propres tests,
+    dans `tests/test_manifeste_gel.py`.
+    """
+    return _figer(*args, **kwargs).noms
 
 
 def _png(largeur, hauteur):

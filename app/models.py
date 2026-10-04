@@ -479,6 +479,17 @@ class Creneau(Base):
     epingle: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Noms des JPEG figes, dans l'ordre du carrousel. Reassigner la liste ENTIERE.
     fichiers: Mapped[list | None] = mapped_column(JSONVariant)
+    # Le MANIFESTE du gel : la liste ordonnee de ce qui part, cover comprise,
+    # medias de l'actu compris -- plus les elements ECARTES au gel, avec leur
+    # raison (`app/publish/manifeste.py`). `fichiers` ne porte que des noms ; le
+    # reste de la liste etait RECALCULE a chaque lecture, donc faux des que
+    # l'article etait purge (mesure du 2026-10-04 : 27 des 48 carrousels geles
+    # recalculables ne retombent pas sur le nombre de fichiers reellement figes).
+    # Denormalise : aucune reference a l'article, donc la liste survit a la purge
+    # et a un creneau devenu autonome de son article. NULL = inconnu (creneau
+    # gele avant la migration 0022, ou preparateur qui ne rend que des noms),
+    # jamais « vide ». Reassigner la liste ENTIERE, jamais de mutation in place.
+    elements: Mapped[list | None] = mapped_column(JSONVariant)
     ig_media_id: Mapped[str | None] = mapped_column(String(100))
     erreur: Mapped[str | None] = mapped_column(Text)
     gele_le: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

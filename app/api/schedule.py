@@ -11,18 +11,16 @@ automatiques ; yt-dlp seul se coupe dans `.env`.
 """
 
 import datetime as dt
-import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau
 from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
-from app.schedule.relecture import RAISON_RELECTURE, regel_possible
-from app.schedule.runner import RAISON_RECLAMATION as RAISON_RECLAMATION_API
+from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.store import (
     MODIFIABLES,
     TEMPLATES,
@@ -271,52 +269,13 @@ def rouvrir_creneau(creneau_id: int, db: Session = Depends(get_db)):
     creneau = db.get(Creneau, creneau_id)
     if creneau is None:
         raise HTTPException(status_code=404, detail="Creneau introuvable")
-    maintenant = _maintenant()
-    if creneau.etat == EtatCreneau.ECHEC and creneau.erreur == RAISON_RECLAMATION_API:
-        raise HTTPException(
-            status_code=409,
-            detail="Publication en cours : le conteneur est cree chez Meta, plus rien ne se modifie",
-        )
-    if creneau.etat != EtatCreneau.GELE:
-        raise HTTPException(
-            status_code=409, detail="Creneau non gele : il se modifie deja sans rien rouvrir"
-        )
-    if creneau.post_id is None:
-        raise HTTPException(status_code=409, detail="Creneau sans post : rien a rouvrir")
-    if not regel_possible(utc(creneau.publier_a), maintenant):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Trop pres du depart : il faut au moins "
-                f"{settings.publication_relecture_regel_minutes} min pour refaire les fichiers figes"
-            ),
-        )
-    touchees = db.execute(
-        update(Creneau)
-        .where(
-            Creneau.id == creneau.id,
-            Creneau.etat == EtatCreneau.GELE,
-            Creneau.post_id == creneau.post_id,
-        )
-        .values(
-            etat=EtatCreneau.PROGRAMME,
-            # Les fichiers figes ne decrivent plus ce qui partira : les oublier
-            # EST l'invalidation. Le gel suivant les reecrit.
-            fichiers=None,
-            epingle=True,
-            erreur=RAISON_RELECTURE,
-        )
-        .execution_options(synchronize_session=False)
-    ).rowcount
-    if touchees != 1:
-        db.rollback()
-        raise HTTPException(
-            status_code=409, detail="Creneau modifie entre-temps par l'agent : rien n'a ete rouvert"
-        )
-    db.commit()
-    db.refresh(creneau)
-    # Le dossier fige est efface : des fichiers orphelins seraient republies tels
-    # quels si quelqu'un remettait l'etat a GELE a la main, et `_menage` ne les
-    # ramasse qu'une fois le creneau termine.
-    shutil.rmtree(settings.publication_dir / str(creneau.id), ignore_errors=True)
+    # Le geste lui-meme vit dans `app/schedule/reouverture.py` : depuis que
+    # `PATCH /posts/{id}` rouvre TOUT SEUL (re-gel automatique, demande de
+    # l'utilisateur), deux copies de cette ecriture conditionnelle finiraient par
+    # divergeer -- et c'est l'ecriture la plus delicate du depot, celle qui croise
+    # la reclamation de l'agent.
+    try:
+        rouvrir(db, creneau, _maintenant())
+    except ReouvertureRefusee as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _vue(db, creneau)

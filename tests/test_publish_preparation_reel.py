@@ -19,10 +19,20 @@ from app.publish.preparation_reel import (
     API,
     YTDLP,
     LienExpire,
-    preparer_reel,
     source_de_la_video,
     telecharger_video,
 )
+from app.publish.preparation_reel import preparer_reel as _figer_reel
+
+
+def preparer_reel(*args, **kwargs):
+    """Les NOMS des deux fichiers figes seuls (video, cover).
+
+    `preparation_reel.preparer_reel` rend desormais un `Figement` : les noms ET le
+    manifeste de ce qui part (2026-10-04). Ces tests-ci portent sur le CONTENU du
+    gel ; le manifeste a ses propres tests, dans `tests/test_manifeste_gel.py`.
+    """
+    return _figer_reel(*args, **kwargs).noms
 
 besoin_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg absent -- assemblage non testable ici")
 

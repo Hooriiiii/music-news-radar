@@ -331,15 +331,30 @@ def test_la_legende_reste_modifiable_sur_un_creneau_gele(client, db_session, act
     assert post.caption == "Programmation devoilee a Brest."
 
 
-def test_la_cover_ne_se_modifie_pas_sans_rouvrir_le_creneau(client, db_session, actu):
-    """Les fichiers figes PORTENT la cover rendue : la changer sans les refaire
-    publierait autre chose que ce qu'on voit. Le refus nomme le remede."""
-    post = _post(db_session, actu)
-    _creneau(db_session, actu, post, publier_a=BASE + dt.timedelta(hours=1), fichiers=["p_01.jpg"])
+def test_editer_la_cover_d_un_creneau_gele_rouvre_le_gel_sans_rien_demander(
+    client, db_session, actu
+):
+    """CHANGEMENT DELIBERE du 2026-10-04 : le re-gel est AUTOMATIQUE.
 
-    reponse = client.patch(f"/posts/{post.id}", json={"variante_retenue": 0})
-    assert reponse.status_code == 409
-    assert "rouvrir" in reponse.json()["detail"]
+    Les fichiers figes PORTENT la cover rendue, donc la changer SANS les refaire
+    publierait autre chose que ce qu'on voit -- c'est ce que le 409 protegeait. Mais
+    il demandait a l'utilisateur de cliquer « Rouvrir » pour obtenir ce qu'il venait
+    justement de demander : « aucun bouton a cliquer, et l'etat affiche est toujours
+    celui qui partira ». L'edition passe donc, et c'est le GEL qui est invalide --
+    fichiers ET manifeste oublies, creneau epingle, marqueur de relecture pose."""
+    post = _post(db_session, actu)
+    creneau = _creneau(
+        db_session, actu, post, publier_a=BASE + dt.timedelta(hours=1),
+        fichiers=["p_01.jpg"], elements=[{"kind": "cover", "fichier": "p_01.jpg", "ecarte": False}],
+    )
+
+    assert client.patch(f"/posts/{post.id}", json={"variante_retenue": 0}).status_code == 200
+
+    db_session.refresh(creneau)
+    assert creneau.etat == EtatCreneau.PROGRAMME
+    assert (creneau.fichiers, creneau.elements) == (None, None)
+    assert creneau.erreur == relecture.RAISON_RELECTURE
+    assert creneau.post_id == post.id
 
 
 def test_rien_ne_se_modifie_pendant_une_publication_en_vol(client, db_session, actu):

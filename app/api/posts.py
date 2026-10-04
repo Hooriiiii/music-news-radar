@@ -28,6 +28,7 @@ from app.content.teinte import palette_du_post
 from app.content.visuels import fond_de_cover
 from app.db import get_db
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
+from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.schedule.store import utc
 from app.schemas import CoversOut, PostOut, PostUpdate
@@ -129,10 +130,10 @@ def _publication_en_vol(db: Session, post: Post) -> bool:
     )
 
 
-def _fichiers_figes(db: Session, post: Post) -> bool:
-    """Un creneau GELE porte ce post : `creneaux.fichiers` existe deja sur le
-    disque (cover rendue par Chromium, photos recadrees, videos transcodees)."""
-    return any(creneau.etat == EtatCreneau.GELE for creneau in _creneaux_engages(db, post))
+def _creneaux_geles(db: Session, post: Post) -> list[Creneau]:
+    """Les creneaux GELES qui portent ce post : leurs fichiers figes (cover rendue
+    par Chromium, photos recadrees, videos transcodees) sont deja sur le disque."""
+    return [c for c in _creneaux_engages(db, post) if c.etat == EtatCreneau.GELE]
 
 
 # Ce dont les FICHIERS FIGES dependent, et rien d'autre. `caption` et `hashtags`
@@ -141,7 +142,39 @@ def _fichiers_figes(db: Session, post: Post) -> bool:
 # 409 qui la bloquait aussi fermait la porte exactement dans la fenetre ou
 # l'utilisateur veut corriger (« modifier la description »). C'etait une
 # sur-portee, pas une protection : rien dans le gel ne depend de ces deux champs.
-CHAMPS_FIGES = ("slides", "variante_retenue", "template")
+#
+# `carrousel_explicite` en fait PARTIE : arreter la liste change ce que
+# `medias_du_carrousel` rendra, donc les fichiers a figer.
+CHAMPS_FIGES = ("slides", "variante_retenue", "template", "carrousel_explicite")
+
+
+def _regel_automatique(db: Session, post: Post) -> None:
+    """Invalide le gel des creneaux qui portent ce post, avant de l'editer.
+
+    LE CHOIX DE L'UTILISATEUR (2026-10-04) : « on modifie, le systeme refait ce
+    qui a change et rien d'autre. Aucun bouton a cliquer, et l'etat affiche est
+    toujours celui qui partira. » Le 409 d'avant renvoyait vers
+    `POST /schedule/{id}/rouvrir` -- une porte que l'utilisateur devait trouver,
+    comprendre et cliquer pour obtenir ce qu'il venait justement de demander.
+
+    CE QUI N'EST PAS REFAIT POUR AUTANT : rien d'autre que les fichiers figes.
+    Claude n'est JAMAIS repaye, le creneau garde son `post_id` (c'est la
+    condition meme de l'ecriture conditionnelle), la legende et les hashtags ne
+    passent pas par ici (relus en base juste avant Meta), et le re-gel lui-meme
+    est le gel ORDINAIRE du passage suivant -- aucun second chemin.
+
+    REFUSER PLUTOT QUE PUBLIER AUTRE CHOSE : un refus de reouverture (publication
+    en vol, moins de 20 min avant le depart, agent passe entre-temps) devient un
+    409 qui porte la raison en clair, et AUCUNE edition n'est appliquee. L'ancien
+    comportement -- editer le brouillon pendant que les fichiers figes disent
+    autre chose -- etait precisement le defaut a supprimer.
+    """
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    for creneau in _creneaux_geles(db, post):
+        try:
+            rouvrir(db, creneau, maintenant)
+        except ReouvertureRefusee as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.patch("/posts/{post_id}", response_model=PostOut)
@@ -153,7 +186,8 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
     edite_le_contenu = any(
         valeur is not None
         for valeur in (
-            payload.slides, payload.variante_retenue, payload.caption, payload.hashtags, payload.template
+            payload.slides, payload.variante_retenue, payload.caption, payload.hashtags,
+            payload.template, payload.carrousel_explicite,
         )
     )
     if edite_le_contenu and _publication_en_vol(db, post):
@@ -162,19 +196,22 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
             status_code=409,
             detail="Publication en cours : le conteneur est cree chez Meta, le post ne se modifie plus",
         )
-    edite_les_fichiers = any(getattr(payload, champ) is not None for champ in CHAMPS_FIGES)
-    if edite_les_fichiers and _fichiers_figes(db, post):
-        # La cover rendue et les medias telecharges sont deja sur le disque : les
-        # changer sans refaire ces fichiers publierait autre chose que ce qu'on
-        # voit. Rouvrir le creneau les invalide et le gel suivant les refait.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Fichiers figes pour ce creneau : la legende et les hashtags restent modifiables, "
-                "la cover et les slides demandent de rouvrir le creneau "
-                "(POST /schedule/{id}/rouvrir)"
-            ),
-        )
+    # `variante_retenue` est VALIDE ICI, avant tout re-gel : sortir des bornes est
+    # la seule faute que cet endpoint peut encore refuser, et la refuser APRES
+    # avoir jete des fichiers figes couterait un gel pour rien.
+    variante = None
+    if payload.variante_retenue is not None:
+        variantes = (post.variants or {}).get("variantes") or []
+        if not (0 <= payload.variante_retenue < len(variantes)):
+            # 422 a la frontiere plutot qu'un IndexError plus tard dans le renderer.
+            raise HTTPException(status_code=422, detail="variante_retenue hors bornes")
+        variante = variantes[payload.variante_retenue]
+    if any(getattr(payload, champ) is not None for champ in CHAMPS_FIGES):
+        # Les fichiers figes ne portent pas cette edition : on les invalide, et le
+        # gel ordinaire du passage suivant les refait. Automatique, jamais un
+        # bouton a cliquer -- et si la reouverture est refusee (publication en vol,
+        # trop pres du depart), rien n'est edite du tout.
+        _regel_automatique(db, post)
 
     if payload.caption is not None:
         post.caption = payload.caption
@@ -208,12 +245,18 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # meme raison que pour `slides` plus haut, un ancien rapport ne parle
         # plus du rendu a venir.
         post.render_report = None
+    if payload.carrousel_explicite is not None:
+        # La liste des elements est ARRETEE : le gel ne reprend plus ni
+        # `posts.assets` ni les medias de l'article, `slides` fait foi
+        # (`preparation.liste_explicite`). Reassignation ENTIERE et FUSION du dict
+        # JSON -- l'ecrire en bloc ferait disparaitre la palette et l'origine du
+        # fond, figees a la composition.
+        post.variants = {
+            **(post.variants or {}),
+            "carrousel": {"explicite": bool(payload.carrousel_explicite)},
+        }
     if payload.variante_retenue is not None:
-        variantes = (post.variants or {}).get("variantes") or []
-        if not (0 <= payload.variante_retenue < len(variantes)):
-            # 422 a la frontiere plutot qu'un IndexError plus tard dans le renderer.
-            raise HTTPException(status_code=422, detail="variante_retenue hors bornes")
-        variante = variantes[payload.variante_retenue]
+        # Bornes deja verifiees plus haut, AVANT le re-gel : `variante` est prete.
         # Reassignation ENTIERE du dict JSON, jamais de mutation in place.
         post.variants = {**post.variants, "retenue": payload.variante_retenue}
         # La cover est REECRITE avec les trois textes de la variante retenue,
