@@ -2115,15 +2115,19 @@ en deux (`CHAMPS_FIGES`) :
 - **publication EN VOL** (creneau reclame, `RAISON_RECLAMATION` de moins de
   20 min) → tout est refuse, legende comprise : le conteneur est parti chez Meta
   AVEC son texte ;
-- **fichiers figes** (creneau GELE) → seuls `slides`, `variante_retenue` et
-  `template` sont refuses, et **le refus nomme le remede** au lieu de laisser
-  l'utilisateur devant une porte fermee.
+- **fichiers figes** (creneau GELE) → `slides`, `variante_retenue`, `template` et
+  `carrousel_explicite` **rouvrent le creneau TOUT SEULS** (voir « Le controle
+  editorial » ci-dessous ; jusqu'au 2026-10-04 ils rendaient 409 en nommant le
+  remede, que l'utilisateur devait aller cliquer).
 
 **`POST /schedule/{id}/rouvrir`** est ce remede : il n'ouvre pas l'edition, il
-**INVALIDE le gel** (GELE → PROGRAMME, `fichiers = NULL`, dossier fige efface) et
-le gel normal refait les fichiers au passage suivant. Trois refus, chacun avec sa
-raison EN CLAIR : pas gele (rien a rouvrir), publication en vol, et **trop pres
-du depart** — `publication_relecture_regel_minutes` (**20** = deux passages de
+**INVALIDE le gel** (GELE → PROGRAMME, `fichiers = NULL`, `elements = NULL`,
+dossier fige efface) et le gel normal refait les fichiers au passage suivant. Le
+geste lui-meme vit desormais dans `app/schedule/reouverture.py`, appele par les
+DEUX portes (le bouton et `PATCH /posts/{id}`) : deux copies de cette ecriture
+conditionnelle divergeraient, et c'est l'ecriture la plus delicate du depot.
+Trois refus, chacun avec sa raison EN CLAIR : pas gele (rien a rouvrir),
+publication en vol, et **trop pres du depart** — `publication_relecture_regel_minutes` (**20** = deux passages de
 l'agent, pour qu'un premier gel differe ne soit pas fatal). Il **EPINGLE** le
 creneau : un PROGRAMME non epingle est repris par `appliquer_arbitrage` dans les
 10 minutes, et le post qu'on vient de rouvrir pour le corriger serait remplace.
@@ -2158,6 +2162,129 @@ les chemins de `_geler` qui ecrivent une AUTRE erreur et lachent le post
 (gabarit qui ne correspond plus, post supprime) l'effacent. Ces cas font de toute
 facon perdre le post au creneau, donc la protection n'y a pas d'objet — mais
 c'est une propriete du marqueur, pas une garantie du schema.
+
+## Le controle editorial sur ce qui va partir (2026-10-04)
+
+Suite directe de la fenetre de relecture ci-dessus. Demande de l'utilisateur :
+« j'aimerais pouvoir cliquer et voir ce qui va etre poste **exactement** […] et
+pouvoir remodifier : changer le hook, voir la description et la modifier, et
+toutes les slides — en rajouter, en supprimer, les modifier. Une premiere couche
+d'automatisation est faite, et moi je peux modifier apres. »
+
+### Le defaut de fond : la liste publiee etait RECALCULEE, jamais ecrite
+
+Le post 164 (Tomorrowland) affichait **1 slide** dans la fiche. Instagram a recu
+**3 images**, dont un logo Wikipedia recadre au point que les lettres etaient
+coupees — repere **apres** publication. `posts.slides` est le BROUILLON ;
+`preparation.medias_du_carrousel` y ajoute au gel jusqu'a neuf medias de l'actu,
+et rien ne persistait le resultat.
+
+Mesure du 2026-10-04 sur la base vivante : **86 creneaux** portent des fichiers
+figes ; parmi les **48 carrousels** dont les candidats sont encore recalculables,
+**27 (56 %)** ne retombent pas sur le nombre de fichiers reellement figes. Et le
+creneau 3 annonce 5 fichiers pour 1 seul candidat recalculable : son article est
+purge. Le recalcul ne dit pas ce qui est parti, et ne le pourra jamais — d'ou la
+regle : **tant que cette liste reste calculee, aucun controle editorial n'est
+possible.**
+
+### `creneaux.elements` : le manifeste du gel (migration 0022)
+
+Le gel ECRIT desormais la liste ordonnee de ce qui part — cover comprise, medias
+de l'actu compris, **plus les elements ECARTES avec leur raison**. Une image trop
+petite ou trop eloignee du 4:5 (`images.ImageEcartee`), une video inutilisable
+retombee sur sa vignette, un carrousel plein a dix : ces decisions n'etaient que
+JOURNALISEES, donc invisibles — c'est precisement ce que l'utilisateur veut voir.
+
+- `app/publish/manifeste.py` : `Figement(noms, elements)`, ce qu'un preparateur
+  rend desormais. Les deux ENSEMBLE et jamais deux appels : le manifeste n'est
+  juste que s'il est construit au moment ou les fichiers s'ecrivent. Un
+  preparateur injecte qui ne rend qu'une liste reste accepte (`normaliser`) —
+  son manifeste vaut alors INCONNU, jamais « vide ».
+- `_recoller_fichiers` verifie l'invariant plutot que de le supposer : les
+  entrees non ecartees sont, dans l'ordre, exactement les fichiers figes.
+- Ecrit par `runner._geler` dans la MEME ecriture conditionnelle que `fichiers` :
+  les deux decrivent le meme gel et ne doivent jamais se desynchroniser.
+  Efface avec eux a la reouverture.
+- **Denormalise** : aucune reference a l'article, donc la liste survit a la purge
+  (`retention_days` = 2 j) et a un creneau devenu autonome de son article.
+  `NULL` = inconnu (creneau gele avant la migration, ou preparateur sans
+  manifeste), jamais « vide ».
+- Expose par `GET /relecture` (`DepartOut.elements`), avec `candidats` (la
+  reserve de l'editeur : actifs du post + medias autorises de l'actu) et
+  `liste_arretee`.
+
+**`GET /relecture/{id}/fichiers/{nom}`** sert le fichier fige LUI-MEME. Tout le
+reste DECRIT ce qui part ; ceci le MONTRE, avec son recadrage reel — aucune
+description n'aurait dit que le logo du post 164 etait coupe. Aucune traversee de
+chemin possible : `nom` n'est jamais construit, il est CHERCHE dans
+`creneaux.fichiers`, la liste que le gel a ecrite lui-meme.
+
+### La liste devient editable, et le re-gel est AUTOMATIQUE
+
+Choix explicite de l'utilisateur : « on modifie, le systeme refait ce qui a change
+et rien d'autre. Aucun bouton a cliquer, et l'etat affiche est toujours celui qui
+partira. » `PATCH /posts/{id}` rouvre donc le creneau LUI-MEME
+(`_regel_automatique` → `app/schedule/reouverture.rouvrir`) des qu'un champ fige
+change, au lieu du 409 qui renvoyait vers un bouton. Le bouton « Rouvrir » a
+disparu du dashboard ; `POST /schedule/{id}/rouvrir` reste, sur le meme chemin.
+
+- **Ce qui est gratuit ne passe toujours pas par la** : legende et hashtags ne
+  rouvrent RIEN (relus en base juste avant Meta). Preuve par mutation —
+  remplacer la condition de `_regel_automatique` par `if True:` laissait toute
+  la suite verte, et coutait un gel entier pour une virgule ; verrouille par
+  `tests/test_manifeste_gel.py::test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes`.
+- **Claude n'est jamais repaye** : le creneau garde son `post_id` — qui est aussi
+  la condition de l'ecriture conditionnelle.
+- **Un refus ne touche a RIEN** : publication en vol, ou moins de 20 min avant le
+  depart → 409 avec la raison, et aucune edition appliquee. L'ancien
+  comportement (editer le brouillon pendant que les fichiers figes disent autre
+  chose) etait exactement le defaut a supprimer. `variante_retenue` est validee
+  AVANT le re-gel, pour ne pas jeter des fichiers figes au profit d'un 422.
+- **Un creneau GELE est desormais `editable: true`.** Il etait « a moitie
+  editable » ; dire le contraire enverrait chercher un bouton qui n'existe plus.
+  Ce qui peut encore refuser une edition de COVER se lit dans
+  `raison_non_reouvrable`, parce que la legende, elle, reste modifiable jusqu'au
+  bout.
+
+**`posts.variants["carrousel"]["explicite"]`** (`preparation.liste_explicite`) :
+pose des que l'utilisateur arrete la liste. Le gel ne reprend alors plus ni
+`posts.assets` ni les medias de l'article — `slides` fait foi. Sans ce marqueur,
+retirer un element n'aurait AUCUN effet : le gel suivant le remettrait, et
+l'edition serait annulee en silence. Les autres filtres (visuels interdits, fond
+jamais republie, doublons) restent appliques : ce sont des REGLES du projet, pas
+une source de candidats. Ecrit en FUSION dans `variants`, jamais en bloc — sinon
+la palette et l'origine du fond disparaitraient. `MediaIn` gagne `origine` et
+`compte`, sans quoi une liste reecrite a la main perdrait la provenance de chaque
+visuel.
+
+### Au dashboard
+
+Section « Ce que Meta recevra » dans la fiche de post : la liste finale, vignettes
+= fichiers figes, un element ecarte en pointille avec sa raison en rouge, et par
+element **supprimer / monter / descendre / remplacer**, plus un selecteur
+« ajouter un visuel » alimente par `candidats`. Un seul chemin d'ecriture pour
+les cinq gestes (la liste entiere + `carrousel_explicite`).
+
+**Et la Programmation devient le poste de travail** : cliquer un creneau ouvre
+l'editeur, et chaque ligne resume « N element(s) · M ecarte(s) au gel ».
+L'utilisateur l'a dit — « l'onglet Flux d'actus ne me sert plus » —, et cet
+onglet reste pour le tri et la detection, sans qu'on soit oblige d'y passer pour
+editer. Quand la liste est arretee, les cases « Medias de l'actu » sont
+DESACTIVEES avec leur raison : elles editent le brouillon et ignorent les visuels
+retenus a la composition, donc en cocher une les ferait disparaitre de la liste
+publiee.
+
+### Anti-doublon, demontre
+
+Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur
+(`etat == GELE`, meme `post_id`), face a une reclamation d'agent qui fait
+GELE → ECHEC **committee avant** tout appel a Meta : soit l'agent passe le
+premier et notre UPDATE touche zero ligne (409), soit nous passons le premier et
+le creneau devient PROGRAMME — or `_publier` ne selectionne que `etat == GELE`.
+Aucun chemin ne mene a `media_publish` avant un nouveau gel. La course elle-meme
+est verrouillee par
+`tests/test_manifeste_gel.py::test_une_reclamation_de_l_agent_pendant_la_reouverture_fait_echouer_l_ecriture`
+(retirer la condition d'etat de l'UPDATE laissait toute la suite verte).
 
 ## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
 

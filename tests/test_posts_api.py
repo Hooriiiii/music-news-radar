@@ -1,8 +1,10 @@
 import datetime as dt
 
 import pytest
+from sqlalchemy import select
 
 from app.content.compose import CoverVariante, PostDraft
+from app.schedule.relecture import RAISON_RELECTURE
 from app.content.render import RenduSlide
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
 from app.schemas import PostOut
@@ -689,19 +691,39 @@ def _post_sur_un_creneau(db, etat, erreur=None, dans=dt.timedelta(hours=1)):
     {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**"}]},
     {"template": "kinda_reel"},
 ])
-def test_la_cover_d_un_post_gele_ne_se_modifie_pas_sans_rouvrir(client, db_session, modification):
-    """`creneaux.fichiers` PORTE la cover rendue et les medias telecharges : les
-    changer sans refaire ces fichiers publierait autre chose que ce qu'on voit.
+def test_editer_la_cover_d_un_post_gele_rouvre_le_creneau_toute_seule(
+    client, db_session, modification
+):
+    """CHANGEMENT DELIBERE du 2026-10-04 : le re-gel est AUTOMATIQUE.
 
-    Le refus nomme le remede (`POST /schedule/{id}/rouvrir`, 2026-10-04) plutot
-    que de laisser l'utilisateur devant une porte fermee -- c'est exactement la
-    fenetre ou il veut corriger."""
+    Avant, cette edition rendait 409 en nommant `POST /schedule/{id}/rouvrir` --
+    une porte que l'utilisateur devait trouver, comprendre et cliquer pour obtenir
+    ce qu'il venait de demander. Son choix : « on modifie, le systeme refait ce qui
+    a change et rien d'autre. Aucun bouton a cliquer, et l'etat affiche est
+    toujours celui qui partira. »
+
+    L'invalidation est celle du bouton, au mot pres (un seul chemin,
+    `app/schedule/reouverture.py`) : GELE -> PROGRAMME, fichiers ET manifeste
+    oublies, creneau EPINGLE (sinon l'arbitrage reprend le creneau dans les 10
+    min), `erreur` = `RAISON_RELECTURE` -- ce dernier faisant qu'un gel impossible
+    apres cette edition LIBERE le creneau au lieu d'exclure l'article a vie."""
     post = _post_sur_un_creneau(db_session, "gele")
-    reponse = client.patch(f"/posts/{post.id}", json=modification)
-    assert reponse.status_code == 409
-    assert "rouvrir" in reponse.json()["detail"]
-    db_session.refresh(post)
-    assert post.template == "kinda_post"
+    creneau = db_session.scalars(select(Creneau).where(Creneau.post_id == post.id)).one()
+    creneau.fichiers = ["abc_01.jpg"]
+    creneau.elements = [{"kind": "cover", "fichier": "abc_01.jpg", "ecarte": False}]
+    db_session.commit()
+
+    assert client.patch(f"/posts/{post.id}", json=modification).status_code == 200
+
+    db_session.refresh(creneau)
+    assert creneau.etat == EtatCreneau.PROGRAMME
+    assert creneau.fichiers is None
+    assert creneau.elements is None
+    assert creneau.epingle is True
+    assert creneau.erreur == RAISON_RELECTURE
+    # Le creneau GARDE son post : Claude n'est jamais repaye, et c'est aussi la
+    # condition de l'ecriture conditionnelle qui interdit la double publication.
+    assert creneau.post_id == post.id
 
 
 @pytest.mark.parametrize("modification", [

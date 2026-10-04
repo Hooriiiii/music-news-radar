@@ -316,6 +316,39 @@
   /* L'inconnu porte sa propre teinte, celle de la supervision : jamais celle d'un
      verdict, qui se lirait comme une promesse (regle du panneau Artistes). */
   .depart-mesures span.inconnu { color: var(--muted); border-style: dashed; }
+  /* --- La liste finale : ce que Meta recevra, element par element ------------
+     Les vignettes sont les FICHIERS FIGES eux-memes (`/relecture/{id}/fichiers/`)
+     quand ils existent : c'est la seule facon de voir le recadrage reel -- le logo
+     Wikipedia du post 164 etait coupe au point que les lettres manquaient, et
+     aucune description ne l'aurait dit. */
+  .elements-liste { display: flex; flex-direction: column; gap: 8px; }
+  .element-ligne { display: flex; align-items: center; gap: 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .element-ligne img, .element-ligne video { width: 54px; height: 68px; object-fit: cover;
+    border-radius: 6px; background: var(--bg); flex: none; }
+  .element-ligne .rang { font-family: var(--police-titre); font-weight: 600; font-size: 12px;
+    color: var(--muted); width: 18px; text-align: right; flex: none; }
+  .element-ligne .quoi { flex: 1; min-width: 0; font-size: 12.5px; }
+  .element-ligne .quoi .d2 { color: var(--muted); font-size: 11.5px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; }
+  .element-ligne .gestes { display: flex; gap: 4px; flex: none; flex-wrap: wrap;
+    justify-content: flex-end; }
+  .element-ligne .gestes button { border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 6px; padding: 3px 7px; cursor: pointer; font-size: 12px; }
+  .element-ligne .gestes button:disabled { opacity: .4; cursor: not-allowed; }
+  /* ECARTE : pointille et gris, pas rouge. Le gel l'a refuse pour une raison
+     legitime (trop petite, carrousel plein) -- ce n'est pas une panne, c'est
+     l'information qui manquait. Seul le MOTIF est en rouge : c'est lui qu'on lit. */
+  .element-ligne.ecarte { border-style: dashed; opacity: .8; }
+  .element-ligne .motif { color: var(--alerte); }
+  .element-ligne.cover { border-left: 3px solid var(--accent); }
+  @media (max-width: 560px) {
+    /* Six gestes sur une ligne de telephone ne tiennent pas : la rangee passe en
+       colonne, les gestes sous la description, et la vignette garde sa place. */
+    .element-ligne { flex-wrap: wrap; }
+    .element-ligne .quoi { flex-basis: 100%; order: 3; }
+    .element-ligne .gestes { flex-basis: 100%; order: 4; justify-content: flex-start; }
+  }
   .detail-actions button, .detail-actions a { border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 12.5px;
     text-decoration: none; }
@@ -1373,6 +1406,10 @@ async function loadSchedulePanel() {
   chargerMode();
   chargerOffreReels();
   chargerReels();
+  // Ce qui partira, par post. L'utilisateur travaille depuis CE panneau (« l'onglet
+  // Flux d'actus ne me sert plus ») : il doit y voir le nombre d'éléments figés et
+  // pouvoir ouvrir l'éditeur sans passer par un autre onglet.
+  await chargerDeparts();
   let creneaux;
   try {
     const reponse = await fetch("/schedule");
@@ -1428,14 +1465,37 @@ async function loadSchedulePanel() {
     // Les identifiants servent, et servent MIEUX en liens : `article_id`
     // mene a l'actu, `post_id` ouvre sa fiche, `ig_media_id` ouvre la
     // publication. Ils restent lisibles et recopiables pour « Remplacer ».
+    // Ce qui partira, résumé sur la ligne : combien d'éléments, et combien le gel
+    // a écartés. C'est l'information qui manquait — le post 164 annonçait 1 slide
+    // et Instagram en a reçu 3. `null` = pas encore gelé : on l'écrit, on ne
+    // suppose rien.
+    const depart = departsParPost ? departsParPost.get(c.post_id) : null;
+    const elements = depart && depart.elements;
+    const ecartes = elements ? elements.filter((e) => e.ecarte).length : 0;
     poserParties(row.querySelector(".sub"), [
       `créneau ${c.id}`,
       c.article_id != null ? renvoiArticle(c.article_id, c.article_url) : null,
       c.post_id != null ? renvoiPost(c.post_id) : null,
       c.ig_media_id ? renvoiInstagram(c.ig_media_id) : null,
+      elements
+        ? `${elements.filter((e) => !e.ecarte).length} élément(s)`
+          + (ecartes ? ` · ${ecartes} écarté(s) au gel` : "")
+        : null,
       c.relevance != null ? `pertinence ${c.relevance}` : null,
       c.epingle ? "📌 épinglé" : null,
     ]);
+    // Cliquer la ligne OUVRE ce qui va partir, et le rend modifiable. L'éditeur
+    // vivait dans l'onglet Posts seulement, et il fallait y aller à la main.
+    if (c.post_id != null) {
+      row.style.cursor = "pointer";
+      row.title = "Voir et modifier ce qui va partir";
+      row.onclick = (evenement) => {
+        // Les boutons d'action de la ligne (épingler, remplacer, décaler, sauter)
+        // et les liens ne doivent pas ouvrir la fiche par-dessus leur effet.
+        if (evenement.target.closest("button, a")) return;
+        ouvrirPost(c.post_id);
+      };
+    }
     const formatPill = row.querySelector(".format-pill");
     formatPill.classList.add(c.format);
     formatPill.textContent = FORMATS_CRENEAU[c.format] || c.format;
@@ -1772,6 +1832,72 @@ async function ouvrirPost(postId) {
   renderPostDetail(post, article, covers);
 }
 
+// --- La liste finale : ce que Meta recevra ----------------------------------
+//
+// LE DEFAUT QUE CETTE SECTION COMBLE, mesure. Le post 164 (Tomorrowland)
+// affichait 1 slide dans la fiche, et Instagram a recu 3 images -- dont un logo
+// Wikipedia recadre au point que les lettres etaient coupees, repere APRES
+// publication. `posts.slides` est le BROUILLON ; le gel y ajoutait jusqu'a neuf
+// medias de l'actu sans que rien ne persiste le resultat. Sur la base vivante,
+// 27 des 48 carrousels geles recalculables ne retombent pas sur le nombre de
+// fichiers reellement figes -- la liste publiee etait donc inconnaissable.
+//
+// Depuis la migration 0022, le gel l'ECRIT (`creneaux.elements`). Cette section
+// la montre telle quelle, vignettes = FICHIERS FIGES quand ils existent, et la
+// rend modifiable : supprimer, reordonner, remplacer, ajouter.
+const ORIGINES_ELEMENT = {
+  article: "📰 photo de l'actu",
+  artiste: "🎤 compte d'un artiste suivi",
+  compte: "📸 compte qui a publié l'actu",
+  web: "🌐 image trouvée sur le web",
+  kinda: "🎨 aplat Kinda",
+  api: "🎬 vidéo donnée par l'API Meta",
+  ytdlp: "🎬 vidéo récupérée par yt-dlp",
+};
+
+// Les elements MEDIA sur lesquels l'edition porte. La cover n'en est pas : elle
+// se modifie plus haut (variantes, fond), et elle part toujours en premier.
+//
+// Priorite au MANIFESTE du gel -- c'est ce qui part REELLEMENT. A defaut (creneau
+// pas encore gele, ou gele avant la migration 0022), on retombe sur les slides du
+// brouillon, en le DISANT : « inconnu, jamais vert ».
+function elementsMedia(post, depart) {
+  if (depart && depart.elements) return depart.elements.filter((e) => e.kind === "media");
+  return (post.slides || []).slice(1).filter((s) => s.kind === "media").map((s) => ({
+    kind: "media", type: s.type, source_url: s.url, origine: s.origine || null,
+    compte: s.compte || null, fichier: null, ecarte: false, raison: null,
+  }));
+}
+
+// Un element redevient une SLIDE. L'enrichissement par la reserve est ce qui
+// garde les dimensions, la duree et la vignette : le manifeste, denormalise pour
+// survivre a la purge, ne porte que l'essentiel.
+function slideDepuisElement(element, candidats) {
+  const connu = (candidats || []).find((c) => c.url === element.source_url);
+  if (connu) return { kind: "media", ...connu };
+  return {
+    kind: "media", type: element.type || "photo", url: element.source_url,
+    origine: element.origine, compte: element.compte,
+  };
+}
+
+// La vignette d'un element : le FICHIER FIGE d'abord (ce que Meta recevra, avec
+// son recadrage reel), la source ensuite, rien si les deux manquent. Une copie
+// locale (`file://`) n'est pas affichable par un navigateur : on ne l'essaie pas.
+function vignetteElement(element, depart) {
+  if (element.fichier && depart) {
+    const url = `/relecture/${depart.creneau_id}/fichiers/${encodeURIComponent(element.fichier)}`;
+    return element.fichier.endsWith(".mp4")
+      ? `<video src="${url}" muted preload="metadata"></video>`
+      : `<img src="${url}" loading="lazy" onerror="this.remove()">`;
+  }
+  const source = element.source_url || "";
+  if (/^https?:/.test(source)) {
+    return `<img src="${escapeHtml(source)}" loading="lazy" onerror="this.remove()">`;
+  }
+  return "";
+}
+
 function renderPostDetail(post, article, covers) {
   const cover = (post.slides || [])[0] || {};
   const variantes = (post.variants && post.variants.variantes) || [];
@@ -1807,6 +1933,12 @@ function renderPostDetail(post, article, covers) {
 
   const mediaList = (article && article.media) || [];
   const slidesMedia = (post.slides || []).slice(1);
+  // Liste ARRÊTÉE à la main : la section « Ce que Meta recevra », plus bas, fait
+  // foi. Ces cases-ci éditent le BROUILLON et ne connaissent pas les visuels
+  // retenus à la composition — en cocher une les ferait disparaître de la liste
+  // publiée. On les désactive, en imprimant la raison (règle de la refonte : un
+  // contrôle désactivé dit toujours pourquoi).
+  const listeArretee = !!(((post.variants || {}).carrousel || {}).explicite);
   const mediaHtml = mediaList.length ? mediaList.map((m, i) => {
     const coche = slidesMedia.some((s) => s.url === m.url);
     const dims = (m.width && m.height) ? `${m.width}×${m.height}px` : "dimensions inconnues";
@@ -1823,9 +1955,11 @@ function renderPostDetail(post, article, covers) {
     const sansUrl = m.type === "video" && !m.url;
     // Decision du 2026-09-17 : jamais l'image ni la video d'un compte media.
     const interdit = !!(article && article.visuels_interdits);
-    const desactivee = tropLongue || sansUrl || interdit;
+    const desactivee = tropLongue || sansUrl || interdit || listeArretee;
     const raison = interdit
       ? "visuel d'un compte média : interdit"
+      : listeArretee
+      ? "liste arrêtée : modifiez-la dans « Ce que Meta recevra », plus bas"
       : tropLongue
       ? `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`
       : sansUrl
@@ -1924,28 +2058,111 @@ function renderPostDetail(post, article, covers) {
       : depart.deborde
         ? `<span class="limite">⚠ la cover déborde et partira ainsi</span>`
         : `<span>cover mesurée : elle tient</span>`);
-    // Le bouton n'apparait QUE sur un creneau gele : ailleurs il n'y a rien a
-    // rouvrir, et un controle desactive sur une porte deja ouverte n'imprime pas
-    // une raison utile, il encombre. La regle « un controle desactive imprime sa
-    // raison » suppose que le controle soit PERTINENT.
-    const boutonRouvrir = depart.etat === "gele"
-      ? `
-      <div class="detail-actions">
-        <button id="btn-rouvrir" ${depart.reouvrable ? "" : "disabled"}>↻ Rouvrir pour modification</button>
-      </div>
-      ${depart.reouvrable
-        ? `<div class="reel-reason">Rouvrir jette les fichiers figés ; l'agent les refait au passage`
-          + ` suivant (10 min). La légende et les hashtags, eux, se modifient sans rouvrir.</div>`
-        : `<div class="reel-reason">${escapeHtml(depart.raison_non_reouvrable || "")}</div>`}`
-      : "";
+    // PLUS DE BOUTON « Rouvrir » (2026-10-04). Le re-gel est AUTOMATIQUE : toute
+    // edition de la cover ou des slides invalide les fichiers figés toute seule, et
+    // l'agent les refait au passage suivant. L'utilisateur devait sinon trouver,
+    // comprendre et cliquer un bouton pour obtenir ce qu'il venait de demander.
+    //
+    // Ce qu'on garde, c'est la RAISON quand l'édition va être refusée — règle de la
+    // refonte : un contrôle indisponible imprime pourquoi, jamais un bouton gris et
+    // muet. Dire à l'avance « trop près du départ » évite de découvrir le refus
+    // après avoir tapé.
+    const noteRegel = depart.etat !== "gele"
+      ? ""
+      : depart.reouvrable
+        ? `<div class="reel-reason">Créneau gelé : toute modification de la cover ou des`
+          + ` éléments refait les fichiers figés automatiquement (l'agent repasse dans les`
+          + ` 10 min). La légende et les hashtags, eux, sont relus juste avant l'envoi.</div>`
+        : `<div class="reel-reason motif">⚠ ${escapeHtml(depart.raison_non_reouvrable || "")}`
+          + ` — la légende et les hashtags restent modifiables.</div>`;
     departSection = `
       <div class="section-title">Ce qui va partir — ${escapeHtml(fmtDate(depart.publier_a) || "?")}`
       + ` · ${escapeHtml(minutesLisibles(depart.minutes_restantes))}</div>
       <div class="depart-apercu">${escapeHtml(depart.legende_publiee)}</div>
       <div class="depart-mesures">${mesures.join("")}</div>
       ${depart.raison_non_editable ? `<div class="reel-reason">${escapeHtml(depart.raison_non_editable)}</div>` : ""}
-      ${boutonRouvrir}`;
+      ${noteRegel}`;
   }
+
+  // --- La liste finale des éléments -----------------------------------------
+  const elementsListe = elementsMedia(post, depart);
+  const reserve = (depart && depart.candidats) || [];
+  const dejaDansLaListe = new Set(elementsListe.map((e) => e.source_url));
+  // Modifiable ? Deux refus possibles, et ils ne portent pas sur la meme chose :
+  // la publication EN VOL ferme tout (`editable`), et un créneau gelé trop près de
+  // son départ ne peut plus refaire ses fichiers (`reouvrable`) — la légende, elle,
+  // reste modifiable jusqu'au bout. Les deux impriment leur raison plus haut.
+  const editableListe = !depart
+    || (depart.editable && (depart.etat !== "gele" || depart.reouvrable));
+  const optionsReserve = reserve.map((c, i) => {
+    const dims = c.width && c.height ? ` ${c.width}×${c.height}` : "";
+    const marque = dejaDansLaListe.has(c.url) ? " (déjà dans la liste)" : "";
+    return `<option value="${i}">${escapeHtml(`${c.type}${dims} · ${c.compte || c.origine || "?"}${marque}`)}</option>`;
+  }).join("");
+  const lignesElements = [
+    // La cover d'abord, toujours : elle n'est ni supprimable ni déplaçable, et le
+    // dire explicitement vaut mieux que de l'omettre de la liste.
+    `<div class="element-ligne cover">
+       <span class="rang">1</span>
+       ${vignetteElement(
+          (depart && depart.elements && depart.elements.find((e) => e.kind === "cover")) || {},
+          depart)}
+       <div class="quoi">Cover Kinda
+         <div class="d2">${escapeHtml(ORIGINES_ELEMENT[depart && depart.fond_origine] || "fond inconnu")}
+           — se modifie plus haut (variantes, image de fond)</div>
+       </div>
+     </div>`,
+    // Le rang affiché est la place CHEZ META, donc il ne compte que les éléments
+    // qui partent : un écarté porte « — ». Numéroter les écartés avec les autres
+    // ferait croire que le carrousel en a un de plus qu'il n'en aura.
+    ...elementsListe.map((e, i) => `
+      <div class="element-ligne${e.ecarte ? " ecarte" : ""}" data-rang="${i}">
+        <span class="rang">${e.ecarte ? "—"
+          : elementsListe.slice(0, i).filter((x) => !x.ecarte).length + 2}</span>
+        ${vignetteElement(e, depart)}
+        <div class="quoi">${escapeHtml(e.type || "média")}${e.ecarte ? " — écarté au gel" : ""}
+          <div class="d2">${escapeHtml(ORIGINES_ELEMENT[e.origine] || e.origine || "origine inconnue")}
+            ${e.compte ? "· " + escapeHtml(e.compte) : ""}</div>
+          ${e.raison ? `<div class="d2 motif">${escapeHtml(e.raison)}</div>` : ""}
+        </div>
+        <div class="gestes">
+          <button class="el-haut" title="Monter d'un rang" ${i === 0 || !editableListe ? "disabled" : ""}>↑</button>
+          <button class="el-bas" title="Descendre d'un rang"
+            ${i === elementsListe.length - 1 || !editableListe ? "disabled" : ""}>↓</button>
+          <button class="el-remplacer" title="Remplacer par un autre visuel"
+            ${!reserve.length || !editableListe ? "disabled" : ""}>⇄</button>
+          <button class="el-retirer" title="Retirer de la liste" ${editableListe ? "" : "disabled"}>✕</button>
+        </div>
+        <select class="el-choix" hidden><option value="">— remplacer par —</option>${optionsReserve}</select>
+      </div>`),
+  ].join("");
+  // « Inconnu, jamais vert » : avant le gel, la liste affichée est le BROUILLON,
+  // pas ce qui partira — le gel y ajoutera les médias de l'actu. On le dit.
+  const avisListe = !depart
+    ? ""
+    : depart.elements
+      ? `<div class="reel-reason">Liste écrite au gel : c'est exactement ce que Meta a reçu`
+        + ` ou recevra, dans cet ordre.</div>`
+      : depart.liste_arretee
+        ? `<div class="reel-reason">Pas encore gelé — c'est cette liste, arrêtée à la main, que le`
+          + ` gel figera telle quelle.</div>`
+        : `<div class="reel-reason">Pas encore gelé — liste du brouillon. Le gel y ajoutera les`
+          + ` médias de l'actu, sauf si vous l'arrêtez ici (toute modification l'arrête).</div>`;
+  const sectionElements = !depart ? "" : `
+      <div class="section-title">Ce que Meta recevra — ${elementsListe.filter((e) => !e.ecarte).length + 1} élément(s)</div>
+      ${avisListe}
+      ${depart.liste_arretee && depart.elements
+        ? `<div class="reel-reason">Liste arrêtée à la main : le gel ne reprend plus ni les visuels`
+          + ` retenus à la composition ni les médias de l'actu.</div>`
+        : ""}
+      <div class="elements-liste" id="elements-liste">${lignesElements}</div>
+      <div class="bg-field">
+        <select id="el-ajouter" ${reserve.length && editableListe ? "" : "disabled"}>
+          <option value="">— ajouter un visuel —</option>${optionsReserve}
+        </select>
+      </div>
+      ${reserve.length ? "" : `<div class="reel-reason">Aucun visuel disponible à ajouter :`
+        + ` l'actu est purgée ou ses visuels sont interdits (compte média).</div>`}`;
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -1991,6 +2208,7 @@ function renderPostDetail(post, article, covers) {
         ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
       </div>
       ${departSection}
+      ${sectionElements}
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
         <button id="btn-approve">Valider le statut</button>
@@ -2148,32 +2366,70 @@ function renderPostDetail(post, article, covers) {
     };
   }
 
-  // --- Rouvrir un creneau gele ---
+  // --- Éditer la liste finale ---
   //
-  // Deux `try` DISTINCTS, meme motif que `basculerTemplate` : la reouverture est
-  // persistee cote serveur meme si le re-rendu de la fiche echoue, et l'UI ne
-  // doit pas le cacher. Elle ne republie RIEN et ne peut pas doubler une
-  // publication : le creneau passe GELE -> PROGRAMME par ecriture
-  // CONDITIONNELLE, et `_publier` ne selectionne que les creneaux GELE.
-  const btnRouvrir = detailEl.querySelector("#btn-rouvrir");
-  if (btnRouvrir && depart && depart.reouvrable) {
-    btnRouvrir.onclick = async () => {
-      if (!confirm("Rouvrir ce créneau ? Les fichiers déjà figés sont jetés ; l'agent les refait"
-          + " au passage suivant (environ 10 minutes), puis publie à l'heure prévue.")) return;
-      try {
-        const reponse = await fetch(`/schedule/${depart.creneau_id}/rouvrir`, { method: "POST" });
-        if (!reponse.ok) throw new Error(await reponse.text());
-      } catch (erreur) {
-        alert("Échec de la réouverture : " + erreur.message);
-        return;
-      }
+  // Un SEUL chemin d'écriture pour les quatre gestes (retirer, monter, descendre,
+  // remplacer, ajouter) : la liste entière repart avec `carrousel_explicite`, qui
+  // dit au gel de ne plus reprendre ni les visuels de la composition ni les médias
+  // de l'actu. Sans ce marqueur, retirer un élément n'aurait aucun effet — le gel
+  // suivant le remettrait, et l'édition serait annulée en silence.
+  //
+  // Le RE-GEL est automatique côté serveur : `PATCH /posts/{id}` invalide les
+  // fichiers figés lui-même (`app/schedule/reouverture.py`). Aucun bouton ici, et
+  // aucune double publication possible — l'écriture est conditionnelle sur
+  // (état GELÉ, même post), et `_publier` ne sélectionne que des créneaux GELÉS.
+  const ecrireListe = async (medias) => {
+    try {
+      const updated = await enregistrerPost(post.id, {
+        slides: [cover, ...medias],
+        carrousel_explicite: true,
+      });
+      // La liste figée vient de changer : sans ce rechargement, la section
+      // montrerait l'ancien manifeste — exactement l'écart qu'elle supprime.
       await chargerDeparts();
-      let rafraichi = post;
-      try {
-        rafraichi = await (await fetch(`/posts/${post.id}`)).json();
-      } catch { /* la fiche reste sur ce qu'on a : la reouverture, elle, est faite */ }
-      renderPostDetail(rafraichi, article, covers);
+      renderPostDetail(updated, article, covers);
       if (!document.getElementById("schedule-panel").hidden) loadSchedulePanel();
+    } catch (erreur) {
+      alert("Échec de la mise à jour de la liste : " + erreur.message);
+    }
+  };
+  const slidesCourantes = () => elementsListe.map((e) => slideDepuisElement(e, reserve));
+  const zoneElements = detailEl.querySelector("#elements-liste");
+  if (zoneElements) {
+    for (const ligne of zoneElements.querySelectorAll(".element-ligne[data-rang]")) {
+      const rang = Number(ligne.dataset.rang);
+      ligne.querySelector(".el-retirer").onclick = () => {
+        const medias = slidesCourantes();
+        medias.splice(rang, 1);
+        ecrireListe(medias);
+      };
+      ligne.querySelector(".el-haut").onclick = () => {
+        const medias = slidesCourantes();
+        [medias[rang - 1], medias[rang]] = [medias[rang], medias[rang - 1]];
+        ecrireListe(medias);
+      };
+      ligne.querySelector(".el-bas").onclick = () => {
+        const medias = slidesCourantes();
+        [medias[rang], medias[rang + 1]] = [medias[rang + 1], medias[rang]];
+        ecrireListe(medias);
+      };
+      // Le choix est un `select` RÉVÉLÉ et non une boîte de dialogue : la réserve
+      // peut porter dix visuels, qu'un `prompt` numéroté rendrait illisibles.
+      const choix = ligne.querySelector(".el-choix");
+      ligne.querySelector(".el-remplacer").onclick = () => { choix.hidden = !choix.hidden; };
+      choix.onchange = () => {
+        if (choix.value === "") return;
+        const medias = slidesCourantes();
+        medias[rang] = { kind: "media", ...reserve[Number(choix.value)] };
+        ecrireListe(medias);
+      };
+    }
+  }
+  const ajouter = detailEl.querySelector("#el-ajouter");
+  if (ajouter) {
+    ajouter.onchange = () => {
+      if (ajouter.value === "") return;
+      ecrireListe([...slidesCourantes(), { kind: "media", ...reserve[Number(ajouter.value)] }]);
     };
   }
 

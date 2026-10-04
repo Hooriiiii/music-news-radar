@@ -34,8 +34,10 @@ from app.content.render import _USER_AGENT, render_post
 from app.content.teinte import palette_du_post
 from app.content.urls import url_propre
 from app.content.video import FORMAT_REEL, AssemblageIndisponible, assembler_reel, exiger_outils, sonder
-from app.content.visuels import ORIGINE_ARTICLE, origine_interdite, urls_interdites
+from app.content.visuels import ORIGINE_ARTICLE, fond_de_cover, origine_interdite, urls_interdites
+from app.publish import manifeste
 from app.publish.images import ImageInexploitable, en_jpeg
+from app.publish.manifeste import Figement
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, verifier_fond
 
 MO = 1024 * 1024
@@ -292,7 +294,15 @@ def preparer_reel(
     telecharger_image=None,
     agrandir=None,
     binaire_disponible=None,
-) -> list[str]:
+) -> Figement:
+    """Les deux fichiers figes (video, cover) ET le manifeste de ce qui part.
+
+    Un reel n'a pas de liste a composer : la video et sa couverture, dans cet
+    ordre. Le manifeste l'ecrit quand meme, pour la meme raison que le
+    carrousel -- l'article est purge a deux jours, et « ce qui est parti » doit
+    rester lisible sans lui, avec l'origine de la video (API Meta ou yt-dlp) que
+    rien ne gardait nulle part.
+    """
     if post.template != "kinda_reel":
         raise PreparationImpossible(f"le post est au gabarit {post.template}, pas kinda_reel")
     if not getattr(post, "credit", None):
@@ -384,4 +394,27 @@ def preparer_reel(
     noms = [f"{prefixe}_reel.mp4", f"{prefixe}_cover.jpg"]
     (dossier / noms[0]).write_bytes(reel)
     (dossier / noms[1]).write_bytes(cover)
-    return noms
+    return Figement(
+        noms=noms,
+        elements=[
+            manifeste.element(
+                kind=manifeste.MEDIA,
+                type=VIDEO,
+                # `API` ou `YTDLP` : d'ou la video a REELLEMENT ete tiree. Meta
+                # omet `media_url` des reels a musique protegee, et savoir
+                # lequel des deux chemins a servi n'etait visible que dans les
+                # logs.
+                origine=origine[0],
+                source_url=origine[1],
+                compte=getattr(post, "credit", None),
+                fichier=noms[0],
+            ),
+            manifeste.element(
+                kind=manifeste.COVER,
+                type="photo",
+                origine=((getattr(post, "variants", None) or {}).get("fond") or {}).get("origine"),
+                source_url=fond_de_cover(post),
+                fichier=noms[1],
+            ),
+        ],
+    )

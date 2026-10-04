@@ -15,14 +15,17 @@ ecriture ici, sauf la reouverture explicite qui vit dans `app/api/schedule.py`.
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.content.legende import HASHTAGS_MAX, LEGENDE_MARGE, credit_de_compte, normaliser_hashtags, texte_legende
 from app.content.visuels import fond_de_cover
 from app.db import get_db
 from app.models import Article, Creneau, EtatCreneau, Post
+from app.publish.preparation import candidats_editables, liste_explicite
 from app.schedule.relecture import RAISON_RELECTURE, regel_possible
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.schedule.store import utc
@@ -58,17 +61,20 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
     en_vol = _en_vol(creneau, maintenant)
     gele = creneau.etat == EtatCreneau.GELE
 
-    # Ce qui empeche d'editer, dit en clair. L'ordre compte : en vol est plus
-    # strict que gele (en vol, meme la legende est deja lue et partie).
-    # Le francais s'ecrit avec ses accents, y compris dans un message d'API :
-    # ces phrases-ci s'affichent telles quelles au dashboard (lecon du 2026-09-19
-    # sur les legendes publiees en ASCII).
-    if en_vol:
-        raison_edition = "publication en cours chez Meta : plus rien ne se modifie"
-    elif gele:
-        raison_edition = "gelé : légende et hashtags modifiables, la cover demande de rouvrir"
-    else:
-        raison_edition = None
+    # Ce qui empeche d'editer, dit en clair.
+    #
+    # UN SEUL CAS DEPUIS LE 2026-10-04, la publication EN VOL. Un creneau GELE
+    # etait auparavant « a moitie editable » (legende oui, cover non, il fallait
+    # cliquer « Rouvrir ») : le re-gel est desormais AUTOMATIQUE, donc un creneau
+    # gele se modifie entierement et le dire autrement enverrait l'utilisateur
+    # chercher un bouton qui n'existe plus. Ce qui PEUT encore refuser une edition
+    # de cover -- trop pres du depart -- se lit dans `raison_non_reouvrable`, parce
+    # que la legende, elle, reste modifiable jusqu'au bout.
+    #
+    # Le francais s'ecrit avec ses accents, y compris dans un message d'API : ces
+    # phrases-ci s'affichent telles quelles au dashboard (lecon du 2026-09-19 sur
+    # les legendes publiees en ASCII).
+    raison_edition = "publication en cours chez Meta : plus rien ne se modifie" if en_vol else None
 
     if en_vol:
         raison_reouverture = raison_edition
@@ -77,7 +83,7 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
     elif not regel_possible(publier_a, maintenant):
         raison_reouverture = (
             "trop près de l'heure de départ pour refaire les fichiers figés : "
-            "rouvrir maintenant ferait manquer la publication"
+            "modifier la cover ou les éléments maintenant ferait manquer la publication"
         )
     else:
         raison_reouverture = None
@@ -112,6 +118,13 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
         fond=fond_de_cover(post),
         fond_origine=((post.variants or {}).get("fond") or {}).get("origine"),
         elements_figes=len(creneau.fichiers) if creneau.fichiers else None,
+        # Le manifeste du gel, tel qu'il a ete ECRIT -- jamais recalcule. C'est
+        # toute la difference : un recalcul ne retombe pas sur ce qui est parti
+        # (27 des 48 carrousels geles mesurables, le 2026-10-04), et il ne le peut
+        # plus du tout une fois l'article purge.
+        elements=creneau.elements,
+        candidats=candidats_editables(post, article),
+        liste_arretee=liste_explicite(post),
         deborde=deborde,
         editable=raison_edition is None,
         raison_non_editable=raison_edition,
@@ -145,6 +158,42 @@ def lister_departs(db: Session = Depends(get_db)):
         # rien n'en partira, il appartient au tableau de la file, pas a la relecture.
         if creneau.etat != EtatCreneau.ECHEC or _en_vol(creneau, maintenant)
     ]
+
+
+# Ce qu'un fichier fige peut etre, et rien d'autre : le gel n'ecrit que des JPEG
+# et des MP4 (`preparation.py`, `preparation_reel.py`).
+TYPES_FIGES = {".jpg": "image/jpeg", ".mp4": "video/mp4"}
+
+
+@router.get("/relecture/{creneau_id}/fichiers/{nom}")
+def servir_fichier_fige(creneau_id: int, nom: str, db: Session = Depends(get_db)):
+    """Le fichier fige lui-meme, tel que Meta le recevra.
+
+    POURQUOI CET ENDPOINT. « Je veux voir ce qui va etre poste EXACTEMENT. » Tout
+    le reste de la relecture decrit ce qui part ; ceci le MONTRE -- la cover rendue
+    par Chromium, les photos recadrees en 1080x1350, les videos transcodees. Le
+    logo Wikipedia du post 164 etait coupe au point que les lettres manquaient :
+    aucune description ne l'aurait dit, l'image si.
+
+    AUCUNE TRAVERSEE DE CHEMIN POSSIBLE : `nom` n'est pas construit, il est
+    CHERCHE dans `creneaux.fichiers` -- la liste que le gel a ecrite lui-meme. Un
+    nom absent de cette liste rend 404 sans jamais toucher au disque, donc ni
+    `..`, ni chemin absolu, ni lien symbolique n'ouvrent quoi que ce soit.
+
+    Lire ne retient RIEN : aucune ecriture, aucun verrou, aucun retard. Le dossier
+    est de toute facon efface des que le creneau est termine (`runner._menage`).
+    """
+    creneau = db.get(Creneau, creneau_id)
+    if creneau is None:
+        raise HTTPException(status_code=404, detail="Creneau introuvable")
+    if nom not in (creneau.fichiers or []):
+        raise HTTPException(status_code=404, detail="Ce fichier n'est pas fige sur ce creneau")
+    chemin = settings.publication_dir / str(creneau.id) / nom
+    if not chemin.is_file():
+        # Le gel a eu lieu mais le dossier a ete efface (menage, reouverture) : le
+        # dire, plutot qu'une image cassee sans explication.
+        raise HTTPException(status_code=404, detail="Fichier fige absent du disque")
+    return FileResponse(chemin, media_type=TYPES_FIGES.get(chemin.suffix, "application/octet-stream"))
 
 
 def creneaux_a_relire(db: Session, maintenant: dt.datetime) -> list[tuple[Creneau, Post]]:

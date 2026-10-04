@@ -81,6 +81,7 @@ from app.content.visuels import (
 )
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
 from app.publish.hosting import HebergementIndisponible
+from app.publish.manifeste import normaliser as normaliser_figement
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
 from app.publish.preparation_reel import ReelInadapte
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
@@ -841,7 +842,7 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
             continue
         try:
-            noms = preparer(post, article, _dossier(creneau))
+            figement = normaliser_figement(preparer(post, article, _dossier(creneau)))
         except PreparationDifferee as exc:
             # Pause ou budget de yt-dlp : le creneau attend le passage suivant.
             # Ni exclusion ni notification (la panne l'a deja ete, une fois), et
@@ -909,7 +910,13 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             continue
         if _ecrire_si(
             db, creneau, attendu,
-            fichiers=noms, etat=EtatCreneau.GELE, gele_le=maintenant, erreur=None,
+            fichiers=figement.noms,
+            # Le MANIFESTE, ecrit dans la meme ecriture CONDITIONNELLE que les
+            # noms de fichiers : les deux decrivent le meme gel et ne doivent
+            # jamais pouvoir se desynchroniser. `None` quand le preparateur ne le
+            # rend pas (preparateur injecte) : inconnu, jamais une liste inventee.
+            elements=figement.elements,
+            etat=EtatCreneau.GELE, gele_le=maintenant, erreur=None,
         ):
             rapport.geles += 1
     return exclusions

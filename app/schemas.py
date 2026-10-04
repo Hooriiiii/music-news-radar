@@ -189,6 +189,14 @@ class MediaIn(BaseModel):
     duration_ms: int | None = None
     width: int | None = None
     height: int | None = None
+    # La PROVENANCE, portee par la slide depuis que la liste publiee est editable
+    # (`PostUpdate.carrousel_explicite`). Sans ces deux champs, une liste reecrite
+    # a la main perdrait l'origine (`article` | `artiste`) et le compte credite de
+    # chaque visuel : le manifeste du gel annoncerait alors « photo de l'actu » sur
+    # une photo pechee chez un artiste suivi. Facultatifs -- les slides posees
+    # avant cette tache n'en ont pas, et « inconnu » est une reponse honnete.
+    origine: str | None = None
+    compte: str | None = None
 
 
 # `kind` discrimine : Pydantic route chaque entree vers CoverIn ou MediaIn selon
@@ -241,6 +249,17 @@ class PostUpdate(BaseModel):
     # Ce controle-la reste donc dans l'endpoint.
     template: str | None = None
     variante_retenue: int | None = None
+    # L'utilisateur a ARRETE la liste des elements : a partir de la, le gel ne
+    # reprend plus ni `posts.assets` ni les medias de l'article -- `slides` fait
+    # foi (`preparation.liste_explicite`). Sans ce marqueur, retirer un element de
+    # la liste finale n'aurait aucun effet : le gel suivant le reprendrait, et
+    # l'edition serait annulee en silence.
+    #
+    # Un BOOLEEN et non un simple effet de bord de `slides` : les cases a cocher
+    # « Medias de l'actu » ecrivent `slides` elles aussi, mais sur le BROUILLON --
+    # leur donner le sens « liste definitive » changerait leur comportement sans
+    # que personne ne l'ait demande.
+    carrousel_explicite: bool | None = None
 
     @field_validator("template")
     @classmethod
@@ -490,6 +509,25 @@ class DepartOut(BaseModel):
     # Nombre d'elements du carrousel une fois geles (cover comprise). `None`
     # avant le gel : on ne devine pas ce que le gel va ecarter.
     elements_figes: int | None = None
+    # LE MANIFESTE du gel (`creneaux.elements`, migration 0022) : la liste
+    # ordonnee de ce qui part -- cover comprise, medias de l'actu compris --, plus
+    # les elements ECARTES avec leur raison. C'est la reponse a « qu'est-ce qui va
+    # etre poste exactement », que personne ne pouvait obtenir : le post 164
+    # affichait 1 slide quand Instagram en recevait 3.
+    #
+    # `None` = pas encore gele, ou creneau gele avant la migration : inconnu,
+    # jamais une liste reconstituee. Un recalcul ne retomberait pas dessus (27 des
+    # 48 carrousels geles mesures le 2026-10-04) et le pourrait d'autant moins que
+    # l'article est purge a deux jours.
+    elements: list[dict] | None = None
+    # Ce que l'editeur propose en remplacement ou en ajout : tout visuel
+    # disponible et AUTORISE pour ce post (actifs retenus a la composition +
+    # medias de l'actu quand elle est encore en base). Le dashboard n'a ainsi pas
+    # a recroiser deux reponses pour savoir ce qu'il peut offrir.
+    candidats: list[dict] = Field(default_factory=list)
+    # La liste a-t-elle ete ARRETEE a la main ? Si oui, le gel ne reprend plus
+    # ni les actifs ni les medias de l'actu : les slides font foi.
+    liste_arretee: bool = False
     # La cover deborde-t-elle ? `None` = aucun rendu ne l'a mesure (inconnu).
     deborde: bool | None = None
     # Editable maintenant ? Et, sinon, POURQUOI -- un controle desactive

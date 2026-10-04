@@ -17,6 +17,7 @@ from app.config import settings
 from app.content.legende import texte_legende
 from app.db import BaseInjoignable, SessionLocal, attendre_base
 from app.models import Article, Post
+from app.publish.manifeste import normaliser
 from app.publish.preparation import preparer_fichiers
 from app.publish.preparation_reel import preparer_reel
 from app.publish.publier import publier_fichiers, publier_reel
@@ -42,11 +43,20 @@ def main() -> None:
         try:
             if post.template == "kinda_reel":
                 recuperer = RecuperateurYtdlp() if settings.publication_reel_ytdlp else None
-                noms = preparer_reel(post, article, dossier, recuperer_ytdlp=recuperer)
+                figement = normaliser(preparer_reel(post, article, dossier, recuperer_ytdlp=recuperer))
+                noms = figement.noms
                 print(f"reel assemble dans {dossier} : {', '.join(noms)}")
                 conteneur = publier_reel(dossier, noms, legende, publier_vraiment=False)
             else:
-                noms = preparer_fichiers(post, article, dossier)
+                figement = normaliser(preparer_fichiers(post, article, dossier))
+                noms = figement.noms
+                # Le manifeste du gel, affiche ici parce que c'est tout
+                # l'interet d'un essai : voir ce qui part, et ce qui a ete
+                # ECARTE avec sa raison -- jusqu'ici seulement journalise.
+                for entree in figement.elements or []:
+                    etat = "ecarte" if entree["ecarte"] else entree["fichier"]
+                    raison = f" ({entree['raison']})" if entree["raison"] else ""
+                    print(f"  {entree['kind']}/{entree['type']} {etat}{raison}")
                 print(f"{len(noms)} image(s) figee(s) dans {dossier}")
                 conteneur = publier_fichiers(dossier, noms, legende, publier_vraiment=False)
         finally:

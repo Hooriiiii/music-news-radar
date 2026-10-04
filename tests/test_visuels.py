@@ -243,8 +243,11 @@ def test_le_gel_lit_les_copies_locales_sans_telecharger(tmp_path):
     def rendre(slides, template, palette_=None):
         return [RenduSlide(png=_image(1080, 1350), scale=1.0, lines={}, overflow=False)]
 
-    noms = preparer_fichiers(post, _article(_source()), tmp_path / "gel", rendre=rendre, telecharger=_interdit)
-    assert len(noms) == 2
+    figement = preparer_fichiers(post, _article(_source()), tmp_path / "gel", rendre=rendre, telecharger=_interdit)
+    assert len(figement.noms) == 2
+    # Le manifeste dit d'OU vient chaque element, et c'est ce que la fiche affiche :
+    # une copie locale d'artiste ne doit pas passer pour une photo de l'actu.
+    assert [e["origine"] for e in figement.elements if not e["ecarte"]][1:] == [ORIGINE_ARTISTE]
 
 
 def test_le_cache_perd_ses_images_trop_vieilles():

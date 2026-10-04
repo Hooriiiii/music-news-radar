@@ -65,7 +65,9 @@ from app.content.visuels import (
     urls_interdites,
     visuels_autorises,
 )
+from app.publish import manifeste as manifeste_mod
 from app.publish.images import ImageEcartee, ImageInexploitable, cadrer_carrousel
+from app.publish.manifeste import Figement
 
 logger = logging.getLogger(__name__)
 
@@ -114,18 +116,46 @@ def _media_d_actif(actif_: dict) -> dict:
     return actif_
 
 
+def liste_explicite(post) -> bool:
+    """L'utilisateur a-t-il ARRETE la liste depuis l'editeur de relecture ?
+
+    Marqueur pose dans `posts.variants["carrousel"]["explicite"]` par
+    `PATCH /posts/{id}` (`carrousel_explicite`). Sur le POST et non sur le
+    creneau, pour la raison qui gouverne toutes ses colonnes denormalisees :
+    l'article est purge a deux jours et le post doit rester publiable sans lui.
+
+    Ce qu'il change, et rien d'autre : les candidats ne viennent plus que des
+    SLIDES. Sans lui, retirer un element de la liste ne servirait a rien -- le gel
+    suivant le reprendrait depuis `posts.assets` ou depuis les medias de
+    l'article, et l'edition serait silencieusement annulee. Tous les autres
+    filtres (visuels interdits, fond jamais republie, doublons) restent
+    appliques : ce sont des REGLES du projet, pas une source de candidats.
+    """
+    return bool(((getattr(post, "variants", None) or {}).get("carrousel") or {}).get("explicite"))
+
+
 def medias_du_carrousel(post, article) -> list[dict]:
     """Photos et videos a publier apres la cover : slides, puis actifs du post
     (ou, pour un post anterieur aux actifs, medias autorises de l'article), sans
-    doublon, sans le media qui sert de fond a la cover, jamais un visuel interdit."""
+    doublon, sans le media qui sert de fond a la cover, jamais un visuel interdit.
+
+    Liste ARRETEE par l'utilisateur (`liste_explicite`) : les slides SEULES, sans
+    reprise des actifs ni des medias de l'article -- `_media_d_actif` leur est
+    quand meme applique, une slide ecrite par l'editeur portant la copie locale
+    d'un actif dans `fichier` (l'URL du CDN Instagram, elle, aura expire).
+    """
     interdites = urls_interdites(article)
     candidats = [
-        slide for slide in post.slides[1:]
+        _media_d_actif(slide) for slide in post.slides[1:]
         if slide.get("kind") == "media" and slide.get("type") in (PHOTO, VIDEO)
         and not ({slide.get("url"), slide.get("preview_url")} & interdites)
     ]
     actifs = getattr(post, "assets", None)
-    if actifs is not None:
+    if liste_explicite(post):
+        # Les deux reprises ci-dessous sont fermees d'un coup : c'est tout ce que
+        # « liste arretee par l'utilisateur » veut dire.
+        pass
+    elif actifs is not None:
         # La policy est RE-VERIFIEE a la relecture : un actif pose quand la source
         # etait autorisee ne part pas si elle est passee en compte media depuis,
         # ni si son URL est devenue interdite. Ici, seule la source du
@@ -158,6 +188,50 @@ def medias_du_carrousel(post, article) -> list[dict]:
             continue
         medias.append(media)
     return medias
+
+
+def candidats_editables(post, article) -> list[dict]:
+    """Tout visuel AUTORISE qu'on peut proposer en ajout ou en remplacement.
+
+    C'est la reserve de l'editeur de relecture, pas la liste publiee : ni le
+    plafond de dix, ni la regle « le fond n'est jamais republie », ni la liste
+    arretee ne s'y appliquent -- ce sont des regles du GEL, et l'utilisateur doit
+    pouvoir remettre dans la liste un element que le gel avait ecarte.
+
+    Ce qui s'y applique en revanche, et sans exception : la regle du 2026-09-17,
+    jamais le visuel d'un compte Instagram de categorie `media`. Une reserve qui
+    proposerait un visuel interdit le ferait rentrer par la porte de l'editeur.
+    """
+    interdites = urls_interdites(article)
+    pool: list[dict] = []
+    for actif in getattr(post, "assets", None) or []:
+        if actif.get("type") in (PHOTO, VIDEO) and not (
+            {actif.get("url"), actif.get("preview_url")} & interdites
+        ):
+            pool.append(_media_d_actif(actif))
+    if article is not None and not origine_interdite(getattr(article, "source", None)):
+        pool += [m for m in visuels_autorises(article) if m.get("type") in (PHOTO, VIDEO)]
+    vus: set[str] = set()
+    reserve = []
+    for media in pool:
+        cle = media.get("url") or media.get("preview_url")
+        if not cle or cle in vus:
+            continue
+        vus.add(cle)
+        reserve.append(
+            {
+                "kind": "media",
+                "type": media.get("type"),
+                "url": media.get("url"),
+                "preview_url": media.get("preview_url"),
+                "duration_ms": media.get("duration_ms"),
+                "width": media.get("width"),
+                "height": media.get("height"),
+                "origine": media.get("origine") or ORIGINE_ARTICLE,
+                "compte": media.get("compte"),
+            }
+        )
+    return reserve
 
 
 def _agrandir_fond_si_marque(
@@ -334,7 +408,15 @@ def preparer_fichiers(
     transcoder=None,
     agrandir=upscale_mod.agrandir_fond,
     binaire_disponible=upscale_mod.binaire_disponible,
-) -> list[str]:
+) -> Figement:
+    """Les fichiers figes ET le manifeste de ce qui part (`app.publish.manifeste`).
+
+    Le manifeste n'est pas un journal a cote : il est construit ICI, element par
+    element, au moment ou chacun est ecrit ou ecarte. C'est la seule facon qu'il
+    soit vrai -- un recalcul plus tard ne retombe pas dessus (mesure du
+    2026-10-04 : 27 des 48 carrousels geles recalculables donnent un autre
+    nombre), et il ne le pourra jamais, l'article etant purge a deux jours.
+    """
     if telecharger_video is None:
         # Import tardif : preparation_reel importe ce module.
         from app.publish.preparation_reel import telecharger_video
@@ -366,35 +448,91 @@ def preparer_fichiers(
         elements = [("jpg", _cadrer(rendus[0].png))]
     except ImageInexploitable as exc:
         raise PreparationImpossible(f"cover inexploitable : {exc}") from exc
+    # Le manifeste, tenu en parallele des octets : une entree par element
+    # EXAMINE, qu'il parte ou non. Les entrees ecartees n'ont pas de fichier et
+    # portent leur raison -- c'est exactement ce que personne ne voyait.
+    manifeste = [
+        manifeste_mod.element(
+            kind=manifeste_mod.COVER,
+            type=PHOTO,
+            origine=((getattr(post, "variants", None) or {}).get("fond") or {}).get("origine"),
+            source_url=fond,
+            # Marqueur provisoire : la cover part TOUJOURS (on n'arrive ici
+            # qu'une fois rendue et cadree). Les vrais noms sont recolles par
+            # `_recoller_fichiers`, le prefixe aleatoire n'etant tire qu'a la fin.
+            fichier="",
+        )
+    ]
+
+    def noter(media: dict, *, raison: str | None = None, part: bool) -> None:
+        """Une ligne de manifeste pour ce media. `part` dit s'il sera fige ; le
+        nom du fichier est recolle a la fin, quand le prefixe aleatoire existe.
+
+        `type` est TOUJOURS celui du media d'origine, meme quand une video part
+        sous forme de vignette : le couple (`type`, `source_url`) doit rester
+        coherent, sinon l'editeur reecrirait une slide `photo` sur une URL de
+        video. Ce qui a ete publie a la place se lit dans `raison`.
+        """
+        manifeste.append(
+            manifeste_mod.element(
+                kind=manifeste_mod.MEDIA,
+                type=media.get("type"),
+                origine=media.get("origine") or ORIGINE_ARTICLE,
+                source_url=media.get("url") or media.get("preview_url"),
+                compte=media.get("compte"),
+                # Marqueur provisoire : remplace par le vrai nom plus bas. Il
+                # n'est jamais rendu tel quel -- `_recoller_fichiers` l'exige.
+                fichier="" if part else None,
+                raison=raison,
+            )
+        )
 
     for media in medias_du_carrousel(post, article):
         if len(elements) >= CARROUSEL_MAX:
-            break
+            # Plus de place chez Meta. ECARTE et non « oublie » : un carrousel
+            # plein est une raison legitime, et la taire laissait croire que le
+            # visuel n'existait pas.
+            noter(media, raison=f"carrousel plein ({CARROUSEL_MAX} elements au maximum chez Meta)", part=False)
+            continue
         if media.get("type") == VIDEO:
             mp4 = _video_de_carrousel(media, telecharger_video, sonder, transcoder)
             if mp4 is not None:
                 elements.append(("mp4", mp4))
+                noter(media, part=True)
                 continue
             url = media.get("preview_url")
             if url and url_propre(url) == fond:
+                noter(media, raison="vignette identique au fond de la cover", part=False)
                 continue
+            if url:
+                # La video est inutilisable mais sa vignette part : le dire, car
+                # ce qui arrive chez Meta n'est pas ce que le brouillon annonce.
+                raison_video = "video inutilisable : sa vignette part en photo a la place"
+            else:
+                raison_video = None
         else:
             url = media.get("url")
+            raison_video = None
         if not url:
+            noter(media, raison="aucune URL exploitable", part=False)
             continue
         octets, raison = _octets_image(url, telecharger)
         if octets is None:
             panne_transport = panne_transport or echec_transitoire(raison)
+            noter(media, raison=f"recuperation impossible : {raison}", part=False)
             continue
         try:
             elements.append(("jpg", _cadrer(octets)))
         except ImageEcartee as exc:
             ecartees.append(str(exc))
             logger.info("visuel ecarte du carrousel (%s) : %s", exc, url)
+            noter(media, raison=str(exc), part=False)
             continue
         except ImageInexploitable as exc:
             logger.info("visuel inexploitable (%s) : %s", exc, url)
+            noter(media, raison=str(exc), part=False)
             continue
+        noter(media, raison=raison_video, part=True)
 
     if len(elements) < 2 and panne_transport:
         # Coupure, 429, 5xx : les visuels EXISTENT, seule leur recuperation a
@@ -427,4 +565,23 @@ def preparer_fichiers(
         nom = f"{prefixe}_{rang:02d}.{extension}"
         (dossier / nom).write_bytes(octets)
         noms.append(nom)
-    return noms
+    return Figement(noms=noms, elements=_recoller_fichiers(manifeste, noms))
+
+
+def _recoller_fichiers(manifeste: list[dict], noms: list[str]) -> list[dict]:
+    """Donne a chaque entree qui PART le nom du fichier reellement ecrit.
+
+    Les noms portent un prefixe aleatoire tire a la toute fin ; le manifeste est
+    construit bien avant. Le recollage est positionnel et l'invariant est verifie
+    plutot que suppose : les entrees non ecartees sont, dans l'ordre, exactement
+    les fichiers figes -- si les deux divergeaient, le manifeste mentirait sur ce
+    qui part, c'est-a-dire le defaut meme que ce chantier corrige.
+    """
+    a_publier = [entree for entree in manifeste if not entree["ecarte"]]
+    if len(a_publier) != len(noms):  # pragma: no cover -- invariant de construction
+        raise RuntimeError(
+            f"manifeste incoherent : {len(a_publier)} elements annonces, {len(noms)} fichiers figes"
+        )
+    for entree, nom in zip(a_publier, noms, strict=True):
+        entree["fichier"] = nom
+    return manifeste
