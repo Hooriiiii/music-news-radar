@@ -555,8 +555,10 @@ ENTITES_FRANCE = frozenset({
     # exactement le meme raisonnement que pour un festival francais. Le
     # « tomorrowland » nu, lui, reste dehors (Boom, en Belgique) : c'est la
     # recherche en sous-chaine du nom COMPLET qui fait la difference.
-    "alpe d'huez", "tomorrowland winter", "delta festival", "saint-etienne",
-    "clermont-ferrand",
+    # « alpe d huez » : la forme sans apostrophe existe aussi dans les captions
+    # et dans les titres translitteres, et ne peut rien d'autre.
+    "alpe d'huez", "alpe d huez", "tomorrowland winter", "delta festival",
+    "saint-etienne", "clermont-ferrand",
     # DES ARTISTES ET UNE LOI. « guy-man » couvre aussi « Guy-Manuel » ;
     # « homem-christo » est garde en plus parce qu'un titre peut ne donner que
     # le nom de famille. « ripost » est la loi francaise sur les free parties
