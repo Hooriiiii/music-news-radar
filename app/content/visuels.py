@@ -26,6 +26,16 @@ ORIGINE_COMPTE = "compte"
 # recours »). Cf. `app/content/recherche_web.py`.
 ORIGINE_WEB = "web"
 ORIGINE_KINDA = "kinda"
+# Un visuel DEPOSE A LA MAIN depuis le disque (2026-10-04, `app/publish/
+# televersement.py`) : le dernier recours quand aucun barreau de l'echelle n'a
+# donne ce que l'utilisateur voulait montrer. Une origine A PART et non `article`,
+# pour deux raisons mesurables. Le dashboard dit d'ou vient chaque element, et
+# annoncer « photo de l'actu » sur un fichier choisi a la main serait faux. Et
+# `store.actifs_interdits` relit la source des actifs `article` et `artiste` pour
+# verifier qu'elle n'est pas passee en compte media depuis la composition : un
+# fichier du disque n'a PAS de source a relire, et le ranger parmi les deux
+# ferait chercher un `article_id` qu'il n'a pas.
+ORIGINE_DEPOT = "depot"
 
 # Le fond Kinda : l'aplat sombre du gabarit (`app/content/assets/fallback.jpg`),
 # celui-la meme sur lequel une cover retombe quand une image est introuvable.

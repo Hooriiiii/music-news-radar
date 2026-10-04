@@ -2274,6 +2274,82 @@ DESACTIVEES avec leur raison : elles editent le brouillon et ignorent les visuel
 retenus a la composition, donc en cocher une les ferait disparaitre de la liste
 publiee.
 
+### Televerser un visuel depuis le disque (2026-10-04)
+
+La derniere piece : l'editeur ne proposait que ce que le PIPELINE avait trouve
+(`candidats_editables` : medias de l'actu, de son groupe de doublons, actifs
+d'artistes, candidats web). Utile quand la bonne image est la, inutile quand elle
+n'y est pas. Choix explicite de l'utilisateur : deposer un fichier de son Mac.
+
+**Le depot produit UNE ENTREE DE PLUS dans `candidats`, et rien d'autre**
+(`app/publish/televersement.py`, `POST /posts/{id}/visuels`) : un actif de plus
+dans `posts.assets`, origine **`depot`**. Tout le reste de l'editeur le traite
+alors sans une ligne de changement, et le mettre dans la liste passe par
+`PATCH /posts/{id}` -- qui rouvre deja le creneau tout seul. **Aucun second
+chemin d'ecriture, et rien ici n'approche Meta** : la reclamation (GELE -> ECHEC
+committe AVANT l'appel) n'est pas touchee, le creneau GELE n'est pas touche.
+
+**La copie locale est celle de tout le monde** : `visuels_cache_dir`, nom derive
+du SHA-256 **du CONTENU**, relue par un `file://` resolu dans ce dossier
+(`lire_fichier_cache`), menage a `visuels_cache_jours`. La purge supprime sur le
+`mtime` : un depot frais ne peut pas disparaitre avant son gel, et un depot
+IDEMPOTENT (memes octets, meme nom) rafraichit ce `mtime`.
+
+**Le verdict est rendu AU DEPOT, par le code du GEL.** `images.cadrer_carrousel`
+avec les seuils de la configuration (`publication_crop_upscale_max` 2,2 ;
+`publication_crop_perte_max` 60 %) : memes seuils, memes messages, et le refus
+dit LEQUEL a mordu. Attendre T-2h pour apprendre qu'un fichier qu'on vient de
+choisir ne passe pas est absurde. **Ce qui est reparable n'est pas refuse** --
+PNG, transparence, orientation EXIF, 16:9 de presse (55 % de perte, sous le
+plafond) passent tous.
+
+**Les trois bornes de Meta sont alors satisfaites PAR CONSTRUCTION**, et c'est
+la seule reponse honnete : ce que le gel fige est la sortie de
+`cadrer_carrousel`, exactement 1080x1350 en JPEG borne a 8 Mo par l'echelle de
+qualites. Le depot ne verifie pas « largeur 320-1440 » ni « 4:5 a 1,91:1 », il
+verifie qu'on peut les ATTEINDRE.
+
+**Pas de video, et ce n'est pas une paresse** : `preparation_reel.
+telecharger_video` refuse tout schema autre que http(s), pour ne jamais lire un
+fichier de la machine sur une URL de base. Une video deposee serait acceptee
+puis ECARTEE au gel sans rien montrer -- exactement le defaut que ce chantier
+corrige. Elle est refusee au depot, avec cette raison.
+
+**Premiere surface ou un fichier entre depuis l'exterieur**, traitee comme non
+fiable meme si le dashboard n'ecoute que sur `127.0.0.1` :
+- le **type REEL** vient du decodage (`Image.format` dans `FORMATS_ACCEPTES`),
+  jamais l'extension ni le `Content-Type`. SVG, PDF, archive et **HEIC** sont
+  NOMMES dans le refus plutot que renvoyes en « illisible » -- le HEIC est le
+  premier candidat sur un Mac, et « illisible » l'aurait laisse sans remede ;
+- **la borne de taille tombe AVANT la lecture en memoire** : un
+  `Content-Length` annonce au-dela de `TAILLE_MAX_OCTETS` (25 Mo) rend 413 sans
+  lire un octet, et le flux est lu morceau par morceau (`request.stream()`,
+  jamais `request.body()`) ;
+- une **borne de pixels** lue dans l'EN-TETE (`PIXELS_MAX`, 50 Mpx) : 25 Mo de
+  PNG decodent en gigaoctets ;
+- **aucun nom de fichier n'arrive jamais au serveur.** Ce n'est pas un nom
+  assaini, c'est un nom ABSENT : le corps de la requete est le fichier BRUT (pas
+  de `multipart`, donc pas de dependance `python-multipart` non plus), la
+  fonction qui nomme ne prend qu'un `bytes`, et le nom sur disque derive du
+  contenu. Un nom ne peut pas composer un chemin par CONSTRUCTION. Preuve par
+  mutation (`tests/test_televersement.py`) : rendre le nom au choix de
+  l'appelant fait rougir ce test, et lui seul.
+
+**Les regles du projet ne sont pas contournees** : un fichier depose est un
+CANDIDAT de plus, pas un passe-droit. `urls_interdites` ne le vise pas (il n'a
+pas de source Instagram), `store.actifs_interdits` ne le cherche pas en base
+(origine a part, voir `ORIGINE_DEPOT`), il ne porte aucun `@` donc aucun credit,
+et le gel lui applique les memes regles qu'a tout media : plafond de dix, fond
+jamais republie, une seule affiche, cadrage 4:5 ancre en haut.
+
+**Connu et assume** : avant le gel, un visuel depose n'a **pas de vignette** --
+sa copie est un `file://`, qu'un navigateur n'affiche pas, et `vignetteElement`
+ne l'essaie meme pas. Le comportement est le meme pour toute copie locale
+(actifs d'artistes) et date d'avant cette tache. Des que le creneau est gele, la
+vignette est le FICHIER FIGE, avec son recadrage reel. Et le nom du fichier
+depose n'est garde nulle part : la reserve le montre comme « photo 1200x1500 ·
+fichier depose depuis le disque ».
+
 ### Anti-doublon, demontre
 
 Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur
