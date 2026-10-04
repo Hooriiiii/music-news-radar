@@ -31,7 +31,7 @@ from collections import Counter
 from sqlalchemy import select
 
 from app.db import SessionLocal, attendre_base
-from app.models import Article, Creneau, Post, PostStatus
+from app.models import Article, Creneau, Post, PostStatus, Source, SourceCategorie
 from app.pipeline.event_features import marqueurs_france, pertinence_france
 
 SEGMENT = re.compile(r"\*\*(.+?)\*\*")
@@ -54,6 +54,24 @@ def _accroche(post: Post) -> str:
     return (v.get("headline") or v.get("title") or "").strip()
 
 
+def _sources_primaires(db, article: Article | None) -> list[str]:
+    """Le nom de la source de l'article, SEULEMENT si ce n'est pas un media.
+
+    Meme doctrine que `event_features.source_primaire_francaise` : pour un
+    compte d'artiste, de festival, de label ou de club, le compte EST le sujet
+    -- un post d'Astropolis parle d'Astropolis. Le nom d'un MEDIA, lui, ne dit
+    rien du pays de son sujet (Tsugi est francais et couvre l'international),
+    donc il n'entre jamais. Liste vide quand l'article est purge (2 jours) :
+    la source est alors inconnue, pas « etrangere ».
+    """
+    if article is None or article.source_id is None:
+        return []
+    source = db.get(Source, article.source_id)
+    if source is None or source.categorie == SourceCategorie.MEDIA:
+        return []
+    return [source.name]
+
+
 def examiner(db, limite: int) -> list[dict]:
     posts = db.scalars(
         select(Post).where(Post.status == PostStatus.PUBLISHED).order_by(Post.id.desc()).limit(limite)
@@ -64,7 +82,23 @@ def examiner(db, limite: int) -> list[dict]:
         article = db.get(Article, post.article_id) if post.article_id else None
         accroche = _accroche(post)
         nu = accroche.replace("**", "")
+        legende = post.caption or ""
         fond = (post.variants or {}).get("fond") or {}
+        # LE CHAMP, autant que la liste. Mesure du 2026-10-04 sur les 55 posts
+        # publies : l'accroche seule porte un marqueur France 8 fois, l'accroche
+        # PLUS la legende 12 fois. Le lieu est presque toujours dans la legende
+        # et presque jamais dans l'accroche -- post 164, « Tomorrowland Winter »
+        # en accroche, « les sommets d'Alpe d'Huez » en legende ; post 17, « le
+        # Delta Festival » en accroche, « la plage du Prado a Marseille » en
+        # legende. Mesurer sur l'accroche seule sous-estimait donc la part FR du
+        # feed, c'est-a-dire declenchait l'alerte de derive a tort.
+        #
+        # On garde les deux ensembles separes a l'affichage : un marqueur qui
+        # n'est que dans la legende ne se VOIT pas sur la cover, et c'est une
+        # information editoriale en soi.
+        primaires = _sources_primaires(db, article)
+        marq_accroche = sorted(marqueurs_france(nu))
+        marq_legende = sorted(set(marqueurs_france(legende)) - set(marq_accroche))
         lignes.append(
             {
                 "id": post.id,
@@ -72,14 +106,18 @@ def examiner(db, limite: int) -> list[dict]:
                 "compose": post.created_at,
                 "publie": creneau.publie_le if creneau else None,
                 "accroche": nu,
-                "legende": post.caption or "",
+                "legende": legende,
                 "hashtags": post.hashtags or [],
                 "credit": post.credit,
                 "slides": len(post.slides or []),
                 "fond": fond.get("origine"),
                 "palette": (post.variants or {}).get("palette"),
-                "france": pertinence_france(titre=nu, noms_sources_primaires=[]),
-                "marqueurs": sorted(marqueurs_france(nu)),
+                "france": pertinence_france(
+                    titre=f"{nu}\n{legende}", noms_sources_primaires=primaires
+                ),
+                "marqueurs": marq_accroche,
+                "marqueurs_legende": marq_legende,
+                "source_primaire": primaires[0] if primaires else None,
                 "segments": len(SEGMENT.findall(accroche)),
                 "enumeration_bancale": bool(ENUMERATION.search(accroche)),
                 "relevance": article.relevance_score if article else None,
@@ -135,6 +173,11 @@ def afficher(lignes: list[dict], brut: bool) -> None:
         print(f"POST {ligne['id']} | {ligne['gabarit']} | compose {compose} -> publie {publie}")
         france = "-" if ligne["france"] is None else f"{ligne['france']:.0f}"
         marq = f" {ligne['marqueurs']}" if ligne["marqueurs"] else ""
+        # Un marqueur qui n'est que dans la legende ne se voit pas sur la cover.
+        if ligne["marqueurs_legende"]:
+            marq += f" (legende: {ligne['marqueurs_legende']})"
+        if not ligne["marqueurs"] and not ligne["marqueurs_legende"] and ligne["source_primaire"]:
+            marq += f" (compte: {ligne['source_primaire']})"
         print(
             f"  fond {str(ligne['fond']):8s} | {ligne['slides']} slide(s) | palette "
             f"{ligne['palette']} | France {france}{marq} | surlignages {ligne['segments']}"
