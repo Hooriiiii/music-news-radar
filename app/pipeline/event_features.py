@@ -438,11 +438,65 @@ def nouveaute(
 # l'air »), et « justice » (le label francais) est volontairement absent du
 # lexique de titre pour la meme raison : il est couvert par (b), ou le nom
 # de compte ne peut pas se confondre avec un mot courant.
+#
+# --- Les LIEUX manquaient, et un post publie l'a prouve (2026-10-04) --------
+#
+# Post 164 du 03/10, « Les forfaits 7 jours pour Tomorrowland Winter sont en
+# vente » : le festival se tient a l'ALPE D'HUEZ, en Isere. La legende le dit
+# (« Direction les sommets d'Alpe d'Huez »), l'affiche publiee en slide
+# l'ecrit en capitales (« ALPE D'HUEZ, FRANCE »), et `marqueurs_france`
+# rendait l'ensemble VIDE. Le lexique connaissait des artistes et neuf
+# METROPOLES ; or la scene francaise se joue aussi dans des stations, des
+# salles et des festivals qui ne sont pas des metropoles.
+#
+# MESURE DU 2026-10-04 sur 3 122 textes REELS de la base (1 980 textes de
+# variantes de cover, 168 legendes, titres et resumes d'articles) :
+#
+# - la liste d'alors declenche sur 278 textes (8,9 %) et sa PRECISION tient :
+#   les 32 marqueurs declenches, relus un par un, ne produisent aucun faux
+#   positif dur -- les deux cas les plus faibles (« Rihanna commente un
+#   incident a Paris », « Madeon a San Francisco ») sont deja ceux que la
+#   note (a) et la note (b) documentent comme volontairement gardes ;
+# - 15 candidats nouveaux declenchent sur de la VRAIE actu francaise, zero
+#   faux positif : ils sont ajoutes ci-dessous (marques « mesure ») ;
+# - et 10 candidats ont ete ESSAYES PUIS REJETES sur leurs faux positifs
+#   mesures. Ils sont listes ici parce que c'est la seule trace qui empeche
+#   de les rajouter demain :
+#
+#     « angele »       -> declenche sur « Los ANGELEs » (8 textes, post 18,
+#                         John Summit a Los Angeles). Le piege de « air »,
+#                         a l'identique. Angele est de plus BELGE.
+#     « rone »         -> « VeRONE », « dRONE », « DRONEflower », « drones »
+#                         (6 textes sur 7).
+#     « crecy » nu     -> « seCRECY » (Secrecy, groupe londonien). Seul
+#                         « etienne de crecy » entier est garde.
+#     « concrete »     -> « Dancing Alone on the Concrete » (Stef Chura,
+#                         americaine). Mot anglais courant.
+#     « jacques »      -> « Jacques Brel », qui est belge. Prenom.
+#     « sebastian »    -> prenom ; et l'actu reelle qu'il portait ici est une
+#                         collaboration d'Angele, donc belge.
+#     « francophone »  -> « en Belgique FRANCOPHONE » (post 148). Un pays
+#                         francophone n'est pas la France -- exactement le
+#                         piege que la note (c) decrit pour la langue.
+#     « cercle »       -> « les CERCLES underground ». Le label Cercle reste
+#                         couvert par (b), ou un nom de compte ne se confond
+#                         avec aucun mot courant.
+#     « because music »-> le label apparait pour Logic1000 (australienne) :
+#                         un label francais ne francise pas son catalogue.
+#     « air »          -> deja retire par le prototype, et la base le redit :
+#                         « AIR (Part 3 of 3) » est un titre de Bicep.
+#
+#   « nice », « tours », « angers », « nancy », « pau », « metz » et « sete »
+#   ne declenchent sur AUCUN de ces 3 122 textes : les garder dehors ne coute
+#   donc rien de mesurable, et les faire entrer rapporterait zero pour un
+#   risque certain. La regle ne change pas.
 
 # Villes, regions, gentiles. Un mot n'entre ici QUE s'il ne peut pas etre lu
 # comme un mot anglais courant : ni « nice », ni « tours », ni « angers », ni
 # « nancy » (prenom) -- « nancy jazz » est dans les entites, qui sont
-# cherchees en sous-chaine.
+# cherchees en sous-chaine. Meme regle pour les departements et les regions :
+# « var » est un mot de code, « jura » est aussi suisse, « reunion » est un
+# mot anglais, « basque » est aussi espagnol -- aucun des quatre n'entre.
 LIEUX_FRANCE = frozenset({
     "france", "francais", "francaise", "francaises", "hexagone",
     "paris", "parisien", "parisienne", "parisiens", "parisiennes",
@@ -452,6 +506,26 @@ LIEUX_FRANCE = frozenset({
     "amiens", "toulon", "carcassonne", "bourges", "tourcoing", "nimes",
     "bretagne", "breton", "bretonne", "normandie", "corse", "provence",
     "alsace", "occitanie",
+    # Mesure : declenchent sur de la vraie actu FR de la base, zero faux
+    # positif. « creteil » : un blocus de lycee remonte par Booska-P -- FR et
+    # hors ligne editoriale, c'est `relevance` qui le baisse, pas cette note.
+    "creteil", "havre",
+    # Mesure : ne declenchent sur AUCUN des 3 122 textes. Zero faux positif
+    # mesure, zero gain mesure : ajoutes pour la couverture (une station de
+    # ski ou une prefecture n'avait aucune chance d'etre vue), jamais sur la
+    # foi d'un exemple invente. A relire si l'un d'eux se met a mentir.
+    # (les noms a trait d'union sont dans les ENTITES : `_mots` coupe sur le
+    # trait d'union, donc « saint-etienne » n'y serait jamais un seul mot.)
+    "perpignan", "besancon", "orleans",
+    "avignon", "annecy", "lorient", "quimper", "vannes", "biarritz",
+    "mulhouse", "poitiers", "versailles", "nanterre", "montreuil", "pantin",
+    "aubervilliers", "limoges", "villeurbanne", "chambery", "troyes",
+    "angouleme", "niort", "chartres", "bayonne", "colmar",
+    "lillois", "nantais", "toulousain", "bordelais", "strasbourgeois",
+    "grenoblois", "dijonnais", "rouennais", "brestois", "nicois", "malouin",
+    "isere", "savoie", "finistere", "morbihan", "gironde", "herault",
+    "vosges", "landes", "vendee", "camargue", "cevennes", "aquitaine",
+    "auvergne", "ardeche", "hexagonal", "hexagonale", "tricolore",
 })
 
 # Festivals, salles, clubs, labels et artistes francais. Cherches en
@@ -471,6 +545,48 @@ ENTITES_FRANCE = frozenset({
     "bob sinclar", "david guetta", "daft punk", "vladimir cauchemar",
     "worakls", "madeon", "christine and the queens", "oklou", "teki latex",
     "stromae", "tour eiffel", "chatelet",
+    # --- Mesure du 2026-10-04 : declenchent sur de la vraie actu FR, zero
+    # faux positif sur les 3 122 textes de la base.
+    #
+    # LES LIEUX, ce qui manquait. « alpe d'huez » est le cas d'origine
+    # (post 164). « tomorrowland winter » est une marque BELGE, et elle entre
+    # pourtant : ce n'est pas le nom d'un groupe mais celui d'un EVENEMENT, et
+    # cet evenement se tient a l'Alpe d'Huez a chacune de ses editions --
+    # exactement le meme raisonnement que pour un festival francais. Le
+    # « tomorrowland » nu, lui, reste dehors (Boom, en Belgique) : c'est la
+    # recherche en sous-chaine du nom COMPLET qui fait la difference.
+    # « alpe d huez » : la forme sans apostrophe existe aussi dans les captions
+    # et dans les titres translitteres, et ne peut rien d'autre.
+    "alpe d'huez", "alpe d huez", "tomorrowland winter", "delta festival",
+    "saint-etienne", "clermont-ferrand",
+    # DES ARTISTES ET UNE LOI. « guy-man » couvre aussi « Guy-Manuel » ;
+    # « homem-christo » est garde en plus parce qu'un titre peut ne donner que
+    # le nom de famille. « ripost » est la loi francaise sur les free parties
+    # -- une variante de cover reduite au seul mot « RIPOST » ne portait sinon
+    # aucun marqueur.
+    "guy-man", "homem-christo", "etienne de crecy", "petit biscuit",
+    "ripost", "gazo", "ninho",
+    # --- Mesure : ne declenchent sur AUCUN des 3 122 textes. Zero faux
+    # positif mesure, zero gain mesure -- ajoutes pour la couverture, dans la
+    # meme logique que les lieux ci-dessus.
+    # Le filtre reste le MEME que pour « air » : un marqueur ne doit pas
+    # pouvoir se lire comme une tournure courante. Sont donc restes dehors,
+    # bien qu'etant de vrais noms de lieux francais, « bout du monde » (« au
+    # bout du monde »), « les escales » (« les escales de la tournee »),
+    # « panoramas », « petit bain », « le bikini », « le grand mix » (une
+    # phrase sur un mix !), « bon entendeur » (« a bon entendeur ») et
+    # « busy p » (« busy promoting »).
+    "francofolies", "jazz a vienne", "nuits de fourviere", "musilac",
+    "nordik impakt", "scopitone", "motocultor", "family piknik",
+    "jazz in marciac", "stade de france", "paris la defense arena",
+    "la gaite lyrique", "gare des mines", "le trianon", "point ephemere",
+    "cabaret sauvage", "glazart", "le transbordeur", "stereolux",
+    "la laiterie", "l'aeronef", "le chabada",
+    "ile-de-france", "hauts-de-france", "nouvelle-aquitaine", "rhone-alpes",
+    "pays de la loire", "franche-comte", "cote d'azur", "haute-savoie",
+    "val d'isere", "les deux alpes", "courchevel", "avoriaz", "la clusaz",
+    "mr oizo", "l'imperatrice", "martin solveig", "irene dresel",
+    "ofenbach", "sacem", "teknival",
 })
 
 # Comptes PRIMAIRES francais (artiste / festival / label / club), normalises
@@ -508,7 +624,20 @@ def _nom_de_source(nom: str) -> str:
 
 
 def marqueurs_france(titre: str) -> frozenset[str]:
-    """Les marqueurs France trouves dans un titre (vide si aucun).
+    """Les marqueurs France trouves dans UN TEXTE (vide si aucun).
+
+    Le parametre s'appelle `titre` parce que c'est son usage d'origine (le
+    titre d'un evenement), mais la fonction ne lit qu'un texte : l'appelant
+    est libre de lui passer plus large, et `scripts/revue_posts.py` lui passe
+    desormais l'accroche PLUS la legende. La mesure du 2026-10-04 justifie ce
+    choix : sur les 55 posts publies, l'accroche seule portait un marqueur 8
+    fois, l'accroche et la legende 12 fois -- l'information est souvent dans
+    la legende, qui est la seule a nommer le lieu (« Direction les sommets
+    d'Alpe d'Huez », « la plage du Prado a Marseille »). Le contre-coup est
+    reel et il faut le savoir : la legende est ecrite par un modele, donc elle
+    peut porter un marqueur FAUX -- post 119, « son wagon parisien » pour Lot
+    Radio, qui est a Brooklyn. Ce faux positif vient du TEXTE PUBLIE, pas du
+    lexique, et il est utile de le voir.
 
     Rendre l'ENSEMBLE et non un booleen n'est pas de la coquetterie : c'est
     ce qui rend une mesure relisible -- on voit QUEL mot a declenche, donc on

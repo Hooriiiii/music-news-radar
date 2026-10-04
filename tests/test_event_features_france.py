@@ -62,6 +62,92 @@ class TestMarqueurDeTitre:
             assert marqueurs_france(titre) == frozenset(), titre
 
 
+class TestLesLieuxNeSontPasQueDesMetropoles:
+    """Le defaut du 2026-10-04, et sa mesure.
+
+    Post 164 publie le 03/10 : « Les forfaits 7 jours pour Tomorrowland Winter
+    sont en vente ». Le festival se tient a l'Alpe d'Huez, en Isere -- la
+    legende le dit, l'affiche publiee en slide l'ecrit en capitales -- et
+    `marqueurs_france` rendait l'ensemble VIDE. Le lexique connaissait des
+    artistes et neuf METROPOLES, pas les stations, les salles ni les festivals.
+    """
+
+    def test_le_cas_qui_a_declenche_la_correction(self):
+        """Les deux textes REELS du post 164, tels qu'ils sont en base."""
+        assert "tomorrowland winter" in marqueurs_france(
+            "Les forfaits 7 jours pour Tomorrowland Winter sont en vente"
+        )
+        assert "alpe d'huez" in marqueurs_france(
+            "Alpe d'Huez attend déjà Tomorrowland Winter 2026"
+        )
+
+    def test_tomorrowland_nu_reste_belge(self):
+        """La marque entiere nomme un EVENEMENT qui se tient en France a chacune
+        de ses editions ; « Tomorrowland » seul se tient a Boom, en Belgique.
+        C'est la recherche du nom COMPLET qui fait la difference -- si quelqu'un
+        raccourcit l'entree, ce test rougit."""
+        assert marqueurs_france("Tomorrowland dévoile sa programmation 2027") == frozenset()
+
+    def test_un_festival_francais_hors_des_metropoles(self):
+        """Texte reel du post 17 : le Delta Festival est a Marseille, mais
+        l'accroche ne le dit pas -- seul son NOM la porte."""
+        assert "delta festival" in marqueurs_france(
+            "Le Delta Festival ne reviendra pas, liquidation judiciaire prononcée"
+        )
+
+    def test_les_faux_positifs_mesures_restent_dehors(self):
+        """CHAQUE texte ci-dessous est reel et vient de la base : c'est sur eux
+        qu'un candidat a ete essaye puis REJETE. Le precedent de « air » est
+        dans le module pour ca -- un detecteur qui crie France partout rendrait
+        la mesure de derive inutilisable, ce qui est sa seule fonction.
+        """
+        for titre in (
+            # « angele » -- Angele est belge, et le mot est dans « Los Angeles ».
+            "John Summit garde le plus gros show de sa tournée pour Los Angeles",
+            # « rone »
+            "le Symphony of Unity capté à Vérone",
+            "Police in Ibiza are using drones to find illegal villa parties",
+            "[Fresh] Drone - What Comes Next (2026)",
+            # « crecy » nu
+            "Secrecy Announce Debut EP Winter In A&E: Hear “Knife In My Dreams”",
+            # « concrete »
+            "Stef Chura, “Dancing Alone on the Concrete”",
+            # « jacques » -- Jacques Brel est belge
+            "Ycare annonce un album hommage à Jacques Brel et une tournée de 50 dates",
+            # « francophone » -- un pays francophone n'est pas la France
+            "Charlotte de Witte et KI/KI : rendez-vous en Belgique francophone",
+            # « air » -- deja retire par le prototype, la base le redit
+            "AIR (Part 3 of 3) est enfin disponible, la trilogie de Bicep est bouclée",
+            # « bout du monde », « les escales », « le grand mix », « bon entendeur »,
+            # « busy p », « petit bain » : de vrais noms de lieux FR, ecartes parce
+            # qu'ils se lisent aussi comme des tournures courantes.
+            "Un set au bout du monde pour clôturer la tournée",
+            "Les escales de la tournée sont déjà complètes",
+            "Le grand mix de l'été est en ligne",
+            "À bon entendeur, le line-up tombe demain",
+            "The label has been busy promoting its new signing",
+        ):
+            assert marqueurs_france(titre) == frozenset(), titre
+
+    def test_un_nom_a_trait_d_union_est_cherche_en_sous_chaine(self):
+        """`_mots` coupe sur le trait d'union : « saint-etienne » ne peut donc
+        pas vivre dans `LIEUX_FRANCE`, qui compare des mots entiers. Ce test
+        existe pour que la prochaine addition ne se perde pas en silence."""
+        assert "saint-etienne" in marqueurs_france("Un festival techno à Saint-Étienne")
+        assert "guy-man" in marqueurs_france("Guy-Man (ex-Daft Punk) signe pour GTA VI")
+
+    def test_chaque_marqueur_rendu_est_bien_present_dans_le_texte(self):
+        """L'invariant qui rend la mesure relisible : l'ensemble rendu nomme des
+        marqueurs qu'on peut RETROUVER dans le texte -- c'est ce qui permet de
+        voir le faux positif, et c'est pour ca qu'on ne rend pas un booleen."""
+        texte = "Les forfaits pour Tomorrowland Winter à l'Alpe d'Huez, en Isère"
+        marqueurs = marqueurs_france(texte)
+        assert marqueurs
+        normalise = texte.lower().replace("è", "e").replace("à", "a")
+        for m in marqueurs:
+            assert m in normalise, m
+
+
 class TestSourcePrimaire:
     def test_un_compte_primaire_francais_sans_marqueur_de_titre(self):
         """« Victory live! » ne dit rien ; le compte qui le poste, si."""
