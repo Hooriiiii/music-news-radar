@@ -68,13 +68,38 @@ OUTIL_RECHERCHE = {"type": "web_search_20250305", "name": "web_search", "max_use
 
 # Domaines dont l'`og:image` n'est jamais la photo de l'actu : banques d'images
 # (filigrane, page de vignettes), reseaux sociaux (mur de connexion, et la regle
-# du 2026-09-17 interdit deja les visuels des comptes Instagram media).
+# du 2026-09-17 interdit deja les visuels des comptes Instagram media), et les
+# ENCYCLOPEDIES.
+#
+# Les encyclopedies ont ete ajoutees le 2026-10-04, apres le post 164
+# (Tomorrowland Winter) dont la troisieme slide etait le logo du festival,
+# recadre au point que les lettres etaient coupees (« MORROWL ») : son
+# `og:image` etait `Tomorrowland_festival_logo.svg` sur `en.wikipedia.org`.
+# L'image de tete d'un article encyclopedique sur une marque, un festival ou un
+# groupe est presque toujours son embleme -- c'est le producteur de logos le
+# plus regulier du web, exactement le motif qui faisait deja ecarter les banques
+# d'images. Mesure sur `visuels_web_cache_path` (7 requetes, 21 candidats
+# memorises) : `en.wikipedia.org` est le domaine le PLUS frequent, 4 candidats
+# sur 21 (19 %), presents dans 3 requetes sur 7 -- et aucune de ces requetes ne
+# se retrouve sans candidat une fois ces pages ecartees.
 DOMAINES_ECARTES = (
     "gettyimages.", "shutterstock.", "alamy.", "istockphoto.", "depositphotos.",
     "dreamstime.", "123rf.", "stock.adobe.com",
     "instagram.com", "facebook.com", "x.com", "twitter.com", "tiktok.com",
     "pinterest.", "youtube.com", "youtu.be", "news.google.com",
+    "wikipedia.org", "wikimedia.org", "wikidata.org", "wiktionary.org",
+    "fandom.com", "wikia.",
 )
+
+# Et un logo se reconnait aussi a son NOM DE FICHIER, quel que soit le site qui
+# le sert : les trois logos du cache (`Tomorrowland_festival_logo.svg`,
+# `OUT.FEST_2021_logo_1.png`, `logo_blue_white_320x250.png` chez
+# 1001tracklists) le disent tous les trois, soit 3 candidats sur 21 (14 %). Le
+# mot doit etre ISOLE par la ponctuation du chemin (`_logo`, `-logo`, `/logo`,
+# `logo.`) : cherche en sous-chaine libre, il attraperait « logoff »,
+# « technologo »... et surtout il n'est teste que sur le CHEMIN de l'image,
+# jamais sur la requete, ou un parametre de CDN peut porter n'importe quoi.
+_LOGO = re.compile(r"(?:^|[^a-z0-9])logos?(?:[^a-z0-9]|$)", re.IGNORECASE)
 
 # Mots qui disent la discipline. Le premier qui matche gagne : un article de
 # festival parle souvent aussi de clubs, l'inverse est rare.
@@ -134,8 +159,21 @@ def domaine_de(url: str) -> str:
 
 
 def _ecarte(url: str) -> bool:
+    """Vrai si la PAGE ne peut pas porter une photo de l'actu."""
     hote = domaine_de(url)
     return not hote or any(motif in hote for motif in DOMAINES_ECARTES)
+
+
+def est_un_logo(image: str) -> bool:
+    """Vrai si le nom de fichier de l'image se declare lui-meme logo.
+
+    Une `og:image` nommee `..._logo.svg` est un embleme, pas une photographie :
+    le juge visuel est volontairement INDULGENT sur une reserve de fond
+    (`meilleures_photos(garder_inconnues=True)`, parce que l'alternative y est
+    de sauter l'article entier), donc rien ne l'arretait en aval. Ce filtre-ci
+    est deterministe et ne coute rien ; il laisse le juge tranquille.
+    """
+    return bool(_LOGO.search(urlsplit(image or "").path))
 
 
 # --- La requete ------------------------------------------------------------
@@ -387,6 +425,11 @@ def candidats_du_web(
         return []
 
 
+def _retenus(candidats: list[Candidat]) -> list[Candidat]:
+    """Les candidats qui passent encore les filtres d'aujourd'hui."""
+    return [c for c in candidats if not _ecarte(c.page) and not est_un_logo(c.image)]
+
+
 def _candidats(article, maintenant, chercheur, extraire, chemin) -> list[Candidat]:
     requete = requete_pour(article)
     if not requete:
@@ -394,9 +437,14 @@ def _candidats(article, maintenant, chercheur, extraire, chemin) -> list[Candida
         return []
     connues = _lire(maintenant, chemin)
     if requete in connues:
+        # Le filtre est applique AUSSI a la relecture : une entree memorisee
+        # avant l'ajout des encyclopedies et du filtre de logo servirait sinon
+        # le defaut pendant encore `visuels_web_cache_jours`. Le refiltrer
+        # coute zero requete, la reponnoncer en couterait une payante.
+        candidats = _retenus(connues[requete][1])
         logger.info("recherche web deja faite pour « %s » : %s candidat(s)",
-                    requete, len(connues[requete][1]))
-        return connues[requete][1]
+                    requete, len(candidats))
+        return candidats
 
     if chercheur is None:
         if not settings.anthropic_api_key:
@@ -429,6 +477,9 @@ def _candidats(article, maintenant, chercheur, extraire, chemin) -> list[Candida
             continue
         image = url_propre((media or {}).get("url"))
         if not image:
+            continue
+        if est_un_logo(image):
+            logger.info("image du web ecartee (logo) : %s", image)
             continue
         trouves.append(Candidat(page=url, titre=titre, image=image, domaine=domaine_de(url)))
 

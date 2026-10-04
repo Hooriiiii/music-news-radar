@@ -15,7 +15,6 @@ si aucune tentative n'aboutit.
 import datetime as dt
 import inspect
 import logging
-import unicodedata
 
 import anthropic
 import pydantic
@@ -25,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.content.choix_visuels import VisuelIntrouvable, VisuelsDifferes, actif_du_web
 from app.content.credit import credit_video
+from app.content.accents import mot_desaccentue, porte_un_accent
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import enumeration_incoherente, validate_headline
 from app.content.legende import sans_mentions_de_source
@@ -189,9 +189,11 @@ def contient_un_accent(texte: str) -> bool:
 
     Decomposition NFD plutot qu'une liste de caracteres : le signe diacritique
     devient un caractere combinant, quelle que soit la lettre qui le porte (e, a,
-    u, c cedille...) et quelle que soit la forme normalisee d'origine.
+    u, c cedille...) et quelle que soit la forme normalisee d'origine. Une seule
+    implementation, dans `app/content/accents.py`, pour que les deux controles
+    d'accents (la legende et les textes rendus) ne divergent jamais.
     """
-    return any(unicodedata.combining(c) for c in unicodedata.normalize("NFD", texte))
+    return porte_un_accent(texte)
 
 
 def probleme_accents(caption: str) -> str | None:
@@ -290,14 +292,55 @@ def probleme_enumeration_surlignee(texte: str) -> str | None:
     )
 
 
+def probleme_accents_de_cover(texte: str, legende: str) -> str | None:
+    """Decrit, pour la relance, un mot desaccentue dans un texte RENDU ; None sinon.
+
+    Le trou que ce controle ferme (post 168, publie le 2026-10-03) : la bande de
+    titre du reel disait « Troye Sivan / invite surprise de Charli XCX a l'ACL »
+    -- « invite » pour « invité », « a » pour « à » -- pendant que la legende du
+    MEME post etait parfaitement accentuee. `probleme_accents` ne recevant que
+    `caption`, aucune relance n'etait declenchee : le controle couvrait le texte
+    qu'on lit en second et laissait passer celui qu'on voit en premier, dessine
+    en gros sur l'image.
+
+    Le critere de `probleme_accents` ne se transpose PAS ici : il demande une
+    longueur minimale, et un texte de cover est court. Mesure sur les 1 980
+    textes de variantes en base : 58,6 % n'ont aucun accent, 36,9 % encore
+    au-dela de 70 caracteres -- un seuil de longueur rendrait le controle inerte
+    ou bavard. `app/content/accents.py` cherche donc un MOT precis, par deux
+    references (la legende du meme brouillon, et un lexique mesure). Mesure du
+    controle complet : 68 textes signales sur 1 980 (3,4 %), 24 posts sur 165
+    (14,5 % des compositions), zero faux positif -- dont trois fois le post 168.
+
+    Meme mecanique que `probleme_emojis`, `probleme_accents`,
+    `probleme_cloture_question` et `probleme_enumeration_surlignee` : pas un
+    validateur de `PostDraft`, une relance puis une acceptation avec
+    avertissement. Une cover mal accentuee vaut mieux que pas de post.
+    """
+    trouve = mot_desaccentue(texte, legende=legende)
+    if trouve is None:
+        return None
+    brut, attendue = trouve
+    return (
+        f"Le texte « {texte} » ecrit « {brut} » sans son accent : c'est "
+        f"« {attendue} ». Ces textes (`headline`, `title`, `subtitle`) sont "
+        "DESSINES EN GROS sur l'image du post -- c'est le texte le plus visible "
+        "du post, un accent manquant s'y voit bien plus que dans la legende. "
+        "Reecris les quatre variantes en francais correctement accentue."
+    )
+
+
 def probleme_de_variantes(draft: PostDraft) -> str | None:
     """Les defauts de FORME des textes RENDUS (accroche, titre, sous-titre).
 
     Separe de `probleme_de_legende` parce que la cible l'est : la legende n'est
-    pas rendue et n'a pas de surlignage, ces trois textes-la en vivent."""
+    pas rendue et n'a pas de surlignage, ces trois textes-la en vivent -- et
+    c'est aussi ELLE qui sert de reference d'accentuation a ces trois-la."""
     for variante in draft.variantes:
         for texte in (variante.headline, variante.title, variante.subtitle):
-            probleme = probleme_enumeration_surlignee(texte)
+            probleme = probleme_enumeration_surlignee(texte) or probleme_accents_de_cover(
+                texte, draft.caption
+            )
             if probleme is not None:
                 return probleme
     return None

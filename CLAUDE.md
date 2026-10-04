@@ -1280,6 +1280,43 @@ contrôle sans mémoire ne sait pas faire « de temps en temps », seulement
 contrôle qui s'est assoupli. Une question reste permise au milieu de la
 légende.
 
+**Les accents : le contrôle regardait la légende, pas la COVER** (2026-10-04,
+post 168 publié le 03/10 — bande de titre du reel « **Troye Sivan** / invité
+surprise de **Charli XCX** à l'ACL », publiée « invite … a »). `probleme_accents`
+ne recevait que `caption` ; la légende de ce post était parfaitement accentuée,
+donc aucune relance, et le texte **le plus visible du post** — dessiné en gros
+sur l'image — est parti tel quel.
+
+Le critère de la légende ne se transpose PAS : il demande une longueur
+minimale, et un texte de cover est court. Mesure sur les 1 980 textes de
+variantes en base : **58,6 % n'ont aucun accent**, encore 36,9 % au-delà de
+70 caractères — une accroche française peut légitimement n'en porter aucun
+(« Le line-up tombe ce week-end »). Tout seuil de longueur rendrait le contrôle
+inerte ou bavard, et le précédent de la clôture en question (six sur six,
+jusqu'à trois appels `composer_model`) interdit le second.
+
+`app/content/accents.py` cherche donc un MOT, par deux références : la LÉGENDE
+du même brouillon (le modèle sait écrire le français, il ne l'applique pas aux
+textes rendus — zéro maintenance) et un lexique de 162 entrées DÉRIVÉ des 148
+légendes accentuées en base (la procédure est dans l'en-tête du module ; les 20
+légendes ASCII sont écartées du corpus, sinon leur « apres » sert de
+contre-preuve à « après »). Deux garde-fous, tous deux mesurés : **l'accent
+perdu ne doit pas être sur la dernière lettre** (`joue`/`joué`,
+`invite`/`invité`, `signe`/`signé` sont tous deux du français valide — sans
+cette règle, 15 des 26 rapprochements bruts étaient des participes CORRECTS),
+et **un mot capitalisé en milieu de texte est ignoré** (le lexique porte
+`video`, `special`, `piece`, qui sont de l'anglais valide : « Video Games »).
+Résultat mesuré : **68 textes signalés sur 1 980 (3,4 %), 24 posts sur 165
+(14,5 % des compositions), zéro faux positif**.
+
+Conséquence assumée : une composition sur sept paie un appel `composer_model`
+de plus — mais pour un défaut RÉEL à chaque fois. Même mécanique non bloquante
+que les quatre contrôles voisins : relance, puis acceptation avec un
+avertissement. Ce que le contrôle NE sait PAS faire : « invite » et « a », les
+deux fautes exactes du post 168, sont ambiguës et restent hors de portée d'un
+critère déterministe — c'est le reste du brouillon (« scene », « joues ») qui
+déclenche la relance, et la relance réécrit les quatre variantes.
+
 **Une énumération se surligne en entier, ou pas du tout** (2026-10-01, post
 « **Angèle**, **Caroline Polachek** et SebastiAn s'unissent sur "Love
 Triangle" » : deux artistes sur trois surlignés, rien ne justifie la
@@ -2312,6 +2349,36 @@ cas même pour lequel il a été écrit. La requête produite est désormais
 (`tests/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
 (le saut depuis la Tâche 5, l'aplat Kinda avant elle) n'est atteinte qu'APRÈS
 une recherche web restée bredouille.
+
+**Les encyclopédies sont écartées comme les banques d'images** (2026-10-04,
+post 164 Tomorrowland Winter publié le 03/10 : la troisième slide était le logo
+du festival, recadré au point que les lettres étaient coupées — « MORROWL » —,
+venu de l'`og:image` de `en.wikipedia.org`). L'image de tête d'un article
+encyclopédique sur une marque, un festival ou un groupe est presque toujours
+son emblème : c'est le producteur de logos le plus régulier du web, exactement
+le motif qui faisait déjà écarter les banques d'images. Mesure sur
+`visuels_web_cache_path` (7 requêtes, 21 candidats) : `en.wikipedia.org` est le
+domaine le **plus fréquent**, 4 candidats sur 21 (19 %), dans 3 requêtes sur 7.
+Ajoutés : `wikipedia.org`, `wikimedia.org`, `wikidata.org`, `wiktionary.org`,
+`fandom.com`, `wikia.`.
+
+Plus un filtre qui ne dépend d'aucun domaine : **une `og:image` dont le nom de
+fichier se dit logo** (`est_un_logo`, le mot isolé par la ponctuation du CHEMIN
+— jamais la requête, où un paramètre de CDN porte n'importe quoi). Les trois
+logos du cache le disaient tous les trois (`Tomorrowland_festival_logo.svg`,
+`OUT.FEST_2021_logo_1.png`, `logo_blue_white_320x250.png`), soit 14 % des
+candidats. Total : **6 candidats sur 21 écartés (29 %), zéro requête vidée** —
+aucune actu ne perd son dernier recours.
+
+Le filtre vaut à la COLLECTE **et à la relecture du cache** : une entrée posée
+avant ce correctif servirait sinon le défaut pendant encore
+`visuels_web_cache_jours`, et refiltrer coûte zéro requête là où rejouer la
+recherche en coûterait une payante. Et il est posé dans `recherche_web`, le
+point par lequel passent les DEUX usages : le fond de cover ET les slides —
+l'image fautive du post 164 était une slide. Le juge visuel n'est PAS durci :
+il reste indulgent (`meilleures_photos(garder_inconnues=True)`) parce que
+l'alternative y est de sauter l'article entier ; ces deux filtres-ci sont
+déterministes et gratuits, ils le laissent tranquille.
 
 **Pas de filtrage de licence**, décision explicite de l'utilisateur (« non mais
 c'est un projet perso donc c'est ok »). **Le site n'est en revanche plus cité**
