@@ -1361,6 +1361,42 @@ et « et X » FERME l'énumération (sinon « entre Londres, Miami et Liverpool,
 signale que 0,3 % des textes, là où la clôture en question en signalait six sur
 six et provoquait jusqu'à trois appels `composer_model` par composition.
 
+**Une date absolue, jamais « ce soir »** (2026-10-04, `app/content/reperes.py`).
+Post 153, publié le 04/10 à 10h21 : la cover disait « **This Dream Of You**, le
+nouveau son de **Martin Garrix**, sort à minuit » et la légende « sort ce soir à
+minuit », pour un morceau sorti dans la nuit du 2 au 3 — le brouillon avait été
+composé le 02/10 à 12h30, **45,9 heures plus tôt**. Sur les 12 derniers posts
+publiés, 3 portaient un repère relatif et **2 étaient faux** au moment de partir.
+C'est un défaut de **VÉRACITÉ**, pas de forme : un compte d'actu qui annonce
+comme à venir ce qui est déjà sorti perd sa crédibilité bien plus vite qu'avec un
+accent manquant — d'où sa place EN TÊTE de `probleme_de_variantes` et de
+`probleme_de_legende`. La cause est structurelle : le modèle écrit à la
+composition et il écrit juste **à cet instant**, mais le créneau glisse.
+
+Même mécanique que les quatre contrôles précédents (relance, puis acceptation
+avec avertissement — jamais un créneau perdu). Mesure sur la base : **3,8 % des
+1 992 textes de cover, 9,5 % des 169 légendes, 13,0 % des posts** — l'ordre de
+grandeur de `probleme_accents_de_cover`, et les 91 textes signalés portent tous
+un repère réel, zéro faux positif. Deux formulations fréquentes sont **hors
+table** parce qu'elles ne vieillissent pas : « dispo dès maintenant » (15 covers,
+11 légendes — une sortie déjà faite le restera) et « bientôt » / « sous peu »
+(vague par nature). Trois pièges mesurés : « ce soir-**là** » est un rappel du
+passé (post 170), « la soir**ée** Trash » n'est pas « ce soir », et
+**« aujourd'hui » est écarté de la PROSE** — dans une légende, 8 des 10
+occurrences sont le sens atemporel (« le morceau ressurgit aujourd'hui sous une
+nouvelle forme », posts 29/34/35/36/37), dans une cover les 6 sont datées. Même
+précédent que `probleme_accents` contre `probleme_accents_de_cover` : deux textes
+de nature différente, deux critères.
+
+**Et `build_user_prompt` donne désormais « Date du jour »**, sinon la règle 9 est
+INSATISFIABLE : on demande une date absolue à la place de « demain », or
+« Publié le » seule ne dit pas au modèle quel jour on est — il ne peut ni
+convertir le « demain » de l'article, ni voir que cet article date de la veille.
+C'est exactement le post 156 (« sort demain » pour une actu de la veille, déjà
+sortie le jour même) : le modèle a **recopié** le repère de l'article faute de
+pouvoir le dater. Le nom du jour vient de `reperes.JOURS` et jamais de `%A`, qui
+suit la locale du processus.
+
 ## Publication automatique (`app/publish/`, `app/schedule/`)
 
 Kinda publie seul **trois carrousels et trois reels par jour** (2026-09-18 ; deux
@@ -1760,6 +1796,57 @@ Enfin, **19 passages ont eu lieu sans atteindre Neon** (« base injoignable apre
 5 essais espaces de 6 s »), tous au bord d'un trou de veille : `attendre_base()`
 accorde 30 s, parfois trop court au reveil. Compte avec les absences, pas comme
 une panne distincte.
+
+**La fraîcheur du TEXTE est relue au GEL** (2026-10-04). Le contrôle de
+composition ci-dessus ne protège que les posts à venir ; un brouillon déjà en
+base dont le créneau a glissé doit être **recomposé** plutôt que publié tel quel,
+et le gel (T-2h) est le dernier moment où l'on peut agir. Un critère de plus à
+côté de `_brouillon_perime` (`runner._reperes_perimes`) plutôt qu'un second
+chemin : le mécanisme « ce brouillon est périmé, on recompose » existe déjà.
+
+**Le critère n'est PAS un nombre d'heures, et c'est mesuré** : le post 101 était
+FAUX à **10,8 h** d'écart (« demain à 18h », composé mer 20h12, publié jeu 07h03
+— minuit franchi) quand le post 115 restait VRAI à **19,5 h** (« vendredi
+prochain », composé ven 20h23, publié sam 15h56 — même semaine ISO, même vendredi
+désigné). Le plus COURT est faux, le plus LONG est vrai : aucun seuil en heures ne
+les sépare. Ce qui les sépare est la **frontière de calendrier** franchie, à
+l'heure de Paris — jour pour « demain / ce soir / minuit / aujourd'hui », semaine
+ISO pour « ce week-end / cette semaine / la semaine prochaine », mois pour « le
+mois prochain », et pour un jour nommé (« ce vendredi », « vendredi prochain ») la
+DATE calculée depuis la semaine d'écriture. Coût mesuré sur les 52 posts publiés
+de la base : **2 recompositions (3,8 %)**, les deux justes, zéro faux positif —
+soit ~0,2 appel `composer_model` de plus par jour à six publications. Réglage :
+`publication_reperes_relus` (`true` par défaut ; `false` rend exactement le
+comportement d'avant).
+
+La référence de temps est `post.created_at` contre **maintenant**, jamais contre
+`creneau.publier_a` : sinon un brouillon composé ce soir pour un créneau de demain
+matin serait périmé à la seconde où on l'écrit, donc recomposé à chaque passage de
+l'agent jusqu'à minuit. Avec `maintenant`, un brouillon frais n'est jamais périmé
+et une recomposition pose un `created_at` du jour de lecture : **au plus une
+recomposition par frontière franchie, jamais une boucle.** Seuls les textes
+RETENUS sont relus (`slides[0]` et la légende), jamais les quatre variantes : trois
+d'entre elles ne partiront jamais.
+
+Deux garde-fous, parce qu'une recomposition ne doit **jamais** faire perdre le
+créneau — on publie l'ancien texte plutôt que rien, en le journalisant :
+- **Article purgé = pas de relâchement.** `retention_days` vaut 2 jours et le
+  créneau est alors AUTONOME (`store.porte_un_post_orphelin`) : personne ne peut
+  recomposer sans titre ni résumé, et lâcher le post rendrait le créneau invisible
+  de la composition comme du gel, jusqu'à MANQUE. C'est le cas MÊME du post 153,
+  dont l'article avait été purgé — c'est le contrôle de composition qui empêche ce
+  texte d'exister, pas le gel.
+- **Un REPLI.** Un brouillon périmé pour son seul TEXTE est par ailleurs
+  publiable (visuels copiés en local, crédit, palette, légende intacts),
+  contrairement à un brouillon périmé pour ses VISUELS, qui ne partirait pas de
+  toute façon. `_composer` le garde donc en repli : si la recomposition échoue
+  (`AucunVisuel`, `VisuelsDifferes`, `VisuelIntrouvable`, `CompositionError`, ou
+  une panne systémique comme le solde Anthropic épuisé du 2026-09-30),
+  `runner._replier` le rend au créneau avec un WARNING, au lieu d'exclure
+  l'article ou de sauter. Il marque alors le créneau (`RAISON_TEXTE_PERIME`) et le
+  gel ne relâche pas ce post une seconde fois : **une tentative par créneau**,
+  sans quoi gel et composition se renvoyaient la balle à chaque passage de l'agent
+  (10 min) pendant les 2 h du gel, à trois appels Sonnet chacun.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
 Pourquoi les creneaux sont manques, avec des effectifs :

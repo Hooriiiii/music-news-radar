@@ -15,6 +15,7 @@ si aucune tentative n'aboutit.
 import datetime as dt
 import inspect
 import logging
+from zoneinfo import ZoneInfo
 
 import anthropic
 import pydantic
@@ -28,6 +29,7 @@ from app.content.accents import mot_desaccentue, porte_un_accent
 from app.content.emojis import EMOJI_RE as _EMOJI_RE
 from app.content.highlight import enumeration_incoherente, validate_headline
 from app.content.legende import sans_mentions_de_source
+from app.content.reperes import JOURS as JOURS_SEMAINE, repere_relatif
 from app.content.illustration import (
     Fond,
     Verdict,
@@ -330,6 +332,50 @@ def probleme_accents_de_cover(texte: str, legende: str) -> str | None:
     )
 
 
+def probleme_repere_relatif(texte: str, *, prose: bool = False) -> str | None:
+    """Decrit, pour la relance, un repere temporel RELATIF ; None sinon.
+
+    Le defaut (post 153, publie le 2026-10-04 a 10h21) : la cover annoncait
+    « **This Dream Of You** [...] sort a minuit » et la legende « sort ce soir a
+    minuit », pour un morceau sorti dans la nuit du 2 au 3 -- le brouillon avait
+    ete compose 45,9 heures plus tot. Sur les 12 derniers posts publies, 3
+    portaient un repere relatif et 2 etaient FAUX au moment de partir.
+
+    La cause est structurelle : le modele ecrit a la composition, avec l'actu sous
+    les yeux, et il ecrit juste A CET INSTANT -- or le post part des heures, parfois
+    des jours plus tard (le creneau glisse). Une date absolue, elle, reste vraie
+    quelle que soit l'heure de depart. C'est le seul de ces controles qui porte sur
+    la VERACITE et non sur la forme, d'ou sa place en tete : un fait faux se voit
+    plus qu'un accent manquant.
+
+    Mesure sur la base (1 992 textes de cover, 169 legendes) : 3,8 % des covers et
+    9,5 % des legendes signalees, 13,0 % des posts -- l'ordre de grandeur de
+    `probleme_accents_de_cover` (3,4 % des textes, 14,5 % des posts), et les 91
+    textes signales sont des reperes reels, zero faux positif. Deux formulations
+    frequentes sont volontairement HORS table parce qu'elles ne vieillissent pas :
+    « dispo des maintenant » (une sortie deja faite le restera) et « bientot »
+    (vague par nature). Voir `app/content/reperes.py` pour le detail.
+
+    Meme mecanique que les quatre controles precedents : pas un validateur de
+    `PostDraft`, une relance puis une acceptation avec avertissement. Un post qui
+    dit « ce soir » vaut encore mieux que pas de post.
+    """
+    repere = repere_relatif(texte, prose=prose)
+    if repere is None:
+        return None
+    return (
+        f"Le texte « {texte} » situe l'actu avec « {repere.expression} », un repere "
+        "RELATIF au jour ou tu ecris. Ce post ne part pas maintenant : il est "
+        "compose a l'avance et publie plus tard, parfois le lendemain ou le "
+        "surlendemain -- « ce soir » et « demain » seront alors FAUX, et un compte "
+        "d'actu qui annonce comme a venir ce qui est deja sorti perd sa "
+        "credibilite. Donne la date ABSOLUE a la place : « vendredi 3 octobre », "
+        "« le 3 octobre a minuit », « du 14 au 16 novembre ». Calcule-la depuis la "
+        "date du jour et la date de l'article, qui te sont donnees. Si tu ne peux "
+        "pas la calculer, formule sans repere temporel du tout."
+    )
+
+
 def probleme_de_variantes(draft: PostDraft) -> str | None:
     """Les defauts de FORME des textes RENDUS (accroche, titre, sous-titre).
 
@@ -338,8 +384,10 @@ def probleme_de_variantes(draft: PostDraft) -> str | None:
     c'est aussi ELLE qui sert de reference d'accentuation a ces trois-la."""
     for variante in draft.variantes:
         for texte in (variante.headline, variante.title, variante.subtitle):
-            probleme = probleme_enumeration_surlignee(texte) or probleme_accents_de_cover(
-                texte, draft.caption
+            probleme = (
+                probleme_repere_relatif(texte)
+                or probleme_enumeration_surlignee(texte)
+                or probleme_accents_de_cover(texte, draft.caption)
             )
             if probleme is not None:
                 return probleme
@@ -348,7 +396,12 @@ def probleme_de_variantes(draft: PostDraft) -> str | None:
 
 def probleme_de_legende(caption: str) -> str | None:
     """Les defauts de FORME qui font relancer sans jamais faire perdre le post."""
-    return probleme_emojis(caption) or probleme_accents(caption) or probleme_cloture_question(caption)
+    return (
+        probleme_repere_relatif(caption, prose=True)
+        or probleme_emojis(caption)
+        or probleme_accents(caption)
+        or probleme_cloture_question(caption)
+    )
 
 
 SYSTEM_PROMPT = """\
@@ -457,7 +510,21 @@ bande-son », « intitule », « depasse » sans accent font traduction automati
 ecris « pensé », « intitulé », « dépassé », « à », « ça », « où ». Jamais d'ASCII \
 approximatif.
 
-9. LE VISUEL COMMANDE LE NOM : quand la ligne « Compte du visuel publie » est \
+9. JAMAIS DE REPERE TEMPOREL RELATIF -- des DATES. Tu ecris MAINTENANT, mais ce \
+post ne part pas maintenant : il est compose a l'avance, et publie des heures, \
+parfois un ou deux jours plus tard. « sort ce soir », « demain a 18h », « ce \
+week-end », « cette semaine », « a minuit », « aujourd'hui » seront alors FAUX -- \
+un compte d'actu qui annonce comme a venir ce qui est deja sorti perd sa \
+credibilite. Ecris la date : "**This Dream Of You** sort le **3 octobre**", \
+jamais "sort ce soir a minuit" ; "vendredi **3 octobre** a minuit", jamais \
+"demain a minuit". Calcule-la depuis « Date du jour » et « Publie le », qui te \
+sont donnees -- et attention, l'ARTICLE est souvent plus vieux que la date du \
+jour : son « demain » n'est pas le tien, ne le recopie pas. Si la date reste \
+incalculable, formule sans aucun repere temporel. Ce qui reste permis : une date \
+absolue, un mois, une saison, une annee, et « des maintenant » pour ce qui est \
+deja sorti (vrai pour toujours).
+
+10. LE VISUEL COMMANDE LE NOM : quand la ligne « Compte du visuel publie » est \
 donnee, elle dit de QUI est la video ou la photo que le post affichera. Dans \
 `title` / `subtitle` -- les textes du REEL, qui sont poses sur cette video --, \
 l'artiste nomme doit etre CELUI-LA. Si l'actu cite plusieurs artistes (un \
@@ -470,8 +537,29 @@ N'invente aucun fait qui ne figure pas dans l'article : ni date, ni lieu, ni nom
 """
 
 
-def build_user_prompt(article: Article, compte_visuel: str | None = None) -> str:
-    parts = [f"Titre : {article.title}"]
+def build_user_prompt(
+    article: Article,
+    compte_visuel: str | None = None,
+    *,
+    aujourd_hui: dt.date | None = None,
+) -> str:
+    """Le prompt utilisateur d'une composition.
+
+    « Date du jour » n'est pas decorative : sans elle, la regle 9 est
+    INSATISFIABLE. On demande au modele une date absolue a la place de « demain »,
+    or « Publie le » seule ne lui dit pas quel jour on est -- il ne peut donc ni
+    convertir le « demain » de l'article, ni voir que cet article date de la
+    veille. C'est exactement ce qui s'est passe sur le post 156 (publie le
+    2026-10-02 a 16h54, « sort demain » pour une actu de la veille deja sortie le
+    jour meme) : le modele a recopie le repere de l'article faute de pouvoir le
+    dater. Le fuseau est celui de la publication -- c'est le jour du lecteur.
+    """
+    if aujourd_hui is None:
+        aujourd_hui = dt.datetime.now(ZoneInfo(settings.publication_fuseau)).date()
+    # Le nom du jour vient de `reperes.JOURS`, jamais de `%A` : celui-la suit la
+    # locale du processus et rendrait « Sunday » sur une machine en anglais.
+    jour = JOURS_SEMAINE[aujourd_hui.weekday()]
+    parts = [f"Date du jour : {jour} {aujourd_hui:%d/%m/%Y}", f"Titre : {article.title}"]
     if article.summary:
         parts.append(f"Resume : {article.summary[:2000]}")
     if article.source is not None:
