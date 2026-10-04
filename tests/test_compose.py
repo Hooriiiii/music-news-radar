@@ -16,6 +16,8 @@ from app.content.compose import (
     make_claude_composer,
     probleme_accents,
     probleme_cloture_question,
+    probleme_de_legende,
+    probleme_de_variantes,
     probleme_emojis,
     probleme_enumeration_surlignee,
     resoudre_fond,
@@ -1343,3 +1345,116 @@ def test_composer_accepte_une_enumeration_bancale_plutot_que_de_perdre_le_crenea
 
 def test_le_prompt_demande_une_enumeration_coherente():
     assert "TOUS ou \\\nAUCUN" in SYSTEM_PROMPT or "TOUS ou AUCUN" in SYSTEM_PROMPT.replace("\n", " ")
+
+
+# --- Le post 168 : la cover desaccentuee que la legende cachait ------------
+#
+# Publie le 2026-10-03 a 21h01. Bande de titre du reel : « Troye Sivan /
+# invite surprise de Charli XCX a l'ACL » -- « invite » pour « invité », « a »
+# pour « à », dans le texte le plus visible du post. Sa legende, elle, etait
+# parfaitement accentuee : `probleme_accents` ne voyant qu'elle, aucune
+# relance n'a ete declenchee et la cover est partie telle quelle.
+
+_LEGENDE_168 = (
+    "Troye Sivan a fait une apparition surprise pendant le set de Charli XCX à "
+    "l'Austin City Limits, pour interpréter deux titres tirés de son prochain "
+    "album. 🎧\n\nCes morceaux sont extraits de She's The Best, qui sort la "
+    "semaine prochaine. Le duo sur scène confirme une complicité qui dépasse le "
+    "simple featuring. ✨\n\nOn attend déjà l'album, avec en tête ces deux "
+    "premiers extraits joués live à Austin."
+)
+# Les quatre variantes telles qu'elles sont en base.
+_VARIANTES_168 = [
+    (
+        "**Troye Sivan** surprise **Charli XCX** sur scene a l'ACL pour deux titres",
+        "**Troye Sivan**",
+        "invite surprise de **Charli XCX** a l'ACL",
+    ),
+    (
+        "Deux titres de **She's The Best** en live avant la sortie de l'album",
+        "**She's The Best**",
+        "deux titres joues en avant-premiere a l'**ACL**",
+    ),
+    (
+        "**Austin City Limits** accueille un duo inattendu avec **Charli XCX**",
+        "**Austin City Limits**",
+        "**Troye Sivan** monte sur scene avec Charli XCX",
+    ),
+    (
+        "L'album de **Troye Sivan** arrive, un avant-gout livre a l'**ACL**",
+        "**Troye Sivan**",
+        "un avant-gout de son album, **une semaine avant** la sortie",
+    ),
+]
+
+
+def _draft_168(textes=None):
+    return PostDraft(
+        variantes=[
+            CoverVariante(headline=h, title=t, subtitle=s)
+            for h, t, s in (textes or _VARIANTES_168)
+        ],
+        caption=_LEGENDE_168,
+        hashtags=[],
+    )
+
+
+def test_la_legende_du_post_168_passe_tous_les_controles_de_legende():
+    """Le point exact du trou : rien dans la LEGENDE n'etait a redire."""
+    assert probleme_de_legende(_LEGENDE_168) is None
+
+
+def test_le_post_168_est_desormais_signale_par_ses_textes_de_cover():
+    probleme = probleme_de_variantes(_draft_168())
+    assert probleme is not None
+    assert "scene" in probleme and "scène" in probleme
+
+
+def test_un_brouillon_bien_accentue_ne_declenche_rien():
+    """Les memes textes, accentues : aucun signalement, aucune relance."""
+    corriges = [
+        (
+            "**Troye Sivan** surprise **Charli XCX** sur scène à l'ACL pour deux titres",
+            "**Troye Sivan**",
+            "invité surprise de **Charli XCX** à l'ACL",
+        ),
+        (
+            "Deux titres de **She's The Best** en live avant la sortie de l'album",
+            "**She's The Best**",
+            "deux titres joués en avant-première à l'**ACL**",
+        ),
+        (
+            "**Austin City Limits** accueille un duo inattendu avec **Charli XCX**",
+            "**Austin City Limits**",
+            "**Troye Sivan** monte sur scène avec Charli XCX",
+        ),
+        (
+            "L'album de **Troye Sivan** arrive, un avant-goût livré à l'**ACL**",
+            "**Troye Sivan**",
+            "un avant-goût de son album, **une semaine avant** la sortie",
+        ),
+    ]
+    assert probleme_de_variantes(_draft_168(corriges)) is None
+
+
+def test_composer_relance_une_cover_desaccentuee_puis_accepte(db_session):
+    """Non bloquant, comme les emojis et la cloture : on relance une fois, et si
+    le modele ne fait pas mieux on accepte avec un avertissement plutot que de
+    perdre la composition d'un creneau."""
+    article = _article(db_session)
+    client = _FakeClient([_FakeParsedResponse(_draft_168())] * 3)
+
+    composer = make_claude_composer(client=client)
+    draft = composer(article)
+
+    assert len(client.messages.appels) == 3  # relance, relance, puis acceptation
+    relance = _contenu_utilisateur(client.messages.appels[1])
+    assert "scène" in relance
+    assert draft.caption == _LEGENDE_168
+
+
+def test_la_relance_nomme_les_textes_rendus_et_non_la_legende():
+    """Le message doit dire OU corriger : trois posts du 2026-09-18 avaient deja
+    montre qu'une consigne qui vise `caption` ne deplace pas les covers."""
+    probleme = probleme_de_variantes(_draft_168())
+    assert "headline" in probleme and "title" in probleme and "subtitle" in probleme

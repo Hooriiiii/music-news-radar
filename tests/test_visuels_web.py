@@ -11,6 +11,7 @@ Aucun reseau : chercheur, telechargement et juge sont injectes.
 import datetime as dt
 import io
 import itertools
+import json
 
 import pytest
 from PIL import Image
@@ -20,6 +21,11 @@ from app.content.choix_visuels import AucunVisuel, actif_du_web, choisir_visuels
 from app.content.compose import actifs_de_secours
 from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.legende import texte_legende
+from app.content.recherche_web import (
+    CACHE_VERSION,
+    candidats_du_web,
+    est_un_logo,
+)
 from app.content.media import entree
 from app.content.visuels import (
     FOND_KINDA,
@@ -391,3 +397,107 @@ def test_un_fond_trop_petit_pour_etre_agrandi_part_sur_l_aplat_apres_le_web(
 
     assert fond == Fond(FOND_KINDA, ORIGINE_KINDA)
     assert chercheur.requetes, "le web doit avoir ete interroge avant l'aplat"
+
+
+# --- Le post 164 : une encyclopedie ne publie pas des photos, des logos ----
+
+
+def _maintenant():
+    """Horloge RELATIVE : une date figee a deja pourri deux fois ces tests."""
+    return dt.datetime.now(UTC)
+
+
+def test_wikipedia_est_ecarte_comme_une_banque_d_images(db_session, monkeypatch):
+    """Post 164 (Tomorrowland Winter, publie le 2026-10-03) : la troisieme slide
+    etait le logo du festival, recadre au point que les lettres etaient coupees
+    (« MORROWL »). Il venait de l'`og:image` de `en.wikipedia.org`. Mesure sur
+    le cache reel (7 requetes, 21 candidats) : c'est le domaine le PLUS
+    frequent, 4 candidats sur 21."""
+    pages = [
+        ("https://en.wikipedia.org/wiki/Tomorrowland_(festival)", "Tomorrowland"),
+        ("https://djmag.com/news/tomorrowland", "DJ Mag"),
+    ]
+    monkeypatch.setattr(
+        "app.content.recherche_web.image_de_partage",
+        _extraction({
+            "https://en.wikipedia.org/wiki/Tomorrowland_(festival)":
+                "https://upload.wikimedia.org/wikipedia/en/9/90/Tomorrowland_festival_logo.svg",
+            "https://djmag.com/news/tomorrowland": "https://djmag.com/img/tml.jpg",
+        }),
+    )
+    trouves = candidats_du_web(
+        _article(db_session, _source(db_session)),
+        maintenant=_maintenant(),
+        chercheur=Chercheur(pages),
+    )
+    assert [c.domaine for c in trouves] == ["djmag.com"]
+
+
+def test_une_og_image_qui_se_dit_logo_est_ecartee(db_session, monkeypatch):
+    """Le nom du fichier suffit, quel que soit le site : trois logos du cache
+    reel le disaient (`..._logo.svg`, `OUT.FEST_2021_logo_1.png`,
+    `logo_blue_white_320x250.png`), soit 3 candidats sur 21."""
+    pages = [
+        ("https://1001tracklists.com/dj/avh", "1001"),
+        ("https://i-d.co/article/avh", "i-D"),
+    ]
+    monkeypatch.setattr(
+        "app.content.recherche_web.image_de_partage",
+        _extraction({
+            "https://1001tracklists.com/dj/avh":
+                "https://cdn.1001tracklists.com/images/static/logo_blue_white_320x250.png",
+            "https://i-d.co/article/avh": "https://media.i-d.co/2024/05/avh.jpg",
+        }),
+    )
+    trouves = candidats_du_web(
+        _article(db_session, _source(db_session)),
+        maintenant=_maintenant(),
+        chercheur=Chercheur(pages),
+    )
+    assert [c.domaine for c in trouves] == ["i-d.co"]
+
+
+def test_le_mot_logo_doit_etre_isole_dans_le_chemin():
+    """Cherche en sous-chaine libre, le filtre attraperait « technologo » ou un
+    artiste nomme « Logout » : une photo jetee par erreur appauvrit le post."""
+    assert est_un_logo("https://x.example/img/festival_logo.svg")
+    assert est_un_logo("https://x.example/logos/tml.png")
+    assert est_un_logo("https://x.example/wp-json/generate-og-image-with-logo/45845")
+    assert not est_un_logo("https://x.example/img/technologo-live.jpg")
+    assert not est_un_logo("https://x.example/artists/logout/photo.jpg")
+    # Jamais la requete : un parametre de CDN peut porter n'importe quoi.
+    assert not est_un_logo("https://x.example/img/scene.jpg?ref=logo")
+
+
+def test_un_candidat_deja_memorise_repasse_par_les_filtres(db_session, monkeypatch):
+    """Une entree posee avant ces filtres servirait sinon le defaut pendant
+    encore `visuels_web_cache_jours`. Refiltrer coute zero requete ; reponnoncer
+    la recherche en couterait une payante."""
+    maintenant = _maintenant()
+    chemin = settings.visuels_web_cache_path
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    chemin.write_text(json.dumps({
+        "version": CACHE_VERSION,
+        "requetes": {
+            "Tomorrowland festival photo": {
+                "le": maintenant.isoformat(),
+                "candidats": [
+                    {"page": "https://en.wikipedia.org/wiki/Tomorrowland",
+                     "titre": "Tomorrowland", "image": "https://upload.wikimedia.org/a.svg",
+                     "domaine": "en.wikipedia.org"},
+                    {"page": "https://djmag.com/news/tml", "titre": "DJ Mag",
+                     "image": "https://djmag.com/img/tml.jpg", "domaine": "djmag.com"},
+                ],
+            }
+        },
+    }), encoding="utf-8")
+    article = _article(db_session, _source(db_session), titre="Tomorrowland devoile",
+                       artistes=())
+    monkeypatch.setattr("app.content.recherche_web.requete_pour",
+                        lambda _: "Tomorrowland festival photo")
+
+    def jamais(_requete):
+        raise AssertionError("une recherche payante a ete relancee")
+
+    trouves = candidats_du_web(article, maintenant=maintenant, chercheur=jamais)
+    assert [c.domaine for c in trouves] == ["djmag.com"]
