@@ -1849,6 +1849,8 @@ créneau — on publie l'ancien texte plutôt que rien, en le journalisant :
   (10 min) pendant les 2 h du gel, à trois appels Sonnet chacun.
 
 Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
+Ce qui attend une relecture avant de partir : `GET /relecture`, ou la liste
+« À relire avant publication » en tete du panneau Posts du dashboard.
 Pourquoi les creneaux sont manques, avec des effectifs :
 `uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]`
 (lecture seule, aucun appel reseau).
@@ -2031,12 +2033,139 @@ republication, limitation de l'IP résidentielle — démarrer en `apercu`.
 soit « Gelé » (publié, aperçu ou manqué), puis descendre. Sinon un reel gelé
 perdrait en cours de route son format et son crédit obligatoire.
 
+## La fenetre de relecture avant publication (2026-10-04)
+
+**Pourquoi.** Trois defauts reels, reperes A L'OEIL sur le compte publie en deux
+jours et invisibles de toute la suite de tests : un logo Wikipedia recadre en
+derniere slide, un reel de 4 secondes sans rapport avec l'actu, une annonce
+« sort ce soir » publiee deux jours apres la sortie. Demande de l'utilisateur :
+pouvoir verifier et corriger avant le depart, parce que « certains elements sont
+difficilement detectables par l'app ». C'est juste, et c'est tout le chantier.
+
+**L'INVARIANT, qui gouverne tout : si personne ne relit, ca publie quand meme a
+l'heure.** La relecture est une OPTION, jamais une condition. Un post qui
+attendrait une validation ressemble a un post en cours, et le taux de publication
+est deja a moins de la moitie des creneaux aboutis. Aucune fonction de
+`app/schedule/relecture.py` n'est lue par `runner._publier` ; preuve par mutation
+dans `tests/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`
+(on ajoute dans `_publier` le `if post.status is PostStatus.DRAFT: continue`
+qu'un contributeur presse ecrirait, et le test rougit — rien d'autre dans la
+suite ne bougeait).
+
+**LA MESURE QUI A DEPLACE LA FENETRE.** On cherchait d'abord cette fenetre au
+GEL, puisque c'est la que tout est fige. Sur les 85 creneaux reellement geles en
+base (sur 125) :
+
+| ecart gel → heure prevue | n=85 |
+|---|---|
+| mediane | 105 min |
+| p25 | 33 min |
+| ≤ 30 min | 18 (21 %) |
+| ≤ 5 min | 12 (14 %) |
+
+Un creneau sur sept est gele a moins de **cinq minutes** de son depart (passage
+rattrape au reveil du Mac) : une fenetre accrochee au gel n'existerait pas pour
+lui. Alors que le POST existe BIEN plus tot — ecart composition → heure prevue,
+n=111 creneaux portant un post : **mediane 737 min (12 h)**, p25 258 min, et
+seulement 9 sur 111 sous 2 h. **La fenetre s'ouvre donc a la COMPOSITION**, ou le
+creneau est PROGRAMME donc deja librement editable. Le gel n'est que le DERNIER
+APPEL.
+
+Ce qui manquait n'etait pas du temps. C'etait trois choses.
+
+**1. Rien ne prevenait.** `runner._annoncer_relecture`, etape isolee comme les
+autres, notifie (macOS — le seul canal du projet : ni mail ni Discord, CLAUDE.md
+interdit de re-proposer SMTP) quand un post compose entre dans les
+`publication_relecture_avance_minutes` (**120**) qui precedent son depart.
+Declenchee par l'HORLOGE et jamais par le gel, precisement a cause de la mesure
+ci-dessus. **Au plus UNE annonce par creneau** (`relecture.json` a cote du jeton,
+meme mecanique que `quota_graph.json` : ecriture atomique, temporaire nomme par
+processus, purge des entrees de plus d'un jour, aucune ecriture en LECTURE) —
+six notifications par post est la facon la plus sure d'apprendre a les ignorer.
+Plus un voyant `relecture` au bandeau, et un compteur `annonces_relecture` dans
+le log de `run_publication`. Le voyant reste **`ok`** quand des posts attendent :
+peindre en ATTENTION ce qui part tout seul reapprendrait a ignorer le bandeau
+(lecon du voyant de composition qui criait au loup, 2026-10-02). Il passe a
+ATTENTION pour une seule chose, une cover qui DEBORDE — celle-la, personne
+d'autre ne la rattrapera.
+
+**2. Rien ne montrait ce qui va PARTIR.** `GET /relecture` (`app/api/relecture.py`,
+`DepartOut`) rend, par creneau a venir portant un post, le texte EXACT que Meta
+recevra — c'est-a-dire `texte_legende(post)`, qui aere les paragraphes, remet le
+diese sur les hashtags, les deduplique, les plafonne a 30, ajoute la ligne de
+credit obligatoire et tronque a 2150 points de code. **La legende editee n'est
+pas la legende publiee**, l'audit UX du 02/10 l'avait releve, et `posts.credit`
+n'etait affiche NULLE PART. Un endpoint dedie et non `PostOut` elargi, meme motif
+que `GET /supervision` : la question croise `creneaux`, `posts` et un pipeline
+dont le resultat n'est stocke nulle part (il est calcule a l'instant de publier),
+et chaque lecteur de post paierait ce calcul pour rien. Au dashboard : une liste
+« À relire avant publication » en tete du panneau Posts, et une section « Ce qui
+va partir » dans la fiche. `deborde` vaut **`None`** tant qu'aucun rendu ne l'a
+mesure et s'affiche « inconnu » : un `false` par defaut serait un faux feu vert
+sur le seul signal qui doit empecher une publication en defaut.
+
+**3. Le gel fermait la porte, et il la fermait TROP LARGE.** `PATCH /posts/{id}`
+repondait 409 sur un creneau GELE pour les cinq champs de contenu. Or
+**`caption` et `hashtags` ne sont PAS figes** : `runner._publier` appelle
+`texte_legende(post)` juste avant l'appel a Meta, en lisant la base. Le 409 qui
+les bloquait etait une SUR-PORTEE, pas une protection — il fermait la porte
+exactement dans les deux heures ou l'utilisateur veut corriger (« modifier la
+description »), alors que rien dans le gel n'en depend. Le refus se scinde donc
+en deux (`CHAMPS_FIGES`) :
+- **publication EN VOL** (creneau reclame, `RAISON_RECLAMATION` de moins de
+  20 min) → tout est refuse, legende comprise : le conteneur est parti chez Meta
+  AVEC son texte ;
+- **fichiers figes** (creneau GELE) → seuls `slides`, `variante_retenue` et
+  `template` sont refuses, et **le refus nomme le remede** au lieu de laisser
+  l'utilisateur devant une porte fermee.
+
+**`POST /schedule/{id}/rouvrir`** est ce remede : il n'ouvre pas l'edition, il
+**INVALIDE le gel** (GELE → PROGRAMME, `fichiers = NULL`, dossier fige efface) et
+le gel normal refait les fichiers au passage suivant. Trois refus, chacun avec sa
+raison EN CLAIR : pas gele (rien a rouvrir), publication en vol, et **trop pres
+du depart** — `publication_relecture_regel_minutes` (**20** = deux passages de
+l'agent, pour qu'un premier gel differe ne soit pas fatal). Il **EPINGLE** le
+creneau : un PROGRAMME non epingle est repris par `appliquer_arbitrage` dans les
+10 minutes, et le post qu'on vient de rouvrir pour le corriger serait remplace.
+
+**Ce qui est GRATUIT ne passe jamais par la.** Legende et hashtags : zero re-gel,
+ils sont relus a la publication. Cover, slides, gabarit : un seul re-gel, qui est
+le minimum — le JPEG fige EST la cover. On ne repaie jamais Claude : le creneau
+garde son `post_id`, la composition n'est pas refaite.
+
+**Si le re-gel echoue, on ne perd pas le post.** `rouvrir` ecrit
+`RAISON_RELECTURE` dans `creneaux.erreur` — meme procede que `RAISON_RECLAMATION`,
+un marqueur lisible dans un champ libre relu par un autre module. `_geler` le lit
+AVANT toute ecriture du passage et change une seule chose : une
+`PreparationImpossible` **libere** le creneau au lieu d'**exclure** l'article a
+vie. Sans ca, une accroche rallongee d'un caractere de trop (cover qui deborde)
+brulerait l'actu pour une faute de frappe de l'utilisateur. Le marqueur passe en
+TETE d'un `gel differe`, exactement comme `_raison_manque` conserve la cause
+precedente : sinon un premier report effacerait la protection. Hors reouverture
+manuelle, un gel impossible exclut comme il l'a toujours fait (test-sentinelle).
+
+**Aucune double publication possible.** `rouvrir` n'appelle jamais Meta, et son
+ecriture est CONDITIONNELLE sur (etat, article, post) comme la reclamation de
+l'agent : un creneau deja reclame est en ECHEC, donc hors de la condition
+`etat == GELE` ; si l'agent reclame entre la lecture et l'ecriture, zero ligne
+est touchee et l'API rend 409. Apres l'appel le creneau est PROGRAMME, or
+`_publier` ne selectionne que `etat == GELE` — aucun chemin ne mene a
+`media_publish` avant un nouveau gel. La reclamation (GELE → ECHEC committe avant
+l'appel a Meta) n'a pas ete touchee.
+
+**Limite connue, assumee.** Le marqueur de relecture vit dans `creneaux.erreur` :
+les chemins de `_geler` qui ecrivent une AUTRE erreur et lachent le post
+(gabarit qui ne correspond plus, post supprime) l'effacent. Ces cas font de toute
+facon perdre le post au creneau, donc la protection n'y a pas d'objet — mais
+c'est une propriete du marqueur, pas une garantie du schema.
+
 ## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
 
 Un bandeau permanent en tete du dashboard, visible quel que soit le panneau, qui
 repond a une seule question : **« la machine tourne-t-elle, et qu'a-t-elle fait
-en mon nom ? »** Neuf voyants : mode de publication, composition/credits,
-creneaux du jour, dernier passage, sante des sources, quota Graph, pauses
+en mon nom ? »** Dix voyants : mode de publication, composition/credits,
+creneaux du jour, **relecture** (voir « La fenetre de relecture », juste
+au-dessus), dernier passage, sante des sources, quota Graph, pauses
 (yt-dlp, visuels sautes), et les DEUX jetons Meta.
 
 **Pourquoi.** Semaine du 2026-09-26 au 2026-10-02 : credits Anthropic epuises

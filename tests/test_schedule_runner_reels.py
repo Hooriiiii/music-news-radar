@@ -77,6 +77,15 @@ class Outils:
     def notifier(self, titre, message):
         self.notifications.append(message)
 
+    # Les notifications HORS annonce de relecture. L'annonce (« un post part a
+    # 14:37, va le relire ») est un canal LATERAL ajoute le 2026-10-04 : elle part
+    # du meme `notifier`, mais ces tests-ci decrivent des PANNES, et compter
+    # l'annonce avec elles ne mesurerait plus rien. Un filtre a UN endroit plutot
+    # que des bornes relachees dans chaque test.
+    @property
+    def alertes(self):
+        return [m for m in self.notifications if not m.startswith("relecture :")]
+
     def tourner(self, db, maintenant, mode="reel", avec_reels=True, lire_mode=None):
         return tourner(
             db, maintenant, mode=mode, composer=self.composer, preparer=self.preparer,
@@ -176,7 +185,7 @@ def test_ffmpeg_absent_n_exclut_rien_et_n_empeche_pas_le_gel_des_carrousels(db_s
     assert reel.etat == EtatCreneau.PROGRAMME and "ffmpeg" in reel.erreur
     db_session.refresh(video)
     assert video.file_exclu_raison is None
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
 
 
 def test_un_reel_d_artiste_sans_media_url_est_programme_en_reel(db_session):
@@ -211,7 +220,7 @@ def test_une_attente_yt_dlp_ne_notifie_ni_n_exclut_ni_ne_bloque(db_session, vide
     outils.tourner(db_session, BASE + dt.timedelta(minutes=10))
     assert reel.etat == EtatCreneau.PROGRAMME and "yt-dlp en pause" in reel.erreur
     assert carrousel.etat == EtatCreneau.GELE
-    assert outils.notifications == []
+    assert outils.alertes == []
     db_session.refresh(video)
     assert video.file_exclu_raison is None
 
@@ -225,7 +234,7 @@ def test_une_panne_yt_dlp_notifie_la_commande_de_mise_a_jour(db_session, video):
     )
     outils.tourner(db_session, BASE)
     assert reel.etat == EtatCreneau.PROGRAMME
-    assert len(outils.notifications) == 1 and MISE_A_JOUR in outils.notifications[0]
+    assert len(outils.alertes) == 1 and MISE_A_JOUR in outils.alertes[0]
     db_session.refresh(video)
     assert video.file_exclu_raison is None
 
@@ -284,7 +293,7 @@ def test_une_attente_sur_un_reel_n_empeche_pas_le_gel_du_suivant(db_session, vid
     outils.tourner(db_session, BASE)
     assert premier.etat == EtatCreneau.PROGRAMME and "differe" in premier.erreur
     assert second.etat == EtatCreneau.GELE
-    assert outils.notifications == []
+    assert outils.alertes == []
 
 
 def test_sans_outils_reel_aucun_reel_n_est_compose(db_session, video):
@@ -348,7 +357,7 @@ def test_une_panne_systemique_reel_suspend_les_reels_seulement(db_session, video
     assert len(outils.prepares_reel) == 1
     assert (reel.etat, autre_reel.etat) == (EtatCreneau.PROGRAMME, EtatCreneau.PROGRAMME)
     assert carrousel.etat == EtatCreneau.GELE
-    assert len(outils.notifications) == 1
+    assert len(outils.alertes) == 1
 
 
 def test_un_reel_gele_n_est_jamais_regele(db_session, video):
@@ -486,7 +495,7 @@ def test_un_reel_gele_manque_parce_que_les_reels_sont_coupes_le_dit(db_session, 
     outils = Outils()
     rapport = outils.tourner(db_session, BASE, avec_reels=False)
     assert rapport.manques == 1
-    (message,) = [n for n in outils.notifications if "manque" in n]
+    (message,) = [n for n in outils.alertes if "manque" in n]
     assert "reels coupés" in message
     assert "veille" not in message
 
@@ -497,7 +506,7 @@ def test_un_reel_manque_reels_actifs_garde_le_message_de_veille(db_session, vide
              etat=EtatCreneau.GELE, fichiers=["r_reel.mp4", "r_cover.jpg"])
     outils = Outils()
     outils.tourner(db_session, BASE)
-    (message,) = [n for n in outils.notifications if "manque" in n]
+    (message,) = [n for n in outils.alertes if "manque" in n]
     assert "veille" in message and "reels coupés" not in message
 
 

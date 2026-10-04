@@ -102,23 +102,46 @@ def lire_post(post_id: int, db: Session = Depends(get_db)):
     return post
 
 
-def _publication_figee(db: Session, post: Post) -> bool:
-    """Gele, ou RECLAME recemment par l'agent : conteneur en creation ou attente
-    de l'heure affichee. Une vieille reclamation (crash) ne fige plus rien."""
-    maintenant = dt.datetime.now(dt.timezone.utc)
-    creneaux = db.scalars(
-        select(Creneau).where(
-            Creneau.post_id == post.id, Creneau.etat.in_([EtatCreneau.GELE, EtatCreneau.ECHEC])
+def _creneaux_engages(db: Session, post: Post) -> list[Creneau]:
+    return list(
+        db.scalars(
+            select(Creneau).where(
+                Creneau.post_id == post.id, Creneau.etat.in_([EtatCreneau.GELE, EtatCreneau.ECHEC])
+            )
         )
-    ).all()
-    return any(
-        creneau.etat == EtatCreneau.GELE
-        or (
-            creneau.erreur == RAISON_RECLAMATION
-            and utc(creneau.publier_a) > maintenant - RECLAMATION_EN_COURS
-        )
-        for creneau in creneaux
     )
+
+
+def _publication_en_vol(db: Session, post: Post) -> bool:
+    """RECLAME recemment par l'agent : le conteneur est en creation chez Meta, ou
+    l'agent attend l'heure affichee dans le tunnel ouvert.
+
+    Plus RIEN ne se modifie, legende comprise : `runner._publier` a deja appele
+    `texte_legende(post)` et passe le texte a `publier`, donc une edition
+    n'arriverait plus a temps et ferait croire le contraire. Une vieille
+    reclamation (processus tue) ne fige plus rien : c'est un echec editable.
+    """
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    return any(
+        creneau.erreur == RAISON_RECLAMATION
+        and utc(creneau.publier_a) > maintenant - RECLAMATION_EN_COURS
+        for creneau in _creneaux_engages(db, post)
+    )
+
+
+def _fichiers_figes(db: Session, post: Post) -> bool:
+    """Un creneau GELE porte ce post : `creneaux.fichiers` existe deja sur le
+    disque (cover rendue par Chromium, photos recadrees, videos transcodees)."""
+    return any(creneau.etat == EtatCreneau.GELE for creneau in _creneaux_engages(db, post))
+
+
+# Ce dont les FICHIERS FIGES dependent, et rien d'autre. `caption` et `hashtags`
+# n'y sont PAS : `runner._publier` calcule `texte_legende(post)` juste avant
+# l'appel a Meta, en lisant la base -- la legende n'est donc jamais figee, et le
+# 409 qui la bloquait aussi fermait la porte exactement dans la fenetre ou
+# l'utilisateur veut corriger (« modifier la description »). C'etait une
+# sur-portee, pas une protection : rien dans le gel ne depend de ces deux champs.
+CHAMPS_FIGES = ("slides", "variante_retenue", "template")
 
 
 @router.patch("/posts/{post_id}", response_model=PostOut)
@@ -133,11 +156,24 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
             payload.slides, payload.variante_retenue, payload.caption, payload.hashtags, payload.template
         )
     )
-    if edite_le_contenu and _publication_figee(db, post):
-        # Les fichiers sont figes et la legende part telle quelle a l'heure dite :
-        # une edition maintenant ne correspondrait plus a ce qui a ete fige.
+    if edite_le_contenu and _publication_en_vol(db, post):
+        # Le conteneur est parti chez Meta avec son texte : plus rien a changer.
         raise HTTPException(
-            status_code=409, detail="Post gele sur un creneau de publication : il ne se modifie plus"
+            status_code=409,
+            detail="Publication en cours : le conteneur est cree chez Meta, le post ne se modifie plus",
+        )
+    edite_les_fichiers = any(getattr(payload, champ) is not None for champ in CHAMPS_FIGES)
+    if edite_les_fichiers and _fichiers_figes(db, post):
+        # La cover rendue et les medias telecharges sont deja sur le disque : les
+        # changer sans refaire ces fichiers publierait autre chose que ce qu'on
+        # voit. Rouvrir le creneau les invalide et le gel suivant les refait.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Fichiers figes pour ce creneau : la legende et les hashtags restent modifiables, "
+                "la cover et les slides demandent de rouvrir le creneau "
+                "(POST /schedule/{id}/rouvrir)"
+            ),
         )
 
     if payload.caption is not None:

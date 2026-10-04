@@ -167,6 +167,10 @@ def main() -> None:
         # Un report qui se prolonge doit se voir AVANT de basculer en saut,
         # distinct de `sautes`.
         "reportes": rapport.reportes,
+        # Combien de posts on a annonces a la relecture. Visible pour la meme
+        # raison que les autres : une annonce qui ne part jamais (fichier d'etat
+        # illisible, notification en panne) est une panne MUETTE.
+        "annonces_relecture": rapport.annonces_relecture,
     }
     # Silence quand rien ne se passe : le log ne grossit pas de 144 lignes vides par jour.
     if any(compteurs.values()) or rapport.erreurs:

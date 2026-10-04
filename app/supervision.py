@@ -850,6 +850,62 @@ def voyant_creneaux(db: Session, maintenant: dt.datetime) -> Voyant:
     return Voyant("creneaux", "Créneaux du jour", OK, valeur, None, details)
 
 
+def voyant_relecture(db: Session, maintenant: dt.datetime) -> Voyant:
+    """Qu'est-ce qui part bientot et attend un oeil ?
+
+    Ni une alarme ni une attente : ce voyant reste `ok` meme quand des posts
+    attendent, parce qu'un post non relu part quand meme a l'heure (la relecture
+    est une OPTION, voir `app/schedule/relecture.py`). Le peindre en ATTENTION
+    apprendrait a lire « il faut agir » la ou il n'y a rien a faire -- et le
+    bandeau a deja paye cette lecon le 2026-10-02, avec un voyant de composition
+    qui criait au loup pendant que le scoring notait 57 articles.
+
+    Il dit en revanche les deux choses que l'ecran ne disait pas : COMBIEN, et
+    POUR QUAND -- de quoi decider d'ouvrir le panneau Posts ou pas. Une
+    information de PANNE ne devient jamais moins visible (regle 2 de la refonte) :
+    un post dont la cover DEBORDE est signale en ATTENTION, parce que celui-la,
+    personne d'autre ne le rattrapera.
+    """
+    from app.api.relecture import creneaux_a_relire
+
+    fuseau = ZoneInfo(settings.publication_fuseau)
+    attendus = creneaux_a_relire(db, maintenant)
+    if not attendus:
+        return Voyant(
+            "relecture", "Relecture", OK, "rien en attente",
+            None,
+            ["aucun post ne part dans les "
+             f"{settings.publication_relecture_avance_minutes} prochaines minutes."],
+        )
+    details = []
+    debordent = []
+    for creneau, post in attendus:
+        quand = _utc(creneau.publier_a).astimezone(fuseau)
+        accroche = _ligne(((post.slides or [{}])[0] or {}).get("headline") or f"post {post.id}", 120)
+        rapport = post.render_report if isinstance(post.render_report, dict) else {}
+        slides = rapport.get("slides")
+        deborde = bool(
+            isinstance(slides, list) and slides and isinstance(slides[0], dict) and slides[0].get("overflow")
+        )
+        if deborde:
+            debordent.append(post.id)
+        marque = " ⚠ cover qui deborde" if deborde else ""
+        details.append(
+            f"{quand:%H:%M} — {creneau.format.value} — post {post.id} — "
+            f"{accroche.replace('**', '')}{marque}"
+        )
+    prochain = _utc(attendus[0][0].publier_a).astimezone(fuseau)
+    valeur = f"{len(attendus)} à relire, prochain {prochain:%H:%M}"
+    if debordent:
+        return Voyant(
+            "relecture", "Relecture", ATTENTION, valeur,
+            f"{len(debordent)} cover(s) debordent et partiront ainsi : post(s) "
+            + ", ".join(str(i) for i in debordent) + ".",
+            details,
+        )
+    return Voyant("relecture", "Relecture", OK, valeur, None, details)
+
+
 # --- L'assemblage -----------------------------------------------------------
 
 
@@ -880,6 +936,7 @@ def superviser(db: Session, maintenant: dt.datetime | None = None) -> Supervisio
         ("mode", "Publication", lambda: voyant_mode(maintenant)),
         ("composition", "Composition", lambda: voyant_composition(db, maintenant)),
         ("creneaux", "Créneaux du jour", lambda: voyant_creneaux(db, maintenant)),
+        ("relecture", "Relecture", lambda: voyant_relecture(db, maintenant)),
         ("passage", "Dernier passage", lambda: voyant_passage(db, maintenant, sources)),
         ("sources", "Sources", lambda: voyant_sources(sources)),
         ("quota", "Quota Graph", lambda: voyant_quota(maintenant)),
