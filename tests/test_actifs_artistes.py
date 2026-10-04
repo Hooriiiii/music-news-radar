@@ -162,3 +162,80 @@ def test_posts_en_base_est_borne_aux_plus_recents(db_session, monkeypatch):
 
     titres = [p.titre for p in posts_en_base(db_session, [compte], MAINTENANT)]
     assert sorted(titres) == ["Post 0", "Post 1", "Post 2"]
+
+
+# --- Plancher de duree EDITORIAL (2026-10-04, reel 168 : 4,0 s) --------------
+
+
+def test_le_reel_refuse_une_video_sous_le_plancher_editorial():
+    """4 s ne laisse pas le temps de lire la bande de titre. Le plancher est a
+    6 s : la mesure du 2026-10-04 place un trou entre 4 et 7 s."""
+    courte = entree("video", "https://cdn.ig/4s.mp4", duration_ms=4_000)
+    juste = entree("video", "https://cdn.ig/7s.mp4", duration_ms=7_000)
+    assert medias_utilisables([courte], None, FormatCreneau.REEL) == []
+    assert medias_utilisables([courte, juste], None, FormatCreneau.REEL) == [juste]
+
+
+def test_le_plancher_editorial_prime_sur_le_plancher_technique(monkeypatch):
+    """Le plus HAUT des deux planchers s'applique, un seul point de comparaison."""
+    from app.config import settings as reglages
+
+    monkeypatch.setattr(reglages, "publication_reel_duree_editoriale_min_s", 12.0)
+    assert actifs_artistes.duree_min_reel_ms() == 12_000
+    monkeypatch.setattr(reglages, "publication_reel_duree_editoriale_min_s", 1.0)
+    # Jamais sous la limite de Meta, meme si le reglage editorial descend.
+    assert actifs_artistes.duree_min_reel_ms() == 3_000
+
+
+def test_une_duree_inconnue_passe_toujours():
+    """Regle du doute inchangee : le gel la mesurera (ffprobe) et `ReelInadapte`
+    liberera le creneau sans exclure l'article."""
+    inconnue = entree("video", "https://cdn.ig/v.mp4")
+    assert inconnue["duration_ms"] is None
+    assert medias_utilisables([inconnue], None, FormatCreneau.REEL) == [inconnue]
+
+
+# --- Chronologie : une video empruntee doit pouvoir MONTRER l'actu -----------
+
+
+def _video(jours_avant, duree_ms=20_000):
+    return entree("video", f"https://cdn.ig/v{jours_avant}.mp4", duration_ms=duree_ms)
+
+
+def test_une_video_hors_sujet_anterieure_a_l_actu_est_ecartee_en_reel():
+    """Reel 168 du 2026-10-03 : Troye Sivan invite surprise chez Charli XCX a
+    l'ACL, illustre par une video de @charli_xcx en studio publiee 22 h AVANT.
+    Une video anterieure ne peut pas montrer un evenement qui vient d'avoir lieu.
+    """
+    avant = _post("studio day", 22 / 24, media=[_video(1)])
+    assert _classer(avant, format_=FormatCreneau.REEL) == []
+
+
+def test_une_video_hors_sujet_posterieure_a_l_actu_reste_prise():
+    apres = _post("studio day", -0.2, media=[_video(1)])
+    assert [r.post for r in _classer(apres, format_=FormatCreneau.REEL)] == [apres]
+
+
+def test_une_video_SUR_LE_SUJET_peut_etre_anterieure():
+    """Un teaser, une annonce, un extrait de set precedent illustrent
+    legitimement une actu a venir : la fenetre reste pleine dans les deux sens."""
+    teaser = _post("GTA soundtrack coming", 3, media=[_video(3)])
+    assert [r.post for r in _classer(teaser, format_=FormatCreneau.REEL)] == [teaser]
+
+
+def test_la_regle_ne_touche_pas_le_carrousel_ni_le_fond_de_cover():
+    """Un FOND de cover est classe en format CARROUSEL (`choix_visuels._reel`) :
+    une photo d'artiste anterieure a l'actu y reste parfaitement legitime."""
+    photo = _post("studio day", 1)
+    assert [r.post for r in _classer(photo, format_=FormatCreneau.CARROUSEL)] == [photo]
+
+
+def test_mutation_sans_le_critere_la_video_du_02_10_redevient_eligible(monkeypatch):
+    """Preuve par mutation : la tolerance d'anteriorite portee a 24 h (le critere
+    desarme) rend la video de @charli_xcx du 02/10 eligible pour l'actu du 03/10."""
+    from app.config import settings as reglages
+
+    avant = _post("studio day", 22 / 24, media=[_video(1)])
+    assert _classer(avant, format_=FormatCreneau.REEL) == []
+    monkeypatch.setattr(reglages, "visuels_reel_anteriorite_toleree_heures", 24.0)
+    assert [r.post for r in _classer(avant, format_=FormatCreneau.REEL)] == [avant]

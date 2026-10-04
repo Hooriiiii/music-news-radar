@@ -222,3 +222,25 @@ def test_des_fenetres_reel_fautives_n_empechent_pas_la_file_des_carrousels(db_se
     creneaux = db_session.query(Creneau).all()
     assert len(creneaux) == 9
     assert {c.format for c in creneaux} == {FormatCreneau.CARROUSEL}
+
+
+def test_une_video_trop_courte_retire_le_reel_mais_garde_le_carrousel(db_session):
+    """Plancher editorial du 2026-10-04 : 4 s ne laisse pas lire la bande de
+    titre. L'article n'est PAS exclu -- un reel refuse n'est pas une actu
+    perdue, il reste candidat au carrousel."""
+    artiste = _source(db_session)
+    court = _article(db_session, artiste, 1, duree_ms=4_000, photo=True)
+    assert raison_ineligible_reel(court) == "aucune video exploitable"
+    assert court.file_exclu_raison is None
+    reels = candidats_eligibles(db_session, MAINTENANT, FormatCreneau.REEL)
+    carrousels = candidats_eligibles(db_session, MAINTENANT, FormatCreneau.CARROUSEL)
+    assert [c.article_id for c in reels] == []
+    assert [c.article_id for c in carrousels] == [court.id]
+
+
+def test_sept_secondes_restent_eligibles(db_session):
+    """Le plancher est pose dans le TROU de la distribution (4 s / 7 s) : le
+    peloton des 8 s et la seule video de 7 s mesures en base passent."""
+    artiste = _source(db_session)
+    assert raison_ineligible_reel(_article(db_session, artiste, 1, duree_ms=7_000)) is None
+    assert raison_ineligible_reel(_article(db_session, artiste, 2, duree_ms=8_000)) is None

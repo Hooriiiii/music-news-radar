@@ -535,3 +535,21 @@ def test_le_lot_elargi_ne_depasse_jamais_le_budget_du_juge(db_session, fred, mon
         "https://presse.example/2.jpg",
         "https://cdn.ig/0-0.jpg",
     ]
+
+
+def test_le_fond_d_un_reel_peut_etre_une_photo_ANTERIEURE_et_hors_sujet(db_session, fred):
+    """Sentinelle de la regle du 2026-10-04 : « hors sujet et anterieure » ecarte
+    une VIDEO de reel, jamais le FOND de sa cover -- un fond n'a pas a montrer
+    l'evenement, il illustre l'artiste. `_reel` classe son fond en format
+    CARROUSEL exprès, et cette portee doit le rester."""
+    charlotte = _source(db_session, "Charlotte de Witte (IG)", "charlottedewittemusic")
+    article = _article(db_session, charlotte, media=[entree("video", None)],
+                       mentioned=["Fred again.."],
+                       url="https://www.instagram.com/reel/DdANTERIEUR/")
+    # Aucun mot du sujet, et publiee la VEILLE de l'actu.
+    _article(db_session, fred, "merci Berlin", media=[entree("photo", "https://cdn.ig/berlin.jpg")],
+             date=DATE_ACTU - dt.timedelta(days=1))
+
+    choix = _choisir(db_session, article, format_=FormatCreneau.REEL)
+
+    assert image_de_fond(choix.actifs).startswith("file://")

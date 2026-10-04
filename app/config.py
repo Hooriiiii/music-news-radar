@@ -455,6 +455,27 @@ class Settings(BaseSettings):
     # Hors sujet (un portrait, un live), un post n'est accepte qu'a N jours de l'actu.
     # Meme borne par la purge que ci-dessus.
     visuels_artiste_generique_jours: int = 5
+    # ... mais pour la VIDEO d'un REEL, cette fenetre hors sujet n'est plus
+    # symetrique : une video publiee AVANT l'actu ne peut pas montrer un
+    # evenement qui vient d'avoir lieu. Le reel 168 du 2026-10-03 (Troye Sivan
+    # invite surprise chez Charli XCX a l'ACL) est parti sur une video de
+    # @charli_xcx posant en studio, publiee 22 h AVANT l'article : elle ne
+    # pouvait rien montrer de l'actu.
+    #
+    # Hors sujet seulement : une video qui PARTAGE les mots du sujet garde la
+    # fenetre pleine dans les deux sens (un teaser, une annonce, un extrait de
+    # set precedent illustrent legitimement une actu a venir).
+    #
+    # La tolerance couvre le decalage entre l'evenement et l'article qui le
+    # rapporte (une video postee juste apres le concert, l'article quelques
+    # heures plus tard). 0 h par defaut : c'est la seule valeur NON arbitraire
+    # sur les donnees disponibles -- mesure du 2026-10-04 sur la base vivante,
+    # 6 articles reel-eligibles par video EMPRUNTEE, un seul candidat hors sujet
+    # anterieur (-5,1 h, une video de @peggygou_ pour les 25 ans de « Fever » de
+    # Kylie Minogue, un rapprochement sans valeur). A 0 h : 5 articles sur 6
+    # gardent un reel ; les 10 articles a video PROPRE ne sont pas concernes.
+    # L'article perdu n'est jamais exclu, il reste candidat au carrousel.
+    visuels_reel_anteriorite_toleree_heures: float = 0.0
     visuels_max_photos: int = 3
     # business_discovery en direct, a la composition : le quota Graph est partage
     # avec le pipeline et a deja rendu le code 4 pendant une heure.
@@ -736,6 +757,24 @@ class Settings(BaseSettings):
     # refusee, jamais coupee.
     publication_reel_duree_min_s: float = 3.0
     publication_reel_duree_max_s: float = 90.0
+    # Plancher EDITORIAL, distinct du plancher technique ci-dessus (3 s = la
+    # limite de Meta, en dessous de laquelle le conteneur REELS est refuse).
+    # Motif : le reel 168 du 2026-10-03 durait 4,0 s -- trop court pour lire la
+    # bande de titre de la cover. Mesure du 2026-10-04 sur les 70 brouillons
+    # `kinda_reel` de la base (44 durees connues) :
+    #
+    #   4 s : 2   7 s : 1   8 s : 8   9 s : 3   10 s : 1   puis 12 s et au-dela
+    #
+    # La distribution porte un TROU entre 4 et 7 s : le plancher se pose dedans,
+    # a 6 s, sans frôler le gros peloton des 8 s. Effet mesure : 2 brouillons sur
+    # 44 ecartes (4,5 %), et 1 reel PUBLIE sur les 13 de duree connue -- le 168,
+    # celui du defaut. Un plancher a 8 s en couterait 3 sur 13 (23 %).
+    #
+    # Une duree INCONNUE passe toujours (regle du doute, inchangee) : le gel la
+    # mesure a ffprobe et `verifier_source` la refuse alors en `ReelInadapte`,
+    # qui LIBERE le creneau sans exclure l'article -- il reste publiable en
+    # carrousel.
+    publication_reel_duree_editoriale_min_s: float = 6.0
     # Poids max de la video source telechargee, et du reel assemble (Meta : 300 Mo).
     publication_reel_source_max_mo: int = 100
     publication_reel_max_mo: int = 100
