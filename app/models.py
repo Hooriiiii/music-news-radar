@@ -266,6 +266,12 @@ class ArtistMention(Base):
     emergence_score: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(Text)
     url: Mapped[str] = mapped_column(String(2000))
+    # Cette citation porte-t-elle l'actu, ou l'artiste n'est-il qu'un nom de
+    # passage ? La note d'emergence de l'article ne vaut pour l'artiste que dans
+    # le premier cas (voir `artists.est_citation_principale`). NULL = inconnu
+    # (citations anterieures a la migration 0020) et vaut PRINCIPAL a la lecture :
+    # la regle du doute, une vraie decouverte ne doit pas etre degradee a tort.
+    principal: Mapped[bool | None] = mapped_column(Boolean)
 
     artist: Mapped[Artist] = relationship(back_populates="mentions")
 

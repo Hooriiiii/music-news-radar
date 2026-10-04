@@ -33,6 +33,7 @@ from app.models import (
     Post,
     PostStatus,
     Source,
+    SourceCategorie,
     SourceType,
 )
 
@@ -70,7 +71,26 @@ def collecter(db) -> dict:
         "creneaux_manques": etats_creneaux.get(EtatCreneau.MANQUE, 0),
         "creneaux_programmes": etats_creneaux.get(EtatCreneau.PROGRAMME, 0),
         "artistes": un(select(func.count(Artist.id))),
-        "artistes_suivis": un(select(func.count(Artist.id)).where(Artist.tracked.is_(True))),
+        # CE QUE LE PIPELINE APPELLE « ARTISTE SUIVI », et ce qu'il n'appelle
+        # pas ainsi. L'exception au pre-filtre (`scoring.ContexteScoring`) et la
+        # reserve de visuels (`content/choix_visuels.py`) lisent toutes deux
+        # `comptes_artistes.IndexComptes`, c'est-a-dire les SOURCES Instagram
+        # actives de categorie artiste. Elles ne lisent JAMAIS `Artist.tracked`,
+        # qui est ecrit par `PATCH /artists/{id}` et lu par personne. Ce script
+        # affichait « 0 artiste suivi sur 4 684 : les chemins qui en dependent
+        # ne se declenchent jamais » -- une alerte FAUSSE, qui comptait
+        # `tracked` : 88 comptes etaient en place et ces chemins tournaient.
+        "comptes_artistes": un(
+            select(func.count(Source.id)).where(
+                Source.type == SourceType.INSTAGRAM,
+                Source.categorie == SourceCategorie.ARTISTE,
+                Source.active.is_(True),
+            )
+        ),
+        # Les fiches `artists` rattachees a l'un de ces comptes
+        # (`lier_artistes_comptes`) : ce qui permet de reconnaitre un artiste
+        # deja suivi quand son nom seul ne suffit pas.
+        "artistes_lies": un(select(func.count(Artist.id)).where(Artist.source_instagram_id.is_not(None))),
         "citations": un(select(func.count(ArtistMention.id))),
         "events": un(select(func.count(Event.id))),
         "observations": un(select(func.count(EventObservation.id))),
@@ -107,6 +127,11 @@ def formater(etat: dict) -> str:
             f"· {etat['creneaux_programmes']} programmes",
         ),
         ("artistes en memoire", f"**{etat['artistes']}**"),
+        (
+            "comptes d'artistes suivis",
+            f"**{etat['comptes_artistes']}** comptes Instagram actifs "
+            f"— {etat['artistes_lies']} fiches artistes rattachees",
+        ),
         ("citations archivees", f"**{etat['citations']}**"),
         (
             "evenements",
@@ -124,10 +149,15 @@ def formater(etat: dict) -> str:
         alertes.append(f"- {part:.0f} % des creneaux aboutis sont MANQUES ({etat['creneaux_manques']}).")
     if couverture < 95:
         alertes.append(f"- {100 - couverture:.0f} % des articles n'appartiennent a AUCUN evenement.")
-    if etat["artistes"] and not etat["artistes_suivis"]:
+    # L'alerte ne se declenche que sur la VRAIE condition de panne : plus aucun
+    # compte d'artiste suivi. C'est ce que lisent l'exception au pre-filtre et la
+    # reserve de visuels. La version precedente comptait `Artist.tracked`, que
+    # personne ne lit, et criait donc en permanence sur un systeme en bonne
+    # sante.
+    if not etat["comptes_artistes"]:
         alertes.append(
-            f"- 0 artiste suivi sur {etat['artistes']} : les chemins qui en dependent "
-            "(exception au pre-filtre, reserve de visuels) ne se declenchent jamais."
+            "- 0 compte d'artiste suivi (source Instagram active, categorie artiste) : "
+            "l'exception au pre-filtre et la reserve de visuels ne se declenchent jamais."
         )
     if alertes:
         sortie += ["", "A signaler :", *alertes]
