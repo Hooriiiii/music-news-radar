@@ -1733,8 +1733,9 @@ en « Manqué » parce que les reels ont été coupés est notifié comme tel
 (« reels coupés »), pas comme un Mac en veille. Arbitrage **reels d'abord**, un article n'occupe jamais deux
 créneaux. Éligible en reel : vidéo avec URL directe (≤ 90 s ou durée inconnue),
 compte artiste/festival/label/club (`PUBLICATION_REEL_CATEGORIES`), source
-Instagram (crédit), durée connue d'au moins **3 s** (`PUBLICATION_REEL_DUREE_MIN_S` ;
-une vidéo plus courte reste bonne pour un carrousel). L'éligibilité est revérifiée
+Instagram (crédit), durée connue d'au moins **6 s**
+(`PUBLICATION_REEL_DUREE_EDITORIALE_MIN_S` ; une vidéo plus courte reste bonne
+pour un carrousel). L'éligibilité est revérifiée
 au gel : un article devenu inapte (vidéo retirée, compte reclassé) libère son
 créneau sans exclusion. Un brouillon `kinda_reel` antérieur au crédit est
 complété (`credit_video`) à la reprise ou au gel, jamais exclu pour ça. Le gel (`app/publish/preparation_reel.py`) télécharge la
@@ -1797,6 +1798,63 @@ d'ajustement réduisait la police, le bloc raccourcissait en remontant vers le
 milieu du cadre, et les reels ressortaient dans la grille comme des corps
 étrangers au milieu des posts, dont le texte est en bas. Un ancrage par le bas
 est stable par construction, quelle que soit la hauteur mesurée.
+
+**Deux planchers de durée, pas un** (2026-10-04, reel 168 : 4,0 s publiées).
+`PUBLICATION_REEL_DUREE_MIN_S` (3 s) est **technique** — la limite de Meta, en
+dessous le conteneur `REELS` est refusé ; `PUBLICATION_REEL_DUREE_EDITORIALE_MIN_S`
+(**6 s**) est **éditorial** — un reel plus court ne laisse pas le temps de lire la
+bande de titre de la cover. C'est le plus haut des deux qui s'applique, en UN
+SEUL point (`actifs_artistes.duree_min_reel_ms`), sur les trois chemins : la
+vidéo propre de l'article (`store._trop_courte`), la vidéo **empruntée** à un
+artiste cité (`actifs_artistes.medias_utilisables`) et le gel
+(`preparation_reel.verifier_source`).
+
+Le 6 est **mesuré**, pas choisi au goût. Sur les 70 brouillons `kinda_reel` de
+la base (44 durées connues) : `4 s ×2`, `7 s ×1`, `8 s ×8`, `9 s ×3`, `10 s ×1`,
+puis 12 s et au-delà. La distribution porte un **trou entre 4 et 7 s** : le
+plancher se pose dedans. Coût mesuré : **2 brouillons sur 44** (4,5 %) et **1
+reel publié sur les 13 de durée connue** — le 168, celui du défaut. Un plancher
+à 8 s en coûterait 3 sur 13 (23 %), le peloton le plus dense.
+
+Une durée **inconnue passe toujours** (règle du doute, inchangée) : le gel la
+mesure à ffprobe, et `verifier_source` la refuse alors en `ReelInadapte`, qui
+**libère le créneau sans exclure** et mémorise la durée dans `articles.media` —
+l'article reste publiable en carrousel, la vidéo n'est plus jamais rechoisie.
+
+**Une vidéo EMPRUNTÉE doit pouvoir montrer l'actu** (2026-10-04, même reel 168 :
+*« Troye Sivan Joins Charli XCX To Perform Two Of His New Songs At ACL »*,
+Stereogum, **une seule photo** et aucune vidéo — le pipeline a donc emprunté une
+vidéo à `@charli_xcx`, le mécanisme prévu et sans lequel il n'y aurait pas eu de
+reel). La vidéo publiée montrait Charli XCX **seule, en studio**, et surtout
+elle avait été **publiée 22 h AVANT l'article** : elle ne pouvait rien montrer
+d'un événement qui n'avait pas encore eu lieu.
+
+Le remède est **dans `classer`, pas dans un étage de plus** : la fenêtre « hors
+sujet » (`VISUELS_ARTISTE_GENERIQUE_JOURS`, 5 j) était **symétrique**, et c'est
+elle qui laissait passer le cas. Pour la VIDÉO d'un REEL elle devient **à sens
+unique** — une vidéo qui ne partage AUCUN mot du sujet ne peut plus précéder
+l'actu de plus de `VISUELS_REEL_ANTERIORITE_TOLEREE_HEURES` (**0 h**).
+
+Trois bornes à cette règle, chacune délibérée. (1) **Hors sujet seulement** :
+une vidéo qui partage les mots du sujet garde la fenêtre pleine dans les deux
+sens — un teaser, une annonce, un extrait d'un set précédent illustrent
+légitimement une actu à venir, et interdire tout ce qui précède l'actu viderait
+une bonne part des reels. (2) **En REEL seulement** : un fond de cover et une
+photo de carrousel n'ont pas à montrer l'événement, ils illustrent l'artiste —
+`choix_visuels._reel` classe d'ailleurs son fond en format `CARROUSEL`, et un
+test-sentinelle le vérifie. (3) **Jamais une exclusion** : l'article perdu pour
+le reel reste candidat au carrousel (`candidats_eligibles` filtre par format,
+`file_exclu_raison` n'est pas posé).
+
+Le 0 h est la seule valeur **non arbitraire** sur les données disponibles. La
+tolérance existerait pour couvrir l'écart entre l'événement et l'article qui le
+rapporte (une vidéo postée juste après le concert, l'article quelques heures
+plus tard) — mais la mesure du 2026-10-04 sur la base vivante ne donne qu'**un
+seul** candidat hors sujet antérieur, à −5,1 h (une vidéo de `@peggygou_` pour
+les 25 ans de *Fever* de Kylie Minogue : un rapprochement sans valeur), face au
+−22 h du défaut. Entre 0 et 22 h, rien dans les données ne tranche. Effet
+mesuré : sur 74 articles publiables, 10 ont une vidéo propre (non concernés) et
+**6 dépendent d'une vidéo empruntée** ; à 0 h, **5 des 6** gardent leur reel.
 
 **yt-dlp pour les reels d'artistes (2026-09-17, autorisé par l'utilisateur).**
 Meta omet `media_url` des reels à musique protégée ; la vidéo vient alors de

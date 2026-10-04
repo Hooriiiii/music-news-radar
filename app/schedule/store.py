@@ -16,7 +16,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.config import settings
-from app.content.actifs_artistes import classer, posts_en_base
+from app.content.actifs_artistes import classer, duree_min_reel_ms, posts_en_base
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
 from app.content.visuels import (
@@ -209,10 +209,13 @@ def duree_max_reel_ms() -> int:
 
 
 def _trop_courte(entree: dict) -> bool:
-    # Une duree CONNUE sous le minimum ferait echouer le gel, qui exclurait
-    # l'article pour tous les formats. Une duree inconnue passe.
+    # Une duree CONNUE sous le minimum ferait echouer le gel. Le plancher est
+    # le meme que pour une video EMPRUNTEE a un artiste cite
+    # (`actifs_artistes.duree_min_reel_ms` : le plus haut des deux planchers,
+    # technique Meta et editorial). Une duree inconnue passe : le gel la
+    # mesurera, et `ReelInadapte` liberera le creneau sans exclure l'article.
     duree = entree.get("duration_ms")
-    return duree is not None and duree < settings.publication_reel_duree_min_s * 1000
+    return duree is not None and duree < duree_min_reel_ms()
 
 
 def source_video_reel(article: Article) -> str | None:

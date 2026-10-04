@@ -54,6 +54,23 @@ class Retenu:
         return self.recouvrement > 0
 
 
+def duree_min_reel_ms() -> int:
+    """Le plancher de duree d'un reel, en millisecondes.
+
+    DEUX planchers, et c'est le plus haut qui s'applique :
+    `publication_reel_duree_min_s` est TECHNIQUE (3 s, la limite de Meta, en
+    dessous le conteneur REELS est refuse) ; `publication_reel_duree_
+    editoriale_min_s` est EDITORIAL (6 s : un reel plus court ne laisse pas le
+    temps de lire la bande de titre de la cover -- reel 168 du 2026-10-03,
+    4,0 s). Un seul point de comparaison pour tous les chemins, sinon la
+    selection et le gel pourraient diverger.
+    """
+    return int(
+        max(settings.publication_reel_duree_min_s, settings.publication_reel_duree_editoriale_min_s)
+        * 1000
+    )
+
+
 def medias_utilisables(
     media: list[dict] | None, permalink: str | None, format_: FormatCreneau
 ) -> list[dict]:
@@ -69,7 +86,7 @@ def medias_utilisables(
     """
     media = media or []
     if format_ == FormatCreneau.REEL:
-        duree_min = settings.publication_reel_duree_min_s * 1000
+        duree_min = duree_min_reel_ms()
         directes = [
             v
             for v in videos_exploitables(media, int(settings.publication_reel_duree_max_s * 1000))
@@ -117,6 +134,7 @@ def classer(
         if generique_jours is None
         else generique_jours
     )
+    tolerance = dt.timedelta(hours=settings.visuels_reel_anteriorite_toleree_heures)
     retenus = []
     for post in posts:
         publie = _utc(post.publie_le)
@@ -129,6 +147,19 @@ def classer(
             continue
         commun = recouvrement(article.title, post)
         if commun == 0 and abs(publie - reference) > generique:
+            continue
+        if format_ == FormatCreneau.REEL and commun == 0 and publie < reference - tolerance:
+            # Une video HORS SUJET et ANTERIEURE a l'actu ne peut pas la
+            # montrer : quand l'actu rapporte un evenement qui vient d'avoir
+            # lieu, le film en est forcement posterieur. Le reel 168 du
+            # 2026-10-03 est parti sur une video de @charli_xcx en studio
+            # publiee 22 h AVANT l'apparition surprise de Troye Sivan a l'ACL.
+            # Seulement hors sujet : une video qui partage les mots du sujet
+            # (teaser, annonce, extrait d'un set precedent) garde la fenetre
+            # pleine dans les deux sens. Et seulement en REEL : un FOND de
+            # cover ou une photo de carrousel n'ont pas a montrer l'evenement,
+            # ils illustrent l'artiste (`_reel` classe d'ailleurs son fond en
+            # format CARROUSEL, exprès).
             continue
         retenus.append(Retenu(post, medias, commun))
     retenus.sort(

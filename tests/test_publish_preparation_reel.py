@@ -280,6 +280,21 @@ def test_une_duree_hors_bornes_est_refusee(tmp_path, duree, motif):
         preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(source={**SOURCE, "duration": duree}))
 
 
+def test_le_gel_applique_le_plancher_EDITORIAL_pas_celui_de_meta(tmp_path):
+    """Une video de 4 s passe le plancher technique de Meta (3 s) mais pas le
+    plancher editorial (6 s). C'est le dernier filet pour une duree qui etait
+    INCONNUE a la selection -- reel 168 du 2026-10-03. `ReelInadapte` libere le
+    creneau sans exclure l'article, qui reste publiable en carrousel."""
+    from app.publish.preparation_reel import ReelInadapte
+
+    with pytest.raises(ReelInadapte, match="trop courte : 4.0 s, minimum 6 s") as leve:
+        preparer_reel(_post(), _article(VIDEO), tmp_path,
+                      **_outils(source={**SOURCE, "duration": 4.0}))
+    # La duree MESUREE voyage avec l'exception : `runner._memoriser_duree`
+    # l'ecrit dans `articles.media`, la video n'est plus jamais rechoisie.
+    assert leve.value.duree_ms == 4000
+
+
 def test_une_sortie_hors_specs_est_refusee_avant_meta(tmp_path):
     with pytest.raises(PreparationImpossible, match="cadence"):
         preparer_reel(_post(), _article(VIDEO), tmp_path, **_outils(sortie={**SORTIE, "fps": 20.0}))
@@ -524,8 +539,8 @@ def test_un_telechargement_interminable_est_differe():
 def test_la_chaine_complete_avec_ffmpeg(tmp_path):
     source = tmp_path / "source.mp4"
     subprocess.run(
-        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=30:duration=4",
-         "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=720x1280:rate=30:duration=8",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source)],
         capture_output=True, check=True,
     )

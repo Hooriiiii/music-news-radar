@@ -28,6 +28,7 @@ from types import SimpleNamespace
 import httpx
 
 from app.config import settings
+from app.content.actifs_artistes import duree_min_reel_ms
 from app.content.media import CLES, VIDEO, lien_de_reel, video_recuperable, videos_exploitables
 from app.content.render import _USER_AGENT, render_post
 from app.content.teinte import palette_du_post
@@ -193,9 +194,15 @@ class ReelInadapte(PreparationImpossible):
 
 def verifier_source(infos: dict, *, url: str | None = None, article_id: int | None = None) -> None:
     duree = infos["duration"]
+    # Le plancher EDITORIAL (6 s), pas le plancher technique de Meta (3 s) : une
+    # video dont la duree etait INCONNUE a la selection n'est mesuree qu'ici, et
+    # c'est le dernier endroit ou l'ecarter. `ReelInadapte` libere le creneau
+    # sans exclure l'article, et memorise la duree dans `articles.media` pour que
+    # la video ne soit plus jamais rechoisie en reel.
+    minimum = duree_min_reel_ms() / 1000
     hors_bornes = (
-        f"video trop courte : {duree:.1f} s, minimum {settings.publication_reel_duree_min_s:.0f} s"
-        if duree < settings.publication_reel_duree_min_s
+        f"video trop courte : {duree:.1f} s, minimum {minimum:.0f} s"
+        if duree < minimum
         # Refusee, jamais coupee : couper le contenu d'un artiste en trahirait le sens.
         else f"video trop longue : {duree:.0f} s, maximum {settings.publication_reel_duree_max_s:.0f} s"
         if duree > settings.publication_reel_duree_max_s
