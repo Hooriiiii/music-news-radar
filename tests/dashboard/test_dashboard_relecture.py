@@ -1,6 +1,6 @@
 """La liste de relecture, MESUREE dans un vrai Chromium a trois largeurs.
 
-Meme methode et meme motif que `tests/test_dashboard_lisibilite.py` : le defaut
+Meme methode et meme motif que `tests/dashboard/test_dashboard_lisibilite.py` : le defaut
 que la refonte du 2026-10-02 a trouve -- un titre ecrase a zero de large par ses
 voisins dans une rangee flex -- ne se voyait ni dans le DOM ni a la lecture du
 CSS, et aucun test structurel ne l'attrapait. La ligne de relecture a exactement
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 PAGE = DASHBOARD.read_text(encoding="utf-8")
 
 LARGEURS = (1440, 900, 390)

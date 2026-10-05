@@ -260,7 +260,7 @@ def test_aucun_module_de_publication_ne_lit_les_features_2c():
     expose, c'est 2D qui classera.
 
     Verifie sur les imports plutot que sur le comportement, comme la
-    sentinelle de `tests/test_quota_graph.py` : le jour ou un
+    sentinelle de `tests/pipeline/test_quota_graph.py` : le jour ou un
     `from app.pipeline.event_features import ...` apparait dans
     `app/publish` ou `app/schedule`, ce test rougit.
     """

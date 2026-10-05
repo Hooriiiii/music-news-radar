@@ -3,7 +3,7 @@
 Chaque test passe par `link_duplicates` (jamais par une ecriture directe de
 `duplicate_of_id`) : c'est `cluster.lier()` qui appelle `events.attacher`, et
 c'est ce chemin reel qu'il faut prouver correct. Le schema lui-meme (colonnes,
-contrainte unique, survie a la purge) est deja verifie par `tests/test_events.py`
+contrainte unique, survie a la purge) est deja verifie par `tests/pipeline/test_events.py`
 (Task 1) ; ce fichier verifie le RATTACHEMENT.
 """
 
@@ -196,7 +196,7 @@ def test_archive_link_adds_an_observation_to_the_published_event(db_session):
 def test_observation_survives_article_purge_with_denormalized_fields(db_session):
     """Meme philosophie qu'`artist_mentions` : la preuve reste lisible une fois
     l'article supprime. SQLite n'applique pas ON DELETE (voir
-    tests/test_retention.py), donc on verifie la SURVIE de la ligne et
+    tests/pipeline/test_retention.py), donc on verifie la SURVIE de la ligne et
     l'integrite des champs denormalises, pas la mise a NULL en elle-meme."""
     db_session.autoflush = False
     src = _src(db_session, "tsugi")

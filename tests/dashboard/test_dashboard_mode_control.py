@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 
 
 def test_le_dashboard_porte_le_selecteur_de_mode_de_publication():

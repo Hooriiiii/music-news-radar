@@ -31,9 +31,9 @@ from pathlib import Path
 
 import pytest
 
-from tests import test_dashboard_marque as marque
+from tests.dashboard import test_dashboard_marque as marque
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 PAGE = DASHBOARD.read_text(encoding="utf-8")
 
 # La garde de portee, telle qu'elle est ecrite dans `load()`. Si cette ligne
@@ -377,7 +377,7 @@ def test_la_ligne_de_creneau_hierarchise_heure_titre_et_panne():
         assert "90 min de retard" in m["alerte"]["texte"], (largeur, m["alerte"])
         # Le rouge n'est plus EPINGLE a un triplet : la charte Kinda a ramene
         # les alertes a la teinte rouge pure pour qu'on ne les confonde pas
-        # avec le rose d'accent (voir `tests/test_dashboard_marque.py`), et un
+        # avec le rose d'accent (voir `tests/dashboard/test_dashboard_marque.py`), et un
         # literal aurait rougi ici pour une amelioration. Ce qu'on verifie est
         # l'INTENTION : c'est bien le jeton d'alerte, c'est bien du rouge, et
         # il reste lisible sur son fond.

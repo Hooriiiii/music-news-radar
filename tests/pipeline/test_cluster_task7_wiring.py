@@ -77,7 +77,7 @@ def test_run_veille_n_arbitre_jamais_meme_active_et_avec_une_cle(db_session, mon
     )
 
     # Une paire reelle dans la bande douteuse (archive < 0.8, recouvrement >= 0.65
-    # -- memes titres que `tests/test_cluster.py::_paire_douteuse`), datee sur
+    # -- memes titres que `tests/pipeline/test_cluster.py::_paire_douteuse`), datee sur
     # l'HEURE REELLE : `link_duplicates` ne lit jamais `T0`.
     maintenant = dt.datetime.now(UTC)
     src_publie = Source(name="media-publie", type=SourceType.RSS, url="https://a/feed")

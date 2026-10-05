@@ -26,7 +26,7 @@ def preparer_fichiers(*args, **kwargs):
     `preparation.preparer_fichiers` rend desormais un `Figement` : les noms ET le
     manifeste de ce qui part (2026-10-04). Ces tests-ci portent sur le CONTENU du
     gel, et ce desemballage les garde lisibles ; le manifeste a ses propres tests,
-    dans `tests/test_manifeste_gel.py`.
+    dans `tests/publish/test_manifeste_gel.py`.
     """
     return _figer(*args, **kwargs).noms
 

@@ -1,7 +1,7 @@
 """Sentinelle (Phase 2A, Task 4) : aucun champ d'`EventOut`/`EventObservationOut`
 ne doit etre silencieusement absent du panneau Événements du dashboard --
 meme philosophie que `test_le_dashboard_propose_la_categorie_ecologie` dans
-`tests/test_api.py`, qui verifie deja qu'aucune `Category` n'est invisible a
+`tests/api/test_api.py`, qui verifie deja qu'aucune `Category` n'est invisible a
 l'usage."""
 
 import json

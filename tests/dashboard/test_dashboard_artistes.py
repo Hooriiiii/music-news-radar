@@ -36,7 +36,7 @@ import pytest
 
 from app.schemas import ArtistMentionOut, ArtistOut, SignalArtisteOut
 
-DASHBOARD = pathlib.Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = pathlib.Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 PAGE = DASHBOARD.read_text(encoding="utf-8")
 
 

@@ -40,7 +40,7 @@ class Outils:
         # Erreurs consommees une par appel, avant `erreur_preparation_reel`.
         self.erreurs_preparation_reel = []
 
-    # Ce double ACCEPTE le compte du visuel (celui de tests/test_schedule_runner.py
+    # Ce double ACCEPTE le compte du visuel (celui de tests/schedule/test_schedule_runner.py
     # ne le prend pas : les deux doivent marcher, c'est la retrocompatibilite du
     # crochet).
     def composer(self, article, *, compte_visuel=None):

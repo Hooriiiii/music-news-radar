@@ -387,7 +387,7 @@ def test_le_dashboard_affiche_les_identifiants(client):
 
     Ils sont desormais fabriques par les RENVOIS (`renvoiArticle`,
     `renvoiInstagram`, `renvoiPost`) : toujours ecrits en clair, et en plus
-    cliquables -- voir `tests/test_dashboard_navigation.py`."""
+    cliquables -- voir `tests/dashboard/test_dashboard_navigation.py`."""
     html = client.get("/").text
     assert "`#${a.id} · ${sourceName(a.source_id)}" in html
     assert "`créneau ${c.id}`" in html

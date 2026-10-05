@@ -6,7 +6,7 @@ portait `flex: 1` (donc `flex-basis: 0`) pendant que les onze badges de
 metriques revendiquaient leur largeur INTRINSEQUE. Le titre perdait l'arbitrage
 et tombait a zero de large -- on n'en voyait qu'un fragment de glyphe --, et les
 metadonnees tombaient un mot par ligne. Tous les champs etaient pourtant bien
-presents dans le HTML, et `tests/test_dashboard_events.py` etait au vert.
+presents dans le HTML, et `tests/dashboard/test_dashboard_events.py` etait au vert.
 
 C'est exactement pourquoi un test structurel ne suffit pas : il faut MESURER.
 Chromium calcule la mise en page, Python juge. Trois largeurs, parce que le
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 PAGE = DASHBOARD.read_text(encoding="utf-8")
 
 # Les largeurs verifiees. 1280 = le poste de travail ; 820 = la largeur ou le

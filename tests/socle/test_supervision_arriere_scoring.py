@@ -12,7 +12,7 @@ meme passage. Leur `fetched_at` avait 24 h, leur attente reelle quelques
 minutes, et le passage suivant les a notes.
 
 L'autre moitie du meme sujet : un article REFLEXIF (defaut du meme jour, voir
-`tests/test_cluster_reflexif.py`) est, lui, bloque pour de bon -- et le filtre
+`tests/pipeline/test_cluster_reflexif.py`) est, lui, bloque pour de bon -- et le filtre
 `duplicate_of_id IS NULL` du compteur le rendait invisible. Les deux cas ne
 doivent pas disparaitre du meme geste.
 

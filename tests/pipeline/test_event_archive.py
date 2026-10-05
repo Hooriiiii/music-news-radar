@@ -229,7 +229,7 @@ class TestRienNeChangeDansLaPublication:
     qui classera. Un test doit le prouver. »
 
     Meme motif que le test-sentinelle du quota Graph
-    (`tests/test_quota_graph.py`) : on interdit l'IMPORT, pas seulement
+    (`tests/pipeline/test_quota_graph.py`) : on interdit l'IMPORT, pas seulement
     l'usage -- une feature lue par l'arbitrage changerait ce qui part en
     ligne, et personne ne s'en apercevrait avant de le voir publie.
     """
@@ -237,7 +237,7 @@ class TestRienNeChangeDansLaPublication:
     def test_aucun_module_de_publication_ne_lit_les_features_d_evenement(self):
         import pathlib
 
-        racine = pathlib.Path(__file__).resolve().parent.parent
+        racine = pathlib.Path(__file__).resolve().parents[2]
         coupables = []
         for dossier in ("app/publish", "app/schedule"):
             for fichier in (racine / dossier).rglob("*.py"):

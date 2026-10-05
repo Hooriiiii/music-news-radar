@@ -271,7 +271,7 @@ def test_render_one_cable_un_voile_plus_haut_que_la_maquette_pour_un_bloc_haut()
 def test_les_marges_publiees_sont_celles_de_la_maquette():
     """Le defaut du 2026-09-18, mesure sur le PIXEL plutot que sur les constantes.
 
-    `tests/test_layout.py` verifie que le gabarit est au format publie ; ici on
+    `tests/content/test_layout.py` verifie que le gabarit est au format publie ; ici on
     verifie que le rendu le respecte vraiment -- une regle CSS pourrait deplacer
     le logo ou l'accroche sans toucher a `layout.py`. Les trois nombres sont ceux
     de la guideline Figma : logo a 87 px du haut, accroche a 76 px du bas, 77 px

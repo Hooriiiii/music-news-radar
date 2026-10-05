@@ -859,7 +859,7 @@ def test_c1_un_article_revient_apres_sa_pause(db_session, fred):
 # --- Tache 6 (2026-09-23) : le SAUT au GEL suit le meme contrat que le saut
 # a la composition (Tache 5) -- pas une exclusion, meme comptage, meme ordre
 # liberer-avant-pause. Le vrai `preparer_fichiers` n'est pas invoque ici
-# (couvert par `tests/test_publish_preparation.py`) : cette suite verifie
+# (couvert par `tests/publish/test_publish_preparation.py`) : cette suite verifie
 # uniquement le CABLAGE de `runner._geler` autour de `PreparationSautee`.
 
 

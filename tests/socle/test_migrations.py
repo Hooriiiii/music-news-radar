@@ -14,7 +14,7 @@ from alembic.script import ScriptDirectory
 # Chemin absolu derive de __file__ : un chemin relatif a "alembic.ini" ne
 # resout que si pytest est lance depuis la racine du depot, ce qui n'est pas
 # garanti (IDE, CI, ou simple `cd` avant la commande).
-RACINE = Path(__file__).resolve().parent.parent
+RACINE = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = RACINE / "alembic.ini"
 
 

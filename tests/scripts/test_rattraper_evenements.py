@@ -5,7 +5,7 @@
 quand un NOUVEAU lien de doublon est pose -- un groupe forme avant la mise en
 service de ce module (Task 2) n'a jamais eu l'occasion de devenir un
 evenement. Ce fichier verifie le SCRIPT de rattrapage, pas `attacher`
-elle-meme (deja couverte par `tests/test_events_rattachement.py`).
+elle-meme (deja couverte par `tests/pipeline/test_events_rattachement.py`).
 """
 
 import datetime as dt

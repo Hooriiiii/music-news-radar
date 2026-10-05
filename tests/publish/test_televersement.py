@@ -393,7 +393,7 @@ def test_le_visuel_depose_ne_porte_aucun_credit(client, db_session):
 
 from pathlib import Path  # noqa: E402
 
-PAGE = (Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html").read_text(
+PAGE = (Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html").read_text(
     encoding="utf-8"
 )
 
@@ -427,10 +427,10 @@ def test_le_controle_desactive_imprime_toujours_sa_raison():
 
 def test_une_raison_de_refus_porte_la_teinte_d_alerte_jamais_l_accent():
     """Rose et rouge sont voisins : une raison de panne qui vire au rose ne casse
-    rien et rend la lecture aveugle. `tests/test_dashboard_marque.py` couvre
+    rien et rend la lecture aveugle. `tests/dashboard/test_dashboard_marque.py` couvre
     desormais cette regle, parce que son selecteur porte le mot « erreur »."""
     assert ".depot-motif.erreur { color: var(--alerte); }" in PAGE
-    from tests.test_dashboard_marque import regles_de_panne_citant_l_accent
+    from tests.dashboard.test_dashboard_marque import regles_de_panne_citant_l_accent
 
     mutee = PAGE.replace(
         ".depot-motif.erreur { color: var(--alerte); }",

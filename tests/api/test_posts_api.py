@@ -355,7 +355,7 @@ def test_exporter_un_post_inexistant(client):
 
 
 def test_render_persiste_le_rapport(client, db_session, monkeypatch):
-    """Le but n'est pas de tester le rendu ici -- tests/test_render.py le fait --
+    """Le but n'est pas de tester le rendu ici -- tests/content/test_render.py le fait --
     mais que le RAPPORT arrive bien en base. C'est lui qui permet au dashboard de
     signaler un post en defaut plutot que de laisser publier une image coupee."""
     article = _article(db_session)

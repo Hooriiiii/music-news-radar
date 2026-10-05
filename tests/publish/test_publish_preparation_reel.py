@@ -30,7 +30,7 @@ def preparer_reel(*args, **kwargs):
 
     `preparation_reel.preparer_reel` rend desormais un `Figement` : les noms ET le
     manifeste de ce qui part (2026-10-04). Ces tests-ci portent sur le CONTENU du
-    gel ; le manifeste a ses propres tests, dans `tests/test_manifeste_gel.py`.
+    gel ; le manifeste a ses propres tests, dans `tests/publish/test_manifeste_gel.py`.
     """
     return _figer_reel(*args, **kwargs).noms
 

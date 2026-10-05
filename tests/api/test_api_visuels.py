@@ -9,7 +9,7 @@ from app.content.media import entree
 from app.models import Article, Artist, Creneau, Source, SourceCategorie, SourceType
 
 UTC = dt.timezone.utc
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 _numeros = itertools.count()
 
 

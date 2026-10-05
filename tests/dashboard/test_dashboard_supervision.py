@@ -8,7 +8,7 @@ sur le serveur.
 
 from pathlib import Path
 
-DASHBOARD = Path(__file__).resolve().parent.parent / "app" / "static" / "dashboard.html"
+DASHBOARD = Path(__file__).resolve().parents[2] / "app" / "static" / "dashboard.html"
 
 
 def test_le_bandeau_est_dans_l_entete_donc_visible_sur_tous_les_panneaux():
