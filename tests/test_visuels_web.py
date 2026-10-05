@@ -17,7 +17,13 @@ import pytest
 from PIL import Image
 
 from app.config import settings
-from app.content.choix_visuels import AucunVisuel, actif_du_web, choisir_visuels, photos_du_web
+from app.content.choix_visuels import (
+    AucunVisuel,
+    VisuelIntrouvable,
+    actif_du_web,
+    choisir_visuels,
+    photos_du_web,
+)
 from app.content.compose import actifs_de_secours
 from app.content.illustration import Fond, Lot, Verdict, eviter_l_affiche
 from app.content.legende import texte_legende
@@ -120,13 +126,16 @@ def test_un_article_sans_rien_trouve_desormais_une_image(db_session, monkeypatch
     assert choix.actifs[0]["fichier"].startswith("file://")
 
 
-def test_sans_rien_sur_le_web_non_plus_l_article_sort_de_la_file(db_session, monkeypatch):
-    """Le web n'est pas une garantie : quand il ne donne rien non plus, le
-    comportement d'avant revient mot pour mot."""
+def test_sans_rien_sur_le_web_non_plus_le_creneau_saute_sans_exclure(db_session, monkeypatch):
+    """Le web n'est pas une garantie. Mais quand il ne donne rien non plus, ce
+    n'est pas la FAUTE de l'article : c'est « rien trouve AUJOURD'HUI », donc un
+    SAUT (`VisuelIntrouvable`) et jamais l'exclusion a vie que levait
+    `AucunVisuel` jusqu'au 2026-10-05 -- c'est cette conversion qui rend sur le
+    desserrage de `store.raison_sans_visuel` du meme jour."""
     monkeypatch.setattr("app.content.recherche_web.image_de_partage", _extraction({}))
     article = _article(db_session, _source(db_session))
 
-    with pytest.raises(AucunVisuel):
+    with pytest.raises(VisuelIntrouvable):
         _visuels(db_session, article, chercheur_web=Chercheur())
 
 

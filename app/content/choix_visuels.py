@@ -27,9 +27,20 @@ part sur le fond Kinda -- jamais sur une affiche.
    le web en dernier recours ») -- une image du web plutot qu'un article saute.
    Jamais la VIDEO d'un reel, seulement des images.
 
-Deux issues sans visuel : `AucunVisuel` (l'article n'en a pas, il sort de la
-file) et `VisuelsDifferes` (la lecture en direct attend son budget ou le quota :
-on reessaie au passage suivant, rien n'est exclu).
+TROIS issues sans visuel, et la frontiere a bouge le 2026-10-05 :
+- `VisuelsDifferes` -- une panne de TRANSPORT (reseau, quota, budget de lecture) :
+  on reessaie au passage suivant, rien n'est exclu ;
+- `VisuelIntrouvable` -- toute l'echelle a ete parcourue, WEB COMPRIS, et rien
+  n'a donne AUJOURD'HUI : le creneau SAUTE, l'article est mis a l'ecart
+  quelques heures et reste eligible. C'est desormais l'issue de tous les
+  chemins ou le web a regarde pour rien, et c'est ce qui rend sur le
+  desserrage de `store.raison_sans_visuel` (meme jour) : auparavant ces
+  articles etaient EXCLUS a vie, donc desserrer le filtre les aurait brules
+  un par un au lieu de les ecarter proprement ;
+- `AucunVisuel` -- le FORMAT demande est impossible, quoi que trouve le web :
+  un reel sans video. Le web ne sert jamais la video d'un reel, seulement le
+  fond de sa cover : aucun passage suivant n'y changera rien, d'ou l'exclusion.
+  C'est l'information que cette exception porte encore, et la seule.
 """
 
 import datetime as dt
@@ -86,7 +97,15 @@ RAISON_SANS_FOND = (
 
 
 class AucunVisuel(RuntimeError):
-    """Aucun visuel autorise pour cet article. Message affichable."""
+    """Le FORMAT demande est impossible pour cet article, et le web n'y peut
+    rien : un reel sans video (le web ne sert jamais la video d'un reel).
+    L'appelant EXCLUT -- aucun passage suivant ne changera la donne.
+
+    Depuis le 2026-10-05, ce n'est plus l'issue d'un simple « rien trouve
+    aujourd'hui » : ces chemins levent `VisuelIntrouvable` (un SAUT). La
+    distinction porte donc desormais une information precise -- impossible par
+    NATURE contre introuvable AUJOURD'HUI -- la ou elle melangeait les deux.
+    Message affichable."""
 
 
 class VisuelsDifferes(RuntimeError):
@@ -95,9 +114,12 @@ class VisuelsDifferes(RuntimeError):
 
 class VisuelIntrouvable(RuntimeError):
     """Toute l'echelle a ete parcourue (actu, compte source, artiste cite, web)
-    sans trouver une image ni affiche ni trop petite pour le gabarit (2026-09-21,
-    Tache 5 : FOND_KINDA n'est plus une issue publiable, seulement le signal
-    interne d'echec de `illustration.eviter_l_affiche`).
+    sans trouver une image publiable -- soit parce qu'aucune n'est ni affiche ni
+    trop petite pour le gabarit (2026-09-21, Tache 5 : FOND_KINDA n'est plus une
+    issue publiable, seulement le signal interne d'echec de
+    `illustration.eviter_l_affiche`), soit, depuis le 2026-10-05, parce qu'il n'y
+    avait AUCUNE image a juger : ni dans l'actu, ni chez les artistes suivis
+    cites, ni sur le web.
 
     A la difference d'`AucunVisuel`, ceci ne DOIT PAS exclure l'article : un
     article sans bonne image aujourd'hui peut en avoir une demain (le compte
@@ -395,7 +417,9 @@ def _reel(
                     "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
                 ) from exc
             if not copies:
-                raise AucunVisuel(RAISON_SANS_FOND)
+                # La VIDEO existe, seul le FOND de la cover manque -- et le web
+                # peut en donner un demain : un SAUT, jamais une exclusion.
+                raise VisuelIntrouvable(f"{RAISON_SANS_FOND}, ni sur le web")
         actifs += copies
     credit = credit_des_actifs(actifs)
     return ChoixVisuels(actifs, credit or (propres.credit if propres is not None else None))
@@ -421,7 +445,8 @@ def _avec_fond_du_web(
             "recherche web impossible (reseau) : nouvelle tentative au prochain passage"
         ) from exc
     if not fond:
-        raise AucunVisuel(raison)
+        # Idem : la video est la, le fond manque partout y compris sur le web.
+        raise VisuelIntrouvable(f"{raison}, ni sur le web")
     actifs += fond
     return ChoixVisuels(actifs, credit_des_actifs(actifs))
 
@@ -735,7 +760,9 @@ def _choisir_visuels(
             ) from exc
         if actifs:
             return ChoixVisuels(actifs, credit_des_actifs(actifs))
-        raise AucunVisuel(raison_sans_artiste(article))
+        # Le web a REGARDE et n'a rien donne : un SAUT, jamais une exclusion
+        # (2026-10-05, voir `VisuelIntrouvable`).
+        raise VisuelIntrouvable(f"{raison_sans_artiste(article)}, et rien sur le web")
 
     posts = posts_en_base(db, comptes, maintenant)
     retenus = classer(article, posts, format_=format_, maintenant=maintenant)
@@ -781,6 +808,9 @@ def _choisir_visuels(
         raise VisuelsDifferes(
             "copie des visuels d'artistes impossible (reseau) : nouvelle tentative au prochain passage"
         )
-    raise AucunVisuel(
-        "aucun visuel recent des artistes suivis cites (hors fenetre, hors sujet ou inaccessible)"
+    # Meme conclusion que ci-dessus : toute l'echelle a ete parcourue, web
+    # compris, et rien n'a donne AUJOURD'HUI -- un SAUT, jamais une exclusion.
+    raise VisuelIntrouvable(
+        "aucun visuel recent des artistes suivis cites (hors fenetre, hors sujet ou "
+        "inaccessible), et rien sur le web"
     )

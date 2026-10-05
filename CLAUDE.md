@@ -2914,14 +2914,68 @@ cette distinction, une simple coupure réseau faisait sauter un créneau avec la
 raison fausse « aucune image… ni sur le web » alors que le web n'avait jamais
 répondu.
 
+**Le filtre d'entrée de la file ignorait le dernier barreau** (desserré le
+2026-10-05, décision de l'utilisateur). `store.raison_sans_visuel` refusait un
+article qui n'a aucune image autorisée EN BASE et ne cite aucun artiste suivi —
+à l'arbitrage comme à l'assignation manuelle (« Action refusée : Article sans
+visuel autorisé : visuels d'un compte média Instagram interdits, et aucun
+artiste suivi cité »). Il est délibérément SANS appel réseau, et c'est bien ;
+mais il concluait « pas de visuel » là où il fallait conclure « pas de visuel
+**en base** » : la recherche WEB est le dernier barreau de l'échelle et peut
+illustrer à peu près n'importe quelle actu. Mesuré ce jour-là : **7 articles sur
+48 publiables (14 %)** étaient bloqués, tous par ce seul motif, et après
+desserrage **0 sur 47**.
+
+Il reste **deux refus**, tous deux DÉTERMINISTES et gratuits
+(`recherche_web.raison_sans_recherche`, pure) : `VISUELS_WEB_ENABLED=false` — le
+barreau n'existe plus, le filtre reprend exactement sa sévérité d'avant —, et un
+article dont RIEN ne donne de requête (`requete_pour` rend `None`). Laisser
+passer ces deux cas ne ferait que leur faire sauter des créneaux.
+
+**Et ce desserrage n'est sûr QUE grâce au correctif en aval du même jour.**
+`choix_visuels` levait `AucunVisuel` quand le web avait regardé et n'avait rien
+donné, et `runner._exclure` écartait alors l'article **définitivement**
+(« composition impossible : … »). Desserrer sans toucher à ça aurait été PIRE
+que le refus : au lieu d'être écartés proprement, ces 7 articles auraient été
+**brûlés un par un**. Les chemins où le web a regardé pour rien lèvent donc
+désormais `VisuelIntrouvable` — un SAUT (`_liberer`, puis
+`pause_visuels.marquer_saute` seulement si la libération a réussi, l'INVARIANT
+D'ORDRE documenté, désormais factorisé dans `runner._sauter`, UN seul point
+d'appel pour les deux chemins de composition ; l'ancien handler l'enfreignait,
+il appelait `marquer_saute` avant `_liberer`).
+
+`AucunVisuel` garde un sens, et un seul — c'est ce qui justifie de ne pas
+fusionner les deux exceptions : le **FORMAT** est impossible quoi que trouve le
+web, c'est-à-dire un reel sans vidéo (le web ne sert jamais la vidéo d'un reel,
+seulement le fond de sa cover). Aucun passage suivant n'y changera rien, donc
+l'exclusion reste juste. La distinction est passée de « pas d'image » / « pas pu
+regarder » à **« impossible par NATURE » / « introuvable AUJOURD'HUI » / « pas
+pu regarder »**.
+
+**Les règles de visuels ne bougent pas d'un pouce** : jamais le visuel d'un
+compte média Instagram, jamais une affiche en fond, une seule affiche en slide.
+On a desserré QUI est éligible, jamais CE QU'ON PUBLIE — un article de compte
+média qui passe désormais le filtre est illustré par le web, et ses propres
+médias restent interdits par les mêmes ceintures (`_propres`,
+`preparation.medias_du_carrousel`, `export`).
+
+Coût réseau mesuré : le cache par requête (`visuels_web_cache_jours`, 3) absorbe
+**entièrement** la boucle de reprise — une recherche bredouille est mémorisée,
+donc les ~8 nouvelles tentatives par jour qu'autorise la pause de 3 h ne coûtent
+**zéro** appel. Ce qu'il n'absorbe pas est la PREMIÈRE recherche par requête
+distincte : au plus une par composition, donc **≤ 3 par jour** (3 créneaux
+carrousel), contre ~2,7/jour mesurées dans le cache en production. L'ordre de
+grandeur double, il reste négligeable.
+
 Sans visuel autorisé, l'article reste au dashboard (pastille « 🚫 sans visuel »,
 raison via `store.raison_sans_visuel`, sans appel réseau — un artiste suivi cité
 suffit à dire « pas encore », le vrai verdict attend la composition) mais sort
-de la file de publication. À la composition, deux issues distinctes :
-`AucunVisuel` exclut l'article (« composition impossible : … », comme un échec
-de composition classique) : l'article n'a aucun visuel autorisé — hors sujet,
-hors fenêtre, ou aucun artiste suivi cité. Une panne de TRANSPORT ne donne
-jamais ça : elle lève toujours `VisuelsDifferes`, qui pose seulement la raison
+de la file de publication. À la composition, trois issues distinctes :
+`AucunVisuel` exclut l'article (« composition impossible : … ») — le format est
+impossible, voir ci-dessus ; `VisuelIntrouvable` SAUTE le créneau et met
+l'article à l'écart quelques heures sans jamais l'exclure. Une panne de
+TRANSPORT ne donne jamais ni l'un ni l'autre : elle lève toujours
+`VisuelsDifferes`, qui pose seulement la raison
 « composition differee : … » sur le créneau, sans exclure ni notifier, et attend
 le passage suivant (budget/quota de lecture épuisé, ou copie en échec
 transitoire — `echec_transitoire`) ; une panne persistante refait donc le même
