@@ -545,7 +545,7 @@ def resolution_suffisante(
     """Vrai si une taille CONNUE suffit a remplir le gabarit `cible` sans depasser
     `seuil` (`cover_fond_upscale_max`) d'agrandissement.
 
-    Mesure du 2026-09-21 (CLAUDE.md, 6 derniers posts publies) : nets a 1,05x et
+    Mesure du 2026-09-21 (docs/reference/generation-de-posts.md, 6 derniers posts publies) : nets a 1,05x et
     0,89x d'agrandissement, flous a partir de 2,13x. Le seuil retenu (2,2x)
     n'est PAS au milieu de cet ecart : il laisse volontairement passer
     l'og:image standard 1200x630 (2,14x), de loin l'illustration la plus
@@ -683,7 +683,7 @@ def eviter_l_affiche(
 
     **Le plancher de resolution (2026-09-21)** recoit exactement le meme
     traitement qu'une affiche : mesure sur les 6 derniers posts publies
-    (CLAUDE.md), un post dont le fond n'avait qu'une og:image de 564x345 est
+    (docs/reference/generation-de-posts.md), un post dont le fond n'avait qu'une og:image de 564x345 est
     parti agrandi 3,91x, flou a l'oeil nu. `cible` (la taille du gabarit --
     1080x1350 en post, 1080x1920 en reel) est fourni par l'appelant, qui seul
     connait le format publie ; a `None` (defaut, compositions anterieures a

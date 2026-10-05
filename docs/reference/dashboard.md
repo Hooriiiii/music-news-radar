@@ -1,0 +1,309 @@
+# Le dashboard : supervision, refonte UX, panneau Artistes, charte
+
+**Quand lire ce fichier** : avant de toucher a `app/static/dashboard.html`, a
+`app/supervision.py`, a `GET /supervision`, au panneau Artistes ou aux couleurs
+de la console. Il porte la regle « une valeur qu'on n'a pas pu lire s'affiche
+INCONNUE, jamais verte », les trois regles de conception sorties de l'audit UX,
+les contrastes mesures de la charte et la raison pour laquelle le rose ne
+signale JAMAIS une panne.
+
+## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
+
+Un bandeau permanent en tete du dashboard, visible quel que soit le panneau, qui
+repond a une seule question : **« la machine tourne-t-elle, et qu'a-t-elle fait
+en mon nom ? »** Dix voyants : mode de publication, composition/credits,
+creneaux du jour, **relecture** (voir « La fenetre de relecture », juste
+au-dessus), dernier passage, sante des sources, quota Graph, pauses
+(yt-dlp, visuels sautes), et les DEUX jetons Meta.
+
+**Pourquoi.** Semaine du 2026-09-26 au 2026-10-02 : credits Anthropic epuises
+deux fois (plus une seule composition pendant deux jours), 46 % des creneaux
+manques dont 25 sur 37 sans raison, 751 erreurs de quota Graph avec 80 % des
+comptes Instagram plus lus, et une actu deja publiee sur le point de repartir —
+**aucun de ces incidents n'etait visible a l'ecran**, et chacun a ete decouvert
+par hasard. Le signal existait a chaque fois (`sources.state.last_error`,
+`creneaux.erreur`, les fichiers d'etat a cote du jeton) ; rien ne le lisait.
+
+**Ca ne coute RIEN** : aucun appel paye, aucun appel reseau vers Meta ou
+Anthropic a l'affichage. Une requete sur la base locale et quatre fichiers JSON.
+Seule exception traitee a la source : l'echeance du jeton de SOURCING ne se lit
+que chez Meta, donc `surveiller_jeton_sourcing` la **consigne** desormais dans
+`sourcing_token_alert.json` (`expire_le`, `releve_le`) a chaque passage horaire —
+il appelle `debug_token` de toute facon, ca ne coute pas un appel de plus — et le
+bandeau la relit. Tant qu'aucun passage ne l'a consignee, le voyant dit
+« inconnu ».
+
+**La regle qui gouverne tout le module : une valeur qu'on n'a pas pu lire
+s'affiche INCONNUE, jamais « tout va bien ».** Un voyant vert par defaut sur une
+machine en panne est pire que pas de voyant — il apprend a ne plus regarder.
+D'ou `lire_json`, qui distingue **trois** issues (absent / lisible / illisible)
+la ou les lecteurs d'etat du pipeline (`app/publish/mode.py`,
+`app/pipeline/quota_graph.py`) les confondent VOLONTAIREMENT en une seule : eux
+doivent continuer a tourner sans fichier, celui-ci doit DIRE ce qu'il ne sait
+pas. D'ou aussi `niveau_global`, ou l'inconnu passe devant l'attention (une
+valeur non lue peut cacher une panne), et l'enveloppe de `superviser` : une
+exception imprevue devient un voyant « inconnu » qui porte le type de
+l'exception — jamais un voyant ABSENT (une case vide se lit « rien a signaler »)
+ni une 500 qui viderait le bandeau. Propriete NEGATIVE, donc facile a casser par
+un `or "ok"` bien intentionne sans qu'aucun autre test ne rougisse :
+`tests/socle/test_supervision.py` et `tests/dashboard/test_dashboard_supervision.py` la
+verrouillent aux quatre etages (agregation, lecteurs, enveloppe, JS).
+
+**Chaque voyant porte sa raison en clair**, adjacente et visible sous les
+pastilles — jamais seulement dans un `title`. Les details (un bloc par voyant)
+sont derriere « Details ».
+
+**Le voyant « composition » criait au loup, et c'est la faute la plus grave
+qu'un bandeau puisse commettre** (2026-10-02). Il affichait « 4 article(s)
+attendent une note depuis plus de 2 h alors que chaque passage horaire note
+tout : scoring interrompu » **pendant que** le passage precedent notait 57
+articles sans une seule erreur. Les quatre etaient d'anciens DOUBLONS — un
+doublon n'est jamais note, c'est l'economie que `link_duplicates` existe pour
+faire — dont le representant venait d'etre PURGE : `articles.duplicate_of_id`
+est `ON DELETE SET NULL`, donc la purge les a rendus notables **apres** le
+scoring du meme passage. Leur `fetched_at` avait 24 h, leur attente reelle
+quelques minutes, et le passage suivant les a notes. Verifie sur les quatre :
+tous portaient une `event_observations` creee par `cluster.lier`, donc tous
+avaient bien ete lies.
+
+`fetched_at` n'est donc PAS la date a laquelle un article est devenu notable, et
+rien dans le schema ne la date — ce qui ne vaut pas une colonne. Le voyant
+mesure desormais la PREUVE au lieu de la duree
+(`articles_jamais_atteints_par_le_scoring`) : `score_pending` sert les articles
+notables par `fetched_at` CROISSANT et **sans limite** au passage horaire, donc
+un article note a T prouve que le scoring a tourne apres T, et qu'il aurait
+servi avant lui tout article notable plus ancien. On ne compte que les articles
+sans note dont le `fetched_at` depasse STRICTEMENT le dernier `fetched_at` deja
+note. Rien de note du tout = aucun repere = on compte tout (regle 1 du module :
+le doute ne se degrade jamais en vert). Faux negatif ASSUME : `run_veille` note
+au plus 20 articles toutes les 5 min, donc un arriere peut faire avancer le
+repere au-dela d'articles encore en attente — le passage horaire le resorbe dans
+l'heure, et un trou d'une heure vaut mieux qu'un faux positif permanent, qui
+apprend a ignorer le bandeau.
+
+**Et un article LEUR PROPRE doublon, lui, est reellement bloque** (meme jour,
+voir « Dedup a deux etages ») : il est compte a part
+(`articles_leur_propre_doublon`), **sans** le filtre `duplicate_of_id IS NULL`
+qui le rendait invisible, avec son propre message et la commande de reparation —
+dire « scoring interrompu » sur ce cas serait un autre message faux. Il figure
+TOUJOURS dans les details, meme quand une branche plus grave prend le titre :
+une corruption ne doit pas etre masquee par une panne passagere.
+
+**Deux populations mal cadrees restent CONNUES et non corrigees** (relevees le
+2026-10-02, hors perimetre du correctif ci-dessus) :
+- `voyant_creneaux` compte comme « en echec » un creneau en `ECHEC` dont
+  l'erreur est `RAISON_RECLAMATION` — or `app/api/posts.py` traite
+  deliberement ce meme etat comme « Publication en cours » tant que
+  `publier_a` est a moins de 20 min. Pendant les quelques minutes d'une
+  publication en vol, le bandeau annonce donc un echec qui n'en est pas un.
+  L'information pour les distinguer existe (`RECLAMATION_EN_COURS`).
+- `voyant_passage` ecrit « N source(s) en erreur **au dernier passage** », alors
+  que `sources.state.last_error` n'est PAS vieilli : une source qui n'a pas ete
+  APPELEE (pause de quota Graph) garde son erreur — c'est voulu cote pipeline
+  (« effacer l'ancienne trace ferait oublier une source reellement morte »),
+  mais la phrase, elle, est fausse. `last_error_at` est deja ecrit par
+  `app/pipeline/health.py` et n'est lu par personne.
+
+**Un endpoint dedie** plutot que cinq schemas elargis : la question est
+transversale, le niveau global doit se calculer a UN endroit (une regle negative
+repartie sur cinq vues n'est verrouillable nulle part), et le bandeau se
+rafraichit toutes les 60 s quel que soit le panneau.
+
+`SourceOut` expose desormais la sante (`last_error`, `last_error_at`,
+`last_ok_at`, extraits de `sources.state` par `app/api/sources.py::vue`) : elle
+etait ecrite a chaque ingestion depuis le debut et n'etait exposee par rien. Le
+panneau Sources l'imprime sous chaque URL.
+## Le dashboard, apres la refonte UX du 2026-10-02
+
+Audit mene avec le skill `ux-audit`, couches code ET captures. Sa conclusion
+gouverne la refonte : **c'etait une console pour un robot qui publie six fois
+par jour, et elle ne savait RIEN dire du robot**. Tous les incidents de la
+semaine du 26/09 au 02/10 -- credits epuises deux fois, 46 % de creneaux
+manques, 751 erreurs de quota, une actu deja publiee sur le point de repartir --
+etaient invisibles a l'ecran. L'utilisateur decouvrait les pannes par hasard.
+
+**Le defaut le plus grave n'etait dans aucune liste** : `renderPostDetail`
+appelait `querySelectorAll(".media-choice")` sur toute la fiche, or la section
+« Visuels retenus » produit la meme classe SANS case a cocher -- `TypeError`
+avant `detailEl.hidden = false`. **126 posts sur 157 (80 %) ne s'ouvraient pas
+du tout**, silencieusement : le clic ne faisait rien. Present depuis la
+migration 0018. Aucune lecture de code ne l'a trouve ; il a fallu ouvrir un
+VRAI post dans un navigateur. La recherche est bornee a `#medias-actu`, avec un
+test de regression.
+
+**Trois regles de conception sorties de l'audit**, chacune verrouillee par un
+test :
+1. **Une valeur qu'on n'a pas pu lire s'affiche INCONNUE, jamais verte.** Un
+   voyant au vert sur une machine en panne est pire que pas de voyant. Quatre
+   mutations le verifient, dont `GRAVITE[INCONNU] = 0`.
+2. **Une information de PANNE ne devient jamais moins visible** pour gagner de
+   la place. Le repli du bandeau plie ce qui va bien, jamais une raison.
+3. **Deux controles qui semblent redondants sont une question de COMPOSITION,
+   pas de soustraction.** Navigation et filtres partageaient une classe et une
+   rangee : portees differentes (application contre grille), donc deux formes
+   (onglets contre pastilles), jamais une fusion.
+
+**Ce qui etait casse a l'ecran et ne se voyait dans aucun test** : le panneau
+Evenements avait son titre ecrase a zero de large (`.event-head` en flex, titre
+a `flex: 1` contre sept badges a largeur intrinseque) -- Chromium le comptait
+lui-meme comme *hidden*. Recompose en blocs empiles ; un test mesure la
+LARGEUR RENDUE (>= 95 % de la ligne a 1280/820/390 px), pas une propriete CSS.
+Aucune media query n'existait : l'entete faisait **705 px sur un telephone**,
+plus que l'ecran, en `sticky`. Elle cesse de l'etre sous 900 px.
+
+**Quatre textes de l'interface affirmaient des choses fausses** (« toutes les
+2 h » quand le passage est horaire, « 14 jours de retention » quand elle est a
+**2**, l'aplat Kinda decrit comme une issue publiable, le credit web presente
+comme actif). Les deux premiers sont desormais **derives de la config** via
+`GET /reglages` -- un nombre recopie dans une chaine d'interface derive au
+premier changement de reglage.
+
+**Remettre un article dans la file** : `POST /articles/{id}/reintegrer`
+(bouton « ↩ Remettre dans la file » sur la carte, pastille « ⛔ hors file »
+depuis `ArticleOut.file_exclu_raison`). Il **refuse (409) une exclusion posee
+par la dedup d'archive** et renvoie vers `scripts.reparations.marquer_doublon_manuel` :
+effacer la raison seule ne tient pas, `link_duplicates` relierait l'article au
+passage suivant (voir « Dedup a deux etages »). Une exclusion de gel sur un
+article par ailleurs doublon se leve, elle : c'est la RAISON qui decide, pas le
+statut de doublon.
+
+**Une legende tapee survit desormais a un re-rendu de la fiche.** Six gestes
+reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et
+detruisaient le texte en cours de frappe -- le geste editorial normal (ecrire
+la legende, puis choisir la cover qui va avec) perdait la legende. Un tampon a
+UN seul point de capture (l'evenement `input`) et UN seul point de lecture
+(`textesAReinjecter`, pure), plus une garde a la fermeture.
+
+**Le lien vers Instagram est DEDUIT** du shortcode (base 64 de l'id media), pas
+verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le
+lien ouvre un 404, et l'identifiant brut reste lisible a cote. Le vrai remede
+serait de stocker le `permalink` que Meta renvoie a la publication.
+
+### Le panneau Artistes (2026-10-04)
+
+La moitie DETECTION de Kinda etait INVISIBLE. `artists` / `artist_mentions` sont
+« l'actif de Kinda » et le flux score « le deal-flow du label » ; en production,
+**4 752 artistes et 13 533 citations archivees depuis des semaines**, et aucune
+interface ne les montrait — `GET /artists` existait, teste, **sans un seul
+consommateur**. L'audit UX du 02/10 l'avait releve.
+
+**Ce panneau ne pouvait PAS etre construit plus tot**, et c'est le point le plus
+important a retenir : le signal etait faux jusqu'au 03/10 (tri par VOLUME de
+citations, donc Taylor Swift et BTS en tete). Pose sur cet ancien signal, le
+panneau aurait propose de signer Taylor Swift. Il arrive apres la reparation,
+pas avant.
+
+Trois choses se lisent d'un coup d'oeil, parce que ce sont elles qui separent
+une decouverte d'une star :
+- **la TENDANCE** (`acceleration`) — « ↗ on commence a en parler », « → regulier »,
+  « ↘ ca retombe », ou **« tendance inconnue »** ;
+- **« deja suivi » contre « a decouvrir »**, avec le NOM du compte — l'action
+  implicite du panneau, et un FAIT (une source Instagram active de categorie
+  artiste liee a la fiche), jamais un jugement de notoriete ;
+- **les CITATIONS elles-memes** au clic sur la ligne (titre, source, date,
+  pertinence, emergence, renvoi vers l'actu) : juger sur pieces, pas sur un score.
+
+Reglages manipulables dans la barre du panneau, en `select` et non en `.chip` —
+les pastilles appartiennent a la grille, les onglets a l'application, et melanger
+les trois est la confusion de portees que la refonte du 02/10 a demontee :
+fenetre, `citations_min` (3 pour une shortlist, **1 pour fouiller un
+primo-signal**), `min_emergence`, nombre affiche, et « inclure les comptes deja
+suivis ».
+
+**Le seuil de la tendance est mesure, pas arrondi.** `ACCELERATION_MONTE` vaut
+**0,34** et non 0,3 : `acceleration` porte un biais structurel de **+1/n** pour un
+nombre IMPAIR de citations regulierement espacees (son propre docstring le dit),
+donc **trois citations equidistantes valent +0,33**, et trois est le plancher par
+defaut. Un seuil sous 0,33 qualifierait de montee la regularite la plus plate du
+cas le plus frequent. Verifie sur les donnees REELLES le 2026-10-04 : FRÈJUS et
+G2G sont exactement a 0,3333 et se lisent « → regulier » ; Ahadadream a 0,43 se
+lit « ↗ on commence a en parler ». Au-dela de trois citations le biais ne fait
+que diminuer : le seuil est conservateur dans le bon sens.
+
+**La regle « inconnue, jamais zero » est ici la plus couteuse du dashboard**, et
+elle passe par UN SEUL point (`mesure()` dans `app/static/dashboard.html`).
+`velocite` vaut `None` sous deux citations datees, `acceleration` sous trois, et
+17 % des citations n'ont aucune note d'emergence : une acceleration inconnue
+affichee « 0 » se lit **« cet artiste stagne »**, une affirmation fausse sur la
+seule grandeur qui separe une decouverte d'une star. Preuve par mutation sur
+Chromium reel (`tests/dashboard/test_dashboard_artistes.py`) : on remplace le garde-fou par
+le `|| 0` exact qu'un contributeur presse ecrirait, et la ligne doit afficher
+« → regulier 0.00 » — la mesure refuse. L'inconnu porte sa propre teinte
+(gris-bleu, celle de la supervision), jamais celle d'un des trois verdicts ni
+l'accent de la marque, qui se lirait comme une promesse.
+
+Le seul geste d'ECRITURE du panneau est `PATCH /artists/{id}` avec
+`source_instagram_id` : rattacher une fiche a son compte quand le nom ne suffit
+pas. Sans compte lisible, le selecteur est desactive **avec sa raison ecrite a
+cote** — jamais gris et muet.
+## La charte Kinda dans la console (2026-10-02)
+
+Le compte Instagram etait a la charte ; la console qui le pilote portait un
+violet `#7c5cff` sans rapport avec la marque. Le rose signature `#FB8AC2` est a
+un cheveu du `#FD8BC3` des gabarits de post (`app/content/layout.py`) : **la
+charte etait deja dans le produit PUBLIE, elle manquait seulement a l'outil**.
+
+**Le fond reste SOMBRE** (`#101014`), decision de l'utilisateur : la console se
+regarde des heures et le sombre sert la densite de donnees. La marque y entre en
+ACCENT, et la mesure le confirme -- le violet etait en dessous du seuil :
+
+| paire | contraste | |
+|---|---|---|
+| violet sur fond sombre | 4,37:1 | sous 4,5 |
+| **rose Kinda sur fond sombre** | **8,60:1** | presque le double |
+| blanc sur bouton violet plein | 4,35:1 | echouait |
+| blanc sur bouton rose plein | 2,21:1 | **interdit** |
+| **texte `#101014` sur bouton rose plein** | **8,60:1** | la correction |
+
+**Le bouton principal porte donc un texte SOMBRE sur le rose** (`--sur-accent`),
+jamais blanc. C'est contre-intuitif et c'est mesure. La meme regle a corrige le
+bouton rouge plein du mode `reel`, ou le blanc ne valait que 3,4:1.
+
+**Le ROSE NE SIGNALE JAMAIS UNE PANNE**, et c'est la propriete la plus fragile
+de ce chantier : rose (teinte 330) et rouge d'alerte sont voisins, une panne qui
+vire au rose ne CASSE rien -- la page reste belle, les tests de structure
+restent verts -- elle rend seulement la supervision aveugle, c'est-a-dire ce que
+l'audit UX a fait construire en premier. Les rouges sont donc ramenes a la
+teinte 0 EXACTE et montes en saturation (`#ff8a8a` etait a 0 mais aussi pale que
+le rose ; `#ff9aa5` penchait carrement vers lui, a 353) : `--alerte` `#ff7b7b`
+(7,57:1) et `--alerte-douce` `#ff8c8c` (8,48:1), tous deux au-dessus du seuil --
+une raison de panne ne perd jamais en lisibilite pour gagner en teinte.
+`tests/dashboard/test_dashboard_marque.py` le verrouille par **deux preuves par
+mutation** : une alerte qui prend la teinte de l'accent, et une regle de panne
+qui s'ecrit `var(--accent)`. Une seule exception, ecrite plutot que devinee :
+`.zone-erreur .relance` est une ACTION dans un etat de panne, pas le signal de
+panne.
+
+Consequence sur un test existant : `test_dashboard_navigation.py` epinglait le
+literal `rgb(255, 138, 138)`. Un literal aurait rougi pour une AMELIORATION ; il
+verifie desormais l'intention (le jeton `--alerte`, une teinte rouge, un
+contraste suffisant sur son fond).
+
+**Typographie : aucune police web.** La charte demande une grotesque condensee ;
+le fichier est autonome et ne depend d'aucun CDN, propriete qu'on garde. La pile
+`--police-titre` part d'« Avenir Next Condensed » (presente sur macOS, et seule
+condensee locale a offrir quatre graisses REELLES, donc un 600 vrai et non
+synthetise), puis « DIN Condensed », puis des condensees Linux/Windows, et le
+dernier repli est exactement la pile d'aujourd'hui : une machine sans condensee
+rend la page telle qu'elle etait, jamais cassee. Elle ne s'applique qu'aux
+titres et aux tetes de ligne -- « pas de fantaisie dans le texte courant ».
+
+**Les deux signes de marque sont INLINES en `data:`**, pas servis. `app/main.py`
+rend le dashboard par un `FileResponse` UNIQUE et ne monte aucun `StaticFiles` :
+monter un repertoire statique pour deux PNG ajouterait une route, deux requetes
+au premier rendu (un logo qui apparait apres le texte) et un 404 muet de plus a
+pouvoir rater. Cout mesure et borne a **+15,7 ko** sur la page, parce que les
+deux images sont DERIVEES avant d'etre encodees (`scripts/outillage/inliner_marque.py`,
+idempotent, a relancer apres une refonte du logo) :
+- le **logo** est aplati a la creme EXACTE de la charte `#FEF1F7` -- l'original
+  portait 7 648 couleurs distinctes (un anticrenelage autour d'un `#FFF7FA` a
+  peine different) qui coutaient 30 ko de base64 pour rien ; a plat, 13,7 ko, et
+  la teinte devient celle de la charte. Il va dans le `src` d'une `<img
+  alt="Kinda">` : seul endroit ou un `alt` donne le nom accessible sans texte
+  masque a entretenir ;
+- l'**etoile** devient un MASQUE gris+alpha (1,9 ko) dans une variable CSS, donc
+  recoloree librement par `background-color`. Deux emplois seulement -- l'etat
+  vide et la variante retenue d'une cover : un outil de travail ne se decore
+  pas, il se signe.
+
+Les PNG de `app/static/marque/` restent la source de verite.

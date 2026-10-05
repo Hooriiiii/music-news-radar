@@ -186,7 +186,7 @@ def test_une_url_google_news_est_ignoree_sans_requete(db_session):
 
 
 # --- Variante pleine resolution (2026-09-21) --------------------------------
-# Mesure sur le post 71 (CLAUDE.md) : `?w=564` rendait 564x345 (50 Ko) une
+# Mesure sur le post 71 (docs/reference/generation-de-posts.md) : `?w=564` rendait 564x345 (50 Ko) une
 # image dont la vraie taille, sans ce parametre, est 2156x1320 (386 Ko).
 
 PAGE_REDIMENSIONNEE = '''<html><head>

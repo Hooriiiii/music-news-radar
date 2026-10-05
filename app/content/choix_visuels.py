@@ -172,7 +172,7 @@ def _membres_du_groupe(db: Session, article: Article) -> list[Article]:
     (`duplicate_of_id IS NULL`, `store._articles_publiables`) : les membres a
     consulter sont donc ceux dont `duplicate_of_id` pointe vers lui, jamais une
     chaine a remonter -- le projet garantit qu'un saut suffit toujours
-    (CLAUDE.md, « Dedup a deux etages »).
+    (docs/reference/dedup-et-retention.md, « Dedup a deux etages »).
 
     2026-09-21 : 21 articles lies comme doublons, dont 13 portent des medias --
     jetes jusqu'ici parce que seul le representant elu (le plus INFORMATIF par
@@ -196,7 +196,7 @@ def _propres(
     compte, comme avant. Le REEL n'est pas elargi : son eligibilite (categorie
     du compte, duree de la video) se decide sur l'article seul, et l'elargir
     demanderait de revalider ces regles par membre -- hors perimetre de cette
-    tache (CLAUDE.md, « Reels automatiques »).
+    tache (docs/reference/publication.md, « Reels automatiques »).
 
     `origine_interdite` (« jamais le visuel d'un compte Instagram media ») est
     reverifiee PAR MEMBRE : `visuels_autorises` et `credit_video` la relisent

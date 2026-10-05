@@ -103,7 +103,7 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
 
     Une exclusion posee par la DEDUP D'ARCHIVE est refusee, et ce n'est pas un
     scrupule : `link_duplicates` relie l'article au passage suivant, donc
-    effacer la raison seule ne tient pas (CLAUDE.md, « Reparer un faux positif
+    effacer la raison seule ne tient pas (docs/reference/dedup-et-retention.md, « Reparer un faux positif
     exige un verdict MANUEL »). On nomme donc l'outil qui, lui, tient.
     """
     article = db.get(Article, article_id)

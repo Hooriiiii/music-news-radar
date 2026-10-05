@@ -372,7 +372,7 @@ def test_la_preuve_ignore_casse_accents_et_tirets():
 
 # --- La source EST le sujet : festival, artiste, label, club (revue 2026-09-21)
 # Mesure : source « Astropolis (IG) », la phrase qui porte l'actu disparaissait.
-# CLAUDE.md, « Qui parle : `sources.categorie` » : pour un compte d'artiste, de
+# docs/reference/scoring.md, « Qui parle : `sources.categorie` » : pour un compte d'artiste, de
 # festival, de label ou de club, `source.name` est le SUJET de l'actu, pas la
 # source de l'info. Seul un compte `media` (ou de categorie inconnue, dans le
 # doute) voit son nom banni.

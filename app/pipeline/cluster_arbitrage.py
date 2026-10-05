@@ -51,7 +51,7 @@ Trois defauts corriges ici :
 Un verdict MANUEL (pose par `scripts.reparations.marquer_doublon_manuel`) prime sur tout
 rapprochement automatique ulterieur, y compris sur la bande certaine : c'est ce
 qui rend enfin reelle la procedure de reparation d'un faux positif d'archive
-(l'ancienne procedure de CLAUDE.md -- effacer `duplicate_of_id` et
+(l'ancienne procedure de docs/reference/dedup-et-retention.md -- effacer `duplicate_of_id` et
 `file_exclu_raison` -- ne tenait pas, le passage suivant relie l'article tant
 qu'il reste dans la fenetre de 48 h de sa vie publiable). `marquer_manuel` leve
 si l'ecriture n'est pas confirmee par une relecture : le script appelant ne

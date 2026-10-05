@@ -199,7 +199,7 @@ class Settings(BaseSettings):
     illustration_max_par_run: int = 40
     # Variante PLEINE RESOLUTION de l'og:image (2026-09-21). Certains CDN
     # d'editeurs (WordPress) recopient dans og:image le parametre de
-    # redimensionnement de la page -- mesure sur le post 71 (CLAUDE.md) :
+    # redimensionnement de la page -- mesure sur le post 71 (docs/reference/generation-de-posts.md) :
     # `?w=564` rendait 564x345 (50 Ko) la ou la meme image sans ce parametre
     # pese 386 Ko en 2156x1320. Le resultat (variante retenue) est memorise par
     # URL, meme mecanique que `illustration_cache_path`, pour ne pas repayer la
@@ -534,7 +534,7 @@ class Settings(BaseSettings):
     # `publication_crop_upscale_max` : ce dernier borne le cadrage des SLIDES du
     # carrousel (toujours 1080x1350), alors que le fond peut remplir le gabarit
     # REEL, plus grand (1080x1920) -- pas la meme cible, donc pas le meme reglage.
-    # Mesure sur les 6 derniers posts REELLEMENT publies (CLAUDE.md, releve du
+    # Mesure sur les 6 derniers posts REELLEMENT publies (docs/reference/generation-de-posts.md, releve du
     # 2026-09-21) : nets a 1,05x et 0,89x d'agrandissement (aucun agrandissement
     # notable), flous des 2,13x (2,13x / 2,39x / 3,52x / 3,91x, dont un visage
     # baveux a l'oeil nu sur le post 71).
@@ -582,8 +582,8 @@ class Settings(BaseSettings):
     # `upscayl-lite-4x`, pas `upscayl-standard-4x` : mesure sur l'image du
     # probleme reel (660x440, l'ADE et Shlomo, post 76) sur cette machine,
     # 1,1 s contre 5,8 s -- environ 5x plus rapide. Le fond de cover est
-    # recouvert d'un voile sombre ET du texte de l'accroche (CLAUDE.md,
-    # « Agrandir le fond plutot que sauter le post ») : le detail que le
+    # recouvert d'un voile sombre ET du texte de l'accroche (docs/reference/generation-de-posts.md,
+    # « L'agrandissement, barreau ajoute juste avant le saut ») : le detail que le
     # modele standard rendrait en plus n'y est de toute facon pas visible,
     # donc la difference de qualite ne justifie pas de payer 5x plus de
     # temps, six fois par jour, pour un element decoratif. Reglable : si un

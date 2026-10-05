@@ -19,12 +19,12 @@ Retour de l'utilisateur le 2026-09-21 en ouvrant le compte reellement publie :
 « supprime les sources des descriptions [...] parle de l'actu en elle-meme ».
 Mesure sur les posts en ligne : « Info via Stereogum. », « Qu'en pensez-vous ?
 Info a retrouver via Stereogum. », « ... selon Soompi ... ». Kinda veut etre
-une SOURCE, pas un intermediaire (CLAUDE.md, « Veille rapide ») : nommer le
+une SOURCE, pas un intermediaire (docs/reference/sources-et-ingestion.md, « Veille rapide ») : nommer le
 media d'ou vient l'info fait exactement l'inverse, ca renvoie vers un
 concurrent. `sans_mentions_de_source` est le filet DETERMINISTE derriere la
 regle de prompt posee dans `app/content/compose.py` (SYSTEM_PROMPT) -- un
 prompt ne garantit jamais rien a lui seul, lecon deja ecrite trois fois plus
-haut dans ce module et dans CLAUDE.md. Meme jour, meme demande : le credit
+haut dans ce module et dans docs/reference/generation-de-posts.md. Meme jour, meme demande : le credit
 d'un simple nom de DOMAINE (« 📸 djmag.com », post 59) disparait aussi -- seul
 un credit de COMPTE (`@artiste`) reste affiche (`credit_de_compte` ici,
 `app/content/visuels.credit_des_actifs` a la creation).
@@ -157,7 +157,7 @@ def noms_a_bannir(article) -> list[str]:
     (IG) », categorie festival : « Astropolis devoile sa programmation. Trois
     jours a Brest fin aout. » perdait sa premiere phrase -- celle qui PORTE
     l'actu. Pour un compte d'artiste, de festival, de label ou de club,
-    `source.name` est le SUJET, pas la source de l'info (CLAUDE.md, « Qui
+    `source.name` est le SUJET, pas la source de l'info (docs/reference/scoring.md, « Qui
     parle : `sources.categorie` ») ; le bannir mutile precisement les posts que
     le feed priorise. Categorie `None` (sources X, ou pas encore classee) :
     dans le doute on protege du plagiat, comme pour un media. La racine du
@@ -197,7 +197,7 @@ def sans_mentions_de_source(caption: str, article) -> str:
     """Retire les phrases qui NOMMENT la source de l'article -- « Info via
     Stereogum. », « ... selon Soompi ... », « Info a retrouver via Stereogum. »,
     les trois formulations reellement publiees le 2026-09-21. Kinda veut etre
-    une SOURCE, pas un intermediaire (CLAUDE.md, « Veille rapide ») : nommer le
+    une SOURCE, pas un intermediaire (docs/reference/sources-et-ingestion.md, « Veille rapide ») : nommer le
     media d'ou vient l'info revient a renvoyer vers un concurrent.
 
     Elle ne DEVINE aucun nom a bannir : ils viennent de `noms_a_bannir`, donc

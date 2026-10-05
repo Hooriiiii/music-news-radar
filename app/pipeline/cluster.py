@@ -1037,7 +1037,7 @@ def link_duplicates(
         # positif suppose désormais un verdict manuel « différent »
         # (`scripts.reparations.marquer_doublon_manuel`), pas seulement effacer ce champ :
         # sinon le passage suivant relie l'article tant qu'il reste dans la
-        # fenêtre de sa vie publiable (voir CLAUDE.md, « Dédup à deux étages »).
+        # fenêtre de sa vie publiable (voir docs/reference/dedup-et-retention.md).
         if origine == "certain":
             detail = f"similarite {score:.2f}"
         elif origine == "arbitre":

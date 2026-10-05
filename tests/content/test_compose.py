@@ -603,7 +603,7 @@ def test_resoudre_fond_reporte_au_lieu_de_sauter_sur_une_panne_de_reserve(db_ses
 
 
 def test_le_plancher_de_resolution_suit_le_gabarit_publie(db_session, monkeypatch):
-    """Post 71 (CLAUDE.md) : une seule og:image, 564x345, agrandie 3,91x pour
+    """Post 71 (docs/reference/generation-de-posts.md) : une seule og:image, 564x345, agrandie 3,91x pour
     remplir 1080x1350 -- trop petite pour partir telle quelle, mais assez
     grande (Tache 6, 2026-09-23) pour que le GEL tente l'agrandissement : la
     composition n'exclut plus ce candidat, elle le marque `a_agrandir`."""

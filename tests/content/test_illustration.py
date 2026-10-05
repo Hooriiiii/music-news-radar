@@ -292,7 +292,7 @@ def test_le_juge_envoie_une_image_par_candidat():
 
 
 # --- Plancher de resolution du fond (2026-09-21) ----------------------------
-# Mesure sur les 6 derniers posts publies (CLAUDE.md) : nets a 1,05x et 0,89x
+# Mesure sur les 6 derniers posts publies (docs/reference/generation-de-posts.md) : nets a 1,05x et 0,89x
 # d'agrandissement, flous a partir de 2,13x. `cover_fond_upscale_max` (2,2x par
 # defaut, la meme valeur et la meme famille de raisonnement que
 # `publication_crop_upscale_max`) separe le cas nominal des fonds minuscules.
