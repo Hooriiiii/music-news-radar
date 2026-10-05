@@ -4,6 +4,7 @@ import datetime as dt
 import itertools
 from pathlib import Path
 
+from app.config import settings
 from app.content.media import entree
 from app.models import Article, Artist, Creneau, Source, SourceCategorie, SourceType
 
@@ -75,6 +76,28 @@ def test_un_article_sans_visuel_est_refuse_sur_un_creneau_carrousel(client, db_s
     reponse = client.patch(f"/schedule/{creneau.id}", json={"article_id": article.id})
     assert reponse.status_code == 409
     assert reponse.json()["detail"].startswith("Article sans visuel autorise :")
+    assert "recherche web coupee" in reponse.json()["detail"]
+
+
+def test_la_recherche_web_allumee_laisse_assigner_le_meme_article(
+    client, db_session, monkeypatch
+):
+    """L'ACTION REFUSEE dont l'utilisateur s'est plaint le 2026-10-05. Le filtre
+    ignorait le dernier barreau de l'echelle : il concluait « pas de visuel » la
+    ou il fallait conclure « pas de visuel EN BASE ». Avec la recherche web
+    allumee -- le reglage de production --, l'assignation manuelle passe."""
+    monkeypatch.setattr(settings, "visuels_web_enabled", True)
+    guettapen = _source(db_session, "Guettapen (IG)", "guettapen", SourceCategorie.MEDIA)
+    article = _article(db_session, guettapen, "Orphelin", media=[entree("photo", "https://cdn.ig/o.jpg")])
+    creneau = Creneau(publier_a=dt.datetime.now(UTC) + dt.timedelta(hours=5))
+    db_session.add(creneau)
+    db_session.commit()
+
+    reponse = client.patch(f"/schedule/{creneau.id}", json={"article_id": article.id})
+
+    assert reponse.status_code == 200, reponse.json()
+    db_session.refresh(creneau)
+    assert creneau.article_id == article.id
 
 
 def test_le_dashboard_montre_l_origine_des_visuels():

@@ -23,6 +23,7 @@ from app.models import (
     SourceCategorie,
     SourceType,
 )
+from app.schedule.pause_visuels import articles_en_pause
 from app.schedule.runner import _menage, tourner
 from app.schedule.slots import prochains_horaires
 from app.schedule.store import (
@@ -103,18 +104,55 @@ def _epingler(db, article):
     return creneau
 
 
-def test_raison_sans_visuel(db_session, fred, guettapen):
+def test_raison_sans_visuel(db_session, fred, guettapen, monkeypatch):
+    """DESSERRE le 2026-10-05 : la recherche web est le dernier barreau de
+    l'echelle et peut illustrer a peu pres n'importe quelle actu, donc un article
+    sans image EN BASE n'est plus refuse. Mesure du meme jour : 7 des 48 articles
+    publiables (14 %) etaient refuses de la file -- arbitrage ET assignation
+    manuelle -- par ce seul motif.
+
+    Le reglage est rallume explicitement : la suite coupe la recherche web en
+    ambiant (`conftest._pas_de_recherche_web_ambiante`), et c'est justement ce
+    reglage qui decide du desserrage."""
+    monkeypatch.setattr(settings, "visuels_web_enabled", True)
     sans = _article(db_session, guettapen, "Actu sans artiste",
                     media=[entree("photo", "https://cdn.ig/g.jpg")])
     avec = _article(db_session, guettapen, media=[entree("photo", "https://cdn.ig/g.jpg")],
                     mentioned=["Fred again.."])
     propre = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
-    assert raison_sans_visuel(sans) == (
-        "visuels d'un compte media Instagram interdits, et aucun artiste suivi cite"
-    )
+    assert raison_sans_visuel(sans) is None
     assert raison_sans_visuel(avec) is None
     assert raison_sans_visuel(propre) is None
-    assert [c.article_id for c in candidats_eligibles(db_session, BASE)] == [avec.id, propre.id]
+    assert [c.article_id for c in candidats_eligibles(db_session, BASE)] == [
+        sans.id, avec.id, propre.id
+    ]
+
+
+def test_un_article_dont_rien_ne_donne_de_requete_web_reste_refuse(
+    db_session, guettapen, monkeypatch
+):
+    """Le desserrage n'est pas un blanc-seing : il reste deux refus, tous deux
+    DETERMINISTES et sans reseau. Ici, rien dans l'article ne donne de requete --
+    le barreau web ne peut rien, et le laisser passer ne ferait que lui faire
+    sauter des creneaux."""
+    monkeypatch.setattr(settings, "visuels_web_enabled", True)
+    muet = _article(db_session, guettapen, "???", media=[entree("photo", "https://cdn.ig/g.jpg")])
+    raison = raison_sans_visuel(muet)
+    assert raison is not None
+    assert "compte media Instagram interdits" in raison
+    assert "requete web" in raison
+    assert [c.article_id for c in candidats_eligibles(db_session, BASE)] == []
+
+
+def test_la_recherche_web_coupee_rend_le_filtre_d_avant(db_session, guettapen, monkeypatch):
+    """`VISUELS_WEB_ENABLED=false` : le barreau n'existe plus, donc le filtre
+    reprend exactement sa severite d'avant le desserrage."""
+    monkeypatch.setattr(settings, "visuels_web_enabled", False)
+    sans = _article(db_session, guettapen, "Actu sans artiste",
+                    media=[entree("photo", "https://cdn.ig/g.jpg")])
+    raison = raison_sans_visuel(sans)
+    assert raison is not None and "recherche web coupee" in raison
+    assert [c.article_id for c in candidats_eligibles(db_session, BASE)] == []
 
 
 def test_un_reel_de_media_devient_eligible_par_la_video_d_un_artiste(db_session, fred, guettapen):
@@ -134,7 +172,20 @@ def test_un_media_sans_visuel_n_est_jamais_programme(db_session, guettapen):
     assert all(c.article_id is None for c in db_session.query(Creneau).all())
 
 
-def test_un_article_epingle_sans_visuel_est_exclu_sans_composition(db_session, guettapen):
+def test_un_article_dont_le_web_ne_trouve_rien_n_est_JAMAIS_exclu(db_session, guettapen):
+    """LA propriete qui rend sur le desserrage de `raison_sans_visuel`, et sa
+    violation est SILENCIEUSE : l'article disparait de la file sans que rien ne
+    le dise.
+
+    Avant le 2026-10-05, ce chemin levait `AucunVisuel`, donc `runner._exclure`
+    posait `file_exclu_raison` et l'article ne revenait PLUS JAMAIS. Desserrer le
+    filtre sans toucher a ca aurait donc ete pire que le refus : au lieu d'etre
+    ecartes proprement, ces articles auraient ete brules un par un.
+
+    PREUVE PAR MUTATION : remettre `raise AucunVisuel(...)` a la place de
+    `raise VisuelIntrouvable(...)` dans `choix_visuels._choisir_visuels`, ou
+    remplacer `_sauter(...)` par `_exclure(...)` dans `runner._composer`, fait
+    rougir ce test et lui seul."""
     article = _article(db_session, guettapen, "Actu sans artiste",
                        media=[entree("photo", "https://cdn.ig/g.jpg")])
     creneau = _epingler(db_session, article)
@@ -143,10 +194,15 @@ def test_un_article_epingle_sans_visuel_est_exclu_sans_composition(db_session, g
     db_session.refresh(article)
     db_session.refresh(creneau)
     assert outils.composes == []
-    assert article.file_exclu_raison.startswith(
-        "composition impossible : visuels d'un compte media Instagram"
-    )
+    # Pas d'exclusion : l'article reste eligible et repartira des qu'un barreau
+    # donnera mieux (nouveau post du compte source, cache web expire).
+    assert article.file_exclu_raison is None
+    # Le creneau SAUTE, et sa raison le dit.
     assert (creneau.article_id, creneau.etat) == (None, EtatCreneau.LIBRE)
+    assert creneau.erreur.startswith("visuel introuvable :")
+    # Mis a l'ecart TEMPORAIREMENT, sinon il reprendrait le creneau qu'il vient
+    # de liberer a chaque passage, jusqu'a MANQUE.
+    assert articles_en_pause(BASE) == {article.id}
 
 
 def test_des_visuels_differes_attendent_sans_exclure(db_session, fred):
@@ -331,7 +387,10 @@ def test_un_brouillon_sans_aucun_visuel_n_est_pas_gele(db_session, guettapen):
     outils.tourner(db_session)
     db_session.refresh(article)
     assert outils.composes == []
-    assert article.file_exclu_raison.startswith("composition impossible :")
+    # Plus d'exclusion depuis le 2026-10-05 : le web a regarde pour rien, donc
+    # c'est un SAUT -- l'article peut avoir une image demain.
+    assert article.file_exclu_raison is None
+    assert articles_en_pause(BASE) == {article.id}
 
 
 def test_les_actifs_sont_resolus_quelle_que_soit_l_ecriture_du_compte(db_session):

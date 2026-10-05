@@ -19,6 +19,7 @@ from app.config import settings
 from app.content.actifs_artistes import classer, duree_min_reel_ms, posts_en_base
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
+from app.content.recherche_web import raison_sans_recherche
 from app.content.visuels import (
     ORIGINE_ARTICLE,
     ORIGINE_ARTISTE,
@@ -102,22 +103,52 @@ def comptes_cites(article: Article, index: IndexComptes) -> list[CompteArtiste]:
 
 
 def raison_sans_visuel(article: Article, index: IndexComptes | None = None) -> str | None:
-    """None si l'article aura un visuel autorise, sinon la raison, affichable.
+    """None si l'article POURRA avoir un visuel autorise, sinon la raison, affichable.
 
     Sans reseau : un artiste suivi cite suffit, son visuel sera cherche a la
-    composition (en base, puis en direct). Si rien n'est trouve alors, l'article
-    sera exclu avec la raison precise.
+    composition (en base, puis en direct).
+
+    DESSERRE le 2026-10-05, sur decision de l'utilisateur. Ce predicat ignorait
+    la RECHERCHE WEB, qui est le dernier barreau de l'echelle du fond
+    (`choix_visuels._actifs_du_web`) et peut illustrer a peu pres n'importe
+    quelle actu : il concluait donc « pas de visuel » la ou il fallait conclure
+    « pas de visuel EN BASE ». Mesure du meme jour : 7 des 48 articles
+    publiables (14 %) etaient refuses de la file -- a l'arbitrage comme a
+    l'assignation manuelle -- alors que ce barreau les attendait. Le tri
+    editorial revient a la note de pertinence, pas au filtre visuel.
+
+    Il reste deux refus, tous deux DETERMINISTES et sans reseau
+    (`recherche_web.raison_sans_recherche`) : la recherche web est coupee, ou
+    rien dans l'article ne donne de requete. Dans ces deux cas le barreau ne
+    peut rien, et laisser passer l'article ne ferait que lui faire sauter des
+    creneaux.
+
+    Et ce desserrage n'est SUR que grace au correctif en aval du meme jour :
+    un article dont le web ne trouve rien n'est plus EXCLU
+    (`choix_visuels.AucunVisuel` -> `runner._exclure`) mais SAUTE
+    (`VisuelIntrouvable` -> `_liberer` + `pause_visuels.marquer_saute`). Sans
+    lui, desserrer aurait brule ces articles un par un au lieu de les ecarter
+    proprement.
     """
     if a_une_image(article):
         return None
     if index is None:
         db = object_session(article)
         if db is None:
-            return raison_sans_artiste(article)
+            return _raison_ni_base_ni_web(article)
         index = construire_index(db)
     if comptes_cites(article, index):
         return None
-    return raison_sans_artiste(article)
+    return _raison_ni_base_ni_web(article)
+
+
+def _raison_ni_base_ni_web(article: Article) -> str | None:
+    """La raison d'un refus quand la base ne donne rien : seule l'impossibilite
+    de la recherche web la justifie encore."""
+    raison_web = raison_sans_recherche(article)
+    if raison_web is None:
+        return None
+    return f"{raison_sans_artiste(article)}, {raison_web}"
 
 
 def etiquette_visuel(article: Article, index: IndexComptes) -> str | None:

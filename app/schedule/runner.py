@@ -319,6 +319,34 @@ def _differer(
     return False
 
 
+def _sauter(
+    db, creneau: Creneau, attendu: tuple, article: Article, maintenant: dt.datetime,
+    rapport: RapportPublication, exc: Exception,
+) -> None:
+    """Un SAUT (`VisuelIntrouvable`) : toute l'echelle a ete parcourue, web
+    compris, et rien n'a donne AUJOURD'HUI. Pas d'exclusion -- l'article peut
+    avoir une photo demain (nouveau post du compte source, recherche web qui
+    sort du cache apres `visuels_web_cache_jours`). Le creneau se libere et
+    prend le candidat suivant tout de suite.
+
+    La mise a l'ecart temporaire est indispensable : sans elle, l'article
+    revenait sur ce meme creneau libere a CHAQUE passage (le meilleur score
+    gagne l'arbitrage), sautait encore, jusqu'a MANQUE -- une seule mauvaise
+    image pouvait ainsi faire taire tout le compte une journee entiere.
+
+    INVARIANT D'ORDRE, le meme que `_differer` et que la ceinture de
+    `_publier` : `_liberer` est une ecriture CONDITIONNELLE qui peut echouer si
+    le dashboard est passe entre-temps, donc on libere D'ABORD et on ne met
+    l'article a l'ecart QUE SI cette liberation a reussi -- sinon il prend une
+    pause de plusieurs heures pour un creneau qu'on ne lui a meme pas retire.
+    UN SEUL point d'appel pour les deux chemins de composition (le choix des
+    visuels et la resolution du fond) : deux copies de cet ordre divergeraient.
+    """
+    if _liberer(db, creneau, attendu, f"visuel introuvable : {exc}"):
+        marquer_saute(article.id, maintenant)
+        rapport.sautes += 1
+
+
 # Marque, sur le creneau, qu'une recomposition pour texte perime a DEJA ete tentee
 # et a echoue : le gel ne relache pas une seconde fois ce post. Sans cette borne,
 # gel et composition se renvoyaient la balle a chaque passage de l'agent (10 min) --
@@ -640,7 +668,23 @@ def _composer(
                 if _differer(db, creneau, attendu, article, maintenant, rapport, exc):
                     exclusions = True
                 continue
+            except VisuelIntrouvable as exc:
+                # Rien dans l'actu, rien chez les artistes suivis cites, et le
+                # WEB a regarde pour rien (2026-10-05). C'est la MEME conclusion
+                # que celle de `resoudre_fond` ci-dessous, donc le meme geste :
+                # un SAUT. Sans ce handler, l'exception remontait comme une
+                # panne systemique -- et avant la conversion de ces chemins,
+                # c'etait une EXCLUSION a vie, ce qui aurait brule un par un
+                # les articles que le desserrage de `store.raison_sans_visuel`
+                # vient de rendre eligibles.
+                if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
+                    continue
+                _sauter(db, creneau, attendu, article, maintenant, rapport, exc)
+                exclusions = True
+                continue
             except AucunVisuel as exc:
+                # Le FORMAT est impossible, quoi que trouve le web (un reel sans
+                # video) : aucun passage suivant n'y changera rien, on exclut.
                 if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
                     continue
                 _exclure(db, creneau, attendu, f"composition impossible : {exc}", rapport)
@@ -664,19 +708,9 @@ def _composer(
                     exclusions = True
                 continue
             except VisuelIntrouvable as exc:
-                # SAUT, pas exclusion : l'article peut avoir une photo demain
-                # (nouveau post du compte, recherche web qui sort du cache). Le
-                # creneau se libere et prend le candidat suivant tout de suite.
-                # Sans mise a l'ecart, l'article revenait sur ce meme creneau
-                # libere a CHAQUE passage (le meilleur score gagne
-                # l'arbitrage), sautait encore, jusqu'a MANQUE -- une seule
-                # mauvaise image pouvait ainsi faire taire tout le compte une
-                # journee entiere.
                 if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
                     continue
-                marquer_saute(article.id, maintenant)
-                _liberer(db, creneau, attendu, f"visuel introuvable : {exc}")
-                rapport.sautes += 1
+                _sauter(db, creneau, attendu, article, maintenant, rapport, exc)
                 exclusions = True
                 continue
             # Les visuels ont fini par se resoudre pour cet article : une

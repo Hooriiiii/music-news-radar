@@ -11,6 +11,7 @@ from PIL import Image
 from app.content.actifs_artistes import PostArtiste
 from app.content.choix_visuels import (
     AucunVisuel,
+    VisuelIntrouvable,
     ChoixVisuels,
     VisuelsDifferes,
     choisir_visuels,
@@ -128,7 +129,7 @@ def test_un_media_instagram_prend_la_photo_de_l_artiste_cite(db_session, fred, g
 
 def test_sans_artiste_suivi_cite_aucun_visuel(db_session, guettapen):
     article = _article(db_session, guettapen, "Actu sans artiste", media=[entree("photo", "https://cdn.ig/g.jpg")])
-    with pytest.raises(AucunVisuel, match="compte media Instagram"):
+    with pytest.raises(VisuelIntrouvable, match="compte media Instagram"):
         _choisir(db_session, article)
 
 
@@ -161,7 +162,7 @@ def test_des_copies_toutes_en_echec_ne_donnent_aucun_visuel(db_session, fred, gu
     article = _article(db_session, guettapen, mentioned=["Fred again.."])
     _article(db_session, fred, "GTA soundtrack", media=[entree("photo", "https://cdn.ig/expire.jpg")],
              date=DATE_ACTU - dt.timedelta(days=1))
-    with pytest.raises(AucunVisuel):
+    with pytest.raises(VisuelIntrouvable):
         _choisir(db_session, article, telecharger=Telechargement(echecs={"https://cdn.ig/expire.jpg"}))
 
 
@@ -232,7 +233,7 @@ def test_une_vignette_d_artiste_n_est_jamais_un_actif(db_session, fred, guettape
     _article(db_session, fred, "GTA soundtrack", date=DATE_ACTU - dt.timedelta(days=1),
              media=[entree("video", None, preview_url="https://cdn.ig/vignette.jpg")])
     telechargement = Telechargement()
-    with pytest.raises(AucunVisuel):
+    with pytest.raises(VisuelIntrouvable):
         _choisir(db_session, article, telecharger=telechargement)
     assert telechargement.urls == []
 
@@ -249,7 +250,7 @@ def test_un_compte_media_cite_ne_fournit_jamais_de_visuel(db_session, guettapen)
     index = IndexComptes({electro.id: compte}, {cle_artiste("Electro News"): compte})
     telechargement, lecteur = Telechargement(), Lecteur()
 
-    with pytest.raises(AucunVisuel):
+    with pytest.raises(VisuelIntrouvable):
         _choisir(db_session, article, index=index, telecharger=telechargement, lecteur=lecteur)
 
     assert telechargement.urls == [] and lecteur.appels == []
@@ -343,7 +344,7 @@ def test_un_groupe_dont_seul_le_doublon_media_a_une_image_n_a_rien_a_offrir(db_s
                        media=[entree("photo", "https://cdn.ig/guettapen.jpg")])
     _lier(db_session, doublon, representant)
 
-    with pytest.raises(AucunVisuel):
+    with pytest.raises(VisuelIntrouvable):
         _choisir(db_session, representant)
 
 
@@ -391,7 +392,7 @@ def test_une_video_sans_vignette_et_sans_artiste_donne_une_raison_lisible(db_ses
     artiste = _source(db_session, "Charlotte de Witte (IG)", "charlottedewitte")
     article = _article(db_session, artiste, "Un set a Bruxelles",
                        media=[entree("video", "https://cdn.ig/sans-vignette.mp4")])
-    with pytest.raises(AucunVisuel, match="aucune image"):
+    with pytest.raises(VisuelIntrouvable, match="aucune image"):
         _choisir(db_session, article)
 
 
@@ -437,7 +438,7 @@ def test_un_reel_sans_aucune_image_est_refuse_avant_la_composition(db_session):
     article = _article(db_session, charlotte, "Un set a Bruxelles",
                        media=[entree("video", None)],
                        url="https://www.instagram.com/reel/DdSANSIMAGE/")
-    with pytest.raises(AucunVisuel, match="fond"):
+    with pytest.raises(VisuelIntrouvable, match="fond"):
         _choisir(db_session, article, format_=FormatCreneau.REEL)
 
 

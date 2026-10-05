@@ -286,6 +286,25 @@ def requete_pour(article) -> str | None:
     return f"{sujet} {indice_discipline(article)} photo"
 
 
+def raison_sans_recherche(article) -> str | None:
+    """None si une recherche web est POSSIBLE pour cet article, sinon pourquoi.
+
+    PURE : ni reseau, ni appel paye. C'est ce qui lui permet de servir la file
+    (`store.raison_sans_visuel`), qui s'interdit tout appel reseau et concluait
+    jusqu'ici « pas de visuel » la ou il fallait conclure « pas de visuel EN
+    BASE » -- le web est le DERNIER barreau de l'echelle et peut illustrer a peu
+    pres n'importe quelle actu, mais il a deux preconditions deterministes :
+    il faut qu'il soit allume, et qu'on sache quoi chercher.
+
+    Mesure du 2026-10-05 : 7 des 48 articles publiables (14 %) etaient refuses
+    par la file alors que ce barreau les attendait."""
+    if not settings.visuels_web_enabled:
+        return "recherche web coupee (VISUELS_WEB_ENABLED)"
+    if requete_pour(article) is None:
+        return "et rien dans l'article ne donne de requete web"
+    return None
+
+
 # --- Le chercheur ----------------------------------------------------------
 
 

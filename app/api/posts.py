@@ -52,7 +52,12 @@ def creer_post(article_id: int, db: Session = Depends(get_db)):
         visuels = choisir_visuels(
             db, article, maintenant=dt.datetime.now(dt.timezone.utc), lecteur=LecteurComptes()
         )
-    except AucunVisuel:
+    except (AucunVisuel, VisuelIntrouvable):
+        # `VisuelIntrouvable` depuis le 2026-10-05 : les chemins « rien trouve,
+        # web compris » de `choisir_visuels` la levent au lieu d'`AucunVisuel`.
+        # Les DEUX gardent ici l'echappatoire MANUELLE d'avant (brouillon compose
+        # a fond vide, a completer a la main) : c'est la FILE que la regle vise,
+        # pas le geste de l'utilisateur.
         visuels = ChoixVisuels()
     except VisuelsDifferes as exc:
         raise HTTPException(
