@@ -414,7 +414,8 @@ def test_le_depot_passe_par_le_chemin_ordinaire_d_ecriture_de_la_liste():
     seul. Un second chemin d'ecriture divergerait du re-gel automatique."""
     geste = PAGE[PAGE.index('const depot = detailEl.querySelector("#el-depot")'):]
     geste = geste[: geste.index("\n  }\n")]
-    assert "await ecrireListe([...slidesCourantes()" in geste
+    assert "await ecrireListe(" in geste
+    assert "[...slidesCourantes(), { kind: \"media\", ...candidat }]" in geste
 
 
 def test_le_controle_desactive_imprime_toujours_sa_raison():
@@ -422,7 +423,11 @@ def test_le_controle_desactive_imprime_toujours_sa_raison():
     bloc = PAGE[PAGE.index('<div class="depot">'):]
     bloc = bloc[: bloc.index("</div>`;")]
     assert '${editableListe ? "" : "disabled"}' in bloc
-    assert "depart.raison_non_editable || depart.raison_non_reouvrable" in bloc
+    # La raison est calculee une fois, en amont, parce que DEUX controles la
+    # partagent desormais (le depot et le selecteur d'ajout) : une seconde copie
+    # de cette expression divergerait.
+    assert "escapeHtml(raisonNonEditable)" in bloc
+    assert "depart.raison_non_editable || depart.raison_non_reouvrable" in PAGE
 
 
 def test_une_raison_de_refus_porte_la_teinte_d_alerte_jamais_l_accent():
@@ -441,10 +446,17 @@ def test_une_raison_de_refus_porte_la_teinte_d_alerte_jamais_l_accent():
 
 
 def test_l_origine_du_depot_est_nommee_partout_ou_une_origine_s_affiche():
-    """Trois endroits affichent d'ou vient un visuel : la liste finale, la
-    reserve d'ajout et « Visuels retenus ». Le premier depot a ete annonce
-    « photo de presse » dans le troisieme -- la seule provenance que
-    l'utilisateur choisit lui-meme etait la seule annoncee de travers."""
+    """DEUX endroits affichent d'ou vient un visuel depuis la fusion des listes
+    (2026-10-05) : la liste finale et la reserve d'ajout.
+
+    Il y en avait trois, et le premier depot a ete annonce « photo de presse »
+    dans le troisieme (« Visuels retenus ») -- la seule provenance que
+    l'utilisateur choisit lui-meme etait la seule annoncee de travers. Cette
+    section a disparu dans la fusion ; le risque, lui, ne disparait pas : le
+    libelle doit rester branche aux deux endroits qui restent.
+    """
     assert 'depot: "📁 fichier déposé depuis le disque"' in PAGE
-    assert 'x.origine === "depot"' in PAGE
+    # La liste finale.
+    assert "ORIGINES_ELEMENT[e.origine] || e.origine || \"origine inconnue\"" in PAGE
+    # La reserve d'ajout et de remplacement.
     assert "c.compte || ORIGINES_ELEMENT[c.origine]" in PAGE

@@ -229,6 +229,14 @@ def candidats_editables(post, article) -> list[dict]:
                 "height": media.get("height"),
                 "origine": media.get("origine") or ORIGINE_ARTICLE,
                 "compte": media.get("compte"),
+                # La PROVENANCE, et non seulement l'origine : le permalien du post
+                # d'ou vient le visuel, et sa date. Ils ne servaient a rien tant
+                # que le dashboard affichait une section « Visuels retenus »
+                # separee ; depuis que la fiche n'a plus qu'UNE liste
+                # (2026-10-05), c'est par la reserve qu'ils remontent -- sans eux,
+                # « voir le post » disparaissait avec la section qui le portait.
+                "permalink": media.get("permalink"),
+                "publie_le": media.get("publie_le"),
             }
         )
     return reserve

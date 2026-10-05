@@ -241,10 +241,18 @@ les cinq gestes (la liste entiere + `carrousel_explicite`).
 l'editeur, et chaque ligne resume « N element(s) · M ecarte(s) au gel ».
 L'utilisateur l'a dit — « l'onglet Flux d'actus ne me sert plus » —, et cet
 onglet reste pour le tri et la detection, sans qu'on soit oblige d'y passer pour
-editer. Quand la liste est arretee, les cases « Medias de l'actu » sont
-DESACTIVEES avec leur raison : elles editent le brouillon et ignorent les visuels
-retenus a la composition, donc en cocher une les ferait disparaitre de la liste
-publiee.
+editer.
+
+**Depuis le 2026-10-05, c'est la SEULE liste de visuels de la fiche.** Les cases
+« Medias de l'actu » et la section « Visuels retenus » montraient le meme visuel
+une seconde et une troisieme fois, et toutes deux editaient le BROUILLON en
+ignorant les visuels retenus a la composition -- on les DESACTIVAIT donc des que
+la liste etait arretee, avec leur raison. Elles ont disparu ; ce qu'elles
+portaient d'utile (la provenance et le permalien d'un actif, les deux refus
+« video sans URL directe » et « video trop longue pour une slide ») vit
+maintenant sur la ligne de l'element et sur l'option de la reserve. Detail,
+mesures et preuve par mutation : `docs/reference/dashboard.md`, « La fiche
+d'edition d'un post, refondue le 2026-10-05 ».
 
 ### Televerser un visuel depuis le disque (2026-10-04)
 

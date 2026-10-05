@@ -101,10 +101,22 @@ def test_la_recherche_web_allumee_laisse_assigner_le_meme_article(
 
 
 def test_le_dashboard_montre_l_origine_des_visuels():
-    """Sentinelles : pastille d'origine, actifs retenus, medias interdits grises."""
+    """Sentinelles : pastille d'origine, provenance des visuels, comptes medias.
+
+    La section « Visuels retenus » a ete FUSIONNEE dans la liste unique « Ce que
+    Meta recevra » (2026-10-05) : l'origine, le compte, la date du post et le
+    lien « voir le post » vivent desormais sur la ligne de l'element. Ce test
+    visait la PROVENANCE affichee, pas le titre de la section -- il verifie donc
+    la ligne, et le mot qui doit rester en PLACE : une sentinelle qui se
+    contenterait du titre resterait verte sur un simple commentaire qui le cite.
+    """
     html = DASHBOARD.read_text()
+    code = html[html.index("function renderPostDetail"):]
     assert 'class="badge visuel"' in html
     assert 'class="badge sans-visuel"' in html
-    assert "Visuels retenus" in html
-    assert "const interdit = !!(article && article.visuels_interdits);" in html
-    assert "visuel d'un compte média : interdit" in html
+    # La provenance d'un visuel, sur la ligne de la liste unique.
+    assert "infos.permalink" in code and "voir le post" in code
+    assert 'ORIGINES_ELEMENT[e.origine] || e.origine || "origine inconnue"' in code
+    # La regle du 2026-09-17 : jamais le visuel d'un compte media.
+    assert "const interdit = !!(article && article.visuels_interdits);" in code
+    assert "visuel d'un compte média : interdit" in code

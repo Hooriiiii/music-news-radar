@@ -197,12 +197,18 @@ def test_un_sources_en_echec_n_empeche_plus_la_grille_de_se_charger():
 @chromium_absent
 def test_un_post_avec_des_visuels_retenus_s_ouvre_vraiment():
     """Defaut PRE-EXISTANT trouve en verifiant ① dans le vrai dashboard : la
-    section « Visuels retenus » produit elle aussi des `.media-choice`, mais sans
-    case a cocher. Le `querySelectorAll(".media-choice")` portait sur TOUTE la
-    fiche, donc `.media-check.onchange` levait un TypeError au milieu de
+    section « Visuels retenus » produisait elle aussi des `.media-choice`, mais
+    sans case a cocher. Le `querySelectorAll(".media-choice")` portait sur TOUTE
+    la fiche, donc `.media-check.onchange` levait un TypeError au milieu de
     `renderPostDetail` -- avant `detailEl.hidden = false` et avant le branchement
     de « Enregistrer ». Tout post portant des `assets` (tous ceux composes depuis
     la migration 0018) ne s'ouvrait donc pas du tout : le clic ne faisait rien.
+
+    La FUSION des trois listes en une seule (2026-10-05) a retire la cause -- il
+    n'y a plus qu'une liste de visuels dans la fiche, donc plus deux formes sous
+    un meme selecteur. Le test reste : ce qu'il verifie n'est pas le selecteur,
+    c'est qu'un post porteur d'`assets` s'OUVRE, sans exception, avec sa liste
+    branchee. C'est la propriete qui avait coute 126 posts sur 157.
     """
     from playwright.sync_api import sync_playwright
 
@@ -227,10 +233,18 @@ def test_un_post_avec_des_visuels_retenus_s_ouvre_vraiment():
             page.evaluate("([p, a]) => renderPostDetail(p, a, null)", [post, article])
             assert not fautes, fautes
             assert page.is_visible("#post-detail .sheet")
-            # Et la case du MEDIA DE L'ACTU est bien branchee, pas celle d'un actif.
+            # Et la LISTE UNIQUE est bien branchee : l'actif du post et le media
+            # de l'actu y sont tous deux proposables, et le geste de retrait de
+            # la ligne existe.
             assert page.evaluate(
-                "!!document.querySelector('#medias-actu .media-check').onchange"
-            )
+                "document.querySelectorAll('#el-ajouter option').length"
+            ) == 3  # l'entete + l'actif + le media de l'actu
+            assert page.evaluate(
+                "!!document.querySelector('#elements-liste .el-retirer')"
+            ) is False  # ce post n'a aucune slide media : rien a retirer
+            assert page.evaluate(
+                "document.querySelectorAll('#elements-liste .element-ligne').length"
+            ) == 1  # la cover, et elle seule
             navigateur.close()
     finally:
         serveur.shutdown()
