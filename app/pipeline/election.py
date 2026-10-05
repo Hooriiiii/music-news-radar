@@ -120,7 +120,7 @@ def representant_engage(db: Session, article: Article) -> bool:
     aussi) et surtout la seule lecture qui vaut quand le statut vient d'etre
     change dans la session sans avoir ete flushe -- `SessionLocal` tourne en
     `autoflush=False`. Le reste de la regle n'existe qu'une fois, dans
-    `articles_engages` ; `tests/test_retention_evenements.py` verrouille
+    `articles_engages` ; `tests/pipeline/test_retention_evenements.py` verrouille
     l'accord des deux chemins sur les trois formes d'engagement.
     """
     if article.status == ArticleStatus.USED:

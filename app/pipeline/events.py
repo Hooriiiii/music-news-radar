@@ -729,7 +729,7 @@ def observer_articles(db: Session, *, plafond: int | None = None) -> Observation
     (`_fusionner`). Deux articles nes chacun avec leur evenement solo et
     rapproches plus tard par la dedup voient donc leurs deux evenements
     FUSIONNER tout seuls, par le chemin existant -- verrouille par
-    `tests/test_events_observation_isoles.py`.
+    `tests/pipeline/test_events_observation_isoles.py`.
 
     Un article DOUBLON ne cree jamais son propre evenement : il passe par
     `attacher`, qui le rattache a celui de son representant (et le cree pour

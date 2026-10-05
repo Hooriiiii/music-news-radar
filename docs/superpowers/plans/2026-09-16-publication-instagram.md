@@ -80,7 +80,7 @@
 - Create: `app/publish/__init__.py`
 - Create: `app/publish/images.py`
 - Modify: `pyproject.toml` (Pillow devient une dépendance d'exécution)
-- Test: `tests/test_publish_images.py`
+- Test: `tests/publish/test_publish_images.py`
 
 **Interfaces:**
 - Consumes: rien
@@ -94,7 +94,7 @@ Expected: `pillow` apparaît dans `[project].dependencies` de `pyproject.toml`.
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_publish_images.py
+# tests/publish/test_publish_images.py
 """Les images que Meta acceptera : JPEG, 4:5 a 1,91:1, 1440 px de large au plus."""
 
 import io
@@ -156,7 +156,7 @@ def test_une_image_trop_petite_est_refusee():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_images.py -v`
+Run: `uv run pytest tests/publish/test_publish_images.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -242,7 +242,7 @@ def normaliser(octets: bytes, ratio_min: float = RATIO_MIN) -> bytes:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_images.py -v`
+Run: `uv run pytest tests/publish/test_publish_images.py -v`
 Expected: 8 passed
 
 - [ ] **Step 6: Lint et suite complète**
@@ -253,7 +253,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pyproject.toml uv.lock app/publish/__init__.py app/publish/images.py tests/test_publish_images.py
+git add pyproject.toml uv.lock app/publish/__init__.py app/publish/images.py tests/publish/test_publish_images.py
 git commit -F - <<'EOF'
 feat(publication): normaliser les images aux regles de Meta
 
@@ -273,7 +273,7 @@ EOF
 - Create: `app/publish/jeton.py`
 - Modify: `app/config.py` (bloc `meta_*`, juste avant `# Livraison (étape 5)`)
 - Modify: `.env.example`
-- Test: `tests/test_publish_jeton.py`
+- Test: `tests/publish/test_publish_jeton.py`
 
 **Interfaces:**
 - Consumes: `settings.meta_access_token`, `settings.meta_token_path`
@@ -315,7 +315,7 @@ META_IG_USER_ID=
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_publish_jeton.py
+# tests/publish/test_publish_jeton.py
 """Le jeton IG expire a 60 jours : il se rafraichit, et il previent avant de mourir."""
 
 import datetime as dt
@@ -425,7 +425,7 @@ def test_l_alerte_se_declenche_a_sept_jours_de_l_expiration():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_jeton.py -v`
+Run: `uv run pytest tests/publish/test_publish_jeton.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish.jeton'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -559,7 +559,7 @@ def alerte_expiration(etat: EtatJeton, maintenant: dt.datetime) -> str | None:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_jeton.py -v`
+Run: `uv run pytest tests/publish/test_publish_jeton.py -v`
 Expected: 8 passed
 
 - [ ] **Step 6: Lint et suite complète**
@@ -570,7 +570,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py .env.example app/publish/jeton.py tests/test_publish_jeton.py
+git add app/config.py .env.example app/publish/jeton.py tests/publish/test_publish_jeton.py
 git commit -F - <<'EOF'
 feat(publication): lire, rafraichir et surveiller le jeton Instagram
 
@@ -589,7 +589,7 @@ EOF
 
 **Files:**
 - Create: `app/publish/instagram.py`
-- Test: `tests/test_publish_instagram.py`
+- Test: `tests/publish/test_publish_instagram.py`
 
 **Interfaces:**
 - Consumes: `settings.meta_api_version` (tâche 2)
@@ -603,7 +603,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_publish_instagram.py
+# tests/publish/test_publish_instagram.py
 """Le client Instagram, sur un faux HTTP : aucun appel ne sort."""
 
 import httpx
@@ -715,7 +715,7 @@ def test_aucune_image_est_une_erreur():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_instagram.py -v`
+Run: `uv run pytest tests/publish/test_publish_instagram.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish.instagram'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -820,7 +820,7 @@ class ClientInstagram:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_instagram.py -v`
+Run: `uv run pytest tests/publish/test_publish_instagram.py -v`
 Expected: 9 passed
 
 - [ ] **Step 5: Lint et suite complète**
@@ -831,7 +831,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/publish/instagram.py tests/test_publish_instagram.py
+git add app/publish/instagram.py tests/publish/test_publish_instagram.py
 git commit -F - <<'EOF'
 feat(publication): client Instagram, conteneurs puis publication
 
@@ -849,7 +849,7 @@ EOF
 
 **Files:**
 - Create: `app/publish/hosting.py`
-- Test: `tests/test_publish_hosting.py`
+- Test: `tests/publish/test_publish_hosting.py`
 
 **Interfaces:**
 - Consumes: rien
@@ -866,7 +866,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_publish_hosting.py
+# tests/publish/test_publish_hosting.py
 """L'hebergement ephemere, sans jamais lancer le vrai cloudflared."""
 
 import contextlib
@@ -1022,7 +1022,7 @@ def test_heberger_combine_serveur_tunnel_et_verification(tmp_path, monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_hosting.py -v`
+Run: `uv run pytest tests/publish/test_publish_hosting.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish.hosting'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1181,7 +1181,7 @@ def heberger(dossier: Path, temoin: str):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_hosting.py -v`
+Run: `uv run pytest tests/publish/test_publish_hosting.py -v`
 Expected: 11 passed
 
 - [ ] **Step 5: Lint et suite complète**
@@ -1192,7 +1192,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/publish/hosting.py tests/test_publish_hosting.py
+git add app/publish/hosting.py tests/publish/test_publish_hosting.py
 git commit -F - <<'EOF'
 feat(publication): heberger les images le temps d'une publication
 
@@ -1213,7 +1213,7 @@ EOF
 - Modify: `app/api/posts.py` (remplacer `_texte_legende` par `texte_legende`)
 - Create: `app/publish/preparation.py`
 - Modify: `app/config.py` (bloc `publication_*`, à la suite du bloc `meta_*`)
-- Test: `tests/test_legende.py`, `tests/test_publish_preparation.py`
+- Test: `tests/content/test_legende.py`, `tests/publish/test_publish_preparation.py`
 
 **Interfaces:**
 - Consumes: `normaliser`, `ImageInexploitable` (tâche 1) ; `render_post`, `RenduSlide`, `RenduIndisponible` (`app/content/render.py`) ; `telecharger` (`app/content/export.py`, rend `(octets | None, extension | raison)`)
@@ -1240,7 +1240,7 @@ Dans `app/config.py`, juste après la ligne `meta_token_path` ajoutée à la tâ
 - [ ] **Step 2: Write the failing tests**
 
 ```python
-# tests/test_legende.py
+# tests/content/test_legende.py
 from types import SimpleNamespace
 
 from app.content.legende import HASHTAGS_MAX, LEGENDE_MAX, texte_legende
@@ -1272,7 +1272,7 @@ def test_une_legende_trop_longue_est_coupee_sans_perdre_la_source():
 ```
 
 ```python
-# tests/test_publish_preparation.py
+# tests/publish/test_publish_preparation.py
 """Le gel : ce qui partira chez Meta, fige sur disque avant l'heure."""
 
 import io
@@ -1376,7 +1376,7 @@ def test_les_photos_viennent_des_slides_puis_de_l_article_sans_doublon():
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_legende.py tests/test_publish_preparation.py -v`
+Run: `uv run pytest tests/content/test_legende.py tests/publish/test_publish_preparation.py -v`
 Expected: FAIL — `ModuleNotFoundError` sur `app.content.legende` et `app.publish.preparation`
 
 - [ ] **Step 4: Write the implementation**
@@ -1502,7 +1502,7 @@ def preparer_fichiers(
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_legende.py tests/test_publish_preparation.py tests/test_posts_api.py tests/test_export.py -v`
+Run: `uv run pytest tests/content/test_legende.py tests/publish/test_publish_preparation.py tests/api/test_posts_api.py tests/content/test_export.py -v`
 Expected: tout passe (les tests d'export existants confirment que la légende n'a pas changé)
 
 - [ ] **Step 6: Lint et suite complète**
@@ -1513,7 +1513,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py app/content/legende.py app/api/posts.py app/publish/preparation.py tests/test_legende.py tests/test_publish_preparation.py
+git add app/config.py app/content/legende.py app/api/posts.py app/publish/preparation.py tests/content/test_legende.py tests/publish/test_publish_preparation.py
 git commit -F - <<'EOF'
 feat(publication): figer un post sur disque avant l'heure
 
@@ -1533,7 +1533,7 @@ EOF
 **Files:**
 - Create: `app/publish/publier.py`
 - Create: `scripts/tester_publication.py`
-- Test: `tests/test_publish_publier.py`
+- Test: `tests/publish/test_publish_publier.py`
 
 **Interfaces:**
 - Consumes: `ClientInstagram`, `ErreurInstagram` (tâche 3) ; `charger` (tâche 2) ; `heberger` (tâche 4) ; `preparer_fichiers` (tâche 5) ; `texte_legende` (tâche 5)
@@ -1544,7 +1544,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_publish_publier.py
+# tests/publish/test_publish_publier.py
 import contextlib
 
 import pytest
@@ -1622,7 +1622,7 @@ def test_sans_identifiant_instagram_l_erreur_dit_quoi_faire(tmp_path, monkeypatc
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_publier.py -v`
+Run: `uv run pytest tests/publish/test_publish_publier.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish.publier'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1721,7 +1721,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_publier.py -v`
+Run: `uv run pytest tests/publish/test_publish_publier.py -v`
 Expected: 5 passed
 
 - [ ] **Step 5: Lint et suite complète**
@@ -1750,7 +1750,7 @@ Si Meta refuse le format, le tunnel ou le jeton, **s'arrêter et rapporter le me
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/publish/publier.py scripts/tester_publication.py tests/test_publish_publier.py
+git add app/publish/publier.py scripts/tester_publication.py tests/publish/test_publish_publier.py
 git commit -F - <<'EOF'
 feat(publication): publier un dossier fige, et l'essayer sans publier
 
@@ -1771,7 +1771,7 @@ EOF
 **Files:**
 - Modify: `app/models.py` (enum `EtatCreneau` après `PostStatus` ; colonne `Article.file_exclu_raison` après `duplicate_of_id` ; classe `Creneau` après `Post`)
 - Create: `alembic/versions/0014_creneaux.py`
-- Test: `tests/test_schedule_modeles.py`
+- Test: `tests/schedule/test_schedule_modeles.py`
 
 **Interfaces:**
 - Consumes: rien
@@ -1783,7 +1783,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_schedule_modeles.py
+# tests/schedule/test_schedule_modeles.py
 import datetime as dt
 
 import pytest
@@ -1821,7 +1821,7 @@ def test_un_article_n_est_pas_exclu_par_defaut(db_session):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_modeles.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_modeles.py -v`
 Expected: FAIL — `ImportError: cannot import name 'Creneau'`
 
 - [ ] **Step 3: Write the models**
@@ -1900,7 +1900,7 @@ class Creneau(Base):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_modeles.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_modeles.py -v`
 Expected: 3 passed
 
 - [ ] **Step 5: Write the migration**
@@ -2004,7 +2004,7 @@ Expected: tout passe
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/models.py alembic/versions/0014_creneaux.py tests/test_schedule_modeles.py
+git add app/models.py alembic/versions/0014_creneaux.py tests/schedule/test_schedule_modeles.py
 git commit -F - <<'EOF'
 feat(file): table creneaux et exclusion d'un article de la file
 
@@ -2025,7 +2025,7 @@ EOF
 - Create: `app/schedule/__init__.py`
 - Create: `app/schedule/slots.py`
 - Modify: `app/config.py` (suite du bloc `publication_*`)
-- Test: `tests/test_schedule_slots.py`
+- Test: `tests/schedule/test_schedule_slots.py`
 
 **Interfaces:**
 - Consumes: `settings.publication_fuseau`, `settings.publication_fenetre_matin`, `settings.publication_fenetre_apres_midi`
@@ -2050,7 +2050,7 @@ Dans `app/config.py`, à la suite de `publication_ratio_min` :
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_schedule_slots.py
+# tests/schedule/test_schedule_slots.py
 import datetime as dt
 from zoneinfo import ZoneInfo
 
@@ -2113,7 +2113,7 @@ def test_apres_la_fenetre_du_soir_on_passe_au_lendemain():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_slots.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_slots.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.schedule'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -2171,7 +2171,7 @@ def prochains_horaires(maintenant: dt.datetime, nombre: int) -> list[dt.datetime
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_slots.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_slots.py -v`
 Expected: 7 passed
 
 - [ ] **Step 6: Lint et suite complète**
@@ -2182,7 +2182,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py app/schedule/__init__.py app/schedule/slots.py tests/test_schedule_slots.py
+git add app/config.py app/schedule/__init__.py app/schedule/slots.py tests/schedule/test_schedule_slots.py
 git commit -F - <<'EOF'
 feat(file): deux creneaux par jour, tires une fois pour toutes
 
@@ -2200,7 +2200,7 @@ EOF
 
 **Files:**
 - Create: `app/schedule/queue.py`
-- Test: `tests/test_schedule_queue.py`
+- Test: `tests/schedule/test_schedule_queue.py`
 
 **Interfaces:**
 - Consumes: rien
@@ -2214,7 +2214,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_schedule_queue.py
+# tests/schedule/test_schedule_queue.py
 import datetime as dt
 
 from app.schedule.queue import Candidat, Place, arbitrer, score
@@ -2289,7 +2289,7 @@ def test_un_age_inconnu_compte_pour_un_jour():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_queue.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_queue.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.schedule.queue'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2358,7 +2358,7 @@ def arbitrer(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_queue.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_queue.py -v`
 Expected: 10 passed
 
 - [ ] **Step 5: Lint et suite complète**
@@ -2369,7 +2369,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/schedule/queue.py tests/test_schedule_queue.py
+git add app/schedule/queue.py tests/schedule/test_schedule_queue.py
 git commit -F - <<'EOF'
 feat(file): arbitrer les articles entre les creneaux
 
@@ -2389,7 +2389,7 @@ EOF
 **Files:**
 - Create: `app/schedule/store.py`
 - Modify: `app/config.py` (suite du bloc `publication_*`)
-- Test: `tests/test_schedule_store.py`
+- Test: `tests/schedule/test_schedule_store.py`
 
 **Interfaces:**
 - Consumes: `Creneau`, `EtatCreneau`, `Article.file_exclu_raison` (tâche 7) ; `prochains_horaires` (tâche 8) ; `Candidat`, `Place`, `arbitrer` (tâche 9)
@@ -2414,7 +2414,7 @@ Dans `app/config.py`, à la suite de `publication_creneaux` :
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_schedule_store.py
+# tests/schedule/test_schedule_store.py
 import datetime as dt
 
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, Source, SourceType
@@ -2545,7 +2545,7 @@ def test_deux_passages_donnent_la_meme_file(db_session):
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_store.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_store.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.schedule.store'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -2675,7 +2675,7 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_store.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_store.py -v`
 Expected: 9 passed
 
 - [ ] **Step 6: Lint et suite complète**
@@ -2686,7 +2686,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py app/schedule/store.py tests/test_schedule_store.py
+git add app/config.py app/schedule/store.py tests/schedule/test_schedule_store.py
 git commit -F - <<'EOF'
 feat(file): tenir les creneaux et appliquer l'arbitrage en base
 
@@ -2705,7 +2705,7 @@ EOF
 **Files:**
 - Create: `app/schedule/runner.py`
 - Modify: `app/config.py` (fin du bloc `publication_*`)
-- Test: `tests/test_schedule_runner.py`
+- Test: `tests/schedule/test_schedule_runner.py`
 
 **Interfaces:**
 - Consumes: `appliquer_arbitrage`, `post_a_reprendre`, `utc` (tâche 10) ; `texte_legende` (tâche 5) ; `create_post`, `CompositionError` (`app/content/compose.py`)
@@ -2742,7 +2742,7 @@ Et en tête du fichier : `from typing import Literal`.
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_schedule_runner.py
+# tests/schedule/test_schedule_runner.py
 """Le passage de l'agent, avec une horloge injectee et des outils factices."""
 
 import datetime as dt
@@ -2923,7 +2923,7 @@ def test_on_ne_compose_que_les_creneaux_a_moins_de_24_heures(db_session, article
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_runner.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_runner.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.schedule.runner'`
 
 - [ ] **Step 4: Write minimal implementation**
@@ -3146,7 +3146,7 @@ def tourner(db, maintenant: dt.datetime, *, mode: str, composer, preparer, publi
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_runner.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_runner.py -v`
 Expected: 10 passed
 
 - [ ] **Step 6: Lint et suite complète**
@@ -3157,7 +3157,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py app/schedule/runner.py tests/test_schedule_runner.py
+git add app/config.py app/schedule/runner.py tests/schedule/test_schedule_runner.py
 git commit -F - <<'EOF'
 feat(file): un passage de l'agent, de l'arbitrage a la publication
 
@@ -3178,7 +3178,7 @@ EOF
 - Create: `scripts/run_publication.py`
 - Modify: `scripts/install_agents.py`
 - Modify: `CLAUDE.md`
-- Test: `tests/test_run_publication.py`, `tests/test_install_agents.py`
+- Test: `tests/scripts/test_run_publication.py`, `tests/scripts/test_install_agents.py`
 
 **Interfaces:**
 - Consumes: `tourner`, `RapportPublication` (tâche 11) ; `rafraichir_si_necessaire`, `alerte_expiration`, `enregistrer`, `JetonIndisponible` (tâche 2) ; `preparer_fichiers` (tâche 5) ; `publier_fichiers` (tâche 6) ; `make_claude_composer` (`app/content/compose.py`) ; `notifier` (`app/delivery/notify.py`)
@@ -3190,7 +3190,7 @@ EOF
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-# tests/test_run_publication.py
+# tests/scripts/test_run_publication.py
 import datetime as dt
 
 import scripts.run_publication as script
@@ -3245,7 +3245,7 @@ def test_en_arret_l_agent_ne_touche_meme_pas_la_base(monkeypatch):
     script.main()
 ```
 
-Dans `tests/test_install_agents.py`, ajouter `INTERVALLE_PUBLICATION`, `LABEL_PUBLICATION` et `plist_publication` à l'import depuis `scripts.install_agents`, puis à la fin du fichier :
+Dans `tests/scripts/test_install_agents.py`, ajouter `INTERVALLE_PUBLICATION`, `LABEL_PUBLICATION` et `plist_publication` à l'import depuis `scripts.install_agents`, puis à la fin du fichier :
 
 ```python
 def test_l_agent_de_publication_passe_toutes_les_dix_minutes(chemins):
@@ -3275,7 +3275,7 @@ def test_la_rotation_couvre_les_logs_de_publication(chemins):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_run_publication.py tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_run_publication.py tests/scripts/test_install_agents.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.run_publication'` et `ImportError` sur `LABEL_PUBLICATION`
 
 - [ ] **Step 3: Write the entry point**
@@ -3391,7 +3391,7 @@ def plist_publication(chemins: Chemins) -> dict:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_run_publication.py tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_run_publication.py tests/scripts/test_install_agents.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Documenter dans CLAUDE.md**
@@ -3455,7 +3455,7 @@ Expected: tout passe
 - [ ] **Step 8: Commit**
 
 ```bash
-git add scripts/run_publication.py scripts/install_agents.py CLAUDE.md tests/test_run_publication.py tests/test_install_agents.py
+git add scripts/run_publication.py scripts/install_agents.py CLAUDE.md tests/scripts/test_run_publication.py tests/scripts/test_install_agents.py
 git commit -F - <<'EOF'
 feat(publication): agent launchd de publication, toutes les dix minutes
 
@@ -3475,7 +3475,7 @@ EOF
 - Create: `app/api/schedule.py`
 - Modify: `app/schemas.py`
 - Modify: `app/main.py`
-- Test: `tests/test_schedule_api.py`
+- Test: `tests/api/test_schedule_api.py`
 
 **Interfaces:**
 - Consumes: `Creneau`, `EtatCreneau` (tâche 7) ; `MODIFIABLES`, `appliquer_arbitrage`, `post_a_reprendre`, `utc` (tâche 10)
@@ -3488,7 +3488,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_schedule_api.py
+# tests/api/test_schedule_api.py
 import datetime as dt
 
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
@@ -3599,7 +3599,7 @@ def test_recalculer_cree_la_file(client, db_session):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_api.py -v`
+Run: `uv run pytest tests/api/test_schedule_api.py -v`
 Expected: FAIL — 404 sur `/schedule`
 
 - [ ] **Step 3: Write the schemas, the router and wire it**
@@ -3767,7 +3767,7 @@ Dans `app/main.py` : `from app.api import articles, artists, digests, posts, sch
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_api.py -v`
+Run: `uv run pytest tests/api/test_schedule_api.py -v`
 Expected: 10 passed
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3778,7 +3778,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/api/schedule.py app/schemas.py app/main.py tests/test_schedule_api.py
+git add app/api/schedule.py app/schemas.py app/main.py tests/api/test_schedule_api.py
 git commit -F - <<'EOF'
 feat(file): API de la file, epingler, remplacer, decaler, sauter
 
@@ -3797,7 +3797,7 @@ EOF
 
 **Files:**
 - Modify: `app/static/dashboard.html`
-- Test: `tests/test_api.py`
+- Test: `tests/api/test_api.py`
 
 **Interfaces:**
 - Consumes: `GET /schedule`, `POST /schedule/rebuild`, `PATCH /schedule/{id}` (tâche 13)
@@ -3805,7 +3805,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-À la fin de `tests/test_api.py` :
+À la fin de `tests/api/test_api.py` :
 
 ```python
 def test_le_dashboard_porte_le_panneau_de_programmation(client):
@@ -3817,7 +3817,7 @@ def test_le_dashboard_porte_le_panneau_de_programmation(client):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_api.py::test_le_dashboard_porte_le_panneau_de_programmation -v`
+Run: `uv run pytest tests/api/test_api.py::test_le_dashboard_porte_le_panneau_de_programmation -v`
 Expected: FAIL — `AssertionError`
 
 - [ ] **Step 3: Write the panel**
@@ -3959,7 +3959,7 @@ document.getElementById("schedule-rebuild").onclick = async () => {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_api.py -v`
+Run: `uv run pytest tests/api/test_api.py -v`
 Expected: tout passe
 
 - [ ] **Step 5: Vérifier le panneau à l'écran, sur une base jetable**
@@ -4000,7 +4000,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/static/dashboard.html tests/test_api.py
+git add app/static/dashboard.html tests/api/test_api.py
 git commit -F - <<'EOF'
 feat(dashboard): panneau Programmation de la file de publication
 

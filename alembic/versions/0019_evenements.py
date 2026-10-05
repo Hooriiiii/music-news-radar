@@ -27,7 +27,7 @@ depends_on = None
 # jamais d'enum natif Postgres. `op.f()` n'est appele QUE dans les fonctions
 # upgrade/downgrade : au niveau module il leve un NameError (le proxy Operations
 # n'est pas encore etabli), invisible a l'usage courant mais fatal a
-# `alembic history` / `alembic check` -- voir tests/test_migrations.py.
+# `alembic history` / `alembic check` -- voir tests/socle/test_migrations.py.
 VALEURS_PLATEFORME = ("rss", "reddit_rss", "bluesky", "x", "instagram")
 VALEURS_ROLE = ("primary", "secondary", "unknown")
 

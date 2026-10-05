@@ -105,7 +105,7 @@ def purger_evenements_sans_valeur(
     candidat et la table grossirait quand meme, en silence. Elle doit donc
     tourner AVANT `purge_old_articles`, dans le meme passage -- l'ordre est
     pose dans `app/pipeline/run.py` et verrouille par un test
-    (`tests/test_retention_evenements.py`).
+    (`tests/pipeline/test_retention_evenements.py`).
 
     Cout d'un passage A VIDE : la recherche des candidats part des ARTICLES que
     la purge va supprimer (meme predicat exactement, `_predicat_purgeable`, donc

@@ -37,9 +37,9 @@ Les tâches sont groupées en vagues. À l'intérieur d'une vague, les tâches s
 
 Fichiers touchés par vague, pour vérifier l'absence de collision :
 
-- Vague 1 — T2 : `app/content/highlight.py`, `tests/test_highlight.py`. T3 : `app/content/compose.py`, `app/config.py`, `tests/test_compose.py`. T4 : `app/content/templates/kinda_post/*`, `app/content/assets/*`.
-- Vague 2 — T5 : `app/content/render.py`, `tests/test_render.py`, `pyproject.toml`. T6 : `app/api/posts.py`, `app/schemas.py`, `app/main.py`, `tests/test_posts_api.py`.
-- Vague 3 — T7 : `app/static/dashboard.html`. T8 : `tests/test_retention.py`, `CLAUDE.md`, `README.md`.
+- Vague 1 — T2 : `app/content/highlight.py`, `tests/content/test_highlight.py`. T3 : `app/content/compose.py`, `app/config.py`, `tests/content/test_compose.py`. T4 : `app/content/templates/kinda_post/*`, `app/content/assets/*`.
+- Vague 2 — T5 : `app/content/render.py`, `tests/content/test_render.py`, `pyproject.toml`. T6 : `app/api/posts.py`, `app/schemas.py`, `app/main.py`, `tests/api/test_posts_api.py`.
+- Vague 3 — T7 : `app/static/dashboard.html`. T8 : `tests/pipeline/test_retention.py`, `CLAUDE.md`, `README.md`.
 
 **Note pour l'orchestrateur :** la tâche 4 (extraction Figma) est la plus longue et la plus incertaine — la lancer en premier dans la vague 1.
 
@@ -50,7 +50,7 @@ Fichiers touchés par vague, pour vérifier l'absence de collision :
 **Files:**
 - Modify: `app/models.py` (ajouter à la fin, avant ou après `Digest`)
 - Create: `alembic/versions/0008_add_posts.py`
-- Test: `tests/test_posts_model.py`
+- Test: `tests/socle/test_posts_model.py`
 
 **Interfaces:**
 - Consumes: `Base`, `JSONVariant`, `_values` de `app/models.py`.
@@ -60,7 +60,7 @@ Fichiers touchés par vague, pour vérifier l'absence de collision :
 
 - [ ] **Step 1: Écrire le test qui échoue**
 
-Créer `tests/test_posts_model.py` :
+Créer `tests/socle/test_posts_model.py` :
 
 ```python
 import datetime as dt
@@ -135,7 +135,7 @@ def test_post_survit_a_la_suppression_de_l_article(db_session):
 
 - [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
-Run: `uv run pytest tests/test_posts_model.py -v`
+Run: `uv run pytest tests/socle/test_posts_model.py -v`
 Expected: FAIL — `ImportError: cannot import name 'Post' from 'app.models'`
 
 - [ ] **Step 3: Ajouter l'enum et le modèle**
@@ -197,7 +197,7 @@ class Post(Base):
 
 - [ ] **Step 4: Lancer le test pour vérifier qu'il passe**
 
-Run: `uv run pytest tests/test_posts_model.py -v`
+Run: `uv run pytest tests/socle/test_posts_model.py -v`
 Expected: PASS (2 tests)
 
 - [ ] **Step 5: Écrire la migration**
@@ -280,7 +280,7 @@ Si aucune base Postgres n'est disponible, noter que l'étape est à refaire et c
 ```bash
 uv run ruff check .
 uv run pytest
-git add app/models.py alembic/versions/0008_add_posts.py tests/test_posts_model.py
+git add app/models.py alembic/versions/0008_add_posts.py tests/socle/test_posts_model.py
 git commit -m "feat(posts): table posts, archive editoriale qui survit a la purge"
 ```
 
@@ -291,7 +291,7 @@ git commit -m "feat(posts): table posts, archive editoriale qui survit a la purg
 **Files:**
 - Create: `app/content/__init__.py` (vide)
 - Create: `app/content/highlight.py`
-- Test: `tests/test_highlight.py`
+- Test: `tests/content/test_highlight.py`
 
 **Interfaces:**
 - Consumes: rien (fonction pure, aucune dépendance projet).
@@ -304,7 +304,7 @@ Le surlignage rose est la signature visuelle de Kinda. Dans Figma ce sont des re
 
 - [ ] **Step 1: Écrire le test qui échoue**
 
-Créer `tests/test_highlight.py` :
+Créer `tests/content/test_highlight.py` :
 
 ```python
 import pytest
@@ -344,7 +344,7 @@ def test_validate_accepte_une_accroche_correcte():
 
 - [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
-Run: `uv run pytest tests/test_highlight.py -v`
+Run: `uv run pytest tests/content/test_highlight.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content'`
 
 - [ ] **Step 3: Écrire l'implémentation**
@@ -388,14 +388,14 @@ def to_html(text: str) -> str:
 
 - [ ] **Step 4: Lancer le test pour vérifier qu'il passe**
 
-Run: `uv run pytest tests/test_highlight.py -v`
+Run: `uv run pytest tests/content/test_highlight.py -v`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Lint et commit**
 
 ```bash
 uv run ruff check .
-git add app/content/__init__.py app/content/highlight.py tests/test_highlight.py
+git add app/content/__init__.py app/content/highlight.py tests/content/test_highlight.py
 git commit -m "feat(posts): balisage du surlignage rose des accroches"
 ```
 
@@ -406,7 +406,7 @@ git commit -m "feat(posts): balisage du surlignage rose des accroches"
 **Files:**
 - Create: `app/content/compose.py`
 - Modify: `app/config.py` (ajouter `composer_model`)
-- Test: `tests/test_compose.py`
+- Test: `tests/content/test_compose.py`
 
 **Interfaces:**
 - Consumes: `app.models.Article`, `app.models.Post` (Tâche 1) ; `app.content.highlight.validate_headline` (Tâche 2). **Si la tâche 2 n'est pas encore fusionnée**, cette tâche ne doit PAS créer `highlight.py` — importer et laisser le test échouer n'est pas une option : les deux tâches sont dans la même vague et le module sera là au moment du run de vague. En cas de conflit, réexécuter les tests après la vague.
@@ -422,7 +422,7 @@ git commit -m "feat(posts): balisage du surlignage rose des accroches"
 
 - [ ] **Step 1: Écrire le test qui échoue**
 
-Créer `tests/test_compose.py` :
+Créer `tests/content/test_compose.py` :
 
 ```python
 import datetime as dt
@@ -509,7 +509,7 @@ def test_create_post_denormalise_et_pose_l_image_de_l_article(db_session):
 
 - [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
-Run: `uv run pytest tests/test_compose.py -v`
+Run: `uv run pytest tests/content/test_compose.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.compose'`
 
 - [ ] **Step 3: Ajouter le réglage du modèle**
@@ -678,14 +678,14 @@ def create_post(
 
 - [ ] **Step 5: Lancer le test pour vérifier qu'il passe**
 
-Run: `uv run pytest tests/test_compose.py -v`
+Run: `uv run pytest tests/content/test_compose.py -v`
 Expected: PASS (6 tests)
 
 - [ ] **Step 6: Lint et commit**
 
 ```bash
 uv run ruff check .
-git add app/content/compose.py app/config.py tests/test_compose.py
+git add app/content/compose.py app/config.py tests/content/test_compose.py
 git commit -m "feat(posts): composition editoriale d'un carrousel a partir d'un article"
 ```
 
@@ -940,7 +940,7 @@ git commit -m "feat(posts): template kinda_post extrait de Figma en HTML/CSS"
 **Files:**
 - Create: `app/content/render.py`
 - Modify: `pyproject.toml` (dépendance `playwright`)
-- Test: `tests/test_render.py`
+- Test: `tests/content/test_render.py`
 
 **Interfaces:**
 - Consumes: `app.content.highlight.to_html` (Tâche 2) ; les fichiers de `app/content/templates/kinda_post/` et `app/content/assets/` (Tâche 4).
@@ -959,7 +959,7 @@ uv run playwright install chromium
 
 - [ ] **Step 2: Écrire le test qui échoue**
 
-Créer `tests/test_render.py` :
+Créer `tests/content/test_render.py` :
 
 ```python
 import struct
@@ -1028,7 +1028,7 @@ def test_render_post_reduit_la_police_sur_une_accroche_maximale():
 
 - [ ] **Step 3: Lancer le test pour vérifier qu'il échoue**
 
-Run: `uv run pytest tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_render.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.render'`
 
 - [ ] **Step 4: Écrire l'implémentation**
@@ -1156,7 +1156,7 @@ def render_post(slides: list[dict], template: str = "kinda_post") -> list[bytes]
 
 - [ ] **Step 5: Lancer le test pour vérifier qu'il passe**
 
-Run: `uv run pytest tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_render.py -v`
 Expected: PASS (4 tests). Si les deux tests de rendu sont `SKIPPED`, c'est que Chromium n'est pas installé : lancer `uv run playwright install chromium` et relancer — ils doivent passer en local.
 
 - [ ] **Step 6: Vérification visuelle**
@@ -1179,7 +1179,7 @@ Ouvrir le fichier et vérifier : le surlignage rose est présent et suit le text
 
 ```bash
 uv run ruff check .
-git add app/content/render.py tests/test_render.py pyproject.toml uv.lock
+git add app/content/render.py tests/content/test_render.py pyproject.toml uv.lock
 git commit -m "feat(posts): rendu des slides en PNG par Chromium headless"
 ```
 
@@ -1191,7 +1191,7 @@ git commit -m "feat(posts): rendu des slides en PNG par Chromium headless"
 - Create: `app/api/posts.py`
 - Modify: `app/schemas.py` (ajouter `PostOut`, `PostUpdate`)
 - Modify: `app/main.py` (inclure le routeur)
-- Test: `tests/test_posts_api.py`
+- Test: `tests/api/test_posts_api.py`
 
 **Interfaces:**
 - Consumes: `app.models.Post`, `app.models.PostStatus`, `app.models.Article`, `app.models.ArticleStatus` (Tâche 1) ; `app.content.compose.make_claude_composer`, `create_post` (Tâche 3) ; `app.content.render.render_post` (Tâche 5).
@@ -1205,7 +1205,7 @@ git commit -m "feat(posts): rendu des slides en PNG par Chromium headless"
 
 - [ ] **Step 1: Écrire le test qui échoue**
 
-Créer `tests/test_posts_api.py` :
+Créer `tests/api/test_posts_api.py` :
 
 ```python
 import datetime as dt
@@ -1332,7 +1332,7 @@ def test_slide_hors_bornes(client, db_session):
 
 - [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
-Run: `uv run pytest tests/test_posts_api.py -v`
+Run: `uv run pytest tests/api/test_posts_api.py -v`
 Expected: FAIL — 404 sur tous les endpoints (le routeur n'existe pas)
 
 - [ ] **Step 3: Ajouter les schémas**
@@ -1506,7 +1506,7 @@ app.include_router(posts.router)
 
 - [ ] **Step 6: Lancer les tests pour vérifier qu'ils passent**
 
-Run: `uv run pytest tests/test_posts_api.py -v`
+Run: `uv run pytest tests/api/test_posts_api.py -v`
 Expected: PASS (7 tests)
 
 - [ ] **Step 7: Lint et commit**
@@ -1514,7 +1514,7 @@ Expected: PASS (7 tests)
 ```bash
 uv run ruff check .
 uv run pytest
-git add app/api/posts.py app/schemas.py app/main.py tests/test_posts_api.py
+git add app/api/posts.py app/schemas.py app/main.py tests/api/test_posts_api.py
 git commit -m "feat(posts): API de la file editoriale (creation, edition, export)"
 ```
 
@@ -1606,7 +1606,7 @@ git commit -m "feat(posts): file editoriale et editeur de carrousel dans le dash
 ### Task 8: Rétention des posts et documentation
 
 **Files:**
-- Modify: `tests/test_retention.py`
+- Modify: `tests/pipeline/test_retention.py`
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
@@ -1616,7 +1616,7 @@ git commit -m "feat(posts): file editoriale et editeur de carrousel dans le dash
 
 - [ ] **Step 1: Écrire le test de survie à la purge**
 
-Ajouter à `tests/test_retention.py` :
+Ajouter à `tests/pipeline/test_retention.py` :
 
 ```python
 def test_les_posts_survivent_a_la_purge_des_articles(db_session):
@@ -1662,11 +1662,11 @@ def test_les_posts_survivent_a_la_purge_des_articles(db_session):
     assert survivant.caption == "Legende archivee"
 ```
 
-Vérifier en tête de `tests/test_retention.py` que `Source`, `SourceType`, `Article`, `dt` sont bien importés ; ajouter ce qui manque.
+Vérifier en tête de `tests/pipeline/test_retention.py` que `Source`, `SourceType`, `Article`, `dt` sont bien importés ; ajouter ce qui manque.
 
 - [ ] **Step 2: Lancer le test**
 
-Run: `uv run pytest tests/test_retention.py -v`
+Run: `uv run pytest tests/pipeline/test_retention.py -v`
 Expected: PASS
 
 - [ ] **Step 3: Documenter dans CLAUDE.md**
@@ -1718,7 +1718,7 @@ Ajouter une section décrivant le flux utilisateur : ouvrir le dashboard, clique
 ```bash
 uv run ruff check .
 uv run pytest
-git add tests/test_retention.py CLAUDE.md README.md
+git add tests/pipeline/test_retention.py CLAUDE.md README.md
 git commit -m "feat(posts): retention des posts + documentation de la brique contenu"
 ```
 

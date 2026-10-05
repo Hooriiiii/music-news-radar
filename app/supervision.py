@@ -135,7 +135,7 @@ def niveau_global(voyants: list[Voyant]) -> str:
     """Le niveau du bandeau : le PIRE de ses voyants.
 
     Jamais `ok` des qu'un seul voyant ne l'est pas -- c'est la propriete que
-    `tests/test_supervision.py` verrouille, parce qu'un `or OK` bien
+    `tests/socle/test_supervision.py` verrouille, parce qu'un `or OK` bien
     intentionne la casserait sans faire echouer quoi que ce soit d'autre.
     """
     if not voyants:

@@ -459,7 +459,7 @@ de poser), et la fin la plus tardive qui gagne quand deux pauses se croisent.
 qui attend son heure part même si l'ingestion est à l'arrêt — rater un créneau
 programmé coûte plus cher que de sauter une heure d'ingestion. La lecture de
 visuels à la composition (`lecture_artistes.py`) garde sa propre pause. Un test
-sentinelle (`tests/test_quota_graph.py`) échoue si un module de `app/publish` ou
+sentinelle (`tests/pipeline/test_quota_graph.py`) échoue si un module de `app/publish` ou
 `app/schedule` se met à lire cette pause.
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
@@ -627,7 +627,7 @@ aucune : Chromium MESURE (lignes rendues, largeur de chacune), Python DÉCIDE
 (échelle à essayer, acceptation, abandon). Les feuilles de style des gabarits
 (`templates/*/style.css`) n'ont donc plus de nombres en dur non plus — tout
 passe par des variables CSS injectées par `variables_css()`, et un
-test-sentinelle par gabarit (`tests/test_render.py`) échoue si une valeur
+test-sentinelle par gabarit (`tests/content/test_render.py`) échoue si une valeur
 revient s'y nicher. Une accroche trop longue même à la taille de police
 minimale n'est PLUS rendue coupée en silence : le rendu est marqué `overflow`
 (retourné par `render_post`, persisté dans `posts.render_report` via
@@ -718,7 +718,7 @@ soit 2.10:1 contre 2.09:1 face au texte crème `#FFF7FA`) : le contraste perçu 
 design ne bouge pas d'une actu à l'autre, seule la couleur change. Un vert plus
 sombre lirait mieux sous le texte, mais relever le contraste des DEUX teintes est
 une décision de direction artistique, pas un effet de bord — un test-sentinelle
-(`tests/test_layout.py`) échoue si quelqu'un déplace la couleur à l'œil.
+(`tests/content/test_layout.py`) échoue si quelqu'un déplace la couleur à l'œil.
 
 Le signal est la catégorie de scoring **`ecology`**, ajoutée le même jour. Aucune
 migration : `articles.category` est un `VARCHAR(100)` **sans contrainte CHECK**
@@ -990,7 +990,7 @@ visuels d'artistes) sont décoratifs et les réserves « compte source » et
 « artiste cité » sont quasi vides — hors lecture en direct du compte source.
 Décision de l'utilisateur : c'est la **recherche web**, seul barreau qui ne lit
 pas la base, qui reprend le relais, pour une affiche comme pour un fond trop
-petit (verrouillé de bout en bout dans `tests/test_visuels_web.py`). Les valeurs
+petit (verrouillé de bout en bout dans `tests/content/test_visuels_web.py`). Les valeurs
 sont gardées : elles redeviendront utiles si la rétention remonte ; et une lecture `business_discovery` en direct **même si le
 pipeline vient d'ingérer le compte** (`LecteurComptes(..., ignorer_fraicheur=True)`).
 Cette garde-là est une économie — « la base suffit » — et ici la base ne suffit
@@ -1133,9 +1133,9 @@ retouchée. `app/publish/preparation.py::_agrandir_fond_si_marque` est le SEUL
 point d'appel à `upscale.agrandir_fond`, et il ne lit/écrit que
 `slides[0].image_url` — deux tests-sentinelles, un par gabarit (le carrousel
 et le reel appellent chacun leur propre préparateur) :
-`tests/test_publish_preparation.py::
+`tests/publish/test_publish_preparation.py::
 test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel` et
-`tests/test_publish_preparation_reel.py::
+`tests/publish/test_publish_preparation_reel.py::
 test_l_agrandissement_ne_touche_que_la_cover_jamais_la_video_du_reel`
 échouent si un media du carrousel, ou la vidéo d'un reel, passe par cette
 fonction.
@@ -1583,7 +1583,7 @@ retard : `publication_tunnel_budget_s` (**270 s** = les anciens 3 × 90) plafonn
 la SOMME des attentes, et `publication_tunnel_essais` (3) plafonne le nombre de
 tunnels lancés, donc la lecture d'URL (`DELAI_URL_S`) comme avant. Première
 tentative 180 s, relance éventuelle 90 s — exactement une ancienne fenêtre. Un
-test-sentinelle (`tests/test_publish_hosting.py::
+test-sentinelle (`tests/publish/test_publish_hosting.py::
 test_le_budget_total_de_patience_n_augmente_pas`) échoue si quelqu'un allonge une
 attente « juste un peu ». L'essai perdu est tué par GROUPE de processus
 (`start_new_session`), le serveur local vit pour tout le `with`. Épuisés, ils
@@ -2047,7 +2047,7 @@ l'heure.** La relecture est une OPTION, jamais une condition. Un post qui
 attendrait une validation ressemble a un post en cours, et le taux de publication
 est deja a moins de la moitie des creneaux aboutis. Aucune fonction de
 `app/schedule/relecture.py` n'est lue par `runner._publier` ; preuve par mutation
-dans `tests/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`
+dans `tests/schedule/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`
 (on ajoute dans `_publier` le `if post.status is PostStatus.DRAFT: continue`
 qu'un contributeur presse ecrirait, et le test rougit — rien d'autre dans la
 suite ne bougeait).
@@ -2232,7 +2232,7 @@ disparu du dashboard ; `POST /schedule/{id}/rouvrir` reste, sur le meme chemin.
   rouvrent RIEN (relus en base juste avant Meta). Preuve par mutation —
   remplacer la condition de `_regel_automatique` par `if True:` laissait toute
   la suite verte, et coutait un gel entier pour une virgule ; verrouille par
-  `tests/test_manifeste_gel.py::test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes`.
+  `tests/publish/test_manifeste_gel.py::test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes`.
 - **Claude n'est jamais repaye** : le creneau garde son `post_id` — qui est aussi
   la condition de l'ecriture conditionnelle.
 - **Un refus ne touche a RIEN** : publication en vol, ou moins de 20 min avant le
@@ -2332,7 +2332,7 @@ fiable meme si le dashboard n'ecoute que sur `127.0.0.1` :
   de `multipart`, donc pas de dependance `python-multipart` non plus), la
   fonction qui nomme ne prend qu'un `bytes`, et le nom sur disque derive du
   contenu. Un nom ne peut pas composer un chemin par CONSTRUCTION. Preuve par
-  mutation (`tests/test_televersement.py`) : rendre le nom au choix de
+  mutation (`tests/publish/test_televersement.py`) : rendre le nom au choix de
   l'appelant fait rougir ce test, et lui seul.
 
 **Les regles du projet ne sont pas contournees** : un fichier depose est un
@@ -2359,7 +2359,7 @@ premier et notre UPDATE touche zero ligne (409), soit nous passons le premier et
 le creneau devient PROGRAMME — or `_publier` ne selectionne que `etat == GELE`.
 Aucun chemin ne mene a `media_publish` avant un nouveau gel. La course elle-meme
 est verrouillee par
-`tests/test_manifeste_gel.py::test_une_reclamation_de_l_agent_pendant_la_reouverture_fait_echouer_l_ecriture`
+`tests/publish/test_manifeste_gel.py::test_une_reclamation_de_l_agent_pendant_la_reouverture_fait_echouer_l_ecriture`
 (retirer la condition d'etat de l'UPDATE laissait toute la suite verte).
 
 ## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
@@ -2401,7 +2401,7 @@ exception imprevue devient un voyant « inconnu » qui porte le type de
 l'exception — jamais un voyant ABSENT (une case vide se lit « rien a signaler »)
 ni une 500 qui viderait le bandeau. Propriete NEGATIVE, donc facile a casser par
 un `or "ok"` bien intentionne sans qu'aucun autre test ne rougisse :
-`tests/test_supervision.py` et `tests/test_dashboard_supervision.py` la
+`tests/socle/test_supervision.py` et `tests/dashboard/test_dashboard_supervision.py` la
 verrouillent aux quatre etages (agregation, lecteurs, enveloppe, JS).
 
 **Chaque voyant porte sa raison en clair**, adjacente et visible sous les
@@ -2582,7 +2582,7 @@ elle passe par UN SEUL point (`mesure()` dans `app/static/dashboard.html`).
 17 % des citations n'ont aucune note d'emergence : une acceleration inconnue
 affichee « 0 » se lit **« cet artiste stagne »**, une affirmation fausse sur la
 seule grandeur qui separe une decouverte d'une star. Preuve par mutation sur
-Chromium reel (`tests/test_dashboard_artistes.py`) : on remplace le garde-fou par
+Chromium reel (`tests/dashboard/test_dashboard_artistes.py`) : on remplace le garde-fou par
 le `|| 0` exact qu'un contributeur presse ecrirait, et la ligne doit afficher
 « → regulier 0.00 » — la mesure refuse. L'inconnu porte sa propre teinte
 (gris-bleu, celle de la supervision), jamais celle d'un des trois verdicts ni
@@ -2625,7 +2625,7 @@ teinte 0 EXACTE et montes en saturation (`#ff8a8a` etait a 0 mais aussi pale que
 le rose ; `#ff9aa5` penchait carrement vers lui, a 353) : `--alerte` `#ff7b7b`
 (7,57:1) et `--alerte-douce` `#ff8c8c` (8,48:1), tous deux au-dessus du seuil --
 une raison de panne ne perd jamais en lisibilite pour gagner en teinte.
-`tests/test_dashboard_marque.py` le verrouille par **deux preuves par
+`tests/dashboard/test_dashboard_marque.py` le verrouille par **deux preuves par
 mutation** : une alerte qui prend la teinte de l'accent, et une regle de panne
 qui s'ecrit `var(--accent)`. Une seule exception, ecrite plutot que devinee :
 `.zone-erreur .relance` est une ACTION dans un etat de panne, pas le signal de
@@ -2842,7 +2842,7 @@ premières reprises échouaient (titre commençant par un verbe, aucun artiste
 cité), la requête valait None, et le dernier recours ne partait JAMAIS — sur le
 cas même pour lequel il a été écrit. La requête produite est désormais
 « Transmusicales festival photo ». Verrouillé par un test de bout en bout
-(`tests/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
+(`tests/content/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
 (le saut depuis la Tâche 5, l'aplat Kinda avant elle) n'est atteinte qu'APRÈS
 une recherche web restée bredouille.
 
@@ -3232,7 +3232,7 @@ cover part sur l'image de secours du gabarit.
    La CEINTURE est au point d'écriture : `cibles_a_repointer` retire le
    représentant lui-même de la liste à repointer, donc `lier` ne peut pas
    écrire `x.duplicate_of_id = x.id`. Preuve par mutation
-   (`tests/test_cluster_reflexif.py`) : les deux gardes retirées, le lien
+   (`tests/pipeline/test_cluster_reflexif.py`) : les deux gardes retirées, le lien
    réflexif se reforme à l'identique ; la seule garde de `resoudre` retirée,
    il reste un CYCLE à deux (chacun se présente comme un doublon, donc l'actu
    disparaît tout entière) ; la seule ceinture retirée, le test unitaire de
@@ -3449,7 +3449,7 @@ verrouille l'accord des deux chemins.
 purgé, l'observation survit sans lui et **plus rien ne permet de juger sa
 pertinence**. La décision doit donc être prise AVANT `purge_old_articles`, dans
 le même passage — l'ordre est posé dans `app/pipeline/run.py` et verrouillé par
-`tests/test_retention_evenements.py` (inverser les deux appels rend ce test
+`tests/pipeline/test_retention_evenements.py` (inverser les deux appels rend ce test
 rouge). Les deux étapes visent le même ensemble par CONSTRUCTION
 (`_predicat_purgeable`, un seul prédicat partagé) : deux copies qui
 divergeraient laisseraient des événements derrière elles, ou pire en
@@ -3672,7 +3672,7 @@ le nombre de candidats — rien n'est fait article par article. Ne lève jamais
   les revisions hors contexte de migration (`alembic history`, `alembic check`) ;
   `alembic upgrade` passe, ce qui rend le defaut invisible a l'usage courant.
   Aucun test n'importait les migrations, si bien que la suite entiere passait
-  au vert dessus : d'ou la sentinelle `tests/test_migrations.py`, qui les fait
+  au vert dessus : d'ou la sentinelle `tests/socle/test_migrations.py`, qui les fait
   toutes charger sans base de donnees.
 
 ## Conventions

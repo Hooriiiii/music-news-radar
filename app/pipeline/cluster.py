@@ -155,7 +155,7 @@ def cibles_a_repointer(pointeurs, representant) -> list:
     d'etre lie n'est plus un representant, donc l'etat mutuel ne se forme
     jamais. Celle-ci est la ceinture au POINT D'ECRITURE, isolee en fonction
     pure pour etre verifiable sans monter une session
-    (`tests/test_cluster_reflexif.py`).
+    (`tests/pipeline/test_cluster_reflexif.py`).
     """
     return [pointeur for pointeur in pointeurs if pointeur.id != representant.id]
 

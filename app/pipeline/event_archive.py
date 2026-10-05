@@ -8,7 +8,7 @@ fonctions pures attendent (`dates_publication`, `similarite_max`,
 
 **Le champ de date est `published_at`, jamais `observed_at`.**
 `dates_de_publication` est le SEUL endroit du projet ou ce choix se fait, et
-il porte son test-sentinelle (`tests/test_event_archive.py`). La mesure qui
+il porte son test-sentinelle (`tests/pipeline/test_event_archive.py`). La mesure qui
 l'impose est dans le docstring de `event_features.velocity` : l'etalement des
 dates d'ingestion mesure la cadence horaire du pipeline, pas la propagation de
 l'actu. Basculer ce champ ne ferait echouer aucun calcul -- seulement mentir

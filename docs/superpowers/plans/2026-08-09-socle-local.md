@@ -46,8 +46,8 @@
 | `deploy/com.musicnewsradar.digest.plist` (supprimer) | Agent abandonné (pas de mail). |
 | `deploy/install_launchd.sh` (supprimer) | Remplacé par `scripts/install_agents.py`. |
 | `CLAUDE.md` (modifier) | Deux corrections factuelles + les nouvelles commandes. |
-| `tests/test_db_attente.py` (créer) | Le préambule réseau, sans base. |
-| `tests/test_install_agents.py` (créer) | Les plists, la migration, le plan — sans `launchctl`. |
+| `tests/socle/test_db_attente.py` (créer) | Le préambule réseau, sans base. |
+| `tests/scripts/test_install_agents.py` (créer) | Les plists, la migration, le plan — sans `launchctl`. |
 
 ---
 
@@ -59,7 +59,7 @@ Le constat qui justifie cette tâche : l'agent `digest` échoue **chaque jour de
 - Modify: `app/db.py`
 - Modify: `scripts/run_ingest.py`
 - Modify: `scripts/run_pipeline.py`
-- Test: `tests/test_db_attente.py`
+- Test: `tests/socle/test_db_attente.py`
 
 **Interfaces:**
 - Consumes: rien.
@@ -70,7 +70,7 @@ Le constat qui justifie cette tâche : l'agent `digest` échoue **chaque jour de
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_db_attente.py`:
+Create `tests/socle/test_db_attente.py`:
 
 ```python
 """Le preambule reseau des points d'entree planifies.
@@ -140,7 +140,7 @@ def test_conserve_la_cause_dorigine():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_db_attente.py -v`
+Run: `uv run pytest tests/socle/test_db_attente.py -v`
 Expected: FAIL — `ImportError: cannot import name 'BaseInjoignable' from 'app.db'`
 
 - [ ] **Step 3: Implement in `app/db.py`**
@@ -215,7 +215,7 @@ def attendre_base(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_db_attente.py -v`
+Run: `uv run pytest tests/socle/test_db_attente.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Wire it into the two scheduled entry points**
@@ -255,7 +255,7 @@ Expected: PASS. Baseline is **249 passing**; this task adds 4.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/db.py scripts/run_ingest.py scripts/run_pipeline.py tests/test_db_attente.py
+git add app/db.py scripts/run_ingest.py scripts/run_pipeline.py tests/socle/test_db_attente.py
 git commit -m "feat(deploy): preambule reseau avant les runs planifies
 
 L'agent launchd `digest` echoue chaque jour depuis juillet, et pas a cause
@@ -278,7 +278,7 @@ Aucun effet de bord dans cette tâche : on construit des dictionnaires et on aff
 
 **Files:**
 - Create: `scripts/install_agents.py`
-- Test: `tests/test_install_agents.py`
+- Test: `tests/scripts/test_install_agents.py`
 
 **Interfaces:**
 - Consumes: rien.
@@ -291,7 +291,7 @@ Aucun effet de bord dans cette tâche : on construit des dictionnaires et on aff
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_install_agents.py`:
+Create `tests/scripts/test_install_agents.py`:
 
 ```python
 """Les agents launchd, testes sans launchctl.
@@ -415,7 +415,7 @@ def test_les_labels_obsoletes_sont_ceux_de_juillet():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.install_agents'`
 
 - [ ] **Step 3: Implement the module**
@@ -583,7 +583,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: PASS (10 tests)
 
 - [ ] **Step 5: Check the plan output by eye**
@@ -599,7 +599,7 @@ Expected: PASS. Baseline after Task 1 is **253**; this task adds 10.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/install_agents.py tests/test_install_agents.py
+git add scripts/install_agents.py tests/scripts/test_install_agents.py
 git commit -m "feat(deploy): construction testable des plists launchd
 
 Les trois .plist versionnes codaient /Users/theoherve/... en dur et
@@ -621,7 +621,7 @@ sur un port occupe."
 **Files:**
 - Modify: `scripts/install_agents.py`
 - Delete: `deploy/com.musicnewsradar.pipeline.plist`, `deploy/com.musicnewsradar.digest.plist`, `deploy/install_launchd.sh`
-- Test: `tests/test_install_agents.py`
+- Test: `tests/scripts/test_install_agents.py`
 
 **Interfaces:**
 - Consumes: `Chemins`, `plists`, `LABELS_OBSOLETES`
@@ -633,7 +633,7 @@ sur un port occupe."
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_install_agents.py`:
+Append to `tests/scripts/test_install_agents.py`:
 
 ```python
 class FauxExecuteur:
@@ -737,7 +737,7 @@ Finally, print `- retiré : <label>` only when something was actually removed, a
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: FAIL — `ImportError: cannot import name 'installer'`
 
 - [ ] **Step 3: Implement**
@@ -849,7 +849,7 @@ def main() -> None:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: PASS (15 tests)
 
 - [ ] **Step 5: Delete the superseded files**
@@ -875,7 +875,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add -A scripts/install_agents.py tests/test_install_agents.py deploy/
+git add -A scripts/install_agents.py tests/scripts/test_install_agents.py deploy/
 git commit -m "feat(deploy): installation, statut et desinstallation des agents
 
 Retirer les deux agents de juillet est le PREMIER travail de --apply, et
@@ -900,7 +900,7 @@ Supprime les trois fichiers de deploy/ que ce script remplace."
 
 **Files:**
 - Modify: `scripts/install_agents.py`
-- Test: `tests/test_install_agents.py`
+- Test: `tests/scripts/test_install_agents.py`
 
 **Interfaces:**
 - Produces:
@@ -911,7 +911,7 @@ Supprime les trois fichiers de deploy/ que ce script remplace."
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_install_agents.py`:
+Append to `tests/scripts/test_install_agents.py`:
 
 ```python
 def test_la_conf_de_rotation_cite_chaque_fichier_de_log(chemins):
@@ -951,7 +951,7 @@ def test_tronquer_les_logs_libere_la_place_sans_supprimer_les_fichiers(chemins, 
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: FAIL — `ImportError: cannot import name 'conf_rotation'`
 
 - [ ] **Step 3: Implement**
@@ -1027,7 +1027,7 @@ Wire it in: `installer()` calls `tronquer_logs()` (reporting the freed bytes) th
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_install_agents.py -v`
+Run: `uv run pytest tests/scripts/test_install_agents.py -v`
 Expected: PASS (18 tests)
 
 - [ ] **Step 5: Check the emitted configuration by eye**
@@ -1043,7 +1043,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/install_agents.py tests/test_install_agents.py
+git add scripts/install_agents.py tests/scripts/test_install_agents.py
 git commit -m "feat(deploy): rotation des logs et troncature a l'installation
 
 43 Mo se sont accumules en cinq semaines sans rotation, et un uvicorn

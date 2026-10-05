@@ -68,7 +68,7 @@ comme non fiable :
   cette fonction ne prend qu'un `bytes`, et le nom sur disque se derive du
   CONTENU. Un nom ne peut donc pas composer un chemin, par construction et non
   par vigilance -- la seule propriete d'ici dont la violation serait silencieuse
-  ET grave (test de mutation dans `tests/test_televersement.py`).
+  ET grave (test de mutation dans `tests/publish/test_televersement.py`).
 """
 
 import hashlib

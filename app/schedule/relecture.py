@@ -34,7 +34,7 @@ publie a l'heure. La relecture est une OPTION, jamais une condition -- un post
 qui attendrait une validation qui ne vient pas ressemble a un post en cours, et
 le taux de publication est deja a moins de la moitie. Aucune fonction d'ici n'est
 lue par `_publier`, et un test-sentinelle
-(`tests/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`)
+(`tests/schedule/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`)
 echoue si quelqu'un l'y branche.
 
 L'ANNONCE est une notification macOS -- le seul canal du projet (ni mail ni

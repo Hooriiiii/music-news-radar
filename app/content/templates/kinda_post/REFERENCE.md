@@ -31,7 +31,7 @@ sont injectées au rendu sous forme de variables CSS custom
 (`variables_css()` dans `layout.py`, consommées via `--headline-font-size`,
 `--title-background`, etc.). Une valeur qui reviendrait en dur dans une feuille de
 style serait une règle qui échappe à `layout.py`, donc aux tests : c'est ce que
-vérifie `tests/test_render.py::test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page`
+vérifie `tests/content/test_render.py::test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page`
 pour `kinda_post/style.css` (recherche de motifs comme `80px`, `-0.06em`, `77px`,
 et interdiction d'un bloc `:root` qui rouvrirait la porte à des valeurs locales).
 `kinda_reel/style.css` suit la même discipline par construction (tâche 4) mais
@@ -39,7 +39,7 @@ n'a pas encore son sentinelle dédié — à ajouter si la feuille du reel se re
 dériver.
 
 `layout.py` ne connaît NI Chromium, NI Jinja, NI le réseau, NI la base : c'est du
-Python pur, testable sans navigateur (`tests/test_layout.py`). La répartition des
+Python pur, testable sans navigateur (`tests/content/test_layout.py`). La répartition des
 rôles avec `render.py` est stricte : Chromium MESURE (lignes rendues, largeur de
 chacune, via `Range.getClientRects()`), Python DÉCIDE (échelle à essayer,
 acceptation, abandon — la machine à états `Ajustement`).
@@ -210,7 +210,7 @@ visuel : la taille, l'interlignage et l'interlettrage sont calibrés sur celle-c
   silencieusement l'`@font-face`. Aucune erreur ne remonte : Chromium retombe sur
   un serif système, avec d'autres retours à la ligne que le gabarit Figma, et rien
   ne le signale sauf à comparer visuellement contre `exemples/`. Test qui garde
-  ce piège fermé : `tests/test_render.py::test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit`.
+  ce piège fermé : `tests/content/test_render.py::test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit`.
 - **Surlignage** : le fond du `<mark>` passe par un `linear-gradient` plat plutôt
   que par `background-color`. La hauteur du fond d'un élément en ligne est imposée
   par les métriques de la police (~1.15 em), alors que le rectangle de Figma fait
@@ -292,7 +292,7 @@ de bande dépend des trois valeurs à la fois, la hauteur seulement de
 
 **Ces chiffres sont calés sur le texte d'exemple utilisé à la calibration** :
 `"Gregoire Cliquet"` (titre) et `"au festival des vieilles Charrues"` (sous-titre)
-— voir `tests/test_render.py::test_les_largeurs_de_bande_retombent_sur_la_maquette`
+— voir `tests/content/test_render.py::test_les_largeurs_de_bande_retombent_sur_la_maquette`
 et `::test_les_hauteurs_de_bande_retombent_sur_la_maquette`. Une recalibration sur
 un texte différent (longueur de chaîne différente) ne retombera pas forcément sur
 ces mêmes valeurs : la largeur de bande dépend du nombre de caractères autant que
@@ -302,7 +302,7 @@ référence en s'attendant aux mêmes nombres.
 ### Ce qui reste hors périmètre
 
 Le plafond `max_lines=2` par rôle (une bande, ou deux si le titre est trop long
-pour tenir sur une — voir `tests/test_render.py::test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande`)
+pour tenir sur une — voir `tests/content/test_render.py::test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande`)
 et les autres valeurs de `GABARIT_REEL` sont hors du périmètre de la tâche 8 : la
 calibration du reel a été réglée et validée à la tâche 5, ne pas la rouvrir ici
 même si une mesure ultérieure semble diverger — remonter l'écart plutôt que de

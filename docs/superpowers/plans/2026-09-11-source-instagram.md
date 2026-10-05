@@ -30,7 +30,7 @@
 | Fichier | Responsabilité |
 |---|---|
 | `scripts/desactiver_sources_x.py` (créer) | Éteindre les sources X mortes, idempotent, réversible |
-| `tests/test_desactiver_sources_x.py` (créer) | Le script sur base SQLite |
+| `tests/scripts/test_desactiver_sources_x.py` (créer) | Le script sur base SQLite |
 
 ---
 
@@ -40,7 +40,7 @@ Indépendante de tout le reste et livrable seule. Chaque run produit aujourd'hui
 
 **Files:**
 - Create: `scripts/desactiver_sources_x.py`
-- Test: `tests/test_desactiver_sources_x.py`
+- Test: `tests/scripts/test_desactiver_sources_x.py`
 
 **Interfaces:**
 - Consumes: `app.models.Source`, `app.models.SourceType` (existants)
@@ -49,7 +49,7 @@ Indépendante de tout le reste et livrable seule. Chaque run produit aujourd'hui
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_desactiver_sources_x.py
+# tests/scripts/test_desactiver_sources_x.py
 from app.models import Source, SourceType
 from scripts.desactiver_sources_x import desactiver_sources_x
 
@@ -89,7 +89,7 @@ def test_idempotent_une_source_deja_eteinte_n_est_pas_listee(db_session):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_desactiver_sources_x.py -v`
+Run: `uv run pytest tests/scripts/test_desactiver_sources_x.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.desactiver_sources_x'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -155,7 +155,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_desactiver_sources_x.py -v`
+Run: `uv run pytest tests/scripts/test_desactiver_sources_x.py -v`
 Expected: 4 passed
 
 - [ ] **Step 5: Vérifier le plan sur la vraie base, sans appliquer**
@@ -171,7 +171,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/desactiver_sources_x.py tests/test_desactiver_sources_x.py
+git add scripts/desactiver_sources_x.py tests/scripts/test_desactiver_sources_x.py
 git commit -m "feat(sources): eteindre les sources X, la facturation X n'est plus active"
 ```
 

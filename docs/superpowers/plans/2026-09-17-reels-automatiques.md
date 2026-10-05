@@ -51,7 +51,7 @@ Ce que la révision change dans ce plan :
 - Fautes de l'article (→ `PreparationImpossible`, exclusion) : gabarit ou crédit manquant, pas de vidéo, HTTP 4xx sur la vidéo sans repli yt-dlp possible, vidéo indisponible/supprimée/privée selon yt-dlp, vidéo trop lourde ou pas une vidéo, durée hors bornes, entrée illisible ou assemblage impossible, délai ffmpeg dépassé, sortie hors specs, cover débordante ou inexploitable. Attentes (→ `PreparationDifferee`, rien d'exclu, rien de notifié) : pause ou budget yt-dlp, yt-dlp coupé par `.env` pour un créneau déjà programmé. Pannes systémiques (→ remontent, rien n'est exclu, notifiées, le format seul est suspendu pour le passage) : ffmpeg/ffprobe absents (`AssemblageIndisponible` levée par `exiger_outils`), Chromium absent, réseau ou HTTP 5xx, `YtdlpIndisponible`.
 - Même modèle de sécurité : réclamation GELE → ECHEC committée **avant** Meta ; mode `apercu` = conteneur créé, jamais `media_publish` ; retard > **90 minutes** → `MANQUE` ; créneau reel sans candidat **reste vide** (pas de repli carrousel).
 - API : `https://graph.instagram.com/{meta_api_version}` (`v23.0`), jeton `IG…` en paramètre `access_token` — le même que les carrousels.
-- Python sync, pas d'async. Tests sur SQLite in-memory (`tests/conftest.py`). **Aucun test ne sort sur Internet ni ne lance yt-dlp** : l'exécuteur de sous-processus est injecté et factice. Les tests qui exécutent vraiment ffmpeg sont marqués `besoin_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason=...)`, comme `tests/test_video.py` ; le test VP9 est en plus sauté si ffmpeg n'a pas l'encodeur `libvpx-vp9`.
+- Python sync, pas d'async. Tests sur SQLite in-memory (`tests/conftest.py`). **Aucun test ne sort sur Internet ni ne lance yt-dlp** : l'exécuteur de sous-processus est injecté et factice. Les tests qui exécutent vraiment ffmpeg sont marqués `besoin_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason=...)`, comme `tests/content/test_video.py` ; le test VP9 est en plus sauté si ffmpeg n'a pas l'encodeur `libvpx-vp9`.
 - **SQLite rend des `datetime` naïfs** : toujours passer par `app.schedule.store.utc()`. Toujours écrire des dates **UTC**.
 - Enums en **VARCHAR + CHECK** (`native_enum=False`). Dans une migration écrite à la main, noms de contraintes entourés de `op.f()`, **à l'intérieur des fonctions** seulement.
 - Colonnes JSON : **réassigner en entier**, jamais de mutation en place.
@@ -109,7 +109,7 @@ Ce que la révision change dans ce plan :
 | `app/api/schedule.py` (modifier) | Format dans la vue, décaler par format, éligibilité au remplacement, `GET /schedule/offre-reels`, `GET/PUT /publication/reels` |
 | `app/static/dashboard.html` (modifier) | Pastille de format, ligne d'offre reels, interrupteur « Reels auto » |
 | `CLAUDE.md` (modifier) | Documenter les reels automatiques et yt-dlp |
-| Tests | `tests/test_sources/test_instagram.py`, `tests/test_media.py`, `tests/test_compose.py`, `tests/test_schedule_store.py`, `tests/test_dashboard_mode_control.py`, `tests/test_schedule_modeles.py`, `tests/test_schedule_slots.py`, `tests/test_publish_mode.py`, `tests/test_credit.py`, `tests/test_legende.py`, `tests/test_schedule_store_reels.py`, `tests/test_video.py`, `tests/test_publish_images.py`, `tests/test_publish_ytdlp.py`, `tests/test_publish_preparation_reel.py`, `tests/test_publish_instagram.py`, `tests/test_publish_publier.py`, `tests/test_schedule_runner_reels.py`, `tests/test_run_publication.py`, `tests/test_schedule_api_reels.py` |
+| Tests | `tests/sources/test_instagram.py`, `tests/content/test_media.py`, `tests/content/test_compose.py`, `tests/schedule/test_schedule_store.py`, `tests/dashboard/test_dashboard_mode_control.py`, `tests/schedule/test_schedule_modeles.py`, `tests/schedule/test_schedule_slots.py`, `tests/publish/test_publish_mode.py`, `tests/content/test_credit.py`, `tests/content/test_legende.py`, `tests/schedule/test_schedule_store_reels.py`, `tests/content/test_video.py`, `tests/publish/test_publish_images.py`, `tests/publish/test_publish_ytdlp.py`, `tests/publish/test_publish_preparation_reel.py`, `tests/publish/test_publish_instagram.py`, `tests/publish/test_publish_publier.py`, `tests/schedule/test_schedule_runner_reels.py`, `tests/scripts/test_run_publication.py`, `tests/api/test_schedule_api_reels.py` |
 
 ---
 
@@ -120,7 +120,7 @@ Ce que la révision change dans ce plan :
 **Files:**
 - Modify: `app/sources/instagram.py`
 - Modify: `app/content/media.py`
-- Test: `tests/test_sources/test_instagram.py`, `tests/test_media.py`, `tests/test_compose.py`, `tests/test_schedule_store.py`, `tests/test_dashboard_mode_control.py`
+- Test: `tests/sources/test_instagram.py`, `tests/content/test_media.py`, `tests/content/test_compose.py`, `tests/schedule/test_schedule_store.py`, `tests/dashboard/test_dashboard_mode_control.py`
 
 **Interfaces:**
 - Consumes: `app.content.media.entree`, `PHOTO`, `VIDEO`
@@ -134,7 +134,7 @@ Ce que la révision change dans ce plan :
 
 - [ ] **Step 1: Write the failing tests**
 
-Ajouter à la fin de `tests/test_sources/test_instagram.py` (et `compte_depuis_url` à l'import depuis `app.sources.instagram`) :
+Ajouter à la fin de `tests/sources/test_instagram.py` (et `compte_depuis_url` à l'import depuis `app.sources.instagram`) :
 
 ```python
 def _payload(*noeuds):
@@ -195,7 +195,7 @@ def test_compte_depuis_url(url, attendu):
     assert compte_depuis_url(url) == attendu
 ```
 
-Ajouter à `tests/test_media.py` (et `entree`, `est_lien_instagram`, `lien_de_reel`, `video_recuperable` à l'import depuis `app.content.media`, plus `import pytest`) :
+Ajouter à `tests/content/test_media.py` (et `entree`, `est_lien_instagram`, `lien_de_reel`, `video_recuperable` à l'import depuis `app.content.media`, plus `import pytest`) :
 
 ```python
 SANS_URL = entree("video", None, preview_url="https://cdn/vignette.jpg")
@@ -249,7 +249,7 @@ def test_video_recuperable(media, permalink, attendu):
     assert video_recuperable(media, permalink) is attendu
 ```
 
-Ajouter à `tests/test_compose.py` (et `from app.content.media import entree`) :
+Ajouter à `tests/content/test_compose.py` (et `from app.content.media import entree`) :
 
 ```python
 def test_create_post_prend_la_vignette_d_un_reel_sans_media_url(db_session):
@@ -262,7 +262,7 @@ def test_create_post_prend_la_vignette_d_un_reel_sans_media_url(db_session):
     assert post.slides[0]["image_url"] == "https://thumb.jpg"
 ```
 
-Ajouter à `tests/test_schedule_store.py` (et `from app.content.media import entree`) :
+Ajouter à `tests/schedule/test_schedule_store.py` (et `from app.content.media import entree`) :
 
 ```python
 def test_un_reel_sans_media_url_reste_candidat_carrousel_par_sa_vignette(db_session):
@@ -272,7 +272,7 @@ def test_un_reel_sans_media_url_reste_candidat_carrousel_par_sa_vignette(db_sess
     assert [c.article_id for c in candidats_eligibles(db_session, MAINTENANT)] == [article.id]
 ```
 
-Ajouter à `tests/test_dashboard_mode_control.py` :
+Ajouter à `tests/dashboard/test_dashboard_mode_control.py` :
 
 ```python
 def test_le_detail_d_un_post_sait_lire_une_video_sans_url():
@@ -285,7 +285,7 @@ def test_le_detail_d_un_post_sait_lire_une_video_sans_url():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_sources/test_instagram.py tests/test_media.py tests/test_compose.py tests/test_schedule_store.py tests/test_dashboard_mode_control.py -v`
+Run: `uv run pytest tests/sources/test_instagram.py tests/content/test_media.py tests/content/test_compose.py tests/schedule/test_schedule_store.py tests/dashboard/test_dashboard_mode_control.py -v`
 Expected: FAIL — `ImportError: cannot import name 'compte_depuis_url'` (et `cannot import name 'est_lien_instagram'`). Les tests de `test_compose.py`, `test_schedule_store.py` et `test_dashboard_mode_control.py` passent déjà : ils vérifient que le code existant lit `preview_url`, ce qui est la condition pour changer l'entrée.
 
 - [ ] **Step 3: Implement media.py**
@@ -386,7 +386,7 @@ def _media(noeud: dict) -> list[dict]:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_sources/test_instagram.py tests/test_media.py tests/test_compose.py tests/test_schedule_store.py tests/test_dashboard_mode_control.py -v`
+Run: `uv run pytest tests/sources/test_instagram.py tests/content/test_media.py tests/content/test_compose.py tests/schedule/test_schedule_store.py tests/dashboard/test_dashboard_mode_control.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Lint et suite complète**
@@ -397,7 +397,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/sources/instagram.py app/content/media.py tests/test_sources/test_instagram.py tests/test_media.py tests/test_compose.py tests/test_schedule_store.py tests/test_dashboard_mode_control.py
+git add app/sources/instagram.py app/content/media.py tests/sources/test_instagram.py tests/content/test_media.py tests/content/test_compose.py tests/schedule/test_schedule_store.py tests/dashboard/test_dashboard_mode_control.py
 git commit -F - <<'EOF'
 fix(instagram): garder une video sans media_url comme video
 
@@ -418,7 +418,7 @@ EOF
 **Files:**
 - Modify: `app/models.py` (enum `FormatCreneau` après `EtatCreneau` ; colonne `Post.credit` après `source_name` ; colonne `Creneau.format` après `publier_a`)
 - Create: `alembic/versions/0017_reels.py`
-- Test: `tests/test_schedule_modeles.py`
+- Test: `tests/schedule/test_schedule_modeles.py`
 
 **Interfaces:**
 - Consumes: rien
@@ -430,7 +430,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_schedule_modeles.py` (et `FormatCreneau`, `Post` à l'import depuis `app.models`) :
+Ajouter à `tests/schedule/test_schedule_modeles.py` (et `FormatCreneau`, `Post` à l'import depuis `app.models`) :
 
 ```python
 def test_un_creneau_est_un_carrousel_par_defaut(db_session):
@@ -465,7 +465,7 @@ def test_un_post_n_a_pas_de_credit_par_defaut(db_session):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_modeles.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_modeles.py -v`
 Expected: FAIL — `ImportError: cannot import name 'FormatCreneau'`
 
 - [ ] **Step 3: Write the models**
@@ -553,7 +553,7 @@ def downgrade() -> None:
 
 - [ ] **Step 5: Run tests**
 
-Run: `uv run pytest tests/test_schedule_modeles.py tests/test_migrations.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_modeles.py tests/socle/test_migrations.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Vérifier la migration sur un cluster jetable**
@@ -587,7 +587,7 @@ Expected: tout passe
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/models.py alembic/versions/0017_reels.py tests/test_schedule_modeles.py
+git add app/models.py alembic/versions/0017_reels.py tests/schedule/test_schedule_modeles.py
 git commit -F - <<'EOF'
 feat(modeles): format des creneaux et credit des posts (migration 0017)
 
@@ -608,7 +608,7 @@ EOF
 - Modify: `app/publish/mode.py`
 - Modify: `app/schedule/slots.py`
 - Modify: `.env.example` (après `# PUBLICATION_MODE=arret`)
-- Test: `tests/test_schedule_slots.py`, `tests/test_publish_mode.py`
+- Test: `tests/schedule/test_schedule_slots.py`, `tests/publish/test_publish_mode.py`
 
 **Interfaces:**
 - Consumes: `settings.publication_fenetre_matin`, `settings.publication_fenetre_apres_midi`, `settings.publication_fuseau`
@@ -626,7 +626,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_schedule_slots.py` (imports : `import random`, `import pytest`, `from app.config import settings`, et `FenetresInvalides` depuis `app.schedule.slots`) :
+Ajouter à `tests/schedule/test_schedule_slots.py` (imports : `import random`, `import pytest`, `from app.config import settings`, et `FenetresInvalides` depuis `app.schedule.slots`) :
 
 ```python
 def test_les_carrousels_gardent_exactement_leurs_heures():
@@ -682,7 +682,7 @@ def test_deux_fenetres_qui_se_touchent_sont_refusees(monkeypatch):
         horaires_du_jour(dt.date(2026, 9, 20))
 ```
 
-Ajouter à `tests/test_publish_mode.py` (et `enregistrer_reels`, `reels_actifs`, `source_du_mode` à l'import depuis `app.publish.mode`) :
+Ajouter à `tests/publish/test_publish_mode.py` (et `enregistrer_reels`, `reels_actifs`, `source_du_mode` à l'import depuis `app.publish.mode`) :
 
 ```python
 def test_sans_fichier_les_reels_sont_actifs(tmp_path):
@@ -719,7 +719,7 @@ def test_une_valeur_de_reels_invalide_laisse_les_reels_actifs(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_slots.py tests/test_publish_mode.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_slots.py tests/publish/test_publish_mode.py -v`
 Expected: FAIL — `ImportError: cannot import name 'FenetresInvalides'` (et `cannot import name 'enregistrer_reels'`)
 
 - [ ] **Step 3: Add the settings**
@@ -898,7 +898,7 @@ def prochains_horaires(maintenant: dt.datetime, nombre: int, format_: str = CARR
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_schedule_slots.py tests/test_publish_mode.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_slots.py tests/publish/test_publish_mode.py -v`
 Expected: tout passe (y compris les tests existants de `test_publish_mode.py` : sans fichier préalable, `enregistrer_mode` écrit toujours exactement `{"mode", "change_le"}`)
 
 - [ ] **Step 6: Lint et suite complète**
@@ -909,7 +909,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/config.py app/publish/mode.py app/schedule/slots.py .env.example tests/test_schedule_slots.py tests/test_publish_mode.py
+git add app/config.py app/publish/mode.py app/schedule/slots.py .env.example tests/schedule/test_schedule_slots.py tests/publish/test_publish_mode.py
 git commit -F - <<'EOF'
 feat(file): fenetres et creneaux propres aux reels, coupe-circuits
 
@@ -931,7 +931,7 @@ EOF
 - Create: `app/content/credit.py`
 - Modify: `app/content/compose.py` (`create_post`)
 - Modify: `app/content/legende.py`
-- Test: `tests/test_credit.py`, `tests/test_legende.py`
+- Test: `tests/content/test_credit.py`, `tests/content/test_legende.py`
 
 **Interfaces:**
 - Consumes: `compte_depuis_url` (tâche 1), `Post.credit` (tâche 2)
@@ -943,7 +943,7 @@ EOF
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-# tests/test_credit.py
+# tests/content/test_credit.py
 """Le compte a crediter : un reel ne part jamais sans lui."""
 
 from types import SimpleNamespace
@@ -983,7 +983,7 @@ def test_create_post_pose_le_credit(db_session):
     assert (post.credit, post.template) == ("@saralandry", "kinda_reel")
 ```
 
-Ajouter à `tests/test_legende.py` :
+Ajouter à `tests/content/test_legende.py` :
 
 ```python
 def test_le_credit_d_un_reel_precede_la_source():
@@ -1010,7 +1010,7 @@ def test_le_credit_n_est_jamais_coupe():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_credit.py tests/test_legende.py -v`
+Run: `uv run pytest tests/content/test_credit.py tests/content/test_legende.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.credit'`
 
 - [ ] **Step 3: Implement**
@@ -1067,7 +1067,7 @@ def texte_legende(post) -> str:
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run pytest tests/test_credit.py tests/test_legende.py tests/test_compose.py -v`
+Run: `uv run pytest tests/content/test_credit.py tests/content/test_legende.py tests/content/test_compose.py -v`
 Expected: tout passe
 
 - [ ] **Step 5: Lint et suite complète**
@@ -1078,7 +1078,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/content/credit.py app/content/compose.py app/content/legende.py tests/test_credit.py tests/test_legende.py
+git add app/content/credit.py app/content/compose.py app/content/legende.py tests/content/test_credit.py tests/content/test_legende.py
 git commit -F - <<'EOF'
 feat(legende): crediter le compte Instagram source
 
@@ -1096,8 +1096,8 @@ EOF
 
 **Files:**
 - Modify: `app/schedule/store.py` (remplacement complet)
-- Modify: `tests/test_schedule_store.py`, `tests/test_schedule_api.py`, `tests/test_schedule_runner.py` (fixture carrousel seul)
-- Test: `tests/test_schedule_store_reels.py`
+- Modify: `tests/schedule/test_schedule_store.py`, `tests/api/test_schedule_api.py`, `tests/schedule/test_schedule_runner.py` (fixture carrousel seul)
+- Test: `tests/schedule/test_schedule_store_reels.py`
 
 **Interfaces:**
 - Consumes: `video_recuperable` (tâche 1), `FormatCreneau` (tâche 2), `prochains_horaires(..., format_)`, `reels_actifs`, `settings.publication_reel_ytdlp` (tâche 3), `credit_video` (tâche 4), `videos_exploitables`, `queue.arbitrer` (inchangé)
@@ -1117,7 +1117,7 @@ EOF
 
 - [ ] **Step 1: Isoler les tests existants sur le carrousel**
 
-Ces trois fichiers décrivent la file carrousel seule ; sans ce réglage, les créneaux reel s'intercalent dans les listes et les comptes. Ajouter en tête de `tests/test_schedule_store.py`, `tests/test_schedule_api.py` et `tests/test_schedule_runner.py`, après les imports (ajouter `import pytest` et `from app.config import settings` là où ils manquent) :
+Ces trois fichiers décrivent la file carrousel seule ; sans ce réglage, les créneaux reel s'intercalent dans les listes et les comptes. Ajouter en tête de `tests/schedule/test_schedule_store.py`, `tests/api/test_schedule_api.py` et `tests/schedule/test_schedule_runner.py`, après les imports (ajouter `import pytest` et `from app.config import settings` là où ils manquent) :
 
 ```python
 @pytest.fixture(autouse=True)
@@ -1126,13 +1126,13 @@ def _carrousels_seuls(monkeypatch):
     monkeypatch.setattr(settings, "publication_creneaux_reel", 0)
 ```
 
-Run: `uv run pytest tests/test_schedule_store.py tests/test_schedule_api.py tests/test_schedule_runner.py -q`
+Run: `uv run pytest tests/schedule/test_schedule_store.py tests/api/test_schedule_api.py tests/schedule/test_schedule_runner.py -q`
 Expected: tout passe (le code n'a pas encore changé).
 
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_schedule_store_reels.py
+# tests/schedule/test_schedule_store_reels.py
 """La file des reels : eligibilite, creneaux propres, pas de double emploi."""
 
 import datetime as dt
@@ -1318,7 +1318,7 @@ def test_offre_reels(db_session):
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_store_reels.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_store_reels.py -v`
 Expected: FAIL — `ImportError: cannot import name 'offre_reels'`
 
 - [ ] **Step 4: Implement**
@@ -1572,7 +1572,7 @@ def offre_reels(db: Session, maintenant: dt.datetime) -> dict:
 
 - [ ] **Step 5: Run tests**
 
-Run: `uv run pytest tests/test_schedule_store_reels.py tests/test_schedule_store.py tests/test_schedule_api.py tests/test_schedule_runner.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_store_reels.py tests/schedule/test_schedule_store.py tests/api/test_schedule_api.py tests/schedule/test_schedule_runner.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Lint et suite complète**
@@ -1583,7 +1583,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/schedule/store.py tests/test_schedule_store_reels.py tests/test_schedule_store.py tests/test_schedule_api.py tests/test_schedule_runner.py
+git add app/schedule/store.py tests/schedule/test_schedule_store_reels.py tests/schedule/test_schedule_store.py tests/api/test_schedule_api.py tests/schedule/test_schedule_runner.py
 git commit -F - <<'EOF'
 feat(file): arbitrage par format, reels d'abord, sans double emploi
 
@@ -1607,7 +1607,7 @@ EOF
 **Files:**
 - Modify: `app/content/video.py`
 - Modify: `app/publish/images.py`
-- Test: `tests/test_video.py`, `tests/test_publish_images.py`
+- Test: `tests/content/test_video.py`, `tests/publish/test_publish_images.py`
 
 **Interfaces:**
 - Consumes: rien de neuf
@@ -1621,7 +1621,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Ajouter à `tests/test_video.py` (et `import app.content.video as video_mod`, `_cadence`, `chemin_outil`, `exiger_outils` à l'import) :
+Ajouter à `tests/content/test_video.py` (et `import app.content.video as video_mod`, `_cadence`, `chemin_outil`, `exiger_outils` à l'import) :
 
 ```python
 def test_cadence():
@@ -1703,7 +1703,7 @@ def test_le_reel_respecte_les_specs_de_meta(tmp_path):
     assert b"elst" not in moov
 ```
 
-Ajouter à `tests/test_publish_images.py` (et `en_jpeg` à l'import) :
+Ajouter à `tests/publish/test_publish_images.py` (et `en_jpeg` à l'import) :
 
 ```python
 def test_la_cover_d_un_reel_garde_son_9_16():
@@ -1723,7 +1723,7 @@ def test_en_jpeg_refuse_une_image_illisible():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_video.py tests/test_publish_images.py -v`
+Run: `uv run pytest tests/content/test_video.py tests/publish/test_publish_images.py -v`
 Expected: FAIL — `ImportError: cannot import name '_cadence'`
 
 - [ ] **Step 3: Implement video.py**
@@ -1857,7 +1857,7 @@ Compléter la docstring du module d'une ligne : « `en_jpeg` sert la cover d'un 
 
 - [ ] **Step 5: Run tests**
 
-Run: `uv run pytest tests/test_video.py tests/test_publish_images.py tests/test_export.py -v`
+Run: `uv run pytest tests/content/test_video.py tests/publish/test_publish_images.py tests/content/test_export.py -v`
 Expected: tout passe (les tests `besoin_ffmpeg` sont sautés si ffmpeg est absent, et `besoin_vp9` si ffmpeg n'a pas `libvpx-vp9` — le signaler dans le compte rendu de tâche)
 
 - [ ] **Step 6: Lint et suite complète**
@@ -1868,7 +1868,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/content/video.py app/publish/images.py tests/test_video.py tests/test_publish_images.py
+git add app/content/video.py app/publish/images.py tests/content/test_video.py tests/publish/test_publish_images.py
 git commit -F - <<'EOF'
 feat(reel): MP4 aux specs Meta et cover JPEG sans recadrage
 
@@ -1890,7 +1890,7 @@ EOF
 - Modify: `pyproject.toml`, `uv.lock` (par `uv add`)
 - Modify: `app/publish/preparation.py` (exception `PreparationDifferee`, après `PreparationImpossible`)
 - Create: `app/publish/ytdlp.py`
-- Test: `tests/test_publish_ytdlp.py`
+- Test: `tests/publish/test_publish_ytdlp.py`
 
 **Interfaces:**
 - Consumes: `PreparationImpossible` (existant), `chemin_outil` (tâche 6), `est_lien_instagram` (tâche 1), `settings.meta_token_path`
@@ -1917,7 +1917,7 @@ Expected: une version `2026.08.19` ou postérieure. **Ne lancer yt-dlp sur aucun
 - [ ] **Step 2: Write the failing test**
 
 ```python
-# tests/test_publish_ytdlp.py
+# tests/publish/test_publish_ytdlp.py
 """yt-dlp au gel d'un reel : commande, budget, pause, classement des erreurs.
 
 Aucun test ne lance yt-dlp ni ne sort sur Internet : l'executeur de
@@ -2153,7 +2153,7 @@ def test_yt_dlp_est_une_dependance_epinglee():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_ytdlp.py -v`
+Run: `uv run pytest tests/publish/test_publish_ytdlp.py -v`
 Expected: FAIL — `ImportError: cannot import name 'PreparationDifferee'`
 
 - [ ] **Step 4: Implement**
@@ -2415,7 +2415,7 @@ Note : `_echec` lève toujours ; après un `except` ou un `if` qui l'appelle, `r
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_ytdlp.py -v`
+Run: `uv run pytest tests/publish/test_publish_ytdlp.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Lint et suite complète**
@@ -2426,7 +2426,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pyproject.toml uv.lock app/publish/preparation.py app/publish/ytdlp.py tests/test_publish_ytdlp.py
+git add pyproject.toml uv.lock app/publish/preparation.py app/publish/ytdlp.py tests/publish/test_publish_ytdlp.py
 git commit -F - <<'EOF'
 feat(reel): recuperer la video d'un reel Instagram avec yt-dlp
 
@@ -2446,7 +2446,7 @@ EOF
 
 **Files:**
 - Create: `app/publish/preparation_reel.py`
-- Test: `tests/test_publish_preparation_reel.py`
+- Test: `tests/publish/test_publish_preparation_reel.py`
 
 **Interfaces:**
 - Consumes: `render_post` (existant), `exiger_outils`, `sonder`, `assembler_reel`, `FORMAT_REEL`, `AssemblageIndisponible` (tâche 6), `en_jpeg`, `ImageInexploitable` (tâche 6), `PreparationImpossible` (existant), `PreparationDifferee` (tâche 7), `RecuperateurYtdlp` (tâche 7, par injection), `videos_exploitables`, `video_recuperable`, `est_lien_instagram` (tâche 1), réglages `publication_reel_*` (tâche 3)
@@ -2461,7 +2461,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_publish_preparation_reel.py
+# tests/publish/test_publish_preparation_reel.py
 """Le gel d'un reel : cover, video (API puis yt-dlp), assemblage, specs Meta."""
 
 import io
@@ -2765,7 +2765,7 @@ def test_la_chaine_complete_avec_ffmpeg(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_preparation_reel.py -v`
+Run: `uv run pytest tests/publish/test_publish_preparation_reel.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.publish.preparation_reel'`
 
 - [ ] **Step 3: Implement**
@@ -2982,7 +2982,7 @@ Notes :
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_preparation_reel.py -v`
+Run: `uv run pytest tests/publish/test_publish_preparation_reel.py -v`
 Expected: tout passe (le test `besoin_ffmpeg` est sauté si ffmpeg est absent)
 
 - [ ] **Step 5: Lint et suite complète**
@@ -2993,7 +2993,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/publish/preparation_reel.py tests/test_publish_preparation_reel.py
+git add app/publish/preparation_reel.py tests/publish/test_publish_preparation_reel.py
 git commit -F - <<'EOF'
 feat(publication): gel d'un reel
 
@@ -3013,7 +3013,7 @@ EOF
 
 **Files:**
 - Modify: `app/publish/instagram.py`
-- Test: `tests/test_publish_instagram.py`
+- Test: `tests/publish/test_publish_instagram.py`
 
 **Interfaces:**
 - Consumes: `ClientInstagram` (existant)
@@ -3024,7 +3024,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_publish_instagram.py` :
+Ajouter à `tests/publish/test_publish_instagram.py` :
 
 ```python
 def test_un_reel_donne_un_conteneur_reels_avec_cover_explicite():
@@ -3068,7 +3068,7 @@ def test_un_reel_qui_ne_finit_jamais_leve_apres_le_delai_reel(monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_instagram.py -v`
+Run: `uv run pytest tests/publish/test_publish_instagram.py -v`
 Expected: FAIL — `AttributeError: 'ClientInstagram' object has no attribute 'preparer_reel'`
 
 - [ ] **Step 3: Implement**
@@ -3126,7 +3126,7 @@ Compléter la docstring du module : « `preparer_reel` suit le même contrat pou
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_instagram.py -v`
+Run: `uv run pytest tests/publish/test_publish_instagram.py -v`
 Expected: tout passe, y compris `test_un_conteneur_qui_ne_finit_jamais_leve` (constante lue à l'appel)
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3137,7 +3137,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/publish/instagram.py tests/test_publish_instagram.py
+git add app/publish/instagram.py tests/publish/test_publish_instagram.py
 git commit -F - <<'EOF'
 feat(instagram): conteneur REELS avec cover explicite
 
@@ -3155,7 +3155,7 @@ EOF
 
 **Files:**
 - Modify: `app/publish/publier.py`
-- Test: `tests/test_publish_publier.py`
+- Test: `tests/publish/test_publish_publier.py`
 
 **Interfaces:**
 - Consumes: `ClientInstagram.preparer_reel` (tâche 9), `hosting.heberger` (existant), `settings.publication_reel_share_to_feed` (tâche 3)
@@ -3164,7 +3164,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_publish_publier.py` (et `publier_reel` à l'import) :
+Ajouter à `tests/publish/test_publish_publier.py` (et `publier_reel` à l'import) :
 
 ```python
 class FauxClientReel(FauxClient):
@@ -3210,7 +3210,7 @@ def test_un_reel_dont_un_fichier_manque_n_ouvre_pas_le_tunnel(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_publish_publier.py -v`
+Run: `uv run pytest tests/publish/test_publish_publier.py -v`
 Expected: FAIL — `ImportError: cannot import name 'publier_reel'`
 
 - [ ] **Step 3: Implement**
@@ -3261,7 +3261,7 @@ def publier_reel(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_publish_publier.py -v`
+Run: `uv run pytest tests/publish/test_publish_publier.py -v`
 Expected: tout passe
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3272,7 +3272,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/publish/publier.py tests/test_publish_publier.py
+git add app/publish/publier.py tests/publish/test_publish_publier.py
 git commit -F - <<'EOF'
 feat(publication): publier un reel fige derriere le tunnel ephemere
 
@@ -3292,7 +3292,7 @@ EOF
 
 **Files:**
 - Modify: `app/schedule/runner.py`
-- Test: `tests/test_schedule_runner_reels.py`
+- Test: `tests/schedule/test_schedule_runner_reels.py`
 
 **Interfaces:**
 - Consumes: `FormatCreneau` (tâche 2), `TEMPLATES`, `raison_ineligible_reel`, `post_a_reprendre(..., template)` (tâche 5), `PreparationDifferee`, `YtdlpEnAttente`, `YtdlpIndisponible`, `MISE_A_JOUR` (tâche 7), `create_post(..., template=)` (existant), `AssemblageIndisponible` (existant)
@@ -3305,7 +3305,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_schedule_runner_reels.py
+# tests/schedule/test_schedule_runner_reels.py
 """Le passage de l'agent avec des creneaux reel, sur des outils factices."""
 
 import datetime as dt
@@ -3549,7 +3549,7 @@ def test_le_menage_efface_les_dossiers_des_creneaux_termines(db_session, video):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_runner_reels.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_runner_reels.py -v`
 Expected: FAIL — `TypeError: tourner() got an unexpected keyword argument 'preparer_reel'`
 
 - [ ] **Step 3: Implement**
@@ -3791,7 +3791,7 @@ def tourner(
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run pytest tests/test_schedule_runner_reels.py tests/test_schedule_runner.py -v`
+Run: `uv run pytest tests/schedule/test_schedule_runner_reels.py tests/schedule/test_schedule_runner.py -v`
 Expected: tout passe. Si `test_la_chaine_complete_d_un_reel` échoue parce qu'un créneau carrousel du matin est aussi dans la fenêtre de gel, vérifier qu'aucun carrousel n'a d'article (le seul article est une vidéo placée en reel) — c'est l'invariant testé, pas un réglage à contourner.
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3802,7 +3802,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/schedule/runner.py tests/test_schedule_runner_reels.py
+git add app/schedule/runner.py tests/schedule/test_schedule_runner_reels.py
 git commit -F - <<'EOF'
 feat(file): le runner publie aussi des reels
 
@@ -3823,7 +3823,7 @@ EOF
 **Files:**
 - Modify: `scripts/run_publication.py`
 - Modify: `scripts/tester_publication.py`
-- Test: `tests/test_run_publication.py`
+- Test: `tests/scripts/test_run_publication.py`
 
 **Interfaces:**
 - Consumes: `reels_actifs`, `settings.publication_reel_ytdlp` (tâche 3), `RecuperateurYtdlp` (tâche 7), `preparer_reel` (tâche 8), `publier_reel` (tâche 10), `tourner(..., preparer_reel=, publier_reel=)` (tâche 11)
@@ -3833,7 +3833,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_run_publication.py` :
+Ajouter à `tests/scripts/test_run_publication.py` :
 
 ```python
 def _passages(tmp_path, monkeypatch):
@@ -3883,7 +3883,7 @@ def test_reels_coupes_au_dashboard(tmp_path, monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_run_publication.py -v`
+Run: `uv run pytest tests/scripts/test_run_publication.py -v`
 Expected: FAIL — `KeyError: 'preparer_reel'`
 
 - [ ] **Step 3: Implement**
@@ -3949,7 +3949,7 @@ Dans `scripts/tester_publication.py`, importer `preparer_reel`, `publier_reel` e
 
 - [ ] **Step 4: Run tests et import du script**
 
-Run: `uv run pytest tests/test_run_publication.py -v && uv run python -c "import scripts.tester_publication"`
+Run: `uv run pytest tests/scripts/test_run_publication.py -v && uv run python -c "import scripts.tester_publication"`
 Expected: tout passe, l'import ne lève rien
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3960,7 +3960,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/run_publication.py scripts/tester_publication.py tests/test_run_publication.py
+git add scripts/run_publication.py scripts/tester_publication.py tests/scripts/test_run_publication.py
 git commit -F - <<'EOF'
 feat(agent): brancher le gel et la publication des reels
 
@@ -3980,7 +3980,7 @@ EOF
 **Files:**
 - Modify: `app/schemas.py`
 - Modify: `app/api/schedule.py`
-- Test: `tests/test_schedule_api_reels.py`
+- Test: `tests/api/test_schedule_api_reels.py`
 
 **Interfaces:**
 - Consumes: `FormatCreneau` (tâche 2), `reels_actifs`, `enregistrer_reels`, `settings.publication_reel_ytdlp` (tâche 3), `TEMPLATES`, `raison_ineligible_reel`, `offre_reels`, `post_a_reprendre(..., template)` (tâche 5)
@@ -3996,7 +3996,7 @@ EOF
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_schedule_api_reels.py
+# tests/api/test_schedule_api_reels.py
 import datetime as dt
 
 from app.content.media import entree
@@ -4113,7 +4113,7 @@ def test_couper_les_reels_vide_la_file_des_reels_sans_toucher_au_mode(client, db
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_schedule_api_reels.py -v`
+Run: `uv run pytest tests/api/test_schedule_api_reels.py -v`
 Expected: FAIL — `KeyError: 'format'`
 
 - [ ] **Step 3: Implement schemas**
@@ -4230,7 +4230,7 @@ Compléter la docstring du module : « Un créneau reel n'accepte qu'un article 
 
 - [ ] **Step 5: Run tests**
 
-Run: `uv run pytest tests/test_schedule_api_reels.py tests/test_schedule_api.py -v`
+Run: `uv run pytest tests/api/test_schedule_api_reels.py tests/api/test_schedule_api.py -v`
 Expected: tout passe
 
 - [ ] **Step 6: Lint et suite complète**
@@ -4241,7 +4241,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/schemas.py app/api/schedule.py tests/test_schedule_api_reels.py
+git add app/schemas.py app/api/schedule.py tests/api/test_schedule_api_reels.py
 git commit -F - <<'EOF'
 feat(api): format des creneaux, regles reel, offre et interrupteur
 
@@ -4260,7 +4260,7 @@ EOF
 
 **Files:**
 - Modify: `app/static/dashboard.html`
-- Test: `tests/test_dashboard_mode_control.py`
+- Test: `tests/dashboard/test_dashboard_mode_control.py`
 
 **Interfaces:**
 - Consumes: `CreneauOut.format`, `GET /schedule/offre-reels`, `GET/PUT /publication/reels` (tâche 13)
@@ -4268,7 +4268,7 @@ EOF
 
 - [ ] **Step 1: Write the failing test**
 
-Ajouter à `tests/test_dashboard_mode_control.py` :
+Ajouter à `tests/dashboard/test_dashboard_mode_control.py` :
 
 ```python
 def test_le_panneau_programmation_montre_le_format_et_l_offre_de_reels():
@@ -4288,7 +4288,7 @@ def test_le_panneau_programmation_porte_l_interrupteur_des_reels():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_dashboard_mode_control.py -v`
+Run: `uv run pytest tests/dashboard/test_dashboard_mode_control.py -v`
 Expected: FAIL — `AssertionError`
 
 - [ ] **Step 3: Implement**
@@ -4402,7 +4402,7 @@ async function modifierCreneau(id, donnees) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_dashboard_mode_control.py -v`
+Run: `uv run pytest tests/dashboard/test_dashboard_mode_control.py -v`
 Expected: tout passe
 
 - [ ] **Step 5: Vérifier le panneau à l'écran, sur une base jetable**
@@ -4436,7 +4436,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/static/dashboard.html tests/test_dashboard_mode_control.py
+git add app/static/dashboard.html tests/dashboard/test_dashboard_mode_control.py
 git commit -F - <<'EOF'
 feat(dashboard): format des creneaux et offre de reels
 

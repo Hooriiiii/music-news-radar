@@ -238,7 +238,7 @@ def run_pipeline(
     # sans lui et plus rien ne permet de juger sa pertinence ni son statut.
     # Appelee apres `purge`, cette etape ne trouverait plus aucun candidat et la
     # table `events` grossirait quand meme, en silence. Verrouille par
-    # `tests/test_retention_evenements.py`.
+    # `tests/pipeline/test_retention_evenements.py`.
     # `purger_evenements_sans_valeur` ne leve deja jamais ; ce `try/except` est
     # une seconde ceinture, comme pour `grouper_sources` et `observer`.
     try:

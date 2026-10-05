@@ -162,7 +162,7 @@ class Verdicts(BaseModel):
         facultatif est un champ que le modele peut omettre : le critere serait
         alors INERTE, jamais vrai, et le defaut du 28/09 repasserait en silence.
         On l'y remet donc explicitement. Verrouille par un test-sentinelle
-        (`tests/test_illustration.py`).
+        (`tests/content/test_illustration.py`).
         """
         schema = super().model_json_schema(*args, **kwargs)
         verdict = (schema.get("$defs") or {}).get("Verdict")

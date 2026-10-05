@@ -21,7 +21,7 @@
    par `render.build_document()` dans un bloc de variables a part (voir
    `slide.html.j2`) -- cette feuille n'en declare aucune elle-meme. Une valeur
    qui revient en dur ici est une regle qui echappe a `layout.py`, donc aux
-   tests -- cf. le test-sentinelle dans `tests/test_render.py`. */
+   tests -- cf. le test-sentinelle dans `tests/content/test_render.py`. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -99,7 +99,7 @@ body {
    lui-meme (234:13) fait 150 x 74.75. Position fixe, independante du texte,
    donc hors du Gabarit -- mais injectee par Python (`variables_css`) au meme
    titre que la recette des voiles : aucune valeur ne se declare dans cette
-   feuille elle-meme, cf. le test-sentinelle de `tests/test_render.py`. */
+   feuille elle-meme, cf. le test-sentinelle de `tests/content/test_render.py`. */
 #logo {
   position: absolute;
   right: var(--logo-right);
