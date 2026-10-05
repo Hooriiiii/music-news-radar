@@ -302,7 +302,7 @@ def _encoder_sous_plafond(commande, sortie: Path, poids_max: int | None) -> byte
     C'est le garde-fou dont la violation coute une ACTU et non une image molle :
     au-dela de `publication_reel_max_mo`, `preparation_reel.verifier_sortie`
     leve `PreparationImpossible`, qui exclut l'article DEFINITIVEMENT de la file
-    (voir « Exclusion » dans CLAUDE.md). Baisser le crf de 23 a 20 reduit la
+    (voir « Exclusion » dans docs/reference/publication.md). Baisser le crf de 23 a 20 reduit la
     marge ; on ne laisse donc plus ce depassement se produire en silence.
 
     La duree est MESUREE sur la sortie, jamais deduite de l'entree : la cover

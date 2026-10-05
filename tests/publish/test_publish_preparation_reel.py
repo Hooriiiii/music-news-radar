@@ -621,7 +621,7 @@ def test_le_gel_d_un_reel_trop_long_porte_la_video_et_son_article(tmp_path):
     assert leve.value.duree_ms == 190_000
 
 
-# --- Tache 6, tour de correction 1/5 : la sentinelle promise par CLAUDE.md --
+# --- Tache 6, tour de correction 1/5 : la sentinelle promise par docs/reference/generation-de-posts.md --
 # doit couvrir le reel aussi, pas seulement le carrousel (`test_publish_
 # preparation.py`) : sans ce test, un futur branchement de l'agrandissement
 # sur la VIDEO du reel ne serait rouge nulle part.

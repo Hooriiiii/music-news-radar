@@ -36,7 +36,7 @@ Regles de `grouper_sources`, sur le modele de `scripts/sources/categoriser_sourc
 de correction 1, 2026-09-24) : le regroupement a d'abord ete branche sur le
 passage horaire via un `app/pipeline/source_groups.py` qui IMPORTAIT
 `scripts.reparations.grouper_sources` et `scripts.reparations.rattraper_evenements` -- inversant la
-dependance documentee dans CLAUDE.md (les scripts consomment `app/`, jamais
+dependance documentee dans docs/reference/architecture.md (les scripts consomment `app/`, jamais
 l'inverse) et faisant dependre le pipeline de deux modules qui font de
 l'`argparse` et du `print`. La logique (mapping, pose des `source_group_id`,
 recalcul cible) vit desormais ICI et dans `app/pipeline/events.py`

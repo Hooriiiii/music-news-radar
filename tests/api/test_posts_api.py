@@ -319,7 +319,7 @@ def test_editer_une_slide_au_balisage_invalide_est_refuse(client, db_session):
 
 def test_exporter_un_post(client, db_session, monkeypatch):
     """Export mocke : verifie l'assemblage du zip (slides + legende) et le nom
-    de fichier en ASCII pur (cf. CLAUDE.md)."""
+    de fichier en ASCII pur (cf. docs/reference/contraintes-terrain.md)."""
     article = _article(db_session)
     post = _post(db_session, article)
 

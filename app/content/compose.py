@@ -225,7 +225,7 @@ def probleme_cloture_question(caption: str) -> str | None:
     « Vous suivez CORTIS depuis leurs debuts ? », « Qui tente le deplacement
     pour cette derniere session estivale ? »...). Six sur six, ca s'entend comme
     un tic de machine sur un feed. Meme mecanique que `probleme_emojis` et
-    `probleme_accents`, et pour la meme raison (CLAUDE.md, « Emojis de legende :
+    `probleme_accents`, et pour la meme raison (docs/reference/generation-de-posts.md, « Emojis de legende :
     relances, jamais bloquants ») : ce n'est PAS un validateur de `PostDraft` --
     jeter le brouillon entier pour un defaut de forme ferait perdre la
     composition d'un creneau. Le compositeur relance, puis accepte avec un

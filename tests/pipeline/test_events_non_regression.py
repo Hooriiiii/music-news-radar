@@ -65,7 +65,7 @@ def _semer(db, now: dt.datetime) -> None:
     festival = source("festival", SourceCategorie.FESTIVAL)
 
     # Groupe a 3 sources : le representant local sera remis a noter par
-    # `elire_representants` (voir `CLAUDE.md`, « Dedup a deux etages »).
+    # `elire_representants` (voir `docs/reference/dedup-et-retention.md`).
     from app.models import ScoredBy
 
     article(mixmag, 1, "Fred again.. and more teased for GTA 6 soundtrack", 6,

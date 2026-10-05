@@ -285,7 +285,7 @@ def _presse(db, nom="Stereogum (RSS)"):
 
 
 def test_un_doublon_prete_sa_photo_quand_le_representant_n_a_rien(db_session, fred):
-    """21 articles lies comme doublons le 2026-09-21 (CLAUDE.md), 13 avec medias
+    """21 articles lies comme doublons le 2026-09-21 (docs/reference/visuels.md), 13 avec medias
     -- jetes jusqu'ici. Le representant sans image propre publie desormais celle
     d'un membre de son groupe."""
     representant = _article(db_session, _presse(db_session), "Sheeran evoque Gaza")

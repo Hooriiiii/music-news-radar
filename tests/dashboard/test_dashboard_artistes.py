@@ -1,7 +1,7 @@
 """Le panneau Artistes : la moitie DETECTION de Kinda, enfin visible.
 
-`CLAUDE.md` appelle la courbe des citations « l'actif de Kinda » et le flux score
-« le deal-flow du label ». En production : 4 752 artistes, 13 533 citations
+`docs/reference/memoire-ar.md` appelle la courbe des citations « l'actif de
+Kinda » et `CLAUDE.md` le flux score « le deal-flow du label ». En production : 4 752 artistes, 13 533 citations
 archivees depuis des semaines -- et jusqu'au 2026-10-04, AUCUNE interface ne les
 montrait. `GET /artists` existait, teste, sans un seul consommateur.
 

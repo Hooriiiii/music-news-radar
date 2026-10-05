@@ -71,7 +71,7 @@ def test_reintegrer_un_article_inconnu_rend_404(client):
 
 def test_une_exclusion_de_dedup_est_refusee_et_nomme_l_outil_qui_tient(client, db_session):
     """Effacer la raison seule ne tient pas : `link_duplicates` relie l'article
-    au passage suivant (CLAUDE.md). Mentir sur ce point serait pire que refuser."""
+    au passage suivant (docs/reference/dedup-et-retention.md). Mentir sur ce point serait pire que refuser."""
     source = _source(db_session)
     representant = _article(db_session, source, hash_="rep")
     article = _article(

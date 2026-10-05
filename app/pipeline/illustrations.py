@@ -35,7 +35,7 @@ from app.models import Article
 logger = logging.getLogger(__name__)
 
 # ASCII pur : httpx refuse un en-tête accentué AVANT même d'émettre la requête
-# (contrainte relevée sur le terrain, cf. CLAUDE.md).
+# (contrainte relevée sur le terrain, cf. docs/reference/contraintes-terrain.md).
 ENTETES = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -215,7 +215,7 @@ def _plus_grande_variante(
     en sert une plus petite par parametre ET que la variante sans ce parametre
     est REELLEMENT plus grande une fois telechargee et decodee.
 
-    Mesure du 2026-09-21 (CLAUDE.md) : l'og:image d'un WordPress porte souvent
+    Mesure du 2026-09-21 (docs/reference/generation-de-posts.md) : l'og:image d'un WordPress porte souvent
     `?w=564` (564x345, 50 Ko) alors que la meme image sans parametre pese
     386 Ko en 2156x1320 -- exactement la cause d'un fond de cover flou (post
     71, agrandi 3,91x pour remplir le gabarit). On ne le SUPPOSE pas : un

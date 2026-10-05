@@ -146,4 +146,6 @@ uv run alembic revision -m "..." # crée une migration
 ```
 
 Pour l'architecture détaillée, la ligne éditoriale et les contraintes apprises sur le
-terrain, voir **`CLAUDE.md`**.
+terrain, voir **`CLAUDE.md`** (court, chargé par les agents) et les références
+par domaine dans **`docs/reference/`** — l'index de `CLAUDE.md` dit laquelle lire
+et quand.
