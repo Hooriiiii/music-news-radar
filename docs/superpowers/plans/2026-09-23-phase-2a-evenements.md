@@ -40,7 +40,7 @@ rend explicite et mesurable.
   défaut de production dans ce dépôt.
 - Convention du dépôt : SQLAlchemy 2.0 (`Mapped` / `mapped_column`), enums en
   VARCHAR + CHECK (`native_enum=False`), JSONB via `JSONVariant`, `op.f()` **jamais
-  au niveau module** d'une migration (voir la sentinelle `tests/test_migrations.py`).
+  au niveau module** d'une migration (voir la sentinelle `tests/socle/test_migrations.py`).
 - Commentaires et commits en français, sans accents dans les messages de commit,
   terminés par `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 
@@ -83,7 +83,7 @@ qu'il devra passer, et ce qu'elle fera.
 
 ### Vérification attendue
 
-La sentinelle `tests/test_migrations.py` charge toutes les révisions sans base :
+La sentinelle `tests/socle/test_migrations.py` charge toutes les révisions sans base :
 elle doit rester verte. `alembic check` doit passer. Et un test prouve qu'un
 `event_observation` survit à la purge de son article, avec ses champs dénormalisés
 intacts.

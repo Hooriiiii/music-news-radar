@@ -19,7 +19,7 @@ groupe sous `("groupe", id_du_groupe)`. Si un seul membre d'une paire porte
 regroupement ne sert a rien -- TOUS les membres d'un groupe, la reference
 comprise, doivent porter la MEME valeur.
 
-Regles de `grouper_sources`, sur le modele de `scripts/categoriser_sources.py` :
+Regles de `grouper_sources`, sur le modele de `scripts/sources/categoriser_sources.py` :
 - un mapping EXPLICITE fait foi -- pas de detection par similarite de nom
   (une normalisation qui retire des mots communs rapprocherait des sources
   sans rapport sur un corpus de 145 sources) ;
@@ -35,13 +35,13 @@ Regles de `grouper_sources`, sur le modele de `scripts/categoriser_sources.py` :
 **Pourquoi ce module vit dans `app/pipeline/` et non dans `scripts/`** (tour
 de correction 1, 2026-09-24) : le regroupement a d'abord ete branche sur le
 passage horaire via un `app/pipeline/source_groups.py` qui IMPORTAIT
-`scripts.grouper_sources` et `scripts.rattraper_evenements` -- inversant la
+`scripts.reparations.grouper_sources` et `scripts.reparations.rattraper_evenements` -- inversant la
 dependance documentee dans CLAUDE.md (les scripts consomment `app/`, jamais
 l'inverse) et faisant dependre le pipeline de deux modules qui font de
 l'`argparse` et du `print`. La logique (mapping, pose des `source_group_id`,
 recalcul cible) vit desormais ICI et dans `app/pipeline/events.py`
 (`recalculer_tout`, a cote de son seul autre ecrivain, `_recalculer`) ;
-`scripts/grouper_sources.py` et `scripts/rattraper_evenements.py` ne sont
+`scripts/reparations/grouper_sources.py` et `scripts/reparations/rattraper_evenements.py` ne sont
 plus que des points d'entree en ligne de commande qui RE-EXPORTENT ces
 fonctions pour leur CLI et leurs tests existants -- leur comportement
 observable n'a pas change d'un caractere.
@@ -115,7 +115,7 @@ def grouper_sources(
     moins un de ses membres (laisse intact, jamais applique a moitie).
 
     `commit` (tour de correction 2, 2026-09-24, defaut `True` -- comportement
-    inchange pour `scripts/grouper_sources.py --apply`) : `False` pose les
+    inchange pour `scripts/reparations/grouper_sources.py --apply`) : `False` pose les
     `source_group_id` sur les objets de LA SESSION sans cloturer la
     transaction, pour que l'appelant (`regrouper_sources_et_propager`) puisse
     committer ce regroupement et le recalcul des compteurs d'evenements dans
@@ -191,7 +191,7 @@ def regrouper_sources_et_propager(db: Session) -> GroupementStats:
     puis propage IMMEDIATEMENT aux evenements concernes, pour que les
     compteurs de corroboration ne mentent jamais entre le moment ou un groupe
     est pose et celui ou quelqu'un pense a relancer
-    `scripts/rattraper_evenements.py --recalculer` a la main.
+    `scripts/reparations/rattraper_evenements.py --recalculer` a la main.
 
     **Une seule transaction, tout ou rien** (tour de correction 2,
     2026-09-24) : `grouper_sources` est appelee avec `commit=False` et

@@ -160,7 +160,7 @@ def run_pipeline(
     report.ingest = ingest(db)
 
     # Avant le cluster : un media qui vient de rejoindre son groupe (RSS +
-    # Instagram, voir `scripts/grouper_sources.py`) doit compter pour une
+    # Instagram, voir `scripts/reparations/grouper_sources.py`) doit compter pour une
     # seule confirmation independante des le meme passage, pas seulement au
     # suivant. `regrouper_sources_et_propager` ne leve deja jamais (voir
     # `app.pipeline.source_groups`) ; ce `try/except` est une seconde
@@ -238,7 +238,7 @@ def run_pipeline(
     # sans lui et plus rien ne permet de juger sa pertinence ni son statut.
     # Appelee apres `purge`, cette etape ne trouverait plus aucun candidat et la
     # table `events` grossirait quand meme, en silence. Verrouille par
-    # `tests/test_retention_evenements.py`.
+    # `tests/pipeline/test_retention_evenements.py`.
     # `purger_evenements_sans_valeur` ne leve deja jamais ; ce `try/except` est
     # une seconde ceinture, comme pour `grouper_sources` et `observer`.
     try:

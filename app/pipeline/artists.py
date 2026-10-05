@@ -157,7 +157,7 @@ def est_citation_principale(
     `rang is None` (article purgé, rang perdu) ne dit rien contre l'artiste, et
     `autres_noms` est alors inconnu : l'appelant doit traiter l'inconnu comme
     principal — voir `principal_de_citation` et
-    `scripts/recalculer_attribution_artistes.py`.
+    `scripts/reparations/recalculer_attribution_artistes.py`.
     """
     if rang == 0:
         return True

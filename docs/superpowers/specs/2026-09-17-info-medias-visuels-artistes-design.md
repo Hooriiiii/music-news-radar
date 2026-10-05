@@ -64,7 +64,7 @@ Lecture : la décote a presque vidé la presse de la file (8 candidats média su
   Justification : le plagiat portait sur les **visuels** (watermarks) et la **formulation** ; les deux sont traités ailleurs (Partie 2, et la composition réécrit toujours). Noter la même information plus bas selon le canal punissait exactement les grosses actus, que les artistes ne relaient pas toujours.
 - **`actu_majeure` est supprimé** du schéma `ArticleScore` et du prompt (règle 5 et liste des sorties). Justification : son seul consommateur était le plafond ; le champ n'est **pas une colonne** (jamais persisté), donc **aucune migration** ; le retirer économise des jetons de sortie et supprime une consigne que Haiku appliquait mal. Compatibilité : Pydantic ignore les clés supplémentaires, une réponse du pré-filtre local qui porterait encore `actu_majeure` reste valide (test).
 - **`CONSIGNE_PREFILTRE`** : n'a plus de décote à neutraliser. Elle garde sa raison d'être — le 4B ne doit pas écarter ce que Claude garderait : « ne descends sous 45 que pour le bruit évident, l'actu hors ligne sans axe prioritaire et les posts réellement vides ; un contenu qui porte un fait vaut 45 ou plus, quel que soit le type de compte ».
-- `scripts/appliquer_garde_fous.py` : sa docstring et son message ne parlent plus du plafond média (il ne l'appliquait déjà pas).
+- `scripts/reparations/appliquer_garde_fous.py` : sa docstring et son message ne parlent plus du plafond média (il ne l'appliquait déjà pas).
 
 ### 1.2 Le pré-filtre n'écarte jamais certains articles
 
@@ -119,9 +119,9 @@ Borne : `cluster_reevaluations_max_par_run = 10` (réélections + remises à not
 
 `remettre_a_noter` efface relevance, hotness, emergence, category, imprint, `mentioned_artists` et `scored_by`, garde le résumé (la caption d'origine est déjà perdue ; Claude jugera sur le résumé local — limite assumée). Les mentions d'artistes déjà archivées ne sont pas dupliquées (`record_mentions` est idempotent par article).
 
-### 1.5 Rattrapage : `scripts/reevaluer_actus.py`
+### 1.5 Rattrapage : `scripts/reparations/reevaluer_actus.py`
 
-`uv run python -m scripts.reevaluer_actus [--jours 3] [--limite 100] [--apply]`. Sans `--apply` : le plan seul, **aucune écriture** (l'élection est calculée sans être appliquée). Avec `--apply` :
+`uv run python -m scripts.reparations.reevaluer_actus [--jours 3] [--limite 100] [--apply]`. Sans `--apply` : le plan seul, **aucune écriture** (l'élection est calculée sans être appliquée). Avec `--apply` :
 
 1. `elire_representants` sur la fenêtre `--jours × 24 h` ;
 2. `score_pending` (les représentants promus ou remis à noter, avec les règles R2/R3) ;

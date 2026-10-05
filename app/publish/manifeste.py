@@ -82,7 +82,7 @@ class Figement:
 def normaliser(resultat) -> Figement:
     """Un `Figement`, ou la liste de noms d'un preparateur qui n'en rend pas.
 
-    Le second cas n'est pas une complaisance : `scripts.tester_publication` et
+    Le second cas n'est pas une complaisance : `scripts.diagnostic.tester_publication` et
     les preparateurs injectes dans les tests rendent une liste, et un manifeste
     inconnu est une reponse honnete -- la relecture affiche « inconnu », jamais
     une liste inventee.

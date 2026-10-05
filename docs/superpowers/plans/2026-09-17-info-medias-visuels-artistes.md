@@ -4,7 +4,7 @@
 
 **Goal:** Une grosse actu relayée par des médias (GTA VI × Fred again..) n'est plus perdue : la presse n'est plus décotée à la notation, le pré-filtre local n'écarte jamais une actu couverte par au moins trois sources ni un article qui cite un artiste suivi, le représentant d'un groupe de doublons est l'article le plus informatif ; et les visuels des comptes Instagram médias ne sont plus jamais publiés — on les remplace par les posts des artistes cités (en base, sinon lus à la composition), crédités « 📸 @artiste », faute de quoi l'article reste au dashboard mais sort de la file.
 
-**Architecture:** Partie A (notation) : `appliquer_garde_fous` perd le plafond média, `actu_majeure` disparaît (jamais persisté, aucune migration) ; un index des comptes d'artistes suivis (`app/pipeline/comptes_artistes.py`) sert à la cascade (`ContexteScoring` dans `score_pending`) et à une élection du représentant (`app/pipeline/election.py`, après `link_duplicates`, bornée) ; `scripts/reevaluer_actus.py` rattrape les actus récentes. Partie B (visuels) : `app/content/visuels.py` (politique, actifs, cache local), `actifs_artistes.py` (posts d'artistes en base + heuristique), `lecture_artistes.py` (`business_discovery` en direct, bornée), `choix_visuels.py` (le choix, avant l'appel Claude) ; `posts.assets` (migration 0018) porte le choix, `posts.credit` les handles. Partie C : éligibilité visuelle dans la file et le runner, API et dashboard.
+**Architecture:** Partie A (notation) : `appliquer_garde_fous` perd le plafond média, `actu_majeure` disparaît (jamais persisté, aucune migration) ; un index des comptes d'artistes suivis (`app/pipeline/comptes_artistes.py`) sert à la cascade (`ContexteScoring` dans `score_pending`) et à une élection du représentant (`app/pipeline/election.py`, après `link_duplicates`, bornée) ; `scripts/reparations/reevaluer_actus.py` rattrape les actus récentes. Partie B (visuels) : `app/content/visuels.py` (politique, actifs, cache local), `actifs_artistes.py` (posts d'artistes en base + heuristique), `lecture_artistes.py` (`business_discovery` en direct, bornée), `choix_visuels.py` (le choix, avant l'appel Claude) ; `posts.assets` (migration 0018) porte le choix, `posts.credit` les handles. Partie C : éligibilité visuelle dans la file et le runner, API et dashboard.
 
 **Tech Stack:** Python 3.14, FastAPI, SQLAlchemy 2.0 (`Mapped`/`mapped_column`), Alembic, httpx (sync), Pydantic, Playwright/Chromium (rendu existant), pytest, uv.
 
@@ -36,7 +36,7 @@
   Claude-Session: https://claude.ai/code/session_01Dvb254Kc9aGX1aTK64nMyM
   ```
 - `uv run ruff check .` et `uv run pytest` passent à la fin de chaque tâche.
-- **Rien n'est publié, rien n'est re-noté en production pendant l'implémentation** : aucun agent ne lance `scripts.reevaluer_actus --apply`, `scripts.tester_publication`, ne change le mode, ni n'appelle Meta ; lectures de la base de production interdites hors SELECT explicitement demandé.
+- **Rien n'est publié, rien n'est re-noté en production pendant l'implémentation** : aucun agent ne lance `scripts.reparations.reevaluer_actus --apply`, `scripts.diagnostic.tester_publication`, ne change le mode, ni n'appelle Meta ; lectures de la base de production interdites hors SELECT explicitement demandé.
 
 ## Écarts assumés, et pourquoi
 
@@ -56,7 +56,7 @@
 |---|---|
 | `app/pipeline/scoring.py` (modifier) | Plus de plafond média, plus d'`actu_majeure`, règle 5 réécrite ; `ContexteScoring` et règles R2/R3 dans `score_pending` |
 | `app/pipeline/prefilter.py` (modifier) | `CONSIGNE_PREFILTRE` sans décote |
-| `scripts/appliquer_garde_fous.py` (modifier) | Docstring et message sans plafond média |
+| `scripts/reparations/appliquer_garde_fous.py` (modifier) | Docstring et message sans plafond média |
 | `app/config.py` (modifier) | Réglages `cluster_*` et `visuels_*` |
 | `app/models.py` (modifier) | `Post.assets`, `Artist.source_instagram_id` |
 | `alembic/versions/0018_visuels_artistes.py` (créer) | Les deux colonnes |
@@ -64,7 +64,7 @@
 | `app/pipeline/comptes_artistes.py` (créer) | `cle_artiste`, `CompteArtiste`, `IndexComptes`, `construire_index`, `lier_artistes_comptes` |
 | `app/pipeline/election.py` (créer) | `tailles_clusters`, `cle_information`, `representant_engage`, `remettre_a_noter`, `elire_representants` |
 | `app/pipeline/run.py` (modifier) | Élection après la dédup, liaison des artistes après les mentions |
-| `scripts/reevaluer_actus.py` (créer) | Rattrapage : plan, `--apply` |
+| `scripts/reparations/reevaluer_actus.py` (créer) | Rattrapage : plan, `--apply` |
 | `app/content/visuels.py` (créer) | Politique, actifs, crédit, cache local |
 | `app/content/credit.py`, `compose.py`, `render.py` (modifier) | Origine interdite, fond, lecture du cache |
 | `app/publish/preparation.py`, `preparation_reel.py` (modifier) | Photos autorisées, garde du fond, porteur de la vidéo |
@@ -87,8 +87,8 @@
 ### Task 1: Plus de décote ni de plafond pour les médias
 
 **Files:**
-- Modify: `app/pipeline/scoring.py`, `app/pipeline/prefilter.py`, `scripts/appliquer_garde_fous.py`
-- Test: `tests/test_garde_fous.py`, `tests/test_scoring.py`
+- Modify: `app/pipeline/scoring.py`, `app/pipeline/prefilter.py`, `scripts/reparations/appliquer_garde_fous.py`
+- Test: `tests/pipeline/test_garde_fous.py`, `tests/pipeline/test_scoring.py`
 
 **Interfaces:**
 - Consumes: rien de nouveau
@@ -100,7 +100,7 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Dans `tests/test_garde_fous.py`, **supprimer** toute la section qui commence à `# --- Garde-fou 2 : plafond media, sauf actu majeure ---` et se termine après `test_le_prompt_definit_actu_majeure` (constantes `GUETTAPEN_EVOLUTION`, `GUETTAPEN_RIPOST` comprises), ainsi que les trois tests `test_media_note_par_claude_est_plafonne`, `test_le_plafond_media_ne_fait_pas_ecarter_par_le_prefiltre` et `test_note_locale_sous_le_seuil_est_aussi_plafonnee`. Mettre à la place de la section supprimée :
+Dans `tests/pipeline/test_garde_fous.py`, **supprimer** toute la section qui commence à `# --- Garde-fou 2 : plafond media, sauf actu majeure ---` et se termine après `test_le_prompt_definit_actu_majeure` (constantes `GUETTAPEN_EVOLUTION`, `GUETTAPEN_RIPOST` comprises), ainsi que les trois tests `test_media_note_par_claude_est_plafonne`, `test_le_plafond_media_ne_fait_pas_ecarter_par_le_prefiltre` et `test_note_locale_sous_le_seuil_est_aussi_plafonnee`. Mettre à la place de la section supprimée :
 
 ```python
 # --- Plus de plafond media (decision du 2026-09-17) ---
@@ -173,9 +173,9 @@ def test_note_locale_d_un_media_n_est_plus_plafonnee(db_session):
     assert (a.relevance_score, a.hotness_score) == (30, 90)
 ```
 
-Retirer `from app.config import settings` des imports de `tests/test_garde_fous.py` (plus utilisé : ruff F401).
+Retirer `from app.config import settings` des imports de `tests/pipeline/test_garde_fous.py` (plus utilisé : ruff F401).
 
-Dans `tests/test_scoring.py`, `test_system_prompt_priorise_les_comptes_d_artistes`, remplacer
+Dans `tests/pipeline/test_scoring.py`, `test_system_prompt_priorise_les_comptes_d_artistes`, remplacer
 
 ```python
     assert "plagiat" in lowered
@@ -192,7 +192,7 @@ par
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_garde_fous.py tests/test_scoring.py -v`
+Run: `uv run pytest tests/pipeline/test_garde_fous.py tests/pipeline/test_scoring.py -v`
 Expected: FAIL — `test_la_categorie_ne_plafonne_plus_la_note[SourceCategorie.MEDIA]` (59 != 68), `test_le_prompt_ne_decote_plus_les_medias`, `test_system_prompt_priorise_les_comptes_d_artistes`, `test_actu_majeure_n_existe_plus_dans_le_schema`, `test_media_note_par_claude_garde_sa_note`, `test_note_locale_d_un_media_n_est_plus_plafonnee`.
 
 - [ ] **Step 3: Implement scoring.py**
@@ -293,18 +293,18 @@ emojis ou hashtags seuls). Un contenu qui porte un fait (nom connu, date, sortie
 """
 ```
 
-Dans `scripts/appliquer_garde_fous.py`, supprimer de la docstring le paragraphe `Le plafond MEDIA (59) n'est PAS re-applique : … par le garde-fou « post vide ».` et, dans `main()`, les deux lignes `print("\nPlafond media (59) non re-applique : …")`.
+Dans `scripts/reparations/appliquer_garde_fous.py`, supprimer de la docstring le paragraphe `Le plafond MEDIA (59) n'est PAS re-applique : … par le garde-fou « post vide ».` et, dans `main()`, les deux lignes `print("\nPlafond media (59) non re-applique : …")`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_garde_fous.py tests/test_prefilter.py tests/test_scoring.py tests/test_appliquer_garde_fous_script.py -v`
+Run: `uv run pytest tests/pipeline/test_garde_fous.py tests/pipeline/test_prefilter.py tests/pipeline/test_scoring.py tests/scripts/test_appliquer_garde_fous_script.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/pipeline/scoring.py app/pipeline/prefilter.py scripts/appliquer_garde_fous.py tests/test_garde_fous.py tests/test_scoring.py
+git add app/pipeline/scoring.py app/pipeline/prefilter.py scripts/reparations/appliquer_garde_fous.py tests/pipeline/test_garde_fous.py tests/pipeline/test_scoring.py
 git commit -m "$(cat <<'EOF'
 feat(scoring): plus de decote ni de plafond pour les comptes media
 
@@ -323,8 +323,8 @@ EOF
 
 **Files:**
 - Create: `alembic/versions/0018_visuels_artistes.py`
-- Modify: `app/models.py`, `app/config.py`, `tests/conftest.py`, `tests/test_migrations.py`
-- Test: `tests/test_modeles_visuels.py` (créer)
+- Modify: `app/models.py`, `app/config.py`, `tests/conftest.py`, `tests/socle/test_migrations.py`
+- Test: `tests/socle/test_modeles_visuels.py` (créer)
 
 **Interfaces:**
 - Produces:
@@ -334,7 +334,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_modeles_visuels.py` :
+Créer `tests/socle/test_modeles_visuels.py` :
 
 ```python
 """Ou vit le choix des visuels : posts.assets, et le lien artiste -> compte suivi."""
@@ -389,7 +389,7 @@ def test_le_cache_des_tests_n_est_jamais_le_vrai(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Dans `tests/test_migrations.py`, remplacer `test_la_tete_est_reels` par :
+Dans `tests/socle/test_migrations.py`, remplacer `test_la_tete_est_reels` par :
 
 ```python
 def test_la_tete_est_visuels_artistes():
@@ -397,7 +397,7 @@ def test_la_tete_est_visuels_artistes():
     assert script.get_current_head() == "0018"
 ```
 
-Run: `uv run pytest tests/test_modeles_visuels.py tests/test_migrations.py -v`
+Run: `uv run pytest tests/socle/test_modeles_visuels.py tests/socle/test_migrations.py -v`
 Expected: FAIL — `TypeError: 'assets' is an invalid keyword argument for Post`, `AttributeError: 'Settings' object has no attribute 'cluster_sources_claude'`, `assert '0017' == '0018'`.
 
 - [ ] **Step 3: Implement models, config, conftest, migration**
@@ -507,7 +507,7 @@ Le nom de la FK suit `NAMING_CONVENTION` (`fk_%(table_name)s_%(referred_table_na
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_modeles_visuels.py tests/test_migrations.py -v`
+Run: `uv run pytest tests/socle/test_modeles_visuels.py tests/socle/test_migrations.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Verify the migration on a disposable cluster (optional, never on Neon)**
@@ -527,7 +527,7 @@ Expected: `No new upgrade operations detected.` puis descente sans erreur. (Le s
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add alembic/versions/0018_visuels_artistes.py app/models.py app/config.py tests/conftest.py tests/test_modeles_visuels.py tests/test_migrations.py
+git add alembic/versions/0018_visuels_artistes.py app/models.py app/config.py tests/conftest.py tests/socle/test_modeles_visuels.py tests/socle/test_migrations.py
 git commit -m "$(cat <<'EOF'
 feat(modeles): posts.assets et lien artiste -> compte suivi (migration 0018)
 
@@ -545,7 +545,7 @@ EOF
 
 **Files:**
 - Create: `app/pipeline/comptes_artistes.py`
-- Test: `tests/test_comptes_artistes.py`
+- Test: `tests/pipeline/test_comptes_artistes.py`
 
 **Interfaces:**
 - Consumes: `app.pipeline.cluster.normalize_title`, `app.sources.instagram.compte_depuis_url`, `Source`, `Artist`
@@ -559,7 +559,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_comptes_artistes.py` :
+Créer `tests/pipeline/test_comptes_artistes.py` :
 
 ```python
 """Qui est un « artiste suivi » : le nom d'une source Instagram d'artiste, son
@@ -674,7 +674,7 @@ def test_lier_artistes_comptes_par_le_nom_sans_ecraser(db_session):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_comptes_artistes.py -v`
+Run: `uv run pytest tests/pipeline/test_comptes_artistes.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.pipeline.comptes_artistes'`
 
 - [ ] **Step 3: Implement comptes_artistes.py**
@@ -821,14 +821,14 @@ def lier_artistes_comptes(db: Session) -> int:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_comptes_artistes.py -v`
+Run: `uv run pytest tests/pipeline/test_comptes_artistes.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/pipeline/comptes_artistes.py tests/test_comptes_artistes.py
+git add app/pipeline/comptes_artistes.py tests/pipeline/test_comptes_artistes.py
 git commit -m "$(cat <<'EOF'
 feat(artistes): index des comptes Instagram d'artistes suivis
 
@@ -846,7 +846,7 @@ EOF
 
 **Files:**
 - Create: `app/pipeline/election.py`, `app/content/visuels.py` (première pierre : `origine_interdite` seule, complétée en tâche 7)
-- Test: `tests/test_election.py`
+- Test: `tests/pipeline/test_election.py`
 
 **Interfaces:**
 - Consumes: `IndexComptes.cites`, `cluster.significant_tokens`, `cluster.DEFAULT_WINDOW_HOURS`, `settings.cluster_sources_claude`, `settings.cluster_reevaluations_max_par_run`, `instagram.TITRE_PAR_DEFAUT`
@@ -862,7 +862,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_election.py` :
+Créer `tests/pipeline/test_election.py` :
 
 ```python
 """Le representant d'un groupe de doublons : le plus informatif, plus seulement le
@@ -1069,7 +1069,7 @@ def test_le_reglage_par_defaut_borne_la_run(db_session, fred, monkeypatch):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_election.py -v`
+Run: `uv run pytest tests/pipeline/test_election.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.visuels'`
 
 - [ ] **Step 3: Implement visuels.py (first piece)**
@@ -1274,14 +1274,14 @@ def elire_representants(
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_election.py tests/test_cluster.py -v`
+Run: `uv run pytest tests/pipeline/test_election.py tests/pipeline/test_cluster.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/pipeline/election.py app/content/visuels.py tests/test_election.py
+git add app/pipeline/election.py app/content/visuels.py tests/pipeline/test_election.py
 git commit -m "$(cat <<'EOF'
 feat(dedup): elire le representant le plus informatif d'un groupe
 
@@ -1301,7 +1301,7 @@ EOF
 
 **Files:**
 - Modify: `app/pipeline/scoring.py`, `app/pipeline/run.py`
-- Test: `tests/test_cascade_forcee.py` (créer), `tests/test_pipeline.py`
+- Test: `tests/pipeline/test_cascade_forcee.py` (créer), `tests/pipeline/test_pipeline.py`
 
 **Interfaces:**
 - Consumes: `construire_index`, `IndexComptes.cites`, `tailles_clusters`, `elire_representants`, `lier_artistes_comptes`
@@ -1316,7 +1316,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_cascade_forcee.py` :
+Créer `tests/pipeline/test_cascade_forcee.py` :
 
 ```python
 """Sous le seuil du pre-filtre, deux cas partent quand meme chez Claude : une actu
@@ -1442,7 +1442,7 @@ def test_au_dessus_du_seuil_rien_n_est_compte_comme_force(db_session):
     assert (stats.scored, stats.forces_cluster) == (1, 0)
 ```
 
-Ajouter à `tests/test_pipeline.py` (et `from app.pipeline.election import ElectionStats`) :
+Ajouter à `tests/pipeline/test_pipeline.py` (et `from app.pipeline.election import ElectionStats`) :
 
 ```python
 def test_run_pipeline_elit_avant_le_scoring_et_lie_les_artistes_apres(db_session, full_config):
@@ -1464,7 +1464,7 @@ def test_run_pipeline_elit_avant_le_scoring_et_lie_les_artistes_apres(db_session
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_cascade_forcee.py tests/test_pipeline.py -v`
+Run: `uv run pytest tests/pipeline/test_cascade_forcee.py tests/pipeline/test_pipeline.py -v`
 Expected: FAIL — `AttributeError: 'ScoringStats' object has no attribute 'forces_cluster'` et `TypeError: run_pipeline() got an unexpected keyword argument 'elire'`.
 
 - [ ] **Step 3: Implement scoring.py**
@@ -1611,14 +1611,14 @@ et après `report.mentions_recorded = record(db)` :
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_cascade_forcee.py tests/test_pipeline.py tests/test_garde_fous.py tests/test_scoring.py -v`
+Run: `uv run pytest tests/pipeline/test_cascade_forcee.py tests/pipeline/test_pipeline.py tests/pipeline/test_garde_fous.py tests/pipeline/test_scoring.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/pipeline/scoring.py app/pipeline/run.py tests/test_cascade_forcee.py tests/test_pipeline.py
+git add app/pipeline/scoring.py app/pipeline/run.py tests/pipeline/test_cascade_forcee.py tests/pipeline/test_pipeline.py
 git commit -m "$(cat <<'EOF'
 feat(cascade): jamais d'ecart local pour un groupe de 3 sources ou un artiste suivi
 
@@ -1633,11 +1633,11 @@ EOF
 
 ---
 
-### Task 6: Rattraper les actus récentes (`scripts/reevaluer_actus.py`)
+### Task 6: Rattraper les actus récentes (`scripts/reparations/reevaluer_actus.py`)
 
 **Files:**
-- Create: `scripts/reevaluer_actus.py`
-- Test: `tests/test_reevaluer_actus.py`
+- Create: `scripts/reparations/reevaluer_actus.py`
+- Test: `tests/scripts/test_reevaluer_actus.py`
 
 **Interfaces:**
 - Consumes: `elire_representants`, `tailles_clusters`, `construire_index`, `score_pending`, `apply_score`, `appliquer_garde_fous`, `make_claude_scorer`
@@ -1650,7 +1650,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_reevaluer_actus.py` :
+Créer `tests/scripts/test_reevaluer_actus.py` :
 
 ```python
 """Rattraper les actus enterrees par l'ancienne decote et le pre-filtre.
@@ -1661,7 +1661,7 @@ import itertools
 
 import pytest
 
-import scripts.reevaluer_actus as script
+import scripts.reparations.reevaluer_actus as script
 from app.models import Article, ArticleStatus, ScoredBy, Source, SourceCategorie, SourceType
 from app.pipeline.scoring import ArticleScore, Category
 from app.sources.instagram import TITRE_PAR_DEFAUT
@@ -1777,12 +1777,12 @@ def test_apply_elit_note_les_en_attente_puis_re_note_le_plan(db_session, fred):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_reevaluer_actus.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.reevaluer_actus'`
+Run: `uv run pytest tests/scripts/test_reevaluer_actus.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.reparations.reevaluer_actus'`
 
 - [ ] **Step 3: Implement the script**
 
-Créer `scripts/reevaluer_actus.py` :
+Créer `scripts/reparations/reevaluer_actus.py` :
 
 ```python
 """Reevaluer les actus recentes enterrees par l'ancienne notation.
@@ -1804,8 +1804,8 @@ Le plan, sur --jours jours (non doublons, non publies, non exclus, deja notes) :
   sans re-noter toute la presse.
 
 Usage :
-    uv run python -m scripts.reevaluer_actus                    # plan
-    uv run python -m scripts.reevaluer_actus --apply [--jours 3] [--limite 100]
+    uv run python -m scripts.reparations.reevaluer_actus                    # plan
+    uv run python -m scripts.reparations.reevaluer_actus --apply [--jours 3] [--limite 100]
 """
 
 import argparse
@@ -1961,14 +1961,14 @@ Remarque sur `test_sans_apply_rien_n_est_ecrit` : en mode plan l'élection n'est
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_reevaluer_actus.py -v`
+Run: `uv run pytest tests/scripts/test_reevaluer_actus.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add scripts/reevaluer_actus.py tests/test_reevaluer_actus.py
+git add scripts/reparations/reevaluer_actus.py tests/scripts/test_reevaluer_actus.py
 git commit -m "$(cat <<'EOF'
 feat(scripts): reevaluer_actus rattrape les actus enterrees (plan, --apply)
 
@@ -1989,7 +1989,7 @@ EOF
 
 **Files:**
 - Modify: `app/content/visuels.py`, `app/content/credit.py`, `app/content/compose.py`, `app/content/render.py`, `app/schedule/store.py`, `app/publish/preparation.py`
-- Test: `tests/test_visuels.py` (créer), `tests/test_schedule_store_reels.py`
+- Test: `tests/content/test_visuels.py` (créer), `tests/schedule/test_schedule_store_reels.py`
 
 **Interfaces:**
 - Consumes: `app.content.media.CLES`, `PHOTO`, `entree` ; `settings.visuels_cache_dir`
@@ -2013,7 +2013,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_visuels.py` :
+Créer `tests/content/test_visuels.py` :
 
 ```python
 """Decision du 2026-09-17 : l'info d'un compte media Instagram, jamais ses visuels.
@@ -2236,7 +2236,7 @@ def test_le_gel_lit_les_copies_locales_sans_telecharger(tmp_path):
     assert len(noms) == 2
 ```
 
-Dans `tests/test_schedule_store_reels.py`, `test_un_article_video_va_en_reel_et_jamais_aussi_en_carrousel` prenait la photo d'un compte **Instagram** média comme carrousel — désormais interdit. Garder l'intention (une photo de presse part en carrousel) en passant cette source en RSS :
+Dans `tests/schedule/test_schedule_store_reels.py`, `test_un_article_video_va_en_reel_et_jamais_aussi_en_carrousel` prenait la photo d'un compte **Instagram** média comme carrousel — désormais interdit. Garder l'intention (une photo de presse part en carrousel) en passant cette source en RSS :
 
 ```python
     photo = _article(db_session, _source(db_session, "tsugi", SourceCategorie.MEDIA, SourceType.RSS), 2,
@@ -2245,7 +2245,7 @@ Dans `tests/test_schedule_store_reels.py`, `test_un_article_video_va_en_reel_et_
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_visuels.py -v`
+Run: `uv run pytest tests/content/test_visuels.py -v`
 Expected: FAIL — `ImportError: cannot import name 'ORIGINE_ARTICLE' from 'app.content.visuels'`
 
 - [ ] **Step 3: Implement visuels.py**
@@ -2443,14 +2443,14 @@ et dans la boucle des photos :
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_visuels.py tests/test_publish_preparation.py tests/test_credit.py tests/test_compose.py tests/test_render.py tests/test_schedule_store.py -v`
+Run: `uv run pytest tests/content/test_visuels.py tests/publish/test_publish_preparation.py tests/content/test_credit.py tests/content/test_compose.py tests/content/test_render.py tests/schedule/test_schedule_store.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/content/visuels.py app/content/credit.py app/content/compose.py app/content/render.py app/schedule/store.py app/publish/preparation.py tests/test_visuels.py tests/test_schedule_store_reels.py
+git add app/content/visuels.py app/content/credit.py app/content/compose.py app/content/render.py app/schedule/store.py app/publish/preparation.py tests/content/test_visuels.py tests/schedule/test_schedule_store_reels.py
 git commit -m "$(cat <<'EOF'
 feat(visuels): jamais d'image ni de video d'un compte media Instagram
 
@@ -2469,7 +2469,7 @@ EOF
 
 **Files:**
 - Create: `app/content/actifs_artistes.py`
-- Test: `tests/test_actifs_artistes.py`
+- Test: `tests/content/test_actifs_artistes.py`
 
 **Interfaces:**
 - Consumes: `CompteArtiste`, `cluster.significant_tokens`, `media.videos_exploitables`, `media.video_recuperable`, `media.entree`, `settings.visuels_artiste_*`, `settings.publication_reel_duree_*`, `settings.publication_fraicheur_jours`
@@ -2483,7 +2483,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_actifs_artistes.py` :
+Créer `tests/content/test_actifs_artistes.py` :
 
 ```python
 """Quel post d'artiste illustre une actu : le meme artiste, recent, sur le sujet
@@ -2605,7 +2605,7 @@ def test_posts_en_base_des_comptes_cites_seulement(db_session):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_actifs_artistes.py -v`
+Run: `uv run pytest tests/content/test_actifs_artistes.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.actifs_artistes'`
 
 - [ ] **Step 3: Implement actifs_artistes.py**
@@ -2747,14 +2747,14 @@ def posts_en_base(db: Session, comptes: list[CompteArtiste], maintenant: dt.date
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_actifs_artistes.py -v`
+Run: `uv run pytest tests/content/test_actifs_artistes.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/content/actifs_artistes.py tests/test_actifs_artistes.py
+git add app/content/actifs_artistes.py tests/content/test_actifs_artistes.py
 git commit -m "$(cat <<'EOF'
 feat(visuels): posts des artistes cites en base et heuristique de pertinence
 
@@ -2775,7 +2775,7 @@ EOF
 **Files:**
 - Modify: `app/sources/instagram.py`
 - Create: `app/content/lecture_artistes.py`
-- Test: `tests/test_lecture_artistes.py` (créer), `tests/test_sources/test_instagram.py`
+- Test: `tests/content/test_lecture_artistes.py` (créer), `tests/sources/test_instagram.py`
 
 **Interfaces:**
 - Consumes: `settings.meta_fb_access_token`, `settings.meta_ig_user_id`, `settings.instagram_max_items`, `settings.instagram_intervalle_heures`, `settings.visuels_*`, `PostArtiste`, `CompteArtiste`
@@ -2794,7 +2794,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Ajouter à `tests/test_sources/test_instagram.py` (et `CODES_QUOTA`, `QuotaGraphAtteint`, `items_depuis_payload`, `lire_compte` à l'import depuis `app.sources.instagram`) :
+Ajouter à `tests/sources/test_instagram.py` (et `CODES_QUOTA`, `QuotaGraphAtteint`, `items_depuis_payload`, `lire_compte` à l'import depuis `app.sources.instagram`) :
 
 ```python
 @pytest.mark.parametrize("code", sorted(CODES_QUOTA))
@@ -2820,7 +2820,7 @@ def test_items_depuis_payload_est_le_parse_de_l_adapter():
     assert items_depuis_payload(PAYLOAD) == make_adapter().parse(PAYLOAD)
 ```
 
-Créer `tests/test_lecture_artistes.py` :
+Créer `tests/content/test_lecture_artistes.py` :
 
 ```python
 """La lecture en direct d'un compte d'artiste, a la composition : bornee par
@@ -2958,7 +2958,7 @@ def test_l_etat_vit_a_cote_du_jeton():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_lecture_artistes.py tests/test_sources/test_instagram.py -v`
+Run: `uv run pytest tests/content/test_lecture_artistes.py tests/sources/test_instagram.py -v`
 Expected: FAIL — `ImportError: cannot import name 'CODES_QUOTA'` et `ModuleNotFoundError: No module named 'app.content.lecture_artistes'`
 
 - [ ] **Step 3: Implement instagram.py**
@@ -3218,14 +3218,14 @@ class LecteurComptes:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_lecture_artistes.py tests/test_sources/test_instagram.py -v`
+Run: `uv run pytest tests/content/test_lecture_artistes.py tests/sources/test_instagram.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/sources/instagram.py app/content/lecture_artistes.py tests/test_lecture_artistes.py tests/test_sources/test_instagram.py
+git add app/sources/instagram.py app/content/lecture_artistes.py tests/content/test_lecture_artistes.py tests/sources/test_instagram.py
 git commit -m "$(cat <<'EOF'
 feat(visuels): lecture en direct des comptes d'artistes, bornee
 
@@ -3245,7 +3245,7 @@ EOF
 **Files:**
 - Create: `app/content/choix_visuels.py`
 - Modify: `app/schedule/store.py` (extraire `raison_reel_propre`)
-- Test: `tests/test_choix_visuels.py` (créer)
+- Test: `tests/content/test_choix_visuels.py` (créer)
 
 **Interfaces:**
 - Consumes: `visuels_autorises`, `actif`, `chemin_cache`, `credit_des_actifs`, `raison_sans_artiste`, `credit_video`, `classer`, `posts_en_base`, `LectureDifferee`, `construire_index`, `export.telecharger`, `store.source_video_reel`
@@ -3257,7 +3257,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_choix_visuels.py` :
+Créer `tests/content/test_choix_visuels.py` :
 
 ```python
 """Le choix des visuels : propres s'ils sont autorises, sinon chez les artistes
@@ -3464,7 +3464,7 @@ def test_un_reel_propre_garde_sa_video(db_session, fred):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_choix_visuels.py -v`
+Run: `uv run pytest tests/content/test_choix_visuels.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.choix_visuels'`
 
 - [ ] **Step 3: Extract `raison_reel_propre` in store.py**
@@ -3671,14 +3671,14 @@ Vérifier l'absence de cycle : `uv run python -c "import app.content.choix_visue
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_choix_visuels.py tests/test_schedule_store_reels.py -v`
+Run: `uv run pytest tests/content/test_choix_visuels.py tests/schedule/test_schedule_store_reels.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/content/choix_visuels.py app/schedule/store.py tests/test_choix_visuels.py
+git add app/content/choix_visuels.py app/schedule/store.py tests/content/test_choix_visuels.py
 git commit -m "$(cat <<'EOF'
 feat(visuels): choisir les visuels avant la composition
 
@@ -3698,7 +3698,7 @@ EOF
 
 **Files:**
 - Modify: `app/content/compose.py`, `app/content/legende.py`, `app/publish/preparation_reel.py`, `app/schemas.py`
-- Test: `tests/test_compose.py`, `tests/test_legende.py`, `tests/test_publish_preparation_reel.py`, `tests/test_schedule_runner_reels.py`
+- Test: `tests/content/test_compose.py`, `tests/content/test_legende.py`, `tests/publish/test_publish_preparation_reel.py`, `tests/schedule/test_schedule_runner_reels.py`
 
 **Interfaces:**
 - Consumes: `ChoixVisuels`, `image_de_fond`, `urls_interdites`, `origine_interdite`, `media.CLES`
@@ -3712,7 +3712,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Dans `tests/test_legende.py`, remplacer les trois tests du crédit (`test_le_credit_d_un_reel_precede_la_source`, `test_le_credit_d_un_carrousel_a_son_propre_pictogramme`, `test_le_credit_n_est_jamais_coupe`) par :
+Dans `tests/content/test_legende.py`, remplacer les trois tests du crédit (`test_le_credit_d_un_reel_precede_la_source`, `test_le_credit_d_un_carrousel_a_son_propre_pictogramme`, `test_le_credit_n_est_jamais_coupe`) par :
 
 ```python
 def test_le_credit_d_un_reel_precede_la_source():
@@ -3752,7 +3752,7 @@ def test_nom_du_media():
     assert nom_du_media(None) is None
 ```
 
-Ajouter à `tests/test_compose.py` (et `from app.content.choix_visuels import ChoixVisuels`, `from app.content.visuels import actif`, plus `from app.content.media import entree` s'il n'y est pas déjà) :
+Ajouter à `tests/content/test_compose.py` (et `from app.content.choix_visuels import ChoixVisuels`, `from app.content.visuels import actif`, plus `from app.content.media import entree` s'il n'y est pas déjà) :
 
 ```python
 def test_create_post_garde_les_visuels_choisis(db_session):
@@ -3778,7 +3778,7 @@ def test_create_post_sans_choix_reste_historique(db_session):
     assert post.assets is None
 ```
 
-Ajouter à `tests/test_publish_preparation_reel.py` (et `from app.content.visuels import actif`, `from app.models import SourceCategorie, SourceType`) :
+Ajouter à `tests/publish/test_publish_preparation_reel.py` (et `from app.content.visuels import actif`, `from app.models import SourceCategorie, SourceType`) :
 
 ```python
 REEL_FRED = "https://www.instagram.com/reel/FRED/"
@@ -3815,11 +3815,11 @@ def test_un_lien_d_artiste_expire_retombe_sur_son_permalink(tmp_path):
 
 (`_expire` existe déjà plus bas dans ce fichier : placer ces tests après sa définition.)
 
-Dans `tests/test_schedule_runner_reels.py`, `test_la_chaine_complete_d_un_reel`, remplacer `assert "🎥 via @saralandry" in outils.legendes[0]` par `assert "🎥 @saralandry" in outils.legendes[0]`.
+Dans `tests/schedule/test_schedule_runner_reels.py`, `test_la_chaine_complete_d_un_reel`, remplacer `assert "🎥 via @saralandry" in outils.legendes[0]` par `assert "🎥 @saralandry" in outils.legendes[0]`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_legende.py tests/test_compose.py tests/test_publish_preparation_reel.py -v`
+Run: `uv run pytest tests/content/test_legende.py tests/content/test_compose.py tests/publish/test_publish_preparation_reel.py -v`
 Expected: FAIL — « via » encore présent, `TypeError: create_post() got an unexpected keyword argument 'visuels'`, `source_de_la_video` rend `(API, ...)` pour une vidéo de compte média.
 
 - [ ] **Step 3: Implement compose.py and schemas.py**
@@ -3983,14 +3983,14 @@ par
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_legende.py tests/test_compose.py tests/test_publish_preparation_reel.py tests/test_credit.py tests/test_posts_api.py tests/test_export.py tests/test_schedule_runner_reels.py -v`
+Run: `uv run pytest tests/content/test_legende.py tests/content/test_compose.py tests/publish/test_publish_preparation_reel.py tests/content/test_credit.py tests/api/test_posts_api.py tests/content/test_export.py tests/schedule/test_schedule_runner_reels.py -v`
 Expected: PASS
 
 - [ ] **Step 7: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/content/compose.py app/content/legende.py app/publish/preparation_reel.py app/schemas.py tests/test_legende.py tests/test_compose.py tests/test_publish_preparation_reel.py tests/test_schedule_runner_reels.py
+git add app/content/compose.py app/content/legende.py app/publish/preparation_reel.py app/schemas.py tests/content/test_legende.py tests/content/test_compose.py tests/publish/test_publish_preparation_reel.py tests/schedule/test_schedule_runner_reels.py
 git commit -m "$(cat <<'EOF'
 feat(post): visuels portes par le post, credit sans via, source nommee
 
@@ -4012,7 +4012,7 @@ EOF
 
 **Files:**
 - Modify: `app/schedule/store.py`, `app/schedule/runner.py`, `scripts/run_publication.py`, `app/api/posts.py`
-- Test: `tests/test_file_visuels.py` (créer)
+- Test: `tests/schedule/test_file_visuels.py` (créer)
 
 **Interfaces:**
 - Consumes: `construire_index`, `classer`, `posts_en_base`, `raison_sans_artiste`, `choisir_visuels`, `AucunVisuel`, `VisuelsDifferes`, `ChoixVisuels`, `LecteurComptes`, `origine_interdite`
@@ -4028,7 +4028,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_file_visuels.py` :
+Créer `tests/schedule/test_file_visuels.py` :
 
 ```python
 """Sans visuel autorise, un article reste au dashboard mais n'entre pas dans la
@@ -4256,7 +4256,7 @@ def test_le_dashboard_signale_des_visuels_differes(client, db_session, fred, mon
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_file_visuels.py -v`
+Run: `uv run pytest tests/schedule/test_file_visuels.py -v`
 Expected: FAIL — `ImportError: cannot import name 'raison_sans_visuel' from 'app.schedule.store'`
 
 - [ ] **Step 3: Implement store.py**
@@ -4468,14 +4468,14 @@ et `return create_post(db, article, draft, visuels=visuels)`.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_file_visuels.py tests/test_schedule_runner.py tests/test_schedule_runner_reels.py tests/test_schedule_store.py tests/test_schedule_store_reels.py tests/test_run_publication.py tests/test_posts_api.py tests/test_schedule_api.py tests/test_schedule_api_reels.py -v`
+Run: `uv run pytest tests/schedule/test_file_visuels.py tests/schedule/test_schedule_runner.py tests/schedule/test_schedule_runner_reels.py tests/schedule/test_schedule_store.py tests/schedule/test_schedule_store_reels.py tests/scripts/test_run_publication.py tests/api/test_posts_api.py tests/api/test_schedule_api.py tests/api/test_schedule_api_reels.py -v`
 Expected: PASS
 
 - [ ] **Step 7: Lint, full suite, commit**
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/schedule/store.py app/schedule/runner.py scripts/run_publication.py app/api/posts.py tests/test_file_visuels.py
+git add app/schedule/store.py app/schedule/runner.py scripts/run_publication.py app/api/posts.py tests/schedule/test_file_visuels.py
 git commit -m "$(cat <<'EOF'
 feat(file): sans visuel autorise, pas de file ; visuels choisis avant composition
 
@@ -4495,7 +4495,7 @@ EOF
 
 **Files:**
 - Modify: `app/schedule/store.py`, `app/schemas.py`, `app/api/articles.py`, `app/api/artists.py`, `app/api/schedule.py`, `app/static/dashboard.html`
-- Test: `tests/test_api_visuels.py` (créer), `tests/test_schedule_api_reels.py`
+- Test: `tests/api/test_api_visuels.py` (créer), `tests/api/test_schedule_api_reels.py`
 
 **Interfaces:**
 - Consumes: `raison_sans_visuel`, `comptes_cites`, `_a_une_image`, `origine_interdite`, `construire_index`, `compte_depuis_url`
@@ -4509,7 +4509,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Créer `tests/test_api_visuels.py` :
+Créer `tests/api/test_api_visuels.py` :
 
 ```python
 """Le dashboard dit d'ou vient le visuel d'une actu, et pourquoi il manque."""
@@ -4600,7 +4600,7 @@ def test_le_dashboard_montre_l_origine_des_visuels():
     assert "visuel d'un compte média : interdit" in html
 ```
 
-Dans `tests/test_schedule_api_reels.py`, le fixture `_article` donne une vidéo sans vignette : un tel article n'a jamais pu être candidat carrousel à l'arbitrage (`_a_une_image`), et le choix manuel le refuse désormais aussi. Donner une vignette à la vidéo pour garder l'intention de `test_remplacer_un_carrousel_reprend_le_brouillon_carrousel` :
+Dans `tests/api/test_schedule_api_reels.py`, le fixture `_article` donne une vidéo sans vignette : un tel article n'a jamais pu être candidat carrousel à l'arbitrage (`_a_une_image`), et le choix manuel le refuse désormais aussi. Donner une vignette à la vidéo pour garder l'intention de `test_remplacer_un_carrousel_reprend_le_brouillon_carrousel` :
 
 ```python
     media = [entree("video", f"https://cdn/{n}.mp4", preview_url=f"https://cdn/{n}.jpg")] if video else [entree("photo", f"https://img/{n}.jpg")]
@@ -4608,7 +4608,7 @@ Dans `tests/test_schedule_api_reels.py`, le fixture `_article` donne une vidéo 
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_api_visuels.py -v`
+Run: `uv run pytest tests/api/test_api_visuels.py -v`
 Expected: FAIL — `KeyError: 'visuel'`, 422 attendu, sentinelles absentes.
 
 - [ ] **Step 3: Implement store.py and schemas.py**
@@ -4792,7 +4792,7 @@ et insérer `${actifsSection}` juste avant `<div class="section-title">Médias d
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_api_visuels.py tests/test_api.py tests/test_schedule_api.py tests/test_schedule_api_reels.py tests/test_dashboard_mode_control.py -v`
+Run: `uv run pytest tests/api/test_api_visuels.py tests/api/test_api.py tests/api/test_schedule_api.py tests/api/test_schedule_api_reels.py tests/dashboard/test_dashboard_mode_control.py -v`
 Expected: PASS
 
 - [ ] **Step 7: Check the dashboard by hand (optional)**
@@ -4803,7 +4803,7 @@ Expected: PASS
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/schedule/store.py app/schemas.py app/api/articles.py app/api/artists.py app/api/schedule.py app/static/dashboard.html tests/test_api_visuels.py tests/test_schedule_api_reels.py
+git add app/schedule/store.py app/schemas.py app/api/articles.py app/api/artists.py app/api/schedule.py app/static/dashboard.html tests/api/test_api_visuels.py tests/api/test_schedule_api_reels.py
 git commit -m "$(cat <<'EOF'
 feat(dashboard): origine du visuel, raison de son absence, lien artiste-compte
 
@@ -4909,7 +4909,7 @@ Dans « Commandes », après la ligne des garde-fous, ajouter :
 
 ```markdown
 - Rattraper les actus récentes enterrées par l'ancienne notation :
-  `uv run python -m scripts.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
+  `uv run python -m scripts.reparations.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
   (sans `--apply` : le plan, aucune écriture ni appel Claude ; avec : élection des
   représentants, notation des en-attente, re-notation Claude du plan, au plus
   `--limite` appels)
@@ -4947,7 +4947,7 @@ Aucune de ces étapes n'est exécutée par un agent d'implémentation.
    Un créneau « Gelé » de cette liste partirait avec un visuel interdit : le **sauter** au dashboard. Les « Programmé » seront recomposés (brouillon non repris).
 3. **Migration 0018 sur Neon AVANT la fusion** (par l'utilisateur, depuis ce worktree) : `uv run alembic upgrade head`. Le runner, le dashboard et le pipeline lisent `posts.assets` et `artists.source_instagram_id` dès la fusion.
 4. **Fusionner** `feat/visuels-artistes` dans `main`, puis **redémarrer le dashboard** : `launchctl kickstart -k gui/$(id -u)/com.musicnewsradar.dashboard`. Les agents de pipeline et de publication chargent le nouveau code à leur prochain passage.
-5. **Rattrapage** : `uv run python -m scripts.reevaluer_actus` (plan), relire, puis `uv run python -m scripts.reevaluer_actus --apply` (≤ 100 appels Haiku). Vérifier la BO de GTA VI :
+5. **Rattrapage** : `uv run python -m scripts.reparations.reevaluer_actus` (plan), relire, puis `uv run python -m scripts.reparations.reevaluer_actus --apply` (≤ 100 appels Haiku). Vérifier la BO de GTA VI :
    ```sql
    SELECT a.id, s.name, a.relevance_score, a.scored_by, a.duplicate_of_id, left(a.title, 70)
    FROM articles a JOIN sources s ON s.id = a.source_id

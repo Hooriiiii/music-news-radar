@@ -231,7 +231,7 @@ def a_une_image_autorisee(article) -> bool:
     chose. Deux definitions voisines suffisaient a retenir un article dans la
     file (un `gif` ou un `type` absent avec vignette) puis a l'exclure a la
     composition, avec une raison fausse -- verrouille par un test-sentinelle
-    parametre (`tests/test_visuels.py`)."""
+    parametre (`tests/content/test_visuels.py`)."""
     return any(image_de(m) for m in visuels_autorises(article))
 
 

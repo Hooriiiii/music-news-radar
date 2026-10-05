@@ -25,7 +25,7 @@
      qui a ete construit en premier. Les rouges d'alerte sont donc ramenes a la
      teinte 0 EXACTE (#ff8a8a etait a 0 mais aussi pale que le rose ; #ff9aa5
      penchait carrement vers lui, a 353) et montes en saturation : ils lisent
-     comme une alarme, pas comme un accent. `tests/test_dashboard_marque.py`
+     comme une alarme, pas comme un accent. `tests/dashboard/test_dashboard_marque.py`
      echoue si l'un d'eux se rapproche du rose. */
   :root {
     --bg: #101014; --panel: #18181f; --border: #2a2a35;
@@ -56,7 +56,7 @@
     /* Les deux signes de marque, en `data:` plutot que servis : `app/main.py`
        rend la page par un `FileResponse` unique et ne monte aucun
        `StaticFiles`. Les PNG de `app/static/marque/` restent la source de
-       verite ; `scripts/inliner_marque.py` en derive les deux URI (ici
+       verite ; `scripts/outillage/inliner_marque.py` en derive les deux URI (ici
        l'etoile en MASQUE, 1,9 ko, que le CSS recolore ; le logo, aplati a la
        creme de la charte, 13,7 ko, va dans l'attribut `src` de son `<img>`,
        seul endroit ou un `alt` lui donne un nom accessible). La page reste UN
@@ -2726,7 +2726,7 @@ async function loadEventsPanel() {
 // fausse sur la seule grandeur qui separe une decouverte d'une star.
 //
 // UN SEUL point de passage, donc une seule chose a muter pour verifier la regle
-// (`tests/test_dashboard_artistes.py`).
+// (`tests/dashboard/test_dashboard_artistes.py`).
 function mesure(valeur, decimales) {
   return valeur == null ? null : Number(valeur).toFixed(decimales);
 }

@@ -9,7 +9,7 @@ l'arbitrage de publication -- 2A observe, elle ne decide rien.
 Phase 2C : `velocity`, `acceleration`, `nouveaute` et `pertinence_france`
 rejoignent `freshness` et `corroboration`. Elles restent EN LECTURE SEULE et
 aucune n'est lue par l'arbitrage de publication -- 2C calcule et expose, c'est
-2D qui classera (`tests/test_events_non_regression.py`).
+2D qui classera (`tests/pipeline/test_events_non_regression.py`).
 
 `freshness` et `corroboration` sont calcules A LA LECTURE
 (`app/pipeline/event_features.py`, module pur deja teste) plutot que stockes :

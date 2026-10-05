@@ -24,7 +24,7 @@ def main() -> None:
         all_stats = run_ingest(db)
 
     if not all_stats:
-        print("Aucune source active en base — ajoute des sources via scripts/add_source.py")
+        print("Aucune source active en base — ajoute des sources via scripts/sources/add_source.py")
         return
     for stats in all_stats:
         if stats.error:

@@ -380,7 +380,7 @@ GABARIT_POST = Gabarit(
 #      rose, 753 px creme), `font_size` etant deja fixe.
 # Ces chiffres sont cales sur le texte d'exemple utilise a la calibration :
 # "Gregoire Cliquet" (titre) et "au festival des vieilles Charrues"
-# (sous-titre) -- cf. tests/test_render.py. Une recalibration sur un autre
+# (sous-titre) -- cf. tests/content/test_render.py. Une recalibration sur un autre
 # texte (longueur de chaine differente) ne retombera pas forcement dessus,
 # la largeur de bande dependant du nombre de caracteres autant que du corps.
 # Piege a l'oeil documente parce qu'il a deja failli etre code de travers : la
@@ -405,7 +405,7 @@ GABARIT_POST = Gabarit(
 # y=285 (cf. `Logo` ci-dessus) et se termine donc a 285 + 1080 x 5/4 = 1635.
 # 1500 < 1635 avec 135 px de marge : la contrainte d'interface est la plus
 # stricte des deux, et c'est donc elle qui dimensionne le bloc. Verifie par
-# `tests/test_layout.py::test_la_limite_basse_du_bloc_reste_dans_le_crop_de_la_grille`.
+# `tests/content/test_layout.py::test_la_limite_basse_du_bloc_reste_dans_le_crop_de_la_grille`.
 REEL_LIMITE_BASSE_UI = 1500
 
 GABARIT_REEL = Gabarit(

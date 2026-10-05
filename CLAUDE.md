@@ -116,18 +116,18 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
   vu/posté = workflow éditorial via PATCH /articles/{id})
-- Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...] [--categorie artiste|media|festival|label|club|autre]`
+- Ajouter une source : `uv run python -m scripts.sources.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...] [--categorie artiste|media|festival|label|club|autre]`
   (Instagram : URL au format `ig:<compte>`, ex. `ig:tsugimag` — compte professionnel
   business/creator uniquement, `business_discovery` ne voit pas les profils perso)
-- Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
+- Socle de sources FR : `uv run python -m scripts.sources.seed_fr_sources [--apply]`
   (sans `--apply` : affiche le plan ; idempotent par URL)
 - Lancer une ingestion : `uv run python -m scripts.run_ingest`
 - Scorer les articles : `uv run python -m scripts.score_articles [--limit N]`
   (nécessite `ANTHROPIC_API_KEY` dans `.env` ; modèle : `SCORING_MODEL`,
   défaut `claude-haiku-4-5` — choix validé par l'utilisateur pour le coût)
-- Digest mail : `uv run python -m scripts.send_digest [--dry-run] [--date YYYY-MM-DD]`
+- Digest mail : `uv run python -m scripts.livraison.send_digest [--dry-run] [--date YYYY-MM-DD]`
   (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
-- Alertes Discord : `uv run python -m scripts.send_hot_alerts`
+- Alertes Discord : `uv run python -m scripts.livraison.send_hot_alerts`
 - Rendu des posts : nécessite Chromium Playwright en local
   (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
   la génération est déclenchée à la main depuis le dashboard.
@@ -135,7 +135,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Passage de veille rapide (les seuls comptes de `VEILLE_COMPTES`) :
   `uv run python -m scripts.run_veille` — voir « Veille rapide »
 - Pourquoi les créneaux de publication sont manqués, avec des effectifs :
-  `uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]`
+  `uv run python -m scripts.diagnostic.diagnostiquer_creneaux [--jours N] [--detail]`
   (lecture seule ; croise la base et les logs pour séparer une PANNE d'une
   ABSENCE de la machine — voir « Publication automatique »)
 - **Scheduler : UN SEUL ordonnanceur, launchd, TOUT EN LOCAL sur le Mac**
@@ -210,13 +210,13 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   `--status` redit « obsolète », re-passer la commande `sudo`.
 
   Pas d'envoi de mail : l'utilisateur n'en veut pas — le digest n'est PAS
-  planifié (le code `app/delivery/{digest,email}.py` et `scripts/send_digest.py`
+  planifié (le code `app/delivery/{digest,email}.py` et `scripts/livraison/send_digest.py`
   restent utilisables à la main ou pour une future UI). Ne pas re-proposer SMTP.
 - Nettoyage des URL de médias déjà en base (entités HTML) :
-  `uv run python -m scripts.nettoyer_urls_medias [--apply]` (sans `--apply` :
+  `uv run python -m scripts.reparations.nettoyer_urls_medias [--apply]` (sans `--apply` :
   le plan ; idempotent — voir « URL de médias » dans les contraintes)
 - Remplissage des durées de vidéos déjà en base :
-  `uv run python -m scripts.remplir_durees_medias [--apply]` (sans `--apply` :
+  `uv run python -m scripts.reparations.remplir_durees_medias [--apply]` (sans `--apply` :
   le plan ; idempotent — voir « La durée d'une vidéo Instagram » dans les
   contraintes). Passé en production le 2026-09-21 : 655 vidéos datées dans 273
   articles et 12 posts, dont 25 au-delà de la limite du reel.
@@ -255,7 +255,25 @@ pipeline est source-agnostique et ne connaît que `RawItem`. Le registry dans
   main (déboguer une source sans payer de scoring) — il n'est plus branché à aucun
   ordonnanceur depuis le passage au tout-local.
   Tout point d'entrée planifié appelle `attendre_base()` en premier.
-- Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de `get_db`).
+
+  **Rangement de `scripts/` (2026-10-05) : les POINTS D'ENTRÉE restent à la
+  racine, le reste descend par métier.** `scripts/install_agents.py` écrit
+  `scripts.<nom>` dans les plists, donc déplacer un module que launchd lance
+  casse l'agent EN SILENCE — restent donc à `scripts/<nom>.py` :
+  `run_pipeline`, `run_publication`, `run_veille`, `assurer_prefiltre` (les
+  quatre que les plists nomment), plus `run_ingest`, `score_articles` et
+  `install_agents` lui-même. Les autres vivent dans
+  `scripts/reparations/` (plan puis `--apply`, à passer une fois),
+  `scripts/diagnostic/` (lecture seule, aucun appel payé),
+  `scripts/sources/` (administration des sources),
+  `scripts/outillage/` (outils de la machine) et
+  `scripts/livraison/` (digest et alertes, non planifiés).
+- Tests sur SQLite in-memory (fixtures dans `tests/conftest.py`, override de
+  `get_db`). **`tests/` est rangé en miroir de `app/`** : `api/`, `content/`,
+  `delivery/`, `pipeline/`, `publish/`, `schedule/`, `sources/`, plus
+  `dashboard/` (la page statique), `scripts/` (les points d'entrée) et
+  `socle/` (base, modèles, migrations, supervision). `conftest.py` reste à la
+  racine de `tests/` : ses fixtures s'appliquent à tout ce qui est en dessous.
 
 ## Philosophie de sourcing (source-level, pas aggregator)
 
@@ -326,7 +344,7 @@ distinctes (raison `cluster`), et un article qui cite un artiste suivi (raison
 (garde-fou 1 ci-dessous) reste local dans tous les cas : aucune des deux
 exceptions ne le fait passer à Claude.
 
-Classement des sources existantes : `uv run python -m scripts.categoriser_sources
+Classement des sources existantes : `uv run python -m scripts.sources.categoriser_sources
 [--apply]` (sans option : le plan). Mapping explicite des comptes Instagram connus
 (médias, festivals, labels, clubs — Keinemusik est un collectif, donc artiste),
 tout autre compte Instagram = artiste, RSS/Reddit = média, X = NULL. Le mapping
@@ -359,7 +377,7 @@ donc APRÈS le modèle, sur tous les chemins (Claude et pré-filtre local), dans
    silencieusement si un ancien appel ou une réponse en cache le porte encore
    (Pydantic ignore les clés inconnues).
 
-Nettoyage de la file sans rien payer : `uv run python -m scripts.appliquer_garde_fous
+Nettoyage de la file sans rien payer : `uv run python -m scripts.reparations.appliquer_garde_fous
 [--titres-courts] [--apply]`. Ne re-applique QUE le garde-fou 1. Une note déjà
 posée a perdu sa caption : par défaut seul le titre « Post Instagram » est visé
 (certain) ; `--titres-courts` vise aussi les titres de moins de 6 mots (probable
@@ -368,7 +386,7 @@ jamais touchés.
 
 - Rattraper les actus récentes enterrées par l'ancienne notation (décote média,
   représentant de doublon mal élu) :
-  `uv run python -m scripts.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
+  `uv run python -m scripts.reparations.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
   (sans `--apply` : le plan, aucune écriture ni appel Claude ; avec : élection
   des représentants sur la fenêtre, notation des articles mis en attente par
   cette élection, puis re-notation Claude — sans pré-filtre — du plan : articles
@@ -382,12 +400,12 @@ jamais touchés.
 - Lier une fiche artiste à son compte suivi quand le nom ne suffit pas :
   `PATCH /artists/{id}` avec `{"source_instagram_id": <id de la source>}`
 - Réparer un faux positif (ou confirmer un lien) de doublon d'archive :
-  `uv run python -m scripts.marquer_doublon_manuel --article-a ID --article-b ID
+  `uv run python -m scripts.reparations.marquer_doublon_manuel --article-a ID --article-b ID
   (--different|--meme-actu) --raison "..."` — voir « Dédup à deux étages » pour
   pourquoi effacer `duplicate_of_id`/`file_exclu_raison` seul ne suffit pas.
 - Délier les articles devenus LEUR PROPRE doublon (3 lignes mesurées en
   production le 2026-10-02) : `uv run python -m
-  scripts.reparer_doublons_reflexifs [--apply]` (sans `--apply` : le plan ;
+  scripts.reparations.reparer_doublons_reflexifs [--apply]` (sans `--apply` : le plan ;
   idempotent ; les notes ne sont jamais touchées) — voir « Dédup à deux
   étages » pour la cause et les deux gardes qui l'empêchent de revenir.
 
@@ -459,7 +477,7 @@ de poser), et la fin la plus tardive qui gagne quand deux pauses se croisent.
 qui attend son heure part même si l'ingestion est à l'arrêt — rater un créneau
 programmé coûte plus cher que de sauter une heure d'ingestion. La lecture de
 visuels à la composition (`lecture_artistes.py`) garde sa propre pause. Un test
-sentinelle (`tests/test_quota_graph.py`) échoue si un module de `app/publish` ou
+sentinelle (`tests/pipeline/test_quota_graph.py`) échoue si un module de `app/publish` ou
 `app/schedule` se met à lire cette pause.
 
 ## Mémoire A&R : tables `artists` / `artist_mentions`
@@ -537,7 +555,7 @@ distincts, de tailles très inégales — tout est mesuré dans l'en-tête de
    étages se complètent, aucun ne prétend suffire.
 
 Rattrapage de l'archive (13 310 citations), à passer une fois après la migration :
-`uv run python -m scripts.recalculer_attribution_artistes [--apply]` (sans
+`uv run python -m scripts.reparations.recalculer_attribution_artistes [--apply]` (sans
 `--apply` : le plan ; idempotent, aucun appel payé). Plan mesuré le 2026-10-03 :
 47 citations secondaires avérées, 27 fiches dont `max_emergence` change, et
 12 801 citations sans article dont le rang est perdu pour toujours — elles restent
@@ -552,7 +570,7 @@ visuels (`content/choix_visuels.py`) — est `comptes_artistes.IndexComptes`,
 c'est-à-dire les **sources Instagram actives de catégorie artiste** (88 en
 production), jamais `tracked`.
 
-Elle avait déjà coûté : `scripts/etat_notion.py` la comptait pour conclure « 0
+Elle avait déjà coûté : `scripts/diagnostic/etat_notion.py` la comptait pour conclure « 0
 artiste suivi sur 4 684 : les chemins qui en dépendent ne se déclenchent jamais »
 — FAUX, relayé à l'utilisateur puis écrit dans sa documentation. Une alerte fausse
 est pire que pas d'alerte : elle fait chercher la panne ailleurs. Une colonne
@@ -627,7 +645,7 @@ aucune : Chromium MESURE (lignes rendues, largeur de chacune), Python DÉCIDE
 (échelle à essayer, acceptation, abandon). Les feuilles de style des gabarits
 (`templates/*/style.css`) n'ont donc plus de nombres en dur non plus — tout
 passe par des variables CSS injectées par `variables_css()`, et un
-test-sentinelle par gabarit (`tests/test_render.py`) échoue si une valeur
+test-sentinelle par gabarit (`tests/content/test_render.py`) échoue si une valeur
 revient s'y nicher. Une accroche trop longue même à la taille de police
 minimale n'est PLUS rendue coupée en silence : le rendu est marqué `overflow`
 (retourné par `render_post`, persisté dans `posts.render_report` via
@@ -718,7 +736,7 @@ soit 2.10:1 contre 2.09:1 face au texte crème `#FFF7FA`) : le contraste perçu 
 design ne bouge pas d'une actu à l'autre, seule la couleur change. Un vert plus
 sombre lirait mieux sous le texte, mais relever le contraste des DEUX teintes est
 une décision de direction artistique, pas un effet de bord — un test-sentinelle
-(`tests/test_layout.py`) échoue si quelqu'un déplace la couleur à l'œil.
+(`tests/content/test_layout.py`) échoue si quelqu'un déplace la couleur à l'œil.
 
 Le signal est la catégorie de scoring **`ecology`**, ajoutée le même jour. Aucune
 migration : `articles.category` est un `VARCHAR(100)` **sans contrainte CHECK**
@@ -990,7 +1008,7 @@ visuels d'artistes) sont décoratifs et les réserves « compte source » et
 « artiste cité » sont quasi vides — hors lecture en direct du compte source.
 Décision de l'utilisateur : c'est la **recherche web**, seul barreau qui ne lit
 pas la base, qui reprend le relais, pour une affiche comme pour un fond trop
-petit (verrouillé de bout en bout dans `tests/test_visuels_web.py`). Les valeurs
+petit (verrouillé de bout en bout dans `tests/content/test_visuels_web.py`). Les valeurs
 sont gardées : elles redeviendront utiles si la rétention remonte ; et une lecture `business_discovery` en direct **même si le
 pipeline vient d'ingérer le compte** (`LecteurComptes(..., ignorer_fraicheur=True)`).
 Cette garde-là est une économie — « la base suffit » — et ici la base ne suffit
@@ -1133,9 +1151,9 @@ retouchée. `app/publish/preparation.py::_agrandir_fond_si_marque` est le SEUL
 point d'appel à `upscale.agrandir_fond`, et il ne lit/écrit que
 `slides[0].image_url` — deux tests-sentinelles, un par gabarit (le carrousel
 et le reel appellent chacun leur propre préparateur) :
-`tests/test_publish_preparation.py::
+`tests/publish/test_publish_preparation.py::
 test_l_agrandissement_ne_touche_que_le_fond_jamais_un_media_du_carrousel` et
-`tests/test_publish_preparation_reel.py::
+`tests/publish/test_publish_preparation_reel.py::
 test_l_agrandissement_ne_touche_que_la_cover_jamais_la_video_du_reel`
 échouent si un media du carrousel, ou la vidéo d'un reel, passe par cette
 fonction.
@@ -1583,7 +1601,7 @@ retard : `publication_tunnel_budget_s` (**270 s** = les anciens 3 × 90) plafonn
 la SOMME des attentes, et `publication_tunnel_essais` (3) plafonne le nombre de
 tunnels lancés, donc la lecture d'URL (`DELAI_URL_S`) comme avant. Première
 tentative 180 s, relance éventuelle 90 s — exactement une ancienne fenêtre. Un
-test-sentinelle (`tests/test_publish_hosting.py::
+test-sentinelle (`tests/publish/test_publish_hosting.py::
 test_le_budget_total_de_patience_n_augmente_pas`) échoue si quelqu'un allonge une
 attente « juste un peu ». L'essai perdu est tué par GROUPE de processus
 (`start_new_session`), le serveur local vit pour tout le `with`. Épuisés, ils
@@ -1731,7 +1749,7 @@ qui fait echouer toute composition depuis le matin du 30/09.
 (2026-10-02, mesure complete sur les 97 creneaux aboutis en base, 44 manques
 contre 45 publies). L'enquete du 30/09 avait corrige un trou de conception ; le
 taux a pourtant EMPIRE. La mesure, reproductible par
-`scripts/diagnostiquer_creneaux.py`, croise la base et les trois logs :
+`scripts/diagnostic/diagnostiquer_creneaux.py`, croise la base et les trois logs :
 
 | cause | n | part |
 |---|---|---|
@@ -1848,11 +1866,11 @@ créneau — on publie l'ancien texte plutôt que rien, en le journalisant :
   sans quoi gel et composition se renvoyaient la balle à chaque passage de l'agent
   (10 min) pendant les 2 h du gel, à trois appels Sonnet chacun.
 
-Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
+Essai sans publier : `uv run python -m scripts.diagnostic.tester_publication --post <ID>`.
 Ce qui attend une relecture avant de partir : `GET /relecture`, ou la liste
 « À relire avant publication » en tete du panneau Posts du dashboard.
 Pourquoi les creneaux sont manques, avec des effectifs :
-`uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]`
+`uv run python -m scripts.diagnostic.diagnostiquer_creneaux [--jours N] [--detail]`
 (lecture seule, aucun appel reseau).
 
 **Reels automatiques (2026-09-17).** `creneaux.format` (`carrousel` | `reel`,
@@ -2019,7 +2037,7 @@ des 3 échecs par lien** : une panne d'allure systémique n'exclut rien, mais ap
 bloquerait tous les autres) ; les compteurs vivent dans `ytdlp_etat.json`
 (clé `echecs`, par URL), remis à zéro au succès ou à l'exclusion. Coût assumé :
 une panne globale de yt-dlp exclut un article toutes les ~3 h.
-`scripts.tester_publication` supprime `essais/<id>/` en fin d'essai. Sources
+`scripts.diagnostic.tester_publication` supprime `essais/<id>/` en fin d'essai. Sources
 en VP9 : `assembler_reel` réencode tout en H.264/AAC. Coupe-circuits : case
 « Reels auto » du dashboard (`reels_actifs` dans `publication.json`,
 `/publication/reels`) pour tous les reels, `PUBLICATION_REEL_YTDLP=false` pour
@@ -2047,7 +2065,7 @@ l'heure.** La relecture est une OPTION, jamais une condition. Un post qui
 attendrait une validation ressemble a un post en cours, et le taux de publication
 est deja a moins de la moitie des creneaux aboutis. Aucune fonction de
 `app/schedule/relecture.py` n'est lue par `runner._publier` ; preuve par mutation
-dans `tests/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`
+dans `tests/schedule/test_relecture.py::test_la_relecture_n_est_jamais_une_condition_de_publication`
 (on ajoute dans `_publier` le `if post.status is PostStatus.DRAFT: continue`
 qu'un contributeur presse ecrirait, et le test rougit — rien d'autre dans la
 suite ne bougeait).
@@ -2232,7 +2250,7 @@ disparu du dashboard ; `POST /schedule/{id}/rouvrir` reste, sur le meme chemin.
   rouvrent RIEN (relus en base juste avant Meta). Preuve par mutation —
   remplacer la condition de `_regel_automatique` par `if True:` laissait toute
   la suite verte, et coutait un gel entier pour une virgule ; verrouille par
-  `tests/test_manifeste_gel.py::test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes`.
+  `tests/publish/test_manifeste_gel.py::test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes`.
 - **Claude n'est jamais repaye** : le creneau garde son `post_id` — qui est aussi
   la condition de l'ecriture conditionnelle.
 - **Un refus ne touche a RIEN** : publication en vol, ou moins de 20 min avant le
@@ -2332,7 +2350,7 @@ fiable meme si le dashboard n'ecoute que sur `127.0.0.1` :
   de `multipart`, donc pas de dependance `python-multipart` non plus), la
   fonction qui nomme ne prend qu'un `bytes`, et le nom sur disque derive du
   contenu. Un nom ne peut pas composer un chemin par CONSTRUCTION. Preuve par
-  mutation (`tests/test_televersement.py`) : rendre le nom au choix de
+  mutation (`tests/publish/test_televersement.py`) : rendre le nom au choix de
   l'appelant fait rougir ce test, et lui seul.
 
 **Les regles du projet ne sont pas contournees** : un fichier depose est un
@@ -2359,7 +2377,7 @@ premier et notre UPDATE touche zero ligne (409), soit nous passons le premier et
 le creneau devient PROGRAMME — or `_publier` ne selectionne que `etat == GELE`.
 Aucun chemin ne mene a `media_publish` avant un nouveau gel. La course elle-meme
 est verrouillee par
-`tests/test_manifeste_gel.py::test_une_reclamation_de_l_agent_pendant_la_reouverture_fait_echouer_l_ecriture`
+`tests/publish/test_manifeste_gel.py::test_une_reclamation_de_l_agent_pendant_la_reouverture_fait_echouer_l_ecriture`
 (retirer la condition d'etat de l'UPDATE laissait toute la suite verte).
 
 ## Bandeau de supervision (`app/supervision.py`, `GET /supervision`)
@@ -2401,7 +2419,7 @@ exception imprevue devient un voyant « inconnu » qui porte le type de
 l'exception — jamais un voyant ABSENT (une case vide se lit « rien a signaler »)
 ni une 500 qui viderait le bandeau. Propriete NEGATIVE, donc facile a casser par
 un `or "ok"` bien intentionne sans qu'aucun autre test ne rougisse :
-`tests/test_supervision.py` et `tests/test_dashboard_supervision.py` la
+`tests/socle/test_supervision.py` et `tests/dashboard/test_dashboard_supervision.py` la
 verrouillent aux quatre etages (agregation, lecteurs, enveloppe, JS).
 
 **Chaque voyant porte sa raison en clair**, adjacente et visible sous les
@@ -2517,7 +2535,7 @@ premier changement de reglage.
 **Remettre un article dans la file** : `POST /articles/{id}/reintegrer`
 (bouton « ↩ Remettre dans la file » sur la carte, pastille « ⛔ hors file »
 depuis `ArticleOut.file_exclu_raison`). Il **refuse (409) une exclusion posee
-par la dedup d'archive** et renvoie vers `scripts.marquer_doublon_manuel` :
+par la dedup d'archive** et renvoie vers `scripts.reparations.marquer_doublon_manuel` :
 effacer la raison seule ne tient pas, `link_duplicates` relierait l'article au
 passage suivant (voir « Dedup a deux etages »). Une exclusion de gel sur un
 article par ailleurs doublon se leve, elle : c'est la RAISON qui decide, pas le
@@ -2582,7 +2600,7 @@ elle passe par UN SEUL point (`mesure()` dans `app/static/dashboard.html`).
 17 % des citations n'ont aucune note d'emergence : une acceleration inconnue
 affichee « 0 » se lit **« cet artiste stagne »**, une affirmation fausse sur la
 seule grandeur qui separe une decouverte d'une star. Preuve par mutation sur
-Chromium reel (`tests/test_dashboard_artistes.py`) : on remplace le garde-fou par
+Chromium reel (`tests/dashboard/test_dashboard_artistes.py`) : on remplace le garde-fou par
 le `|| 0` exact qu'un contributeur presse ecrirait, et la ligne doit afficher
 « → regulier 0.00 » — la mesure refuse. L'inconnu porte sa propre teinte
 (gris-bleu, celle de la supervision), jamais celle d'un des trois verdicts ni
@@ -2625,7 +2643,7 @@ teinte 0 EXACTE et montes en saturation (`#ff8a8a` etait a 0 mais aussi pale que
 le rose ; `#ff9aa5` penchait carrement vers lui, a 353) : `--alerte` `#ff7b7b`
 (7,57:1) et `--alerte-douce` `#ff8c8c` (8,48:1), tous deux au-dessus du seuil --
 une raison de panne ne perd jamais en lisibilite pour gagner en teinte.
-`tests/test_dashboard_marque.py` le verrouille par **deux preuves par
+`tests/dashboard/test_dashboard_marque.py` le verrouille par **deux preuves par
 mutation** : une alerte qui prend la teinte de l'accent, et une regle de panne
 qui s'ecrit `var(--accent)`. Une seule exception, ecrite plutot que devinee :
 `.zone-erreur .relance` est une ACTION dans un etat de panne, pas le signal de
@@ -2650,7 +2668,7 @@ rend le dashboard par un `FileResponse` UNIQUE et ne monte aucun `StaticFiles` :
 monter un repertoire statique pour deux PNG ajouterait une route, deux requetes
 au premier rendu (un logo qui apparait apres le texte) et un 404 muet de plus a
 pouvoir rater. Cout mesure et borne a **+15,7 ko** sur la page, parce que les
-deux images sont DERIVEES avant d'etre encodees (`scripts/inliner_marque.py`,
+deux images sont DERIVEES avant d'etre encodees (`scripts/outillage/inliner_marque.py`,
 idempotent, a relancer apres une refonte du logo) :
 - le **logo** est aplati a la creme EXACTE de la charte `#FEF1F7` -- l'original
   portait 7 648 couleurs distinctes (un anticrenelage autour d'un `#FFF7FA` a
@@ -2687,7 +2705,7 @@ un navigateur complet et le cookie de consentement, tous deux essayés. Deux
 conséquences : pas d'`og:image` donc pas d'illustration, et un post citerait
 Google au lieu de l'éditeur.
 
-Les quatre sources concernées ont migré, par `scripts/migrer_sources_google.py` :
+Les quatre sources concernées ont migré, par `scripts/sources/migrer_sources_google.py` :
 Mixmag, qui est un ÉDITEUR, retrouve son flux direct (`mixmag.net/rss.xml`) —
 le tout-local le rend de nouveau accessible, Cloudflare ne renvoyant 403 que
 depuis les runners Azure ; les trois autres sont des RECHERCHES thématiques et
@@ -2842,7 +2860,7 @@ premières reprises échouaient (titre commençant par un verbe, aucun artiste
 cité), la requête valait None, et le dernier recours ne partait JAMAIS — sur le
 cas même pour lequel il a été écrit. La requête produite est désormais
 « Transmusicales festival photo ». Verrouillé par un test de bout en bout
-(`tests/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
+(`tests/content/test_visuels_web.py`) qui prouve que la conclusion « rien ne convient »
 (le saut depuis la Tâche 5, l'aplat Kinda avant elle) n'est atteinte qu'APRÈS
 une recherche web restée bredouille.
 
@@ -3106,7 +3124,7 @@ cover part sur l'image de secours du gabarit.
    lève et plus aucun verdict ni compteur de tentatives ne s'écrit : chaque
    passage horaire redemande donc les mêmes paires douteuses et repaie
    jusqu'à `cluster_arbitrage_max_par_passage` appels, et
-   `scripts.marquer_doublon_manuel` échoue. Supprimer le fichier « pour
+   `scripts.reparations.marquer_doublon_manuel` échoue. Supprimer le fichier « pour
    débloquer » efface les verdicts manuels pour de bon. Qui change la
    version doit donc fournir, dans le même commit, une **migration** qui
    relit l'ancien format et réécrit le nouveau en **préservant toutes les
@@ -3144,14 +3162,14 @@ cover part sur l'image de secours du gabarit.
    L'écriture du cache atomique utilise un nom de temporaire PAR PROCESSUS
    (`tempfile.mkstemp`), même mécanique que `app/pipeline/quota_graph.py` :
    un nom fixe serait écrit à deux mains par le passage horaire et
-   `scripts.marquer_doublon_manuel` lancé pendant ce passage.
+   `scripts.reparations.marquer_doublon_manuel` lancé pendant ce passage.
 
    **Réparer un faux positif exige un verdict MANUEL, pas seulement d'effacer
    les deux champs** — effacer `duplicate_of_id` et `file_exclu_raison` ne
    suffit pas : le passage suivant de `link_duplicates` relie l'article à
    nouveau tant qu'il reste dans la fenêtre de 48 h de sa vie publiable,
    c'est-à-dire pendant toute sa vie publiable. La réparation qui tient :
-   `uv run python -m scripts.marquer_doublon_manuel --article-a ID
+   `uv run python -m scripts.reparations.marquer_doublon_manuel --article-a ID
    --article-b ID --different --raison "..."` défait le lien existant ET pose
    un verdict manuel qui prime sur tout rapprochement automatique ultérieur —
    y compris sur la bande CERTAINE et sur une paire d'articles FRAIS (aucune
@@ -3172,7 +3190,7 @@ cover part sur l'image de secours du gabarit.
    il est apparu (course, crash entre deux écritures, version antérieure du
    code) — elle n'efface que sa propre raison d'exclusion
    (`RAISON_DOUBLON_PREFIXE`), jamais une exclusion posée ailleurs (gel ou
-   composition impossibles). `scripts.marquer_doublon_manuel --different`
+   composition impossibles). `scripts.reparations.marquer_doublon_manuel --different`
    applique le même filtre quand il défait un lien.
 
    **Deux points posent un lien vers un autre article, et chacun garde la
@@ -3232,7 +3250,7 @@ cover part sur l'image de secours du gabarit.
    La CEINTURE est au point d'écriture : `cibles_a_repointer` retire le
    représentant lui-même de la liste à repointer, donc `lier` ne peut pas
    écrire `x.duplicate_of_id = x.id`. Preuve par mutation
-   (`tests/test_cluster_reflexif.py`) : les deux gardes retirées, le lien
+   (`tests/pipeline/test_cluster_reflexif.py`) : les deux gardes retirées, le lien
    réflexif se reforme à l'identique ; la seule garde de `resoudre` retirée,
    il reste un CYCLE à deux (chacun se présente comme un doublon, donc l'actu
    disparaît tout entière) ; la seule ceinture retirée, le test unitaire de
@@ -3244,7 +3262,7 @@ cover part sur l'image de secours du gabarit.
    prévu ferait tomber le passage horaire entier au lieu de perdre un article.
 
    Réparer les lignes DÉJÀ en base (le correctif ne les touche pas) :
-   `uv run python -m scripts.reparer_doublons_reflexifs [--apply]` — plan sans
+   `uv run python -m scripts.reparations.reparer_doublons_reflexifs [--apply]` — plan sans
    `--apply`, idempotent. Il efface le SEUL lien fautif : les notes ne sont
    jamais touchées (21627 garde son 45, 21709 son 65 ; 21599, jamais noté,
    sera noté par le passage suivant puisqu'il redevient notable), et
@@ -3449,7 +3467,7 @@ verrouille l'accord des deux chemins.
 purgé, l'observation survit sans lui et **plus rien ne permet de juger sa
 pertinence**. La décision doit donc être prise AVANT `purge_old_articles`, dans
 le même passage — l'ordre est posé dans `app/pipeline/run.py` et verrouillé par
-`tests/test_retention_evenements.py` (inverser les deux appels rend ce test
+`tests/pipeline/test_retention_evenements.py` (inverser les deux appels rend ce test
 rouge). Les deux étapes visent le même ensemble par CONSTRUCTION
 (`_predicat_purgeable`, un seul prédicat partagé) : deux copies qui
 divergeraient laisseraient des événements derrière elles, ou pire en
@@ -3625,7 +3643,7 @@ le nombre de candidats — rien n'est fait article par article. Ne lève jamais
   où `0014_creneaux` avait pris le numéro.
 - **Les sources X sont eteintes** (2026-09-11) : la facturation developer.x.com
   n'est plus active, les 85 sources actives (sur 100 au total) renvoyaient 402 a
-  chaque run et noyaient la supervision. `scripts/desactiver_sources_x.py` les
+  chaque run et noyaient la supervision. `scripts/sources/desactiver_sources_x.py` les
   eteint sans les supprimer — leur `since_id` est conserve. **Déjà appliqué en
   production le 2026-09-17** (à la main ; ids sauvegardés dans
   `~/Library/Application Support/Kinda/sources_x_desactivees.json`). Le script
@@ -3648,7 +3666,7 @@ le nombre de candidats — rien n'est fait article par article. Ne lève jamais
   `urls_interdites` rend les DEUX formes de chaque URL, pour que la règle
   « jamais le visuel d'un compte média » vaille sur les lignes anciennes comme
   sur les neuves. Les lignes déjà en base se rattrapent avec
-  `scripts/nettoyer_urls_medias.py`.
+  `scripts/reparations/nettoyer_urls_medias.py`.
 - **Une transaction ouverte pendant une attente, c'est une session tuée par
   Neon.** Une session qui a LU garde sa transaction ouverte tant qu'on ne la
   clôt pas : la publication à l'heure lisait le créneau, puis dormait jusqu'à
@@ -3672,7 +3690,7 @@ le nombre de candidats — rien n'est fait article par article. Ne lève jamais
   les revisions hors contexte de migration (`alembic history`, `alembic check`) ;
   `alembic upgrade` passe, ce qui rend le defaut invisible a l'usage courant.
   Aucun test n'importait les migrations, si bien que la suite entiere passait
-  au vert dessus : d'ou la sentinelle `tests/test_migrations.py`, qui les fait
+  au vert dessus : d'ou la sentinelle `tests/socle/test_migrations.py`, qui les fait
   toutes charger sans base de donnees.
 
 ## Conventions

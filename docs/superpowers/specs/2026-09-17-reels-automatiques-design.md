@@ -325,6 +325,6 @@ Ce que le design fait pour limiter le risque, sans prétendre le supprimer :
 1. `uv sync` (installe yt-dlp épinglé) ; vérifier `uv run python -m yt_dlp --version`.
 2. Appliquer la **migration 0017** sur Neon.
 3. `ffmpeg` et `ffprobe` installés (`brew install ffmpeg`).
-4. Mode **`apercu`** d'abord ; essai sans publier : `uv run python -m scripts.tester_publication --post <ID d'un post kinda_reel>`.
+4. Mode **`apercu`** d'abord ; essai sans publier : `uv run python -m scripts.diagnostic.tester_publication --post <ID d'un post kinda_reel>`.
 5. Observer quelques jours les créneaux reel « Gelé » → « Aperçu », l'offre et les raisons d'attente yt-dlp.
 6. Mettre yt-dlp à jour quand la notification le demande : `uv lock --upgrade-package yt-dlp && uv sync`, puis committer `uv.lock`.

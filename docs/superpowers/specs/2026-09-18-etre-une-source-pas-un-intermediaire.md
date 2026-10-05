@@ -340,9 +340,9 @@ plus gros trou mesuré, et il se bouche avec la mécanique existante.
 *Coût :* ~20 appels/h supplémentaires si on ajoute une vingtaine de comptes au rythme de 3 h.
 Négligeable.
 
-*Changements dans le code :* **aucun**. `scripts/add_source --type instagram --url ig:<compte>
+*Changements dans le code :* **aucun**. `scripts/sources/add_source --type instagram --url ig:<compte>
 --categorie festival|club|label`. Éventuellement une extension du mapping explicite de
-`scripts/categoriser_sources.py` pour les nouveaux noms.
+`scripts/sources/categoriser_sources.py` pour les nouveaux noms.
 
 *Le préalable non technique :* **il faut relever `RETENTION_DAYS`.** À 3 jours, un festival qui
 poste le lundi est invisible le jeudi. On ne peut pas suivre des sources hebdomadaires avec une
@@ -353,7 +353,7 @@ connaît qu'un nombre.
 *Droits :* API officielle, comptes publics professionnels. Ne jamais reposter leur visuel sans
 crédit — la règle 4 de la spec du 17/09 s'applique déjà aux médias, elle vaudra ici aussi.
 
-*Premier pas :* `uv run python -m scripts.add_source` pour T7, Cabaret Sauvage, Brunch
+*Premier pas :* `uv run python -m scripts.sources.add_source` pour T7, Cabaret Sauvage, Brunch
 Électronik, One Life Infinity, Stellar, Sonora, Hard Boat, Utopia, Big Fest, Les Castelrouquines.
 
 ### 4. Publier la donnée que personne d'autre n'a : `rising_artists`

@@ -20,7 +20,7 @@
 - Colonnes JSONB via `JSONVariant` (`app/models.py`) — JSON génériques sur SQLite pour les tests.
 - **Réassigner une colonne JSON en entier**, jamais de mutation in place, sinon SQLAlchemy ne persiste pas.
 - Les en-têtes HTTP doivent être en ASCII pur.
-- Les tests qui ont besoin de Chromium portent le marqueur `@chromium_absent` déjà défini dans `tests/test_render.py`.
+- Les tests qui ont besoin de Chromium portent le marqueur `@chromium_absent` déjà défini dans `tests/content/test_render.py`.
 - Commit après chaque tâche, message en français, préfixe `feat(posts):` / `refactor(posts):` / `fix(posts):`.
 
 ## Valeurs de référence (relevées sur les maquettes)
@@ -63,8 +63,8 @@ ajoute `largeur × sin|θ|` = 753 × sin(0,6°) ≈ 7,9 px. Donc 97 − 7,9 ≈ 
 | `alembic/versions/0009_add_render_report.py` (créer) | La migration. |
 | `app/schemas.py` (modifier) | `SlideIn` accepte les rôles du reel ; `PostOut` expose `render_report`. |
 | `app/api/posts.py` (modifier) | `POST /posts/{id}/render` persiste le rapport. |
-| `tests/test_layout.py` (créer) | Les règles, sans Chromium. |
-| `tests/test_render.py` (modifier) | Géométrie, avec Chromium. |
+| `tests/content/test_layout.py` (créer) | Les règles, sans Chromium. |
+| `tests/content/test_render.py` (modifier) | Géométrie, avec Chromium. |
 | `tests/test_api_posts.py` (modifier ou créer) | Le rapport de rendu via l'API. |
 
 ---
@@ -75,7 +75,7 @@ Le cœur du chantier, et la seule partie entièrement testable sans navigateur. 
 
 **Files:**
 - Create: `app/content/layout.py`
-- Test: `tests/test_layout.py`
+- Test: `tests/content/test_layout.py`
 
 **Interfaces:**
 - Consumes: rien.
@@ -95,7 +95,7 @@ Le cœur du chantier, et la seule partie entièrement testable sans navigateur. 
 
 - [ ] **Step 1: Write the failing tests for the fitting rule**
 
-Create `tests/test_layout.py`:
+Create `tests/content/test_layout.py`:
 
 ```python
 """Les regles de mise en page, testees sans Chromium.
@@ -152,7 +152,7 @@ def test_tient_refuse_une_ligne_trop_large():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_layout.py -v`
+Run: `uv run pytest tests/content/test_layout.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.layout'`
 
 - [ ] **Step 3: Write the dataclasses and `tient`**
@@ -256,12 +256,12 @@ def tient(zone: Zone, mesure: Mesure) -> bool:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_layout.py -v`
+Run: `uv run pytest tests/content/test_layout.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Write the failing tests for the fitting state machine**
 
-Append to `tests/test_layout.py`:
+Append to `tests/content/test_layout.py`:
 
 ```python
 def _gabarit_essai(**kwargs) -> Gabarit:
@@ -354,7 +354,7 @@ def test_ajustement_exige_que_TOUS_les_roles_tiennent():
 
 - [ ] **Step 6: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_layout.py -v`
+Run: `uv run pytest tests/content/test_layout.py -v`
 Expected: FAIL — `ImportError: cannot import name 'Ajustement'`
 
 - [ ] **Step 7: Implement `Resultat` and `Ajustement`**
@@ -478,12 +478,12 @@ class Ajustement:
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_layout.py -v`
+Run: `uv run pytest tests/content/test_layout.py -v`
 Expected: PASS (9 tests)
 
 - [ ] **Step 9: Write the failing tests for `GABARIT_POST`, `hauteur_voile` and `variables_css`**
 
-Append to `tests/test_layout.py`:
+Append to `tests/content/test_layout.py`:
 
 ```python
 def test_le_gabarit_post_porte_les_valeurs_de_la_maquette():
@@ -545,7 +545,7 @@ def test_variables_css_omet_ce_que_le_gabarit_ne_definit_pas():
 
 - [ ] **Step 10: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_layout.py -v`
+Run: `uv run pytest tests/content/test_layout.py -v`
 Expected: FAIL — `ImportError: cannot import name 'GABARIT_POST'`
 
 - [ ] **Step 11: Implement `GABARIT_POST`, `hauteur_voile`, `variables_css`, `GABARITS`**
@@ -645,13 +645,13 @@ def variables_css(gabarit_: Gabarit, scale: float, scrim_height: float | None = 
 
 - [ ] **Step 12: Run the full suite and lint**
 
-Run: `uv run pytest tests/test_layout.py -v && uv run ruff check .`
+Run: `uv run pytest tests/content/test_layout.py -v && uv run ruff check .`
 Expected: PASS (15 tests), lint clean
 
 - [ ] **Step 13: Commit**
 
 ```bash
-git add app/content/layout.py tests/test_layout.py
+git add app/content/layout.py tests/content/test_layout.py
 git commit -m "feat(posts): les regles de mise en page sortent du CSS vers layout.py
 
 Les valeurs (corps 80px, interlignage 1.15, plafond 320px, paliers
@@ -677,7 +677,7 @@ Le gabarit pilote le CSS. Le rendu du post doit rester **visuellement identique*
 - Modify: `app/content/templates/kinda_post/style.css`
 - Modify: `app/content/templates/kinda_post/slide.html.j2`
 - Modify: `app/content/render.py` (`build_document`)
-- Test: `tests/test_render.py`
+- Test: `tests/content/test_render.py`
 
 **Interfaces:**
 - Consumes: `layout.gabarit`, `layout.variables_css`, `layout.GABARIT_POST`
@@ -685,7 +685,7 @@ Le gabarit pilote le CSS. Le rendu du post doit rester **visuellement identique*
 
 - [ ] **Step 1: Write the failing test**
 
-Replace `test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit` in `tests/test_render.py` and add a new test. The imports at the top of the file become:
+Replace `test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit` in `tests/content/test_render.py` and add a new test. The imports at the top of the file become:
 
 ```python
 import struct
@@ -753,7 +753,7 @@ def test_la_feuille_de_style_nest_pas_echappee_par_le_gabarit():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_render.py -v`
 Expected: FAIL — `build_document()` takes the old signature; `test_le_css_ne_contient_plus_de_valeurs_de_mise_en_page` fails on `80px`.
 
 - [ ] **Step 3: Rewrite `slide.html.j2`**
@@ -881,7 +881,7 @@ Two deliberate exceptions to "no values in the CSS", to be commented in the file
     ]
 ```
 
-and in the CSS use `var(--voile-noir)`, `var(--voile-rose)`, `var(--voile-haut-hauteur)`. Add a test in `tests/test_layout.py`:
+and in the CSS use `var(--voile-noir)`, `var(--voile-rose)`, `var(--voile-haut-hauteur)`. Add a test in `tests/content/test_layout.py`:
 
 ```python
 def test_variables_css_expose_la_recette_des_voiles():
@@ -940,7 +940,7 @@ Delete the module constants `SLIDE_WIDTH`, `SLIDE_HEIGHT`, `MAX_HEADLINE_HEIGHT`
 
 - [ ] **Step 6: Run the tests**
 
-Run: `uv run pytest tests/test_render.py tests/test_layout.py -v && uv run ruff check .`
+Run: `uv run pytest tests/content/test_render.py tests/content/test_layout.py -v && uv run ruff check .`
 Expected: PASS
 
 - [ ] **Step 7: Verify the render did NOT change visually**
@@ -988,7 +988,7 @@ Le remplacement du cœur : trois paliers → mesure exacte des lignes et dichoto
 **Files:**
 - Modify: `app/content/render.py`
 - Modify: `app/api/posts.py` (les appelants de `render_post`)
-- Test: `tests/test_render.py`
+- Test: `tests/content/test_render.py`
 
 **Interfaces:**
 - Consumes: `layout.Ajustement`, `layout.Mesure`, `layout.gabarit`, `build_document`
@@ -999,7 +999,7 @@ Le remplacement du cœur : trois paliers → mesure exacte des lignes et dichoto
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/test_render.py`, **delete** `test_render_post_reduit_la_police_sur_une_accroche_maximale` (the `scale_log` hack it relied on disappears — `RenduSlide` now carries the information as a first-class citizen) and add:
+In `tests/content/test_render.py`, **delete** `test_render_post_reduit_la_police_sur_une_accroche_maximale` (the `scale_log` hack it relied on disappears — `RenduSlide` now carries the information as a first-class citizen) and add:
 
 ```python
 @chromium_absent
@@ -1064,7 +1064,7 @@ def test_render_post_produit_un_png_par_slide():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_render.py -v`
 Expected: FAIL — `AttributeError: 'bytes' object has no attribute 'lines'`
 
 - [ ] **Step 3: Write the measurement JS and `mesurer_role`**
@@ -1237,12 +1237,12 @@ and in `exporter_post`:
 - [ ] **Step 6: Run the tests**
 
 Run: `uv run pytest -v && uv run ruff check .`
-Expected: PASS (the whole suite — `tests/test_api.py` must stay green)
+Expected: PASS (the whole suite — `tests/api/test_api.py` must stay green)
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/content/render.py app/api/posts.py tests/test_render.py
+git add app/content/render.py app/api/posts.py tests/content/test_render.py
 git commit -m "feat(posts): ajustement continu et voile qui suit le bloc
 
 Les trois paliers 1.0/0.9/0.8 avaient deux defauts : un saut de 10% se
@@ -1271,7 +1271,7 @@ parametre scale_log, qui n'existait que pour les tests."
 - Create: `app/content/templates/kinda_reel/style.css`
 - Modify: `app/content/layout.py` (`GABARIT_REEL`, `GABARITS`)
 - Modify: `app/content/render.py` (le voile est optionnel)
-- Test: `tests/test_layout.py`, `tests/test_render.py`
+- Test: `tests/content/test_layout.py`, `tests/content/test_render.py`
 
 **Interfaces:**
 - Consumes: tout ce qui précède
@@ -1279,7 +1279,7 @@ parametre scale_log, qui n'existait que pour les tests."
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_layout.py`:
+Append to `tests/content/test_layout.py`:
 
 ```python
 def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
@@ -1310,7 +1310,7 @@ def test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette():
     assert zone_sous_titre.max_lines == 2
 ```
 
-Append to `tests/test_render.py`:
+Append to `tests/content/test_render.py`:
 
 ```python
 @chromium_absent
@@ -1350,7 +1350,7 @@ def test_un_titre_de_reel_trop_long_passe_sur_une_deuxieme_bande():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_layout.py tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_layout.py tests/content/test_render.py -v`
 Expected: FAIL — `ImportError: cannot import name 'GABARIT_REEL'`
 
 - [ ] **Step 3: Add `GABARIT_REEL` to `layout.py`**
@@ -1684,7 +1684,7 @@ La seule tâche du plan qui n'est pas déterministe : on ajuste des nombres jusq
 **Files:**
 - Modify: `app/content/layout.py` (`GABARIT_REEL` : `font_size`, `letter_spacing`, `line_height`)
 - Modify: `app/content/templates/kinda_reel/style.css` (`padding` des bandes)
-- Test: `tests/test_render.py` (ajouter le test de largeur de bande)
+- Test: `tests/content/test_render.py` (ajouter le test de largeur de bande)
 
 **Interfaces:**
 - Consumes: `mesurer_bandes`
@@ -1719,7 +1719,7 @@ PY
 2. **Width second.** With `font_size` now settled, close the remaining gap with `letter_spacing` (and, only if needed, the horizontal `padding`). Each 0.01 em of tracking moves a line of *n* characters by roughly `0.01 × font_size × n` px.
 3. Re-check the height after step 2 (it should not have moved) and iterate once if it did.
 
-**Delete the assertion `abs(titre.font_size - sous_titre.font_size) <= 8`** from `test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette` in `tests/test_layout.py`, and delete the code comment in `GABARIT_REEL` that claims the two sizes are close ("mid-80 px"). Both rest on an inference from glyph spans measured on the mockup — 83 px from the accent of `Grégoire` to the tail of the `q`, 64 px from ascender to baseline on the subtitle — and that inference does not survive contact with the data: three estimators (x-height, cap height, ascender) disagree by 10 %, and the rendered widths contradict all three. **The bands are the ground truth; the glyph spans are not.** Replace the deleted assertion with the band-height assertions this task produces, and say so in the commit message.
+**Delete the assertion `abs(titre.font_size - sous_titre.font_size) <= 8`** from `test_le_gabarit_reel_porte_les_valeurs_mesurees_sur_la_maquette` in `tests/content/test_layout.py`, and delete the code comment in `GABARIT_REEL` that claims the two sizes are close ("mid-80 px"). Both rest on an inference from glyph spans measured on the mockup — 83 px from the accent of `Grégoire` to the tail of the `q`, 64 px from ascender to baseline on the subtitle — and that inference does not survive contact with the data: three estimators (x-height, cap height, ascender) disagree by 10 %, and the rendered widths contradict all three. **The bands are the ground truth; the glyph spans are not.** Replace the deleted assertion with the band-height assertions this task produces, and say so in the commit message.
 
 Keep the other assertions of that test (colours, tilts, anchors, `max_lines`) — those are measured directly and hold.
 
@@ -1778,7 +1778,7 @@ While you are in the stylesheet, add a comment on `#bandes`: it takes its horizo
 
 - [ ] **Step 5: Add the band-width test, now that the values are calibrated**
 
-Append to `tests/test_render.py`:
+Append to `tests/content/test_render.py`:
 
 ```python
 @chromium_absent
@@ -1833,15 +1833,15 @@ def test_les_hauteurs_de_bande_retombent_sur_la_maquette():
     assert hauteurs["creme"] == pytest.approx(89, abs=8)
 ```
 
-`_hauteurs_de_bande(png)` is a test helper you write in `tests/test_render.py`: it decodes the PNG with Pillow, isolates the pink pixels (`#FD8BC3`) and the off-white pixels (`#FFF7FA`), and returns the pink band's bounding-box height plus the cream band's tilt-corrected height (`boite - largeur * sin(0.6°)`). Add `pillow` and `numpy` to the dev dependency group (`uv add --dev pillow numpy`) — the project does not have them yet, and this is the first test that needs pixel inspection.
+`_hauteurs_de_bande(png)` is a test helper you write in `tests/content/test_render.py`: it decodes the PNG with Pillow, isolates the pink pixels (`#FD8BC3`) and the off-white pixels (`#FFF7FA`), and returns the pink band's bounding-box height plus the cream band's tilt-corrected height (`boite - largeur * sin(0.6°)`). Add `pillow` and `numpy` to the dev dependency group (`uv add --dev pillow numpy`) — the project does not have them yet, and this is the first test that needs pixel inspection.
 
-Run: `uv run pytest tests/test_render.py -v && uv run ruff check .`
+Run: `uv run pytest tests/content/test_render.py -v && uv run ruff check .`
 Expected: PASS, widths and heights included. If a test fails, go back to Step 2 — these assertions are the gate of the calibration, not an obstacle to work around.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/content/layout.py app/content/templates/kinda_reel/style.css tests/test_render.py
+git add app/content/layout.py app/content/templates/kinda_reel/style.css tests/content/test_render.py
 git commit -m "fix(posts): calibration du gabarit reel sur les mesures de la maquette
 
 Les corps et paddings ne se deduisent pas par inversion des mesures : la
@@ -1880,7 +1880,7 @@ Create (or extend) `tests/test_api_posts.py`:
 ```python
 """L'API des posts. Sans Chromium : on remplace le rendu par un faux.
 
-Le but n'est pas de tester le rendu ici -- tests/test_render.py le fait -- mais
+Le but n'est pas de tester le rendu ici -- tests/content/test_render.py le fait -- mais
 que le RAPPORT arrive bien en base. C'est lui qui permet au dashboard de signaler
 un post en defaut plutot que de laisser publier une image coupee.
 """
@@ -2059,7 +2059,7 @@ Petit, mais c'est la différence entre un outil fiable et un outil pénible.
 
 **Files:**
 - Modify: `app/content/render.py`
-- Test: `tests/test_render.py`
+- Test: `tests/content/test_render.py`
 
 **Interfaces:**
 - Produces: `RenduIndisponible(RuntimeError)`
@@ -2085,7 +2085,7 @@ def test_chromium_absent_donne_une_erreur_lisible(monkeypatch):
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run pytest tests/test_render.py::test_chromium_absent_donne_une_erreur_lisible -v`
+Run: `uv run pytest tests/content/test_render.py::test_chromium_absent_donne_une_erreur_lisible -v`
 Expected: FAIL — `ImportError: cannot import name 'RenduIndisponible'`
 
 - [ ] **Step 3: Implement**
@@ -2135,7 +2135,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/content/render.py app/api/posts.py tests/test_render.py
+git add app/content/render.py app/api/posts.py tests/content/test_render.py
 git commit -m "feat(posts): erreur lisible quand Chromium Playwright est absent
 
 Le dashboard n'installe pas Chromium. Une trace au fond de Playwright ne
@@ -2152,7 +2152,7 @@ La dernière valeur devinée du plan devient une valeur mesurée.
 **Files:**
 - Modify: `app/content/layout.py` (`max_lines` du post, si la mesure le demande)
 - Modify: `app/content/templates/kinda_post/REFERENCE.md`
-- Test: `tests/test_layout.py`
+- Test: `tests/content/test_layout.py`
 
 - [ ] **Step 1: Render headlines of increasing length**
 
@@ -2177,7 +2177,7 @@ PY
 
 Open the produced files. The criterion: **from how many lines does the photo stop being readable as an image?** Below that number, the accroche is acceptable. Above, reduction is preferable.
 
-If the answer is not 5, change `max_lines` in `GABARIT_POST` **and** the sentinel test in `tests/test_layout.py`, and write the measured justification in the code comment — replace the current "Plafond calibre a la tache 8" comment with the real reasoning, in the style of the existing `MAX_HEADLINE_HEIGHT` comment in the pre-refactoring `render.py` (which stated its measurements: 276 px at three lines, 368 px at four).
+If the answer is not 5, change `max_lines` in `GABARIT_POST` **and** the sentinel test in `tests/content/test_layout.py`, and write the measured justification in the code comment — replace the current "Plafond calibre a la tache 8" comment with the real reasoning, in the style of the existing `MAX_HEADLINE_HEIGHT` comment in the pre-refactoring `render.py` (which stated its measurements: 276 px at three lines, 368 px at four).
 
 - [ ] **Step 3: Update `REFERENCE.md`**
 
@@ -2196,7 +2196,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/content/layout.py app/content/templates/kinda_post/REFERENCE.md tests/test_layout.py
+git add app/content/layout.py app/content/templates/kinda_post/REFERENCE.md tests/content/test_layout.py
 git commit -m "docs(posts): plafond de lignes mesure et REFERENCE.md des deux gabarits
 
 Le plafond du post etait une estimation ; il est desormais cale en rendant
@@ -2246,7 +2246,7 @@ Aucun test n'est marqué `xfail` ni laissé rouge entre deux tâches : la tâche
 
 **Type consistency:** `Mesure(line_widths, height)` / `.lines` ; `Resultat(scale, lines, overflow)` ; `RenduSlide(png, scale, lines, overflow)` ; `render_post -> list[RenduSlide]` ; `build_document(gabarit, textes, image_data_uri, scale, scrim_height)`. Le champ `lines` est un `dict[str, int]` partout, y compris dans le JSON de `render_report`. La fonction `gabarit(nom)` et les variables locales `gabarit_` ne se marchent pas dessus (noté explicitement en tâche 3).
 
-**Point de vigilance pour l'exécutant :** la tâche 2 change la signature de `build_document` et supprime `SLIDE_WIDTH` / `SLIDE_HEIGHT` / `MAX_HEADLINE_HEIGHT` / `SCALE_STEPS`. `tests/test_render.py` doit être adapté dans la même tâche, sinon la suite est rouge entre deux commits.
+**Point de vigilance pour l'exécutant :** la tâche 2 change la signature de `build_document` et supprime `SLIDE_WIDTH` / `SLIDE_HEIGHT` / `MAX_HEADLINE_HEIGHT` / `SCALE_STEPS`. `tests/content/test_render.py` doit être adapté dans la même tâche, sinon la suite est rouge entre deux commits.
 
 ---
 

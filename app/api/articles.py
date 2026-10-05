@@ -119,7 +119,7 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
             detail=(
                 "exclusion posee par la dedup d'archive : effacer la raison ne tient pas "
                 "(le lien se reforme au passage suivant). Utiliser "
-                "`uv run python -m scripts.marquer_doublon_manuel --article-a ID "
+                "`uv run python -m scripts.reparations.marquer_doublon_manuel --article-a ID "
                 "--article-b ID --different --raison \"...\"`."
             ),
         )

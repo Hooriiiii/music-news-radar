@@ -628,7 +628,7 @@ def marqueurs_france(titre: str) -> frozenset[str]:
 
     Le parametre s'appelle `titre` parce que c'est son usage d'origine (le
     titre d'un evenement), mais la fonction ne lit qu'un texte : l'appelant
-    est libre de lui passer plus large, et `scripts/revue_posts.py` lui passe
+    est libre de lui passer plus large, et `scripts/diagnostic/revue_posts.py` lui passe
     desormais l'accroche PLUS la legende. La mesure du 2026-10-04 justifie ce
     choix : sur les 55 posts publies, l'accroche seule portait un marqueur 8
     fois, l'accroche et la legende 12 fois -- l'information est souvent dans

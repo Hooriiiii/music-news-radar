@@ -135,7 +135,7 @@ def niveau_global(voyants: list[Voyant]) -> str:
     """Le niveau du bandeau : le PIRE de ses voyants.
 
     Jamais `ok` des qu'un seul voyant ne l'est pas -- c'est la propriete que
-    `tests/test_supervision.py` verrouille, parce qu'un `or OK` bien
+    `tests/socle/test_supervision.py` verrouille, parce qu'un `or OK` bien
     intentionne la casserait sans faire echouer quoi que ce soit d'autre.
     """
     if not voyants:
@@ -388,7 +388,7 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             f"{reflexifs} doublon(s) de soi",
             f"{reflexifs} article(s) pointent sur eux-mêmes comme doublon : ils ne seront "
             "jamais notés ni publiés. Réparer avec "
-            "`uv run python -m scripts.reparer_doublons_reflexifs --apply`.",
+            "`uv run python -m scripts.reparations.reparer_doublons_reflexifs --apply`.",
             details,
         )
     if recente:

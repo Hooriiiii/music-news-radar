@@ -8,7 +8,7 @@ fonctions pures attendent (`dates_publication`, `similarite_max`,
 
 **Le champ de date est `published_at`, jamais `observed_at`.**
 `dates_de_publication` est le SEUL endroit du projet ou ce choix se fait, et
-il porte son test-sentinelle (`tests/test_event_archive.py`). La mesure qui
+il porte son test-sentinelle (`tests/pipeline/test_event_archive.py`). La mesure qui
 l'impose est dans le docstring de `event_features.velocity` : l'etalement des
 dates d'ingestion mesure la cadence horaire du pipeline, pas la propagation de
 l'actu. Basculer ce champ ne ferait echouer aucun calcul -- seulement mentir
@@ -23,7 +23,7 @@ trace. Mesure du 2026-09-30 : 79 des 548 observations dont l'article vivait
 encore (14 %) etaient dans ce cas. L'ecriture ne replie plus (`events.
 _ajouter_observation` ecrit `article.published_at` tel quel, la colonne est
 nullable), donc toute ligne NEUVE est honnete ; les anciennes se rattrapent
-avec `scripts/nettoyer_dates_observations.py` TANT QUE leur article vit
+avec `scripts/reparations/nettoyer_dates_observations.py` TANT QUE leur article vit
 encore -- au-dela (purge a deux jours) l'information est perdue pour de bon,
 et il vaut mieux le dire que de faire semblant.
 

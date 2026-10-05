@@ -86,8 +86,8 @@ Le job `schema` de `ci.yml` fait exactement cela sur chaque push. Une migration 
 | `app/api/posts.py` (modifier) | Génération, rendu des covers, sélection, bascule, suppression, export. |
 | `app/static/dashboard.html` (modifier) | Les 4 covers, le switch, le sélecteur de médias. |
 | `CLAUDE.md`, `app/content/templates/kinda_post/REFERENCE.md` (modifier) | Documentation. |
-| `tests/test_media.py` (créer) | Le prédicat, sans réseau ni base. |
-| `tests/test_export.py` (créer) | Le zip et les échecs de téléchargement. |
+| `tests/content/test_media.py` (créer) | Le prédicat, sans réseau ni base. |
+| `tests/content/test_export.py` (créer) | Le zip et les échecs de téléchargement. |
 | Tests existants (modifier) | 7 fichiers touchent `media_urls` : `test_compose`, `test_ingest`, `test_api`, `test_sources/test_{rss,reddit_rss,x_api,x_apify}`. |
 
 ---
@@ -98,7 +98,7 @@ Le job `schema` de `ci.yml` fait exactement cela sur chaque push. Une migration 
 
 **Files:**
 - Modify: `app/sources/base.py`, `app/sources/rss.py`, `app/sources/x_api.py`, `app/sources/x_apify.py`, `app/models.py`, `app/pipeline/ingest.py`, `app/schemas.py`, `app/api/articles.py`, `app/content/compose.py`, `app/static/dashboard.html`
-- Create: `alembic/versions/0010_typed_media.py`, `app/content/media.py`, `tests/test_media.py`
+- Create: `alembic/versions/0010_typed_media.py`, `app/content/media.py`, `tests/content/test_media.py`
 - Test: les 7 fichiers listés ci-dessus
 
 **Interfaces:**
@@ -111,7 +111,7 @@ Le job `schema` de `ci.yml` fait exactement cela sur chaque push. Une migration 
 
 - [ ] **Step 1: Write the failing tests for the predicate**
 
-Create `tests/test_media.py`:
+Create `tests/content/test_media.py`:
 
 ```python
 """Le predicat « video exploitable », sans reseau ni base.
@@ -185,7 +185,7 @@ def test_la_borne_de_duree_est_inclusive():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_media.py -v`
+Run: `uv run pytest tests/content/test_media.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.content.media'`
 
 - [ ] **Step 3: Implement `app/content/media.py`**
@@ -258,7 +258,7 @@ def raison_pas_de_reel(media: list[dict] | None) -> str | None:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_media.py -v`
+Run: `uv run pytest tests/content/test_media.py -v`
 Expected: PASS (6 tests)
 
 - [ ] **Step 5: Rename the field in `RawItem` and the three adapters**
@@ -420,7 +420,7 @@ def downgrade() -> None:
 
 - [ ] **Step 8: Update the 7 test files**
 
-Mechanical: `media_urls=[...]` → `media=[{"type": "photo", "url": ...}]`. In `tests/test_sources/test_x_api.py`, **add** a case with a real video payload (a `variants` list with two MP4 bitrates and a `preview_image_url`) asserting that the chosen URL is the MP4 and not the thumbnail — that is the bug this task fixes, and no existing test covers it.
+Mechanical: `media_urls=[...]` → `media=[{"type": "photo", "url": ...}]`. In `tests/sources/test_x_api.py`, **add** a case with a real video payload (a `variants` list with two MP4 bitrates and a `preview_image_url`) asserting that the chosen URL is the MP4 and not the thumbnail — that is the bug this task fixes, and no existing test covers it.
 
 - [ ] **Step 9: Run the full suite and lint**
 
@@ -460,7 +460,7 @@ vignette de video, sans consequence : les articles sont purges a 14 jours."
 
 **Files:**
 - Modify: `app/content/compose.py`
-- Test: `tests/test_compose.py`
+- Test: `tests/content/test_compose.py`
 
 **Interfaces:**
 - Produces:
@@ -470,7 +470,7 @@ vignette de video, sans consequence : les articles sont purges a 14 jours."
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/test_compose.py`, replace the draft-shape tests with:
+In `tests/content/test_compose.py`, replace the draft-shape tests with:
 
 ```python
 def test_une_variante_exige_les_trois_textes_balises():
@@ -499,7 +499,7 @@ Keep the existing retry tests (`make_claude_composer` retries on validation fail
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_compose.py -v`
+Run: `uv run pytest tests/content/test_compose.py -v`
 Expected: FAIL — `ImportError: cannot import name 'CoverVariante'`
 
 - [ ] **Step 3: Replace `Slide` / `PostDraft`**
@@ -566,7 +566,7 @@ COMPOSER_MAX_TOKENS = 16000
 
 - [ ] **Step 5: Run the tests**
 
-Run: `uv run pytest tests/test_compose.py -v && uv run ruff check .`
+Run: `uv run pytest tests/content/test_compose.py -v && uv run ruff check .`
 Expected: PASS
 
 - [ ] **Step 6: Try it once for real, and read what comes back**
@@ -598,7 +598,7 @@ This is a **read-only** query plus one paid Claude call (a few cents). Judge: ar
 - [ ] **Step 7: Commit**
 
 ```bash
-git add app/content/compose.py tests/test_compose.py
+git add app/content/compose.py tests/content/test_compose.py
 git commit -m "feat(posts): le compositeur rend 4 variantes de cover
 
 Un seul appel Claude produit quatre formulations de la MEME information --
@@ -643,7 +643,7 @@ pas des angles editoriaux distincts."
 **Files:**
 - Modify: `app/models.py`, `app/content/compose.py` (`create_post`), `app/schemas.py`
 - Create: `alembic/versions/0011_post_variants.py`
-- Test: `tests/test_compose.py`
+- Test: `tests/content/test_compose.py`
 
 **Interfaces:**
 - Produces:
@@ -689,7 +689,7 @@ def test_create_post_prend_la_vignette_dune_video_comme_fond(db_session):
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run pytest tests/test_compose.py -v`
+Run: `uv run pytest tests/content/test_compose.py -v`
 Expected: FAIL — `KeyError: 'kind'` / `AttributeError: 'Post' object has no attribute 'variants'`
 
 - [ ] **Step 3: Add the column and rewrite `create_post`**
@@ -842,7 +842,7 @@ quatre formulations du meme sujet est du signal gratuit sur ce qui plait."
 
 **Files:**
 - Modify: `app/content/render.py`
-- Test: `tests/test_render.py`
+- Test: `tests/content/test_render.py`
 
 **Interfaces:**
 - Produces: `render_covers(variantes: list[dict], image_url: str | None, template: str) -> list[RenduSlide]`
@@ -911,7 +911,7 @@ def test_render_covers_signale_chromium_absent(monkeypatch):
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run pytest tests/test_render.py -v`
+Run: `uv run pytest tests/content/test_render.py -v`
 Expected: FAIL — `ImportError: cannot import name 'render_covers'`
 
 - [ ] **Step 3: Implement**
@@ -979,7 +979,7 @@ multiplierait par quatre le seul cout qui se voit a l'usage du soir."
 ## Task 5: l'export télécharge les médias
 
 **Files:**
-- Create: `app/content/export.py`, `tests/test_export.py`
+- Create: `app/content/export.py`, `tests/content/test_export.py`
 - Modify: `app/api/posts.py` (`exporter_post`)
 
 **Interfaces:**
@@ -1073,7 +1073,7 @@ qu'une reponse peut omettre ou mentir."
 
 **Files:**
 - Modify: `app/api/posts.py`, `app/schemas.py`
-- Test: `tests/test_posts_api.py`
+- Test: `tests/api/test_posts_api.py`
 
 **Interfaces:**
 - `POST /articles/{id}/posts` → crée le post avec 4 variantes (appel Claude, **aucun rendu**)
