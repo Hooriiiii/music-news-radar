@@ -286,7 +286,59 @@
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .field textarea { min-height: 70px; }
-  .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  /* --- La fiche RESPIRE : des BLOCS, pas une colonne de titres -------------
+     « L'interface ne respire pas » (utilisateur, 2026-10-05). La fiche
+     enchainait neuf `.section-title` de meme poids sur un fond uni : aucune
+     hierarchie, donc aucun endroit ou l'oeil se pose. Trois niveaux desormais --
+     le bloc (Cover / Ce que Meta recevra / Texte publié), le sous-titre a
+     l'interieur d'un bloc (Format, Image de fond), et la note explicative. */
+  .bloc { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px 18px;
+    margin-bottom: 18px; background: rgba(255,255,255,.012); }
+  .bloc-titre { font-family: var(--police-titre); font-size: 15px; font-weight: 600;
+    letter-spacing: .02em; color: var(--text); margin-bottom: 12px;
+    display: flex; align-items: baseline; gap: 10px; }
+  .bloc-titre .compte-el { font-family: inherit; font-weight: 400; font-size: 12px;
+    color: var(--muted); }
+  .sous-titre { font-family: var(--police-titre); font-size: 12px; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
+  /* Une NOTE explique, elle n'alerte pas. Jusqu'au 2026-10-05 ces phrases
+     portaient `.reel-reason`, donc le rouge d'alerte : la moitie de la fiche
+     criait, et le rouge ne voulait plus rien dire la ou il compte (une raison de
+     refus, une cover qui deborde). Le rouge reste reserve aux alertes. */
+  .note { color: var(--muted); font-size: 11.5px; line-height: 1.5; margin: 6px 0 2px; }
+  /* Le bandeau de depart : quand, dans quel etat. En TETE de fiche, parce que
+     c'est le cadre de tout le reste -- et non une section de plus en bas. */
+  .depart-bandeau { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 9px 12px; margin-bottom: 14px; font-size: 12.5px; }
+  .depart-bandeau.inconnu { border-left-color: var(--muted); border-style: dashed;
+    color: var(--muted); }
+  .depart-bandeau .quand { font-family: var(--police-titre); font-weight: 600; font-size: 14px; }
+  .depart-bandeau .dans, .depart-bandeau .etat { color: var(--muted); font-size: 11.5px; }
+  /* L'apercu du texte publie est REPLIE : il repetait mot pour mot la zone
+     d'edition juste au-dessus. Les COMPTEURS, eux, restent toujours visibles --
+     ils signalent un depassement avant qu'il coute un post. */
+  .apercu-publie { margin-top: 10px; }
+  .apercu-publie summary { cursor: pointer; font-size: 12px; color: var(--muted);
+    padding: 4px 0; }
+  .apercu-publie summary:hover { color: var(--accent-clair); }
+  .apercu-publie .depart-apercu { margin-top: 8px; }
+  .ajouts { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .ajouts select { flex: 0 1 320px; }
+  .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-top: 18px; padding: 12px 0 2px; border-top: 1px solid var(--border);
+    position: sticky; bottom: -26px; background: var(--panel); z-index: 2; }
+  /* « Supprimer » est DESTRUCTIF et n'a pas a etre le voisin de meme poids
+     d'« Enregistrer » : il part a l'autre bout de la barre. */
+  .detail-actions .danger { margin-left: auto; }
+  /* UNE ECRITURE DIT TOUJOURS SI ELLE A REUSSI. Zone adjacente aux boutons,
+     visible sans faire defiler (la barre est `sticky`), et qui survit au
+     re-rendu de la fiche (`dernierGeste`). */
+  .etat-geste { font-size: 12px; min-height: 1em; }
+  .etat-geste:empty { display: none; }
+  .etat-geste.en-cours { color: var(--muted); }
+  .etat-geste.ok { color: var(--accent-clair); }
+  .etat-geste.erreur { color: var(--alerte); }
 
   /* --- Relecture avant publication -----------------------------------------
      Pas de rouge par defaut : un post qui attend une relecture n'est PAS une
@@ -630,7 +682,10 @@
     .src-form { grid-template-columns: 1fr; }
     .src-row { flex-wrap: wrap; }
     .src-row .grow { flex: 1 1 100%; }
+    .detail-actions { position: static; }
     .detail-actions button, .detail-actions a { flex: 1 1 100%; text-align: center; }
+    .detail-actions .danger { margin-left: 0; }
+    .bloc { padding: 12px 12px 14px; }
     .slot-actions { flex-wrap: wrap; }
     /* Le selecteur de liaison et les reglages du panneau Artistes prennent
        toute la largeur : a 390 px, un `select` a cote de son libelle les
@@ -1730,8 +1785,26 @@ async function enregistrerPost(postId, donnees) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(donnees),
   });
-  if (!reponse.ok) throw new Error(await reponse.text());
+  if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
   return reponse.json();
+}
+
+// La raison d'un refus, LISIBLE. Le corps brut d'une 409 est un JSON
+// (`{"detail": "..."}`) : affiche tel quel dans la fiche, il noie la phrase que
+// le serveur a pris soin d'ecrire en francais -- or c'est elle qui dit s'il faut
+// attendre, rouvrir ou renoncer.
+async function raisonDuRefus(reponse) {
+  const texte = await reponse.text();
+  try {
+    const corps = JSON.parse(texte);
+    if (typeof corps.detail === "string") return corps.detail;
+    if (Array.isArray(corps.detail)) {
+      return corps.detail.map((e) => e.msg || JSON.stringify(e)).join(" ; ");
+    }
+  } catch {
+    // Pas du JSON : le texte brut est deja la meilleure reponse qu'on ait.
+  }
+  return texte || `HTTP ${reponse.status}`;
 }
 
 const detailEl = document.getElementById("post-detail");
@@ -1780,13 +1853,56 @@ function videosExploitables(media) {
   );
 }
 
-function raisonPasDeReel(media) {
+// Mirroir de `app/content/media.py::est_lien_instagram` / `lien_de_reel` /
+// `video_recuperable` -- la SECONDE question de l'eligibilite reel, celle que le
+// dashboard ignorait : « yt-dlp saura-t-il aller chercher la video sur la page du
+// post, AU GEL ? ». Meta omet `media_url` des reels a musique protegee (donc de
+// presque tous les reels d'artistes et de festivals) : sans cette question, le
+// switch REELS etait grise sur des articles que le serveur juge PARFAITEMENT
+// eligibles -- mesure du 2026-10-05 sur l'article 22571 (Tomorrowland),
+// `store.raison_ineligible_reel` rend None et la source de la video est "ytdlp",
+// pendant que la fiche affichait « pas d'URL directe vers la vidéo ».
+//
+// Deux conditions du serveur ne sont PAS visibles d'ici : le type de la source
+// (`SourceType.INSTAGRAM`) et le reglage `PUBLICATION_REEL_YTDLP`. On penche donc
+// du cote qui est deja la regle du depot (`videos_exploitables` : « mieux vaut
+// proposer le reel que griser un bouton sur une donnee absente ») -- l'eligibilite
+// est de toute facon REVERIFIEE au gel, qui libere le creneau sans exclure.
+function lienDeReelInstagram(url) {
+  let hote, segments;
+  try {
+    const lien = new URL(url);
+    if (lien.protocol !== "https:") return false;
+    hote = lien.hostname.toLowerCase();
+    segments = lien.pathname.split("/").filter(Boolean);
+  } catch {
+    return false;
+  }
+  if (hote !== "instagram.com" && !hote.endsWith(".instagram.com")) return false;
+  return segments.length >= 2 && (segments[0] === "reel" || segments[0] === "reels");
+}
+
+function videoRecuperable(media, permalink) {
+  if (!permalink) return false;
+  if (lienDeReelInstagram(permalink)) return true;
+  const liste = media || [];
+  return liste.length === 1 && liste[0].type === "video" && !liste[0].url;
+}
+
+function raisonPasDeReel(media, permalink) {
   if (videosExploitables(media).length) return null;
   const videos = (media || []).filter((m) => m.type === "video");
   if (!videos.length) return "aucune vidéo dans cette actu";
-  if (!videos.some((m) => m.url)) return "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)";
   const durees = videos.map((m) => m.duration_ms).filter((d) => d != null);
-  if (durees.length) {
+  const tropLongues = durees.length && Math.min(...durees) > DUREE_MAX_REEL_MS;
+  if (!videos.some((m) => m.url)) {
+    // Pas de fichier direct, mais yt-dlp ira le chercher au gel : ce n'est PAS
+    // une raison de griser le switch.
+    if (videoRecuperable(media, permalink) && !tropLongues) return null;
+    return "pas d'URL directe vers la vidéo, et aucun permalien de reel où yt-dlp"
+      + " pourrait aller la chercher";
+  }
+  if (tropLongues) {
     const duree = Math.min(...durees);
     return `vidéo trop longue : ${Math.floor(duree / 1000)} s, maximum ${DUREE_MAX_REEL_MS / 1000} s pour un reel`;
   }
@@ -1916,6 +2032,115 @@ function vignetteElement(element, depart) {
   return "";
 }
 
+// --- UNE ECRITURE DIT TOUJOURS SI ELLE A REUSSI ----------------------------
+//
+// LE DEFAUT QUI A FAIT ECRIRE A L'UTILISATEUR « je n'arrive pas a enregistrer »
+// (2026-10-05). Verifie au navigateur : le clic envoyait bien `PATCH /posts/176`,
+// le serveur repondait 200, la fiche se rechargeait -- et RIEN ne le disait.
+// Aucun etat « en cours », aucun libelle qui change, aucune confirmation. Un
+// succes muet est indistinguable d'un echec muet, donc l'utilisateur conclut que
+// ca ne marche pas, et il a raison de le conclure. Meme defaut que l'ecriture
+// muette de la categorie d'une source, corrigee le 2026-10-02, reste sur CINQ
+// boutons de cette fiche -- et un double-clic envoyait deux ecritures.
+//
+// `dernierGeste` survit au re-rendu, comme `brouillonTexte` : tous les gestes de
+// la fiche rappellent `renderPostDetail`, donc un message pose dans le DOM juste
+// avant serait efface par le rendu qui suit l'ecriture reussie. C'est exactement
+// ce qui rend la propriete SILENCIEUSE a casser -- d'ou la preuve par mutation de
+// `tests/dashboard/test_dashboard_ecritures.py`.
+let dernierGeste = null; // { postId, niveau: "ok" | "erreur" | "en-cours", texte }
+let gesteEnCours = false;
+
+function annoncerGeste(postId, niveau, texte) {
+  dernierGeste = { postId, niveau, texte };
+  const zone = detailEl.querySelector("#etat-geste");
+  if (zone) peindreGeste(zone, postId);
+}
+
+function peindreGeste(zone, postId) {
+  const a = dernierGeste && dernierGeste.postId === postId ? dernierGeste : null;
+  zone.className = "etat-geste" + (a ? " " + a.niveau : "");
+  zone.textContent = a ? a.texte : "";
+}
+
+// Le point de passage de TOUTE ecriture de la fiche. Il fait trois choses qu'on
+// ne peut pas obtenir d'un `try/catch` nu : il empeche la seconde ecriture d'un
+// double-clic, il montre que quelque chose se passe, et il DIT le resultat --
+// reussite comprise. Un echec reste a l'ecran (pas d'`alert` a chasser) avec sa
+// raison, a cote du bouton qui l'a provoque.
+async function ecrireDepuisLaFiche(postId, { bouton, libelle, action }) {
+  if (gesteEnCours) return undefined;
+  gesteEnCours = true;
+  const ancien = bouton ? bouton.textContent : null;
+  if (bouton) { bouton.disabled = true; bouton.textContent = "…"; }
+  annoncerGeste(postId, "en-cours", `${libelle}…`);
+  try {
+    const resultat = await action();
+    annoncerGeste(postId, "ok", `✓ ${libelle} — enregistré`);
+    gesteEnCours = false;
+    return resultat;
+  } catch (erreur) {
+    annoncerGeste(postId, "erreur", `✕ ${libelle} — ${erreur.message}`);
+    gesteEnCours = false;
+    if (bouton) { bouton.disabled = false; bouton.textContent = ancien; }
+    return undefined;
+  }
+}
+
+// --- La reserve de visuels, avec ou sans creneau ----------------------------
+//
+// `GET /relecture` ne rend `candidats` que pour un post POSE SUR UN CRENEAU. Un
+// brouillon qui n'est sur aucun creneau a venir doit rester editable : la liste
+// unique remplace les cases « Medias de l'actu », qui etaient jusqu'ici le seul
+// chemin dans ce cas-la. On refait donc localement ce que fait
+// `app/publish/preparation.py::candidats_editables` -- memes regles, meme ordre :
+// actifs du post d'abord, medias de l'actu ensuite, dedupe, et JAMAIS le visuel
+// d'un compte media (decision du 2026-09-17).
+function reserveLocale(post, article) {
+  const pool = [];
+  for (const actif of post.assets || []) {
+    if (actif.type === "photo" || actif.type === "video") pool.push(actif);
+  }
+  // Decision du 2026-09-17 : jamais l'image ni la video d'un compte média.
+  const interdit = !!(article && article.visuels_interdits);
+  if (article && !interdit) {
+    for (const m of article.media || []) {
+      if (m.type === "photo" || m.type === "video") pool.push({ ...m, origine: "article" });
+    }
+  }
+  const vus = new Set();
+  const reserve = [];
+  for (const m of pool) {
+    const cle = m.url || m.preview_url;
+    if (!cle || vus.has(cle)) continue;
+    vus.add(cle);
+    reserve.push({
+      kind: "media", type: m.type, url: m.url, preview_url: m.preview_url || null,
+      duration_ms: m.duration_ms != null ? m.duration_ms : null,
+      width: m.width != null ? m.width : null, height: m.height != null ? m.height : null,
+      origine: m.origine || "article", compte: m.compte || null,
+      permalink: m.permalink || null, publie_le: m.publie_le || null,
+    });
+  }
+  return reserve;
+}
+
+// Ce que la reserve sait d'un element de la liste, et que le manifeste ne porte
+// pas : dimensions, duree, permalien du post d'origine, date. C'est ce qui a
+// disparu avec la section « Visuels retenus » -- et qui devait se retrouver ici.
+function infosDeLElement(element, reserve) {
+  return (reserve || []).find(
+    (c) => c.url === element.source_url || (c.preview_url && c.preview_url === element.source_url)
+  ) || {};
+}
+
+function detailsDuVisuel(media) {
+  const bouts = [];
+  if (media.width && media.height) bouts.push(`${media.width}×${media.height}px`);
+  if (media.duration_ms != null) bouts.push(`${Math.round(media.duration_ms / 1000)} s`);
+  return bouts.join(" · ");
+}
+
 function renderPostDetail(post, article, covers) {
   const cover = (post.slides || [])[0] || {};
   const variantes = (post.variants && post.variants.variantes) || [];
@@ -1941,81 +2166,42 @@ function renderPostDetail(post, article, covers) {
     </div>`;
   }).join("") : `<div class="media-empty">Pas de variantes pour ce post.</div>`;
 
-  const raisonReel = raisonPasDeReel(article ? article.media : null);
-  const reelDisabled = raisonReel != null;
-  const reasonHtml = reelDisabled
-    ? `<div class="reel-reason" id="reel-reason">${escapeHtml(
-        article ? raisonReel : "actu introuvable (" + retentionTexte() + ")"
-      )}</div>`
-    : "";
-
-  const mediaList = (article && article.media) || [];
-  const slidesMedia = (post.slides || []).slice(1);
-  // Liste ARRÊTÉE à la main : la section « Ce que Meta recevra », plus bas, fait
-  // foi. Ces cases-ci éditent le BROUILLON et ne connaissent pas les visuels
-  // retenus à la composition — en cocher une les ferait disparaître de la liste
-  // publiée. On les désactive, en imprimant la raison (règle de la refonte : un
-  // contrôle désactivé dit toujours pourquoi).
-  const listeArretee = !!(((post.variants || {}).carrousel || {}).explicite);
-  const mediaHtml = mediaList.length ? mediaList.map((m, i) => {
-    const coche = slidesMedia.some((s) => s.url === m.url);
-    const dims = (m.width && m.height) ? `${m.width}×${m.height}px` : "dimensions inconnues";
-    const duree = m.duration_ms != null ? ` · ${Math.round(m.duration_ms / 1000)} s` : "";
-    const vignette = m.preview_url || (m.type === "photo" ? m.url : null);
-    // Une video trop longue pour une slide de carrousel reste visible (pour
-    // qu'on sache qu'elle existe) mais n'est pas cochable -- meme logique que
-    // le switch REELS : une case grisee muette serait une enigme.
-    const tropLongue = m.type === "video" && m.duration_ms != null && m.duration_ms > DUREE_MAX_SLIDE_MS;
-    // Meme cas que `raisonPasDeReel` : une video sans URL directe (source qui
-    // ne donne qu'un lien de page) n'a rien a telecharger. Sans ce garde-fou la
-    // case restait cochable et un PATCH avec `url: null` echouait en 422 pour
-    // une action que l'UI presentait comme possible.
-    const sansUrl = m.type === "video" && !m.url;
-    // Decision du 2026-09-17 : jamais l'image ni la video d'un compte media.
-    const interdit = !!(article && article.visuels_interdits);
-    const desactivee = tropLongue || sansUrl || interdit || listeArretee;
-    const raison = interdit
-      ? "visuel d'un compte média : interdit"
-      : listeArretee
-      ? "liste arrêtée : modifiez-la dans « Ce que Meta recevra », plus bas"
-      : tropLongue
-      ? `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`
-      : sansUrl
-        ? "pas d'URL directe vers la vidéo (la source ne donne qu'un lien de page)"
-        : null;
-    return `
-    <div class="media-choice" data-index="${i}">
-      ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
-      <label>
-        <input type="checkbox" class="media-check" ${coche ? "checked" : ""} ${desactivee ? "disabled" : ""}>
-        ${escapeHtml(m.type)} · ${dims}${duree}
-      </label>
-      ${raison ? `<span class="reel-reason">${escapeHtml(raison)}</span>` : ""}
-    </div>`;
-  }).join("") : `<div class="media-empty">${article ? "Aucun média sur cette actu." : "Actu introuvable (probablement purgée) -- pas de médias à proposer."}</div>`;
-
-  const actifsHtml = (post.assets || []).map((x) => {
-    const vignette = x.preview_url || (x.type === "photo" ? x.url : null);
-    // Un fichier DEPOSE a la main n'est ni une photo de presse ni le post d'un
-    // artiste : le dire, sinon la seule provenance que l'utilisateur a choisie
-    // lui-meme serait la seule qu'on lui annonce de travers.
-    const origine = x.origine === "depot"
-      ? ORIGINES_ELEMENT.depot
-      : x.origine === "artiste"
-        ? `📸 ${escapeHtml(x.compte || "?")} · post du ${fmtDate(x.publie_le) || "?"}`
-        : (x.compte ? `📸 ${escapeHtml(x.compte)}` : "📸 photo de presse");
-    const lien = x.permalink
-      ? `<a href="${escapeHtml(x.permalink)}" target="_blank" rel="noopener">voir le post</a>` : "";
-    return `
-    <div class="media-choice">
-      ${vignette ? `<img src="${escapeHtml(vignette)}" loading="lazy" onerror="this.remove()">` : ""}
-      <label>${origine}</label>
-      ${lien}
-    </div>`;
-  }).join("");
-  const actifsSection = post.assets == null ? "" : `
-      <div class="section-title">Visuels retenus</div>
-      <div class="media-list">${actifsHtml || '<div class="media-empty">Aucun visuel autorisé retenu : fond à poser à la main.</div>'}</div>`;
+  // --- Format : le selecteur ne MENT PLUS ------------------------------------
+  //
+  // Le defaut (post 176, 2026-10-05) : `template` valait `kinda_reel`, et
+  // l'interface montrait POST actif et REELS grise « pas d'URL directe vers la
+  // vidéo ». Deux causes, toutes deux corrigees ici.
+  //
+  // 1. AUCUN des deux boutons ne portait `on` dans ce cas (`post.template` ne
+  //    valait ni l'un ni l'autre des deux libelles testes separement), et un
+  //    REELS grise a cote d'un POST normal se LIT « POST est l'actif ». Le
+  //    bouton du gabarit COURANT porte donc desormais `on` dans tous les cas, et
+  //    n'est jamais desactive : on ne grise pas l'etat dans lequel on est.
+  // 2. `raisonPasDeReel` ne mirrorait que `media.videos_exploitables` et ignorait
+  //    `media.video_recuperable` -- la seconde question, « yt-dlp saura-t-il
+  //    aller la chercher au gel ? ». Meta omet `media_url` des reels a musique
+  //    protegee : sans elle, TOUS les reels d'artistes sont annonces impossibles
+  //    alors que le serveur les juge eligibles (verifie sur l'article 22571 :
+  //    `store.raison_ineligible_reel` rend None, source de la video « ytdlp »).
+  const raisonReel = raisonPasDeReel(article ? article.media : null, article ? article.url : null);
+  const estReel = post.template === "kinda_reel";
+  // On ne grise jamais le format COURANT : il est deja choisi, et le dire
+  // impossible serait un mensonge sur l'etat de la base.
+  const reelDisabled = raisonReel != null && !estReel;
+  const texteRaisonReel = article ? raisonReel : "actu introuvable (" + retentionTexte() + ")";
+  // Trois cas, trois phrases differentes -- et jamais la contradiction d'avant
+  // (REELS grise a cote d'un post qui EST un reel) :
+  const raisonFormat = reelDisabled
+    ? `<div class="reel-reason" id="reel-reason">REELS indisponible — ${escapeHtml(texteRaisonReel)}</div>`
+    : estReel && raisonReel
+      // Le post est DEJA un reel et l'actu n'offre plus de video : on ne grise
+      // pas l'etat courant (ce serait mentir sur la base), on dit ce qui va se
+      // passer. Le gel reverifie l'eligibilite et LIBERE le creneau sans exclure
+      // l'article (`preparation_reel.ReelInadapte`).
+      ? `<div class="reel-reason" id="reel-reason">Ce post est un reel, mais l'actu n'offre`
+        + ` plus de vidéo exploitable — ${escapeHtml(texteRaisonReel)}. Le gel libérera le`
+        + ` créneau (l'article reste publiable en carrousel).</div>`
+      : "";
 
   // D'où vient le FOND de la cover. Posé à la composition (`variants.fond`),
   // jamais déduit : une fois l'URL dans la slide, plus rien ne dirait si elle
@@ -2025,9 +2211,7 @@ function renderPostDetail(post, article, covers) {
   // « mieux vaut l'aplat sombre » : depuis la Tâche 5 du chantier visuels
   // (2026-09-21), une composition neuve ne pose plus jamais cet aplat, elle
   // SAUTE le créneau — un brouillon qui porte encore cette origine est donc un
-  // vestige, et le dire évite de chercher à comprendre pourquoi un post part
-  // sur un fond uni. Et `web` promettait un crédit du site, retiré le même
-  // jour : le crédit de la légende ne porte plus que des comptes (@artiste).
+  // vestige. Et `web` promettait un crédit du site, retiré le même jour.
   const ORIGINES_FOND = {
     article: "📰 photo de l'actu",
     compte: "📸 photo du compte qui a publié l'actu (l'actu n'offrait qu'une affiche)",
@@ -2039,29 +2223,197 @@ function renderPostDetail(post, article, covers) {
   };
   const origineFond = ((post.variants || {}).fond || {}).origine;
   const fondSection = origineFond
-    ? `<div class="reel-reason">${escapeHtml(ORIGINES_FOND[origineFond] || origineFond)}</div>`
+    ? `<div class="note">${escapeHtml(ORIGINES_FOND[origineFond] || origineFond)}</div>`
     : "";
 
-  // --- « Ce qui va partir » -------------------------------------------------
-  //
-  // Trois choses que la fiche ne disait pas, et dont l'absence est ce qui a
-  // laisse passer les defauts reperes a l'oeil sur le compte : le texte EXACT
-  // (apres aeration, normalisation des hashtags, credit, troncature a 2150), le
-  // CREDIT (`posts.credit`, affiche nulle part jusqu'ici), et l'heure de depart.
+  // --- Le DEPART : quand, dans quel etat, et ce qui peut encore se modifier ---
   //
   // `departsParPost === null` veut dire qu'on n'a PAS PU lire : on l'ecrit. Une
   // valeur non lue s'affiche inconnue, jamais verte.
   const depart = departsParPost ? departsParPost.get(post.id) : undefined;
-  let departSection;
+  let bandeauDepart;
   if (departsParPost === null) {
-    departSection = `
-      <div class="section-title">Ce qui va partir</div>
-      <div class="media-empty">Aperçu du texte publié injoignable — on ne sait pas ce qui partira.</div>`;
+    bandeauDepart = `<div class="depart-bandeau inconnu">Aperçu du départ injoignable —`
+      + ` on ne sait pas ce qui partira, ni quand.</div>`;
   } else if (!depart) {
-    departSection = `
-      <div class="section-title">Ce qui va partir</div>
-      <div class="media-empty">Ce post n'est sur aucun créneau à venir : rien ne partira tout seul.</div>`;
+    bandeauDepart = `<div class="depart-bandeau">Ce post n'est sur aucun créneau à venir :`
+      + ` rien ne partira tout seul.</div>`;
   } else {
+    // PLUS DE BOUTON « Rouvrir » (2026-10-04). Le re-gel est AUTOMATIQUE : toute
+    // edition de la cover ou des slides invalide les fichiers figés toute seule.
+    // Ce qu'on garde, c'est la RAISON quand l'édition va être refusée — règle de
+    // la refonte : un contrôle indisponible imprime pourquoi, jamais un bouton
+    // gris et muet.
+    const noteRegel = depart.etat !== "gele"
+      ? ""
+      : depart.reouvrable
+        ? `<div class="note">Créneau gelé : modifier la cover ou les éléments refait les`
+          + ` fichiers figés automatiquement (l'agent repasse dans les 10 min). La légende et`
+          + ` les hashtags, eux, sont relus juste avant l'envoi.</div>`
+        : `<div class="reel-reason">⚠ ${escapeHtml(depart.raison_non_reouvrable || "")}`
+          + ` — la légende et les hashtags restent modifiables.</div>`;
+    bandeauDepart = `
+      <div class="depart-bandeau">
+        <span class="quand">${escapeHtml(fmtDate(depart.publier_a) || "?")}</span>
+        <span class="dans">${escapeHtml(minutesLisibles(depart.minutes_restantes))}</span>
+        <span class="etat">${escapeHtml(depart.format)} · ${escapeHtml(depart.etat)}</span>
+      </div>
+      ${depart.raison_non_editable ? `<div class="reel-reason">${escapeHtml(depart.raison_non_editable)}</div>` : ""}
+      ${noteRegel}`;
+  }
+
+  // --- La LISTE UNIQUE : ce que Meta recevra ---------------------------------
+  //
+  // TROIS listes montraient le meme visuel jusqu'au 2026-10-05 : « Visuels
+  // retenus » (les actifs), « Médias de l'actu (carrousel) » (des cases a cocher
+  // sur `article.media`) et « Ce que Meta recevra ». Decision de l'utilisateur :
+  // il n'en reste qu'UNE, la liste finale -- celle qui part. Les candidats
+  // disponibles se proposent AU MOMENT D'AJOUTER, pas en permanence dans deux
+  // sections concurrentes.
+  //
+  // Rien d'utile n'a disparu avec les deux autres : l'origine, le compte, la
+  // date du post et le lien « voir le post » (qui ne vivaient que dans « Visuels
+  // retenus ») sont desormais sur la ligne de l'element ; cocher/decocher un
+  // media de l'actu est devenu « ajouter » / « retirer », qui passent par
+  // `carrousel_explicite` et sont donc, eux, REELLEMENT pris en compte par le gel.
+  const elementsListe = elementsMedia(post, depart);
+  const reserve = (depart && depart.candidats) || reserveLocale(post, article);
+  const dejaDansLaListe = new Set(elementsListe.map((e) => e.source_url));
+  // Modifiable ? Deux refus possibles, et ils ne portent pas sur la meme chose :
+  // la publication EN VOL ferme tout (`editable`), et un créneau gelé trop près de
+  // son départ ne peut plus refaire ses fichiers (`reouvrable`) — la légende, elle,
+  // reste modifiable jusqu'au bout. Les deux impriment leur raison plus haut.
+  const editableListe = !depart
+    || (depart.editable && (depart.etat !== "gele" || depart.reouvrable));
+  const raisonNonEditable = depart
+    ? (depart.raison_non_editable || depart.raison_non_reouvrable || "")
+    : "";
+  // Les deux refus que les cases a cocher « Médias de l'actu » portaient, et qui
+  // devaient survivre a leur suppression : une video SANS URL directe (la source
+  // ne donne qu'un lien de page -- rien a telecharger, et un PATCH avec
+  // `url: null` echoue en 422 pour une action que l'UI presentait comme
+  // possible), et une video trop longue pour une SLIDE de carrousel. L'option
+  // reste VISIBLE et porte sa raison : jamais grise et muette.
+  const motifInutilisable = (c) => {
+    if (!c.url) return "pas d'URL directe : rien à télécharger";
+    if (c.type === "video" && c.duration_ms != null && c.duration_ms > DUREE_MAX_SLIDE_MS) {
+      return `trop longue pour une slide (max ${DUREE_MAX_SLIDE_MS / 1000} s)`;
+    }
+    return null;
+  };
+  const optionsReserve = reserve.map((c, i) => {
+    const dims = c.width && c.height ? ` ${c.width}×${c.height}` : "";
+    const marque = dejaDansLaListe.has(c.url) ? " (déjà dans la liste)" : "";
+    const qui = c.compte || ORIGINES_ELEMENT[c.origine] || c.origine || "?";
+    const motif = motifInutilisable(c);
+    return `<option value="${i}"${motif ? " disabled" : ""}>${escapeHtml(
+      `${c.type}${dims} · ${qui}${marque}${motif ? " — " + motif : ""}`)}</option>`;
+  }).join("");
+  const reserveUtilisable = reserve.filter((c) => !motifInutilisable(c)).length;
+  const lignesElements = [
+    // La cover d'abord, toujours : elle n'est ni supprimable ni déplaçable, et le
+    // dire explicitement vaut mieux que de l'omettre de la liste.
+    `<div class="element-ligne cover">
+       <span class="rang">1</span>
+       ${vignetteElement(
+          (depart && depart.elements && depart.elements.find((e) => e.kind === "cover")) || {},
+          depart)}
+       <div class="quoi">Cover Kinda
+         <div class="d2">${escapeHtml(ORIGINES_ELEMENT[origineFond] || "fond inconnu")}
+           — se modifie dans « Cover », plus haut</div>
+       </div>
+     </div>`,
+    // Le rang affiché est la place CHEZ META, donc il ne compte que les éléments
+    // qui partent : un écarté porte « — ». Numéroter les écartés avec les autres
+    // ferait croire que le carrousel en a un de plus qu'il n'en aura.
+    ...elementsListe.map((e, i) => {
+      const infos = infosDeLElement(e, reserve);
+      const details = detailsDuVisuel(infos);
+      const lien = infos.permalink
+        ? ` <a href="${escapeHtml(infos.permalink)}" target="_blank" rel="noopener">voir le post</a>`
+        : "";
+      const date = infos.publie_le ? ` · post du ${escapeHtml(fmtDate(infos.publie_le) || "?")}` : "";
+      return `
+      <div class="element-ligne${e.ecarte ? " ecarte" : ""}" data-rang="${i}">
+        <span class="rang">${e.ecarte ? "—"
+          : elementsListe.slice(0, i).filter((x) => !x.ecarte).length + 2}</span>
+        ${vignetteElement(e, depart)}
+        <div class="quoi">${escapeHtml(e.type || "média")}${details ? " · " + escapeHtml(details) : ""}${
+          e.ecarte ? " — écarté au gel" : ""}
+          <div class="d2">${escapeHtml(ORIGINES_ELEMENT[e.origine] || e.origine || "origine inconnue")}
+            ${e.compte ? "· " + escapeHtml(e.compte) : ""}${date}${lien}</div>
+          ${e.raison ? `<div class="d2 motif">${escapeHtml(e.raison)}</div>` : ""}
+        </div>
+        <div class="gestes">
+          <button class="el-haut" title="Monter d'un rang" ${i === 0 || !editableListe ? "disabled" : ""}>↑</button>
+          <button class="el-bas" title="Descendre d'un rang"
+            ${i === elementsListe.length - 1 || !editableListe ? "disabled" : ""}>↓</button>
+          <button class="el-remplacer" title="Remplacer par un autre visuel"
+            ${!reserveUtilisable || !editableListe ? "disabled" : ""}>⇄</button>
+          <button class="el-retirer" title="Retirer de la liste" ${editableListe ? "" : "disabled"}>✕</button>
+        </div>
+        <select class="el-choix" hidden><option value="">— remplacer par —</option>${optionsReserve}</select>
+      </div>`;
+    }),
+  ].join("");
+  // « Inconnu, jamais vert » : avant le gel, la liste affichée est le BROUILLON,
+  // pas ce qui partira — le gel y ajoutera les médias de l'actu. On le dit.
+  const avisListe = !depart
+    ? `<div class="note">Ce post n'est sur aucun créneau : c'est la liste du brouillon.</div>`
+    : depart.elements
+      ? `<div class="note">Liste écrite au gel : c'est exactement ce que Meta a reçu`
+        + ` ou recevra, dans cet ordre.</div>`
+      : depart.liste_arretee
+        ? `<div class="note">Pas encore gelé — c'est cette liste, arrêtée à la main, que le`
+          + ` gel figera telle quelle.</div>`
+        : `<div class="note">Pas encore gelé — liste du brouillon. Le gel y ajoutera les`
+          + ` médias de l'actu, sauf si vous l'arrêtez ici (toute modification l'arrête).</div>`;
+  // Decision du 2026-09-17 : jamais l'image ni la video d'un compte média. La
+  // reserve ne les contient donc pas -- et on le DIT, sinon « rien à ajouter »
+  // passerait pour une actu sans visuel.
+  const interdit = !!(article && article.visuels_interdits);
+  const raisonReserveVide = interdit
+    ? `visuel d'un compte média : interdit (watermark, plagiat d'un concurrent)`
+    : reserve.length
+      // La reserve n'est pas vide, mais rien n'y est publiable : on dit POURQUOI,
+      // sinon « aucun visuel disponible » passerait pour une actu sans image.
+      ? [...new Set(reserve.map(motifInutilisable))].join(" ; ")
+      : `l'actu est purgée ou n'offre aucun visuel autorisé`;
+  const sectionElements = `
+      <div class="bloc-titre">Ce que Meta recevra
+        <span class="compte-el">${elementsListe.filter((e) => !e.ecarte).length + 1} élément(s)</span></div>
+      ${avisListe}
+      ${depart && depart.liste_arretee && depart.elements
+        ? `<div class="note">Liste arrêtée à la main : le gel ne reprend plus ni les visuels`
+          + ` retenus à la composition ni les médias de l'actu.</div>`
+        : ""}
+      <div class="elements-liste" id="elements-liste">${lignesElements}</div>
+      <div class="ajouts">
+        <select id="el-ajouter" ${reserveUtilisable && editableListe ? "" : "disabled"}>
+          <option value="">— ajouter un visuel —</option>${optionsReserve}
+        </select>
+        <div class="depot">
+          <input type="file" id="el-depot" ${editableListe ? "" : "disabled"}
+            accept="image/jpeg,image/png,image/webp,image/gif,image/bmp,image/tiff">
+        </div>
+      </div>
+      ${reserveUtilisable ? "" : `<div class="note">Aucun visuel à ajouter —`
+        + ` ${escapeHtml(raisonReserveVide)}.</div>`}
+      <div class="depot-motif" id="el-depot-motif">${editableListe
+        ? `Ou déposez une image de votre disque — JPEG, PNG, WebP… 25 Mo au maximum. Elle sera`
+          + ` recadrée en 1080×1350 (le haut de l'image est conservé) et ajoutée en fin de liste.`
+        : escapeHtml(raisonNonEditable)}</div>`;
+
+  // --- Le TEXTE : une zone d'edition, et UN apercu replie --------------------
+  //
+  // La legende etait affichee DEUX FOIS : la zone editable, puis « Ce qui va
+  // partir » en entier. Decision de l'utilisateur : une zone d'edition, plus un
+  // apercu REPLIABLE. Mais les COMPTEURS restent toujours visibles -- ils
+  // signalent un depassement avant qu'il coute un post, et les cacher dans le
+  // repli les rendrait inutiles.
+  let mesuresHtml = "";
+  let apercuHtml = "";
+  if (depart) {
     const mesures = [];
     const trop = depart.legende_longueur > depart.legende_maximum;
     mesures.push(`<span class="${trop ? "limite" : ""}">${depart.legende_longueur} / `
@@ -2081,120 +2433,16 @@ function renderPostDetail(post, article, covers) {
       : depart.deborde
         ? `<span class="limite">⚠ la cover déborde et partira ainsi</span>`
         : `<span>cover mesurée : elle tient</span>`);
-    // PLUS DE BOUTON « Rouvrir » (2026-10-04). Le re-gel est AUTOMATIQUE : toute
-    // edition de la cover ou des slides invalide les fichiers figés toute seule, et
-    // l'agent les refait au passage suivant. L'utilisateur devait sinon trouver,
-    // comprendre et cliquer un bouton pour obtenir ce qu'il venait de demander.
-    //
-    // Ce qu'on garde, c'est la RAISON quand l'édition va être refusée — règle de la
-    // refonte : un contrôle indisponible imprime pourquoi, jamais un bouton gris et
-    // muet. Dire à l'avance « trop près du départ » évite de découvrir le refus
-    // après avoir tapé.
-    const noteRegel = depart.etat !== "gele"
-      ? ""
-      : depart.reouvrable
-        ? `<div class="reel-reason">Créneau gelé : toute modification de la cover ou des`
-          + ` éléments refait les fichiers figés automatiquement (l'agent repasse dans les`
-          + ` 10 min). La légende et les hashtags, eux, sont relus juste avant l'envoi.</div>`
-        : `<div class="reel-reason motif">⚠ ${escapeHtml(depart.raison_non_reouvrable || "")}`
-          + ` — la légende et les hashtags restent modifiables.</div>`;
-    departSection = `
-      <div class="section-title">Ce qui va partir — ${escapeHtml(fmtDate(depart.publier_a) || "?")}`
-      + ` · ${escapeHtml(minutesLisibles(depart.minutes_restantes))}</div>
-      <div class="depart-apercu">${escapeHtml(depart.legende_publiee)}</div>
-      <div class="depart-mesures">${mesures.join("")}</div>
-      ${depart.raison_non_editable ? `<div class="reel-reason">${escapeHtml(depart.raison_non_editable)}</div>` : ""}
-      ${noteRegel}`;
+    mesuresHtml = `<div class="depart-mesures">${mesures.join("")}</div>`;
+    apercuHtml = `
+      <details class="apercu-publie">
+        <summary>Voir le texte exact que Meta recevra</summary>
+        <div class="depart-apercu">${escapeHtml(depart.legende_publiee)}</div>
+      </details>`;
+  } else if (departsParPost === null) {
+    mesuresHtml = `<div class="depart-mesures"><span class="inconnu">longueur publiée et`
+      + ` crédit inconnus — l'aperçu du départ est injoignable</span></div>`;
   }
-
-  // --- La liste finale des éléments -----------------------------------------
-  const elementsListe = elementsMedia(post, depart);
-  const reserve = (depart && depart.candidats) || [];
-  const dejaDansLaListe = new Set(elementsListe.map((e) => e.source_url));
-  // Modifiable ? Deux refus possibles, et ils ne portent pas sur la meme chose :
-  // la publication EN VOL ferme tout (`editable`), et un créneau gelé trop près de
-  // son départ ne peut plus refaire ses fichiers (`reouvrable`) — la légende, elle,
-  // reste modifiable jusqu'au bout. Les deux impriment leur raison plus haut.
-  const editableListe = !depart
-    || (depart.editable && (depart.etat !== "gele" || depart.reouvrable));
-  const optionsReserve = reserve.map((c, i) => {
-    const dims = c.width && c.height ? ` ${c.width}×${c.height}` : "";
-    const marque = dejaDansLaListe.has(c.url) ? " (déjà dans la liste)" : "";
-    const qui = c.compte || ORIGINES_ELEMENT[c.origine] || c.origine || "?";
-    return `<option value="${i}">${escapeHtml(`${c.type}${dims} · ${qui}${marque}`)}</option>`;
-  }).join("");
-  const lignesElements = [
-    // La cover d'abord, toujours : elle n'est ni supprimable ni déplaçable, et le
-    // dire explicitement vaut mieux que de l'omettre de la liste.
-    `<div class="element-ligne cover">
-       <span class="rang">1</span>
-       ${vignetteElement(
-          (depart && depart.elements && depart.elements.find((e) => e.kind === "cover")) || {},
-          depart)}
-       <div class="quoi">Cover Kinda
-         <div class="d2">${escapeHtml(ORIGINES_ELEMENT[depart && depart.fond_origine] || "fond inconnu")}
-           — se modifie plus haut (variantes, image de fond)</div>
-       </div>
-     </div>`,
-    // Le rang affiché est la place CHEZ META, donc il ne compte que les éléments
-    // qui partent : un écarté porte « — ». Numéroter les écartés avec les autres
-    // ferait croire que le carrousel en a un de plus qu'il n'en aura.
-    ...elementsListe.map((e, i) => `
-      <div class="element-ligne${e.ecarte ? " ecarte" : ""}" data-rang="${i}">
-        <span class="rang">${e.ecarte ? "—"
-          : elementsListe.slice(0, i).filter((x) => !x.ecarte).length + 2}</span>
-        ${vignetteElement(e, depart)}
-        <div class="quoi">${escapeHtml(e.type || "média")}${e.ecarte ? " — écarté au gel" : ""}
-          <div class="d2">${escapeHtml(ORIGINES_ELEMENT[e.origine] || e.origine || "origine inconnue")}
-            ${e.compte ? "· " + escapeHtml(e.compte) : ""}</div>
-          ${e.raison ? `<div class="d2 motif">${escapeHtml(e.raison)}</div>` : ""}
-        </div>
-        <div class="gestes">
-          <button class="el-haut" title="Monter d'un rang" ${i === 0 || !editableListe ? "disabled" : ""}>↑</button>
-          <button class="el-bas" title="Descendre d'un rang"
-            ${i === elementsListe.length - 1 || !editableListe ? "disabled" : ""}>↓</button>
-          <button class="el-remplacer" title="Remplacer par un autre visuel"
-            ${!reserve.length || !editableListe ? "disabled" : ""}>⇄</button>
-          <button class="el-retirer" title="Retirer de la liste" ${editableListe ? "" : "disabled"}>✕</button>
-        </div>
-        <select class="el-choix" hidden><option value="">— remplacer par —</option>${optionsReserve}</select>
-      </div>`),
-  ].join("");
-  // « Inconnu, jamais vert » : avant le gel, la liste affichée est le BROUILLON,
-  // pas ce qui partira — le gel y ajoutera les médias de l'actu. On le dit.
-  const avisListe = !depart
-    ? ""
-    : depart.elements
-      ? `<div class="reel-reason">Liste écrite au gel : c'est exactement ce que Meta a reçu`
-        + ` ou recevra, dans cet ordre.</div>`
-      : depart.liste_arretee
-        ? `<div class="reel-reason">Pas encore gelé — c'est cette liste, arrêtée à la main, que le`
-          + ` gel figera telle quelle.</div>`
-        : `<div class="reel-reason">Pas encore gelé — liste du brouillon. Le gel y ajoutera les`
-          + ` médias de l'actu, sauf si vous l'arrêtez ici (toute modification l'arrête).</div>`;
-  const sectionElements = !depart ? "" : `
-      <div class="section-title">Ce que Meta recevra — ${elementsListe.filter((e) => !e.ecarte).length + 1} élément(s)</div>
-      ${avisListe}
-      ${depart.liste_arretee && depart.elements
-        ? `<div class="reel-reason">Liste arrêtée à la main : le gel ne reprend plus ni les visuels`
-          + ` retenus à la composition ni les médias de l'actu.</div>`
-        : ""}
-      <div class="elements-liste" id="elements-liste">${lignesElements}</div>
-      <div class="bg-field">
-        <select id="el-ajouter" ${reserve.length && editableListe ? "" : "disabled"}>
-          <option value="">— ajouter un visuel —</option>${optionsReserve}
-        </select>
-      </div>
-      ${reserve.length ? "" : `<div class="reel-reason">Aucun visuel disponible à ajouter :`
-        + ` l'actu est purgée ou ses visuels sont interdits (compte média).</div>`}
-      <div class="depot">
-        <input type="file" id="el-depot" ${editableListe ? "" : "disabled"}
-          accept="image/jpeg,image/png,image/webp,image/gif,image/bmp,image/tiff">
-      </div>
-      <div class="depot-motif" id="el-depot-motif">${editableListe
-        ? `Ou déposez une image de votre disque — JPEG, PNG, WebP… 25 Mo au maximum. Elle sera`
-          + ` recadrée en 1080×1350 (le haut de l'image est conservé) et ajoutée en fin de liste.`
-        : escapeHtml(depart.raison_non_editable || depart.raison_non_reouvrable || "")}</div>`;
 
   detailEl.innerHTML = `
     <div class="sheet">
@@ -2203,52 +2451,59 @@ function renderPostDetail(post, article, covers) {
         <span class="status-pill ${post.status}">${STATUS_LABELS[post.status] || post.status}</span>
         <button class="close-btn">✕ Fermer</button>
       </div>
+      ${bandeauDepart}
       ${avertissementHtml}
-      <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
 
-      <div class="section-title">Cover — 4 variantes</div>
-      <div class="covers-grid">${coversHtml}</div>
+      <section class="bloc">
+        <div class="bloc-titre">Cover</div>
+        <div class="covers-grid">${coversHtml}</div>
+        <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
+        <div class="sous-titre">Format</div>
+        <div class="template-switch">
+          <button id="tpl-post" class="${post.template === "kinda_post" ? "on" : ""}">POST</button>
+          <button id="tpl-reel" class="${estReel ? "on" : ""}" ${reelDisabled ? "disabled" : ""}
+            title="${reelDisabled ? escapeHtml(texteRaisonReel) : ""}">REELS</button>
+        </div>
+        ${raisonFormat}
+        <div class="sous-titre">Image de fond</div>
+        ${fondSection}
+        <div class="bg-field">
+          <input type="text" id="bg-url" value="${escapeHtml(cover.image_url || "")}" placeholder="https://…">
+          <button id="bg-valider">Valider le fond</button>
+        </div>
+      </section>
 
-      <div class="section-title">Format</div>
-      <div class="template-switch">
-        <button id="tpl-post" class="${post.template === "kinda_post" ? "on" : ""}">POST</button>
-        <button id="tpl-reel" class="${post.template === "kinda_reel" ? "on" : ""}" ${reelDisabled ? "disabled" : ""}
-          title="${reelDisabled ? escapeHtml(article ? raisonReel : "médias indisponibles") : ""}">REELS</button>
-      </div>
-      ${reasonHtml}
+      <section class="bloc">
+        ${sectionElements}
+      </section>
 
-      <div class="section-title">Image de fond</div>
-      ${fondSection}
-      <div class="bg-field">
-        <input type="text" id="bg-url" value="${escapeHtml(cover.image_url || "")}" placeholder="https://…">
-        <button id="bg-valider">Valider</button>
-      </div>
+      <section class="bloc">
+        <div class="bloc-titre">Texte publié</div>
+        <div class="field">
+          <label for="edit-caption">Légende</label>
+          <textarea id="edit-caption">${escapeHtml(post.caption || "")}</textarea>
+        </div>
+        <div class="field">
+          <label for="edit-hashtags">Hashtags (séparés par des espaces)</label>
+          <textarea id="edit-hashtags" rows="2">${escapeHtml((post.hashtags || []).join(" "))}</textarea>
+        </div>
+        ${mesuresHtml}
+        ${apercuHtml}
+        <div class="render-warning" id="texte-non-enregistre" hidden>
+          ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
+        </div>
+      </section>
 
-      ${actifsSection}
-      <div class="section-title">Médias de l'actu (carrousel)</div>
-      <div class="media-list" id="medias-actu">${mediaHtml}</div>
-
-      <div class="field">
-        <label>Légende</label>
-        <textarea id="edit-caption">${escapeHtml(post.caption || "")}</textarea>
-      </div>
-      <div class="field">
-        <label>Hashtags (séparés par des espaces)</label>
-        <textarea id="edit-hashtags" rows="2">${escapeHtml((post.hashtags || []).join(" "))}</textarea>
-      </div>
-      <div class="render-warning" id="texte-non-enregistre" hidden>
-        ⚠ Légende ou hashtags modifiés et NON enregistrés — « Enregistrer » pour les garder.
-      </div>
-      ${departSection}
-      ${sectionElements}
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
         <button id="btn-approve">Valider le statut</button>
         <button id="btn-publish">Marquer comme publié</button>
         <a href="/posts/${post.id}/export.zip">⬇ Télécharger</a>
+        <div class="etat-geste" id="etat-geste"></div>
         ${post.status === "draft" ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
       </div>
     </div>`;
+  peindreGeste(detailEl.querySelector("#etat-geste"), post.id);
   // `article_url` etait dans la reponse de l'API et n'etait lu NULLE PART :
   // le titre s'affichait en clair, et ouvrir l'actu se faisait a la main.
   const titreFiche = detailEl.querySelector("h2");
@@ -2293,6 +2548,7 @@ function renderPostDetail(post, article, covers) {
     if (textesAReinjecter(brouillonTexte, post)
         && !confirm("La légende n'est pas enregistrée. Fermer et perdre ces modifications ?")) return;
     brouillonTexte = null;
+    dernierGeste = null;
     detailEl.hidden = true;
     detailEl.innerHTML = "";
   };
@@ -2302,42 +2558,36 @@ function renderPostDetail(post, article, covers) {
   for (const choix of detailEl.querySelectorAll(".cover-choice")) {
     choix.onclick = async () => {
       const index = Number(choix.dataset.index);
-      try {
-        const updated = await enregistrerPost(post.id, { variante_retenue: index });
-        // Les 4 covers rendues ne changent pas (meme fond, memes 4 textes) --
-        // seule la marque "retenue" bouge : pas besoin de repayer un rendu.
-        renderPostDetail(updated, article, covers);
-      } catch (erreur) {
-        alert("Échec de la sélection de la variante : " + erreur.message);
-      }
+      if (index === indexActif) return;
+      const updated = await ecrireDepuisLaFiche(post.id, {
+        libelle: `Variante ${index + 1} retenue`,
+        action: () => enregistrerPost(post.id, { variante_retenue: index }),
+      });
+      // Les 4 covers rendues ne changent pas (meme fond, memes 4 textes) --
+      // seule la marque "retenue" bouge : pas besoin de repayer un rendu.
+      if (updated) renderPostDetail(updated, article, covers);
     };
   }
 
   // --- Switch POST / REELS ---
   //
-  // Deux `try` DISTINCTS et non un seul : le PATCH et le rendu des covers sont
-  // deux appels reseau independants, et seul le premier engage un changement
-  // persiste. Un seul `try` autour des deux ferait echouer silencieusement un
-  // changement de format DEJA COMMIS cote serveur des que le rendu (Chromium,
-  // 503 transitoire) rate -- l'utilisateur verrait "Echec du changement de
-  // format" alors que le format a change, et l'UI resterait sur l'ancien
-  // etat/anciennes covers sans aucun moyen de le voir sans fermer-rouvrir.
-  // Meme principe que `ouvrirPost`, qui separe deja render et covers de la
-  // lecture du post pour la meme raison.
+  // Deux appels reseau DISTINCTS et un seul engage un changement persiste : le
+  // PATCH d'abord (annonce par `ecrireDepuisLaFiche`), le rendu des covers
+  // ensuite. Un echec du rendu (Chromium, 503 transitoire) ne doit jamais faire
+  // croire que le format n'a pas change -- il a change.
   const basculerTemplate = async (template) => {
     if (template === post.template) return;
-    let updated;
-    try {
-      updated = await enregistrerPost(post.id, { template });
-    } catch (erreur) {
-      alert("Échec du changement de format : " + erreur.message);
-      return;
-    }
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      libelle: template === "kinda_reel" ? "Format REELS" : "Format POST",
+      action: () => enregistrerPost(post.id, { template }),
+    });
+    if (!updated) return;
     let nouvellesCovers = null;
     try {
       nouvellesCovers = await chargerCovers(post.id);
     } catch (erreur) {
-      alert("Format changé, mais l'aperçu des covers a échoué : " + erreur.message);
+      annoncerGeste(post.id, "erreur",
+        "✓ format changé, mais l'aperçu des covers a échoué — " + erreur.message);
     }
     // Le gabarit change le pictogramme du credit (📸 / 🎥), donc le texte publie.
     await chargerDeparts();
@@ -2348,59 +2598,31 @@ function renderPostDetail(post, article, covers) {
   if (!reelDisabled) btnReel.onclick = () => basculerTemplate("kinda_reel");
 
   // --- Fond de la cover ---
-  // Meme separation que basculerTemplate, meme motif : le PATCH du fond est
-  // deja commis quand le rendu des covers echoue, l'UI ne doit pas le cacher.
-  detailEl.querySelector("#bg-valider").onclick = async () => {
+  const btnFond = detailEl.querySelector("#bg-valider");
+  btnFond.onclick = async () => {
     const url = detailEl.querySelector("#bg-url").value.trim() || null;
     const nouvelleCover = { ...cover, image_url: url };
-    const slides = [nouvelleCover, ...slidesMedia];
-    let updated;
-    try {
-      updated = await enregistrerPost(post.id, { slides });
-    } catch (erreur) {
-      alert("Échec de la mise à jour du fond : " + erreur.message);
-      return;
-    }
+    const slides = [nouvelleCover, ...(post.slides || []).slice(1)];
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      bouton: btnFond,
+      libelle: "Image de fond",
+      action: () => enregistrerPost(post.id, { slides }),
+    });
+    if (!updated) return;
     let nouvellesCovers = null;
     try {
       nouvellesCovers = await chargerCovers(post.id);
     } catch (erreur) {
-      alert("Fond mis à jour, mais l'aperçu des covers a échoué : " + erreur.message);
+      annoncerGeste(post.id, "erreur",
+        "✓ fond mis à jour, mais l'aperçu des covers a échoué — " + erreur.message);
     }
+    await chargerDeparts();
     renderPostDetail(updated, article, nouvellesCovers);
   };
 
-  // --- Choix des medias du carrousel ---
-  //
-  // La recherche est BORNEE aux medias de l'actu (`#medias-actu`) : la section
-  // « Visuels retenus » produit elle aussi des `.media-choice`, mais SANS case a
-  // cocher et sans `data-index`. Un `querySelectorAll(".media-choice")` sur
-  // toute la fiche les ramassait donc aussi, et `choix.querySelector(
-  // ".media-check").onchange` levait un TypeError sur le premier d'entre eux --
-  // au milieu de `renderPostDetail`, donc AVANT `detailEl.hidden = false` et
-  // avant le branchement de « Enregistrer » : tout post portant des `assets`
-  // (c'est-a-dire tous ceux composes depuis la migration 0018) ne s'ouvrait
-  // PAS, et le clic sur la ligne ne faisait rien du tout. Meme sans le plantage,
-  // la liste des coches lisait `mediaList[NaN]` pour ces divs sans index.
-  const listeMedias = detailEl.querySelector("#medias-actu");
-  for (const choix of listeMedias.querySelectorAll(".media-choice")) {
-    choix.querySelector(".media-check").onchange = async () => {
-      const coches = [...listeMedias.querySelectorAll(".media-choice")]
-        .filter((el) => el.querySelector(".media-check").checked)
-        .map((el) => mediaList[Number(el.dataset.index)]);
-      const slides = [cover, ...coches.map((m) => ({ kind: "media", ...m }))];
-      try {
-        const updated = await enregistrerPost(post.id, { slides });
-        renderPostDetail(updated, article, covers);
-      } catch (erreur) {
-        alert("Échec de la mise à jour des médias : " + erreur.message);
-      }
-    };
-  }
-
   // --- Éditer la liste finale ---
   //
-  // Un SEUL chemin d'écriture pour les quatre gestes (retirer, monter, descendre,
+  // Un SEUL chemin d'écriture pour les cinq gestes (retirer, monter, descendre,
   // remplacer, ajouter) : la liste entière repart avec `carrousel_explicite`, qui
   // dit au gel de ne plus reprendre ni les visuels de la composition ni les médias
   // de l'actu. Sans ce marqueur, retirer un élément n'aurait aucun effet — le gel
@@ -2410,40 +2632,41 @@ function renderPostDetail(post, article, covers) {
   // fichiers figés lui-même (`app/schedule/reouverture.py`). Aucun bouton ici, et
   // aucune double publication possible — l'écriture est conditionnelle sur
   // (état GELÉ, même post), et `_publier` ne sélectionne que des créneaux GELÉS.
-  const ecrireListe = async (medias) => {
-    try {
-      const updated = await enregistrerPost(post.id, {
+  const ecrireListe = async (medias, libelle, bouton) => {
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      bouton,
+      libelle: libelle || "Liste des éléments",
+      action: () => enregistrerPost(post.id, {
         slides: [cover, ...medias],
         carrousel_explicite: true,
-      });
-      // La liste figée vient de changer : sans ce rechargement, la section
-      // montrerait l'ancien manifeste — exactement l'écart qu'elle supprime.
-      await chargerDeparts();
-      renderPostDetail(updated, article, covers);
-      if (!document.getElementById("schedule-panel").hidden) loadSchedulePanel();
-    } catch (erreur) {
-      alert("Échec de la mise à jour de la liste : " + erreur.message);
-    }
+      }),
+    });
+    if (!updated) return;
+    // La liste figée vient de changer : sans ce rechargement, la section
+    // montrerait l'ancien manifeste — exactement l'écart qu'elle supprime.
+    await chargerDeparts();
+    renderPostDetail(updated, article, covers);
+    if (!document.getElementById("schedule-panel").hidden) loadSchedulePanel();
   };
   const slidesCourantes = () => elementsListe.map((e) => slideDepuisElement(e, reserve));
   const zoneElements = detailEl.querySelector("#elements-liste");
   if (zoneElements) {
     for (const ligne of zoneElements.querySelectorAll(".element-ligne[data-rang]")) {
       const rang = Number(ligne.dataset.rang);
-      ligne.querySelector(".el-retirer").onclick = () => {
+      ligne.querySelector(".el-retirer").onclick = (ev) => {
         const medias = slidesCourantes();
         medias.splice(rang, 1);
-        ecrireListe(medias);
+        ecrireListe(medias, `Élément ${rang + 2} retiré`, ev.currentTarget);
       };
-      ligne.querySelector(".el-haut").onclick = () => {
+      ligne.querySelector(".el-haut").onclick = (ev) => {
         const medias = slidesCourantes();
         [medias[rang - 1], medias[rang]] = [medias[rang], medias[rang - 1]];
-        ecrireListe(medias);
+        ecrireListe(medias, "Élément monté", ev.currentTarget);
       };
-      ligne.querySelector(".el-bas").onclick = () => {
+      ligne.querySelector(".el-bas").onclick = (ev) => {
         const medias = slidesCourantes();
         [medias[rang], medias[rang + 1]] = [medias[rang + 1], medias[rang]];
-        ecrireListe(medias);
+        ecrireListe(medias, "Élément descendu", ev.currentTarget);
       };
       // Le choix est un `select` RÉVÉLÉ et non une boîte de dialogue : la réserve
       // peut porter dix visuels, qu'un `prompt` numéroté rendrait illisibles.
@@ -2453,7 +2676,7 @@ function renderPostDetail(post, article, covers) {
         if (choix.value === "") return;
         const medias = slidesCourantes();
         medias[rang] = { kind: "media", ...reserve[Number(choix.value)] };
-        ecrireListe(medias);
+        ecrireListe(medias, "Élément remplacé");
       };
     }
   }
@@ -2461,7 +2684,9 @@ function renderPostDetail(post, article, covers) {
   if (ajouter) {
     ajouter.onchange = () => {
       if (ajouter.value === "") return;
-      ecrireListe([...slidesCourantes(), { kind: "media", ...reserve[Number(ajouter.value)] }]);
+      ecrireListe(
+        [...slidesCourantes(), { kind: "media", ...reserve[Number(ajouter.value)] }],
+        "Visuel ajouté");
     };
   }
 
@@ -2503,57 +2728,69 @@ function renderPostDetail(post, article, covers) {
         depot.disabled = false;
         return;
       }
-      await ecrireListe([...slidesCourantes(), { kind: "media", ...candidat }]);
+      await ecrireListe(
+        [...slidesCourantes(), { kind: "media", ...candidat }], "Visuel déposé ajouté");
     };
   }
 
-  detailEl.querySelector("#btn-save").onclick = async () => {
+  const btnSave = detailEl.querySelector("#btn-save");
+  btnSave.onclick = async () => {
     const caption = detailEl.querySelector("#edit-caption").value;
     const hashtags = detailEl.querySelector("#edit-hashtags").value.trim().split(/\s+/).filter(Boolean);
-    try {
-      const updated = await enregistrerPost(post.id, { caption, hashtags });
-      // Le serveur porte ce texte : plus rien a sauver, et l'avertissement tombe.
-      brouillonTexte = null;
-      // La legende PUBLIEE change avec le texte tape : sans ce rechargement,
-      // « Ce qui va partir » montrerait l'ancienne version -- exactement le
-      // genre d'ecart que cette section existe pour supprimer.
-      await chargerDeparts();
-      renderPostDetail(updated, article, covers);
-    } catch (erreur) {
-      alert("Échec de l'enregistrement : " + erreur.message);
-    }
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      bouton: btnSave,
+      libelle: "Légende et hashtags",
+      action: () => enregistrerPost(post.id, { caption, hashtags }),
+    });
+    if (!updated) return;
+    // Le serveur porte ce texte : plus rien a sauver, et l'avertissement tombe.
+    brouillonTexte = null;
+    // La legende PUBLIEE change avec le texte tape : sans ce rechargement,
+    // l'apercu montrerait l'ancienne version -- exactement le genre d'ecart que
+    // cette section existe pour supprimer.
+    await chargerDeparts();
+    renderPostDetail(updated, article, covers);
   };
-  detailEl.querySelector("#btn-approve").onclick = async () => {
-    try {
-      const updated = await enregistrerPost(post.id, { status: "approved" });
-      renderPostDetail(updated, article, covers);
-      if (!postsPanelEl.hidden) loadPostsPanel();
-    } catch (erreur) {
-      alert("Échec de la validation : " + erreur.message);
-    }
+  const btnApprove = detailEl.querySelector("#btn-approve");
+  btnApprove.onclick = async () => {
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      bouton: btnApprove,
+      libelle: "Statut « validé »",
+      action: () => enregistrerPost(post.id, { status: "approved" }),
+    });
+    if (!updated) return;
+    renderPostDetail(updated, article, covers);
+    if (!postsPanelEl.hidden) loadPostsPanel();
   };
-  detailEl.querySelector("#btn-publish").onclick = async () => {
-    try {
-      const updated = await enregistrerPost(post.id, { status: "published" });
-      renderPostDetail(updated, article, covers);
-      if (!postsPanelEl.hidden) loadPostsPanel();
-    } catch (erreur) {
-      alert("Échec de la publication : " + erreur.message);
-    }
+  const btnPublish = detailEl.querySelector("#btn-publish");
+  btnPublish.onclick = async () => {
+    const updated = await ecrireDepuisLaFiche(post.id, {
+      bouton: btnPublish,
+      libelle: "Statut « publié »",
+      action: () => enregistrerPost(post.id, { status: "published" }),
+    });
+    if (!updated) return;
+    renderPostDetail(updated, article, covers);
+    if (!postsPanelEl.hidden) loadPostsPanel();
   };
   const btnDelete = detailEl.querySelector("#btn-delete");
   if (btnDelete) {
     btnDelete.onclick = async () => {
       if (!confirm("Supprimer ce brouillon ?")) return;
-      try {
-        const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
-        if (!reponse.ok) throw new Error(await reponse.text());
-        brouillonTexte = null;
-        detailEl.hidden = true; detailEl.innerHTML = "";
-        if (!postsPanelEl.hidden) loadPostsPanel();
-      } catch (erreur) {
-        alert("Échec de la suppression : " + erreur.message);
-      }
+      const fait = await ecrireDepuisLaFiche(post.id, {
+        bouton: btnDelete,
+        libelle: "Suppression du brouillon",
+        action: async () => {
+          const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
+          if (!reponse.ok) throw new Error(await reponse.text());
+          return true;
+        },
+      });
+      if (!fait) return;
+      brouillonTexte = null;
+      dernierGeste = null;
+      detailEl.hidden = true; detailEl.innerHTML = "";
+      if (!postsPanelEl.hidden) loadPostsPanel();
     };
   }
 

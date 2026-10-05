@@ -35,11 +35,19 @@ def test_la_case_des_reels_est_decochee_par_defaut():
 
 
 def test_le_detail_d_un_post_sait_lire_une_video_sans_url():
-    """Sentinelle : une video sans URL (reel Instagram sans media_url) s'affiche
-    par sa vignette et n'est pas cochable comme slide."""
+    """Sentinelle : une video sans URL (reel Instagram sans media_url) n'est pas
+    proposable comme slide, et le DIT.
+
+    La fiche portait trois listes du meme visuel jusqu'au 2026-10-05 ; il n'en
+    reste qu'une, « Ce que Meta recevra ». Le refus ne s'ecrit donc plus sur une
+    case a cocher mais sur l'option de la reserve -- meme regle, meme raison
+    imprimee, un seul endroit. Sans ce garde-fou, un `PATCH` avec `url: null`
+    echoue en 422 pour une action que l'UI presentait comme possible.
+    """
     html = DASHBOARD.read_text()
-    assert 'const sansUrl = m.type === "video" && !m.url;' in html
-    assert "m.preview_url || (m.type === \"photo\" ? m.url : null)" in html
+    assert 'if (!c.url) return "pas d\'URL directe : rien à télécharger";' in html
+    assert "const motif = motifInutilisable(c);" in html
+    assert '${motif ? " disabled" : ""}' in html
 
 
 def test_un_creneau_reclame_recemment_s_affiche_en_cours_de_publication():

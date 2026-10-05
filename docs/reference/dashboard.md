@@ -236,6 +236,113 @@ Le seul geste d'ECRITURE du panneau est `PATCH /artists/{id}` avec
 `source_instagram_id` : rattacher une fiche a son compte quand le nom ne suffit
 pas. Sans compte lisible, le selecteur est desactive **avec sa raison ecrite a
 cote** — jamais gris et muet.
+### La fiche d'edition d'un post, refondue le 2026-10-05
+
+Retour de l'utilisateur : « **Je n'arrive pas a enregistrer**, et l'UX est
+desastreuse. L'interface doit etre plus claire, moins de fonctions dispatchees
+pour rien qui peuvent etre fusionnees. Et l'interface ne respire pas. »
+
+**Le « bug » d'enregistrement n'en etait pas un, et c'est pire.** Verifie au
+navigateur : le clic envoyait bien `PATCH /posts/176`, le serveur repondait
+**200**, la fiche se rechargeait. **Rien ne le disait** -- aucun etat « en
+cours », aucun libelle qui change, aucune confirmation. Un succes muet est
+indistinguable d'un echec muet, donc l'utilisateur conclut que ca ne marche pas,
+et **il a raison de le conclure**. Meme defaut que l'ecriture muette de la
+categorie d'une source (corrigee le 02/10), reste sur **cinq** boutons de cette
+fiche -- et un double-clic envoyait deux ecritures.
+
+Correctif : UN point de passage pour toute ecriture de la fiche,
+`ecrireDepuisLaFiche`. Il verrouille le geste en cours (plus de seconde ecriture
+sur un double-clic), montre que quelque chose se passe, et DIT le resultat --
+reussite comprise, dans une zone adjacente aux boutons (la barre d'actions est
+`sticky`). Un echec y RESTE avec sa raison, au lieu d'un `alert()` qu'on chasse
+d'un clic et qui ne dit plus rien ensuite ; `raisonDuRefus` en extrait le
+`detail` plutot que d'imprimer le JSON brut.
+
+La propriete est NEGATIVE et silencieuse a casser -- retirer la ligne qui annonce
+la reussite ne fait rougir aucune exception, aucun test de structure, et la page
+reste belle. D'ou la **preuve par mutation** sur Chromium reel
+(`tests/dashboard/test_dashboard_ecritures.py`) : on retire les deux annonces du
+chemin qui REUSSIT, le `PATCH` part toujours, et l'ecran redevient muet -- c'est
+mot pour mot l'etat du 05/10. Le message survit au re-rendu (`dernierGeste`, hors
+DOM), meme procede que le tampon de la legende : les gestes rappellent tous
+`renderPostDetail`, donc un message pose dans le DOM juste avant serait efface
+par le rendu qui suit l'ecriture reussie.
+
+**TROIS listes montraient le meme visuel** : « Visuels retenus » (les actifs),
+« Medias de l'actu (carrousel) » (des cases a cocher sur `article.media`) et
+« Ce que Meta recevra ». Decision de l'utilisateur : **il n'en reste qu'UNE**, la
+liste finale -- celle qui part. Les candidats se proposent AU MOMENT D'AJOUTER,
+pas en permanence dans deux sections concurrentes. Les deux premieres editaient
+d'ailleurs le BROUILLON en ignorant les visuels retenus a la composition : cocher
+une case pouvait faire disparaitre de la publication un visuel que le gel aurait
+repris.
+
+Rien d'utile n'est parti avec elles, et c'est ce que
+`tests/dashboard/test_dashboard_fiche.py` verrouille :
+- l'origine, le compte, la **date du post** et le lien « voir le post » ne
+  vivaient que dans « Visuels retenus » ; ils sont desormais sur la ligne de
+  l'element. `candidats_editables` transporte donc `permalink` et `publie_le`,
+  qu'il jetait ;
+- cocher / decocher un media de l'actu est devenu « ajouter » / « retirer », qui
+  passent par `carrousel_explicite` et sont donc REELLEMENT pris en compte par le
+  gel ;
+- les deux refus que portaient les cases (une video **sans URL directe** -- un
+  `PATCH` avec `url: null` echoue en 422 -- et une video **trop longue pour une
+  slide**) sont desormais sur l'option de la reserve, `disabled` AVEC sa raison ;
+- un post qui n'est sur **aucun creneau** reste editable : `GET /relecture` ne
+  rend `candidats` que pour un creneau, donc la fiche recalcule la meme reserve
+  localement (`reserveLocale`), regle du 2026-09-17 comprise.
+
+**La legende etait affichee DEUX FOIS** : la zone editable, puis « Ce qui va
+partir » en entier. Une zone d'edition, plus un apercu **repliable**. Les
+COMPTEURS, eux, restent toujours visibles (505/2150, 8/30 hashtags, credit,
+debordement) : ils signalent un depassement avant qu'il coute un post, les cacher
+dans le repli les rendrait inutiles.
+
+**Le selecteur de format MENTAIT**, et c'est le defaut le plus couteux des trois.
+Post 176 : `template = "kinda_reel"` en base, et l'ecran montrait POST actif,
+REELS grise « pas d'URL directe vers la video ». **Deux causes distinctes.**
+1. Aucun des deux boutons ne portait `on` dans ce cas (chaque libelle etait teste
+   separement contre `post.template`), et un REELS grise a cote d'un POST normal
+   **se lit** « POST est l'actif ». Le bouton du gabarit COURANT porte donc `on`
+   dans tous les cas, et n'est **jamais desactive** : on ne grise pas l'etat dans
+   lequel on est.
+2. `raisonPasDeReel` ne mirrorait que `app/content/media.py::videos_exploitables`
+   et ignorait `video_recuperable` -- la SECONDE question, « yt-dlp saura-t-il
+   aller la chercher au gel ? ». Meta omet `media_url` des reels a musique
+   protegee, donc de presque tous les reels d'artistes et de festivals : sans
+   elle, le dashboard annonce impossible ce que le pipeline fait tous les jours.
+   Mesure du 05/10 sur l'article 22571 (Tomorrowland) : `store.source_video_reel`
+   rend **"ytdlp"** et `raison_ineligible_reel` rend **None**, pendant que la
+   fiche affichait « pas d'URL directe ». Le manifeste du gel, DANS LA MEME
+   FICHE, disait deja « video recuperee par yt-dlp ».
+
+Deux conditions du serveur ne sont pas visibles du navigateur (le type de la
+source, `PUBLICATION_REEL_YTDLP`) : on penche du cote qui est deja la regle du
+depot (« mieux vaut proposer le reel que griser un bouton sur une donnee
+absente »), et l'eligibilite est de toute facon REVERIFIEE au gel, qui libere le
+creneau sans exclure. Troisieme cas, celui qu'on ne peut pas resoudre en grisant :
+le post EST un reel et l'actu n'offre plus de video -- griser mentirait sur la
+base, se taire cacherait un vrai probleme, donc on dit ce qui va se passer.
+
+**« L'interface ne respire pas »** est un jugement visuel, et on n'y repond pas
+depuis le code : constate sur capture a 1440 / 900 / 390 px. La fiche enchainait
+**neuf `.section-title` de meme poids** sur un fond uni -- aucune hierarchie, donc
+aucun endroit ou l'oeil se pose. Trois niveaux desormais : le BLOC (Cover / Ce que
+Meta recevra / Texte publie), le sous-titre a l'interieur d'un bloc (Format, Image
+de fond), la note. Le depart passe en BANDEAU en tete, parce que c'est le cadre de
+tout le reste et non une section de plus en bas. Et la classe `.note` existe parce
+que la moitie des phrases **explicatives** portaient `.reel-reason`, donc le rouge
+d'alerte : le rouge ne voulait plus rien dire la ou il compte. Hauteur de la fiche, mesuree sur capture, pour la MEME
+information : **2150 -> 1572 px** a 1440, **2083 -> 1544** a 900,
+**2882 -> 2238** a 390.
+
+Enfin « Supprimer » etait le voisin de meme poids d'« Enregistrer » : il part a
+l'autre bout de la barre (`margin-left: auto`), qui devient `sticky` -- sauf sous
+700 px, ou les boutons passent pleine largeur et une barre collante mangerait la
+moitie de l'ecran.
+
 ## La charte Kinda dans la console (2026-10-02)
 
 Le compte Instagram etait a la charte ; la console qui le pilote portait un
