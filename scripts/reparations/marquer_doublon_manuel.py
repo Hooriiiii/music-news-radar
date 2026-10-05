@@ -18,9 +18,9 @@ Deux usages :
   paire defaite par erreur).
 
 Usage :
-    uv run python -m scripts.marquer_doublon_manuel --article-a 123 --article-b 456 \\
+    uv run python -m scripts.reparations.marquer_doublon_manuel --article-a 123 --article-b 456 \\
         --different --raison "deux annonces distinctes, meme artiste"
-    uv run python -m scripts.marquer_doublon_manuel --article-a 123 --article-b 456 \\
+    uv run python -m scripts.reparations.marquer_doublon_manuel --article-a 123 --article-b 456 \\
         --meme-actu --raison "meme sortie, deux sources"
 """
 

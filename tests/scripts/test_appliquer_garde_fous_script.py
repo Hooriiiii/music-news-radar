@@ -1,6 +1,6 @@
 from app.models import Article, ArticleStatus, Source, SourceCategorie, SourceType
 from app.sources.instagram import TITRE_PAR_DEFAUT
-from scripts.appliquer_garde_fous import appliquer_garde_fous_existants
+from scripts.reparations.appliquer_garde_fous import appliquer_garde_fous_existants
 
 
 def _source(db, type_=SourceType.INSTAGRAM, categorie=SourceCategorie.ARTISTE):

@@ -12,7 +12,7 @@ c'est-a-dire les SOURCES Instagram actives de categorie artiste. Il y en avait
 import datetime as dt
 
 from app.models import Artist, Source, SourceCategorie, SourceType
-from scripts.etat_notion import collecter, formater
+from scripts.diagnostic.etat_notion import collecter, formater
 
 UTC = dt.timezone.utc
 

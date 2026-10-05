@@ -17,7 +17,7 @@ SOURCE DE VERITE, et ce script en derive des versions ecrites pour l'ecran.
   (rose d'accent), ce qu'un `<img>` ne permet pas. 1,9 ko.
 
 Regenerer apres une refonte du logo :
-    uv run python -m scripts.inliner_marque --apply
+    uv run python -m scripts.outillage.inliner_marque --apply
 """
 
 from __future__ import annotations

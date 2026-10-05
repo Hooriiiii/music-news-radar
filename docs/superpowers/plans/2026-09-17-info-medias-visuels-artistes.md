@@ -4,7 +4,7 @@
 
 **Goal:** Une grosse actu relayée par des médias (GTA VI × Fred again..) n'est plus perdue : la presse n'est plus décotée à la notation, le pré-filtre local n'écarte jamais une actu couverte par au moins trois sources ni un article qui cite un artiste suivi, le représentant d'un groupe de doublons est l'article le plus informatif ; et les visuels des comptes Instagram médias ne sont plus jamais publiés — on les remplace par les posts des artistes cités (en base, sinon lus à la composition), crédités « 📸 @artiste », faute de quoi l'article reste au dashboard mais sort de la file.
 
-**Architecture:** Partie A (notation) : `appliquer_garde_fous` perd le plafond média, `actu_majeure` disparaît (jamais persisté, aucune migration) ; un index des comptes d'artistes suivis (`app/pipeline/comptes_artistes.py`) sert à la cascade (`ContexteScoring` dans `score_pending`) et à une élection du représentant (`app/pipeline/election.py`, après `link_duplicates`, bornée) ; `scripts/reevaluer_actus.py` rattrape les actus récentes. Partie B (visuels) : `app/content/visuels.py` (politique, actifs, cache local), `actifs_artistes.py` (posts d'artistes en base + heuristique), `lecture_artistes.py` (`business_discovery` en direct, bornée), `choix_visuels.py` (le choix, avant l'appel Claude) ; `posts.assets` (migration 0018) porte le choix, `posts.credit` les handles. Partie C : éligibilité visuelle dans la file et le runner, API et dashboard.
+**Architecture:** Partie A (notation) : `appliquer_garde_fous` perd le plafond média, `actu_majeure` disparaît (jamais persisté, aucune migration) ; un index des comptes d'artistes suivis (`app/pipeline/comptes_artistes.py`) sert à la cascade (`ContexteScoring` dans `score_pending`) et à une élection du représentant (`app/pipeline/election.py`, après `link_duplicates`, bornée) ; `scripts/reparations/reevaluer_actus.py` rattrape les actus récentes. Partie B (visuels) : `app/content/visuels.py` (politique, actifs, cache local), `actifs_artistes.py` (posts d'artistes en base + heuristique), `lecture_artistes.py` (`business_discovery` en direct, bornée), `choix_visuels.py` (le choix, avant l'appel Claude) ; `posts.assets` (migration 0018) porte le choix, `posts.credit` les handles. Partie C : éligibilité visuelle dans la file et le runner, API et dashboard.
 
 **Tech Stack:** Python 3.14, FastAPI, SQLAlchemy 2.0 (`Mapped`/`mapped_column`), Alembic, httpx (sync), Pydantic, Playwright/Chromium (rendu existant), pytest, uv.
 
@@ -36,7 +36,7 @@
   Claude-Session: https://claude.ai/code/session_01Dvb254Kc9aGX1aTK64nMyM
   ```
 - `uv run ruff check .` et `uv run pytest` passent à la fin de chaque tâche.
-- **Rien n'est publié, rien n'est re-noté en production pendant l'implémentation** : aucun agent ne lance `scripts.reevaluer_actus --apply`, `scripts.tester_publication`, ne change le mode, ni n'appelle Meta ; lectures de la base de production interdites hors SELECT explicitement demandé.
+- **Rien n'est publié, rien n'est re-noté en production pendant l'implémentation** : aucun agent ne lance `scripts.reparations.reevaluer_actus --apply`, `scripts.diagnostic.tester_publication`, ne change le mode, ni n'appelle Meta ; lectures de la base de production interdites hors SELECT explicitement demandé.
 
 ## Écarts assumés, et pourquoi
 
@@ -56,7 +56,7 @@
 |---|---|
 | `app/pipeline/scoring.py` (modifier) | Plus de plafond média, plus d'`actu_majeure`, règle 5 réécrite ; `ContexteScoring` et règles R2/R3 dans `score_pending` |
 | `app/pipeline/prefilter.py` (modifier) | `CONSIGNE_PREFILTRE` sans décote |
-| `scripts/appliquer_garde_fous.py` (modifier) | Docstring et message sans plafond média |
+| `scripts/reparations/appliquer_garde_fous.py` (modifier) | Docstring et message sans plafond média |
 | `app/config.py` (modifier) | Réglages `cluster_*` et `visuels_*` |
 | `app/models.py` (modifier) | `Post.assets`, `Artist.source_instagram_id` |
 | `alembic/versions/0018_visuels_artistes.py` (créer) | Les deux colonnes |
@@ -64,7 +64,7 @@
 | `app/pipeline/comptes_artistes.py` (créer) | `cle_artiste`, `CompteArtiste`, `IndexComptes`, `construire_index`, `lier_artistes_comptes` |
 | `app/pipeline/election.py` (créer) | `tailles_clusters`, `cle_information`, `representant_engage`, `remettre_a_noter`, `elire_representants` |
 | `app/pipeline/run.py` (modifier) | Élection après la dédup, liaison des artistes après les mentions |
-| `scripts/reevaluer_actus.py` (créer) | Rattrapage : plan, `--apply` |
+| `scripts/reparations/reevaluer_actus.py` (créer) | Rattrapage : plan, `--apply` |
 | `app/content/visuels.py` (créer) | Politique, actifs, crédit, cache local |
 | `app/content/credit.py`, `compose.py`, `render.py` (modifier) | Origine interdite, fond, lecture du cache |
 | `app/publish/preparation.py`, `preparation_reel.py` (modifier) | Photos autorisées, garde du fond, porteur de la vidéo |
@@ -87,7 +87,7 @@
 ### Task 1: Plus de décote ni de plafond pour les médias
 
 **Files:**
-- Modify: `app/pipeline/scoring.py`, `app/pipeline/prefilter.py`, `scripts/appliquer_garde_fous.py`
+- Modify: `app/pipeline/scoring.py`, `app/pipeline/prefilter.py`, `scripts/reparations/appliquer_garde_fous.py`
 - Test: `tests/pipeline/test_garde_fous.py`, `tests/pipeline/test_scoring.py`
 
 **Interfaces:**
@@ -293,7 +293,7 @@ emojis ou hashtags seuls). Un contenu qui porte un fait (nom connu, date, sortie
 """
 ```
 
-Dans `scripts/appliquer_garde_fous.py`, supprimer de la docstring le paragraphe `Le plafond MEDIA (59) n'est PAS re-applique : … par le garde-fou « post vide ».` et, dans `main()`, les deux lignes `print("\nPlafond media (59) non re-applique : …")`.
+Dans `scripts/reparations/appliquer_garde_fous.py`, supprimer de la docstring le paragraphe `Le plafond MEDIA (59) n'est PAS re-applique : … par le garde-fou « post vide ».` et, dans `main()`, les deux lignes `print("\nPlafond media (59) non re-applique : …")`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -304,7 +304,7 @@ Expected: PASS
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add app/pipeline/scoring.py app/pipeline/prefilter.py scripts/appliquer_garde_fous.py tests/pipeline/test_garde_fous.py tests/pipeline/test_scoring.py
+git add app/pipeline/scoring.py app/pipeline/prefilter.py scripts/reparations/appliquer_garde_fous.py tests/pipeline/test_garde_fous.py tests/pipeline/test_scoring.py
 git commit -m "$(cat <<'EOF'
 feat(scoring): plus de decote ni de plafond pour les comptes media
 
@@ -1633,10 +1633,10 @@ EOF
 
 ---
 
-### Task 6: Rattraper les actus récentes (`scripts/reevaluer_actus.py`)
+### Task 6: Rattraper les actus récentes (`scripts/reparations/reevaluer_actus.py`)
 
 **Files:**
-- Create: `scripts/reevaluer_actus.py`
+- Create: `scripts/reparations/reevaluer_actus.py`
 - Test: `tests/scripts/test_reevaluer_actus.py`
 
 **Interfaces:**
@@ -1661,7 +1661,7 @@ import itertools
 
 import pytest
 
-import scripts.reevaluer_actus as script
+import scripts.reparations.reevaluer_actus as script
 from app.models import Article, ArticleStatus, ScoredBy, Source, SourceCategorie, SourceType
 from app.pipeline.scoring import ArticleScore, Category
 from app.sources.instagram import TITRE_PAR_DEFAUT
@@ -1778,11 +1778,11 @@ def test_apply_elit_note_les_en_attente_puis_re_note_le_plan(db_session, fred):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/scripts/test_reevaluer_actus.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.reevaluer_actus'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.reparations.reevaluer_actus'`
 
 - [ ] **Step 3: Implement the script**
 
-Créer `scripts/reevaluer_actus.py` :
+Créer `scripts/reparations/reevaluer_actus.py` :
 
 ```python
 """Reevaluer les actus recentes enterrees par l'ancienne notation.
@@ -1804,8 +1804,8 @@ Le plan, sur --jours jours (non doublons, non publies, non exclus, deja notes) :
   sans re-noter toute la presse.
 
 Usage :
-    uv run python -m scripts.reevaluer_actus                    # plan
-    uv run python -m scripts.reevaluer_actus --apply [--jours 3] [--limite 100]
+    uv run python -m scripts.reparations.reevaluer_actus                    # plan
+    uv run python -m scripts.reparations.reevaluer_actus --apply [--jours 3] [--limite 100]
 """
 
 import argparse
@@ -1968,7 +1968,7 @@ Expected: PASS
 
 ```bash
 uv run ruff check . && uv run pytest -q
-git add scripts/reevaluer_actus.py tests/scripts/test_reevaluer_actus.py
+git add scripts/reparations/reevaluer_actus.py tests/scripts/test_reevaluer_actus.py
 git commit -m "$(cat <<'EOF'
 feat(scripts): reevaluer_actus rattrape les actus enterrees (plan, --apply)
 
@@ -4909,7 +4909,7 @@ Dans « Commandes », après la ligne des garde-fous, ajouter :
 
 ```markdown
 - Rattraper les actus récentes enterrées par l'ancienne notation :
-  `uv run python -m scripts.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
+  `uv run python -m scripts.reparations.reevaluer_actus [--jours 3] [--limite 100] [--apply]`
   (sans `--apply` : le plan, aucune écriture ni appel Claude ; avec : élection des
   représentants, notation des en-attente, re-notation Claude du plan, au plus
   `--limite` appels)
@@ -4947,7 +4947,7 @@ Aucune de ces étapes n'est exécutée par un agent d'implémentation.
    Un créneau « Gelé » de cette liste partirait avec un visuel interdit : le **sauter** au dashboard. Les « Programmé » seront recomposés (brouillon non repris).
 3. **Migration 0018 sur Neon AVANT la fusion** (par l'utilisateur, depuis ce worktree) : `uv run alembic upgrade head`. Le runner, le dashboard et le pipeline lisent `posts.assets` et `artists.source_instagram_id` dès la fusion.
 4. **Fusionner** `feat/visuels-artistes` dans `main`, puis **redémarrer le dashboard** : `launchctl kickstart -k gui/$(id -u)/com.musicnewsradar.dashboard`. Les agents de pipeline et de publication chargent le nouveau code à leur prochain passage.
-5. **Rattrapage** : `uv run python -m scripts.reevaluer_actus` (plan), relire, puis `uv run python -m scripts.reevaluer_actus --apply` (≤ 100 appels Haiku). Vérifier la BO de GTA VI :
+5. **Rattrapage** : `uv run python -m scripts.reparations.reevaluer_actus` (plan), relire, puis `uv run python -m scripts.reparations.reevaluer_actus --apply` (≤ 100 appels Haiku). Vérifier la BO de GTA VI :
    ```sql
    SELECT a.id, s.name, a.relevance_score, a.scored_by, a.duplicate_of_id, left(a.title, 70)
    FROM articles a JOIN sources s ON s.id = a.source_id

@@ -1,6 +1,6 @@
 """Fusionne les evenements qui ne sont que des RE-INGESTIONS l'un de l'autre.
 
-    uv run python -m scripts.fusionner_evenements_reingeres [--apply]
+    uv run python -m scripts.reparations.fusionner_evenements_reingeres [--apply]
 
 Sans `--apply` : le plan, aucune ecriture. Idempotent : le relancer ne trouve
 plus rien.

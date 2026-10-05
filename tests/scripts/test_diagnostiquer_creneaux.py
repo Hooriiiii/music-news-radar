@@ -11,7 +11,7 @@ import pytest
 
 from app.config import settings
 from app.models import Creneau, EtatCreneau, FormatCreneau
-from scripts.diagnostiquer_creneaux import (
+from scripts.diagnostic.diagnostiquer_creneaux import (
     ABSENCE,
     INCONNUE_GELE,
     SANS_POST,
@@ -121,7 +121,7 @@ def test_examiner_ne_touche_jamais_la_base(db_session, tmp_path, heure, monkeypa
     """Lecture seule : c'est la propriete qui rend le script lancable en
     production sans precaution."""
     db_session.autoflush = False
-    monkeypatch.setattr("scripts.diagnostiquer_creneaux.DOSSIER_LOGS", tmp_path)
+    monkeypatch.setattr("scripts.diagnostic.diagnostiquer_creneaux.DOSSIER_LOGS", tmp_path)
     (tmp_path / "publication.log").write_text("")
     db_session.add(_creneau(heure, id=None, erreur="hebergement indisponible : rien"))
     db_session.add(_creneau(heure + dt.timedelta(hours=1), id=None, etat=EtatCreneau.PUBLIE, erreur=None))

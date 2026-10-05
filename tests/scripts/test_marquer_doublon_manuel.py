@@ -4,7 +4,7 @@ import pytest
 
 from app.models import Article, ArticleStatus, Source, SourceType
 from app.pipeline.cluster_arbitrage import lire_cache
-from scripts.marquer_doublon_manuel import appliquer
+from scripts.reparations.marquer_doublon_manuel import appliquer
 
 UTC = dt.timezone.utc
 

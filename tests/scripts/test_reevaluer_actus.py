@@ -6,7 +6,7 @@ import itertools
 
 import pytest
 
-import scripts.reevaluer_actus as script
+import scripts.reparations.reevaluer_actus as script
 from app.models import Article, ArticleStatus, ScoredBy, Source, SourceCategorie, SourceType
 from app.pipeline.scoring import ArticleScore, Category, ScoringStats
 from app.sources.instagram import TITRE_PAR_DEFAUT

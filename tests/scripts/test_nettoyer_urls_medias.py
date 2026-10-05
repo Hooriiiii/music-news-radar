@@ -1,4 +1,4 @@
-"""Le rattrapage des lignes deja en base : `scripts/nettoyer_urls_medias.py`.
+"""Le rattrapage des lignes deja en base : `scripts/reparations/nettoyer_urls_medias.py`.
 
 Le nettoyage a l'ingestion ne vaut que pour les nouvelles lignes. Celles posees
 avant -- dont l'article 17974, dont le reel est parti sur le fond de secours --
@@ -8,7 +8,7 @@ gardent leur `&amp;` et referaient le meme post.
 import datetime as dt
 
 from app.models import Article, Post, Source, SourceType
-from scripts.nettoyer_urls_medias import nettoyer_urls
+from scripts.reparations.nettoyer_urls_medias import nettoyer_urls
 
 SALE = "https://cdn/a.jpg?_nc_cat=105&amp;ccb=7-5"
 PROPRE = "https://cdn/a.jpg?_nc_cat=105&ccb=7-5"

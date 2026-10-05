@@ -7,7 +7,7 @@ depend du compte, pas du format : `sources.type` ne la porte pas.
 
 Nullable, sans backfill : NULL veut dire « inconnu », et le classement des
 sources existantes est une decision editoriale portee par
-`scripts/categoriser_sources.py`, pas par la migration.
+`scripts/sources/categoriser_sources.py`, pas par la migration.
 
 Revision ID: 0016
 Revises: 0015

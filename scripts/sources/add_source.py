@@ -1,7 +1,7 @@
 """Ajoute une source de veille en base.
 
 Usage :
-    uv run python -m scripts.add_source --name "r/techno" --type reddit_rss \
+    uv run python -m scripts.sources.add_source --name "r/techno" --type reddit_rss \
         --url https://www.reddit.com/r/techno --genre techno --categorie media
 
 `--categorie` (artiste, media, festival, label, club, autre) pondere le scoring :

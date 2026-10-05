@@ -90,8 +90,8 @@ uv run python -m scripts.run_pipeline
 # Ou étape par étape :
 uv run python -m scripts.run_ingest            # récupère les nouveaux articles
 uv run python -m scripts.score_articles        # score ceux pas encore évalués (--limit N)
-uv run python -m scripts.send_hot_alerts       # envoie les alertes Discord des hot
-uv run python -m scripts.send_digest --dry-run # aperçu du digest dans /tmp/digest_preview.html
+uv run python -m scripts.livraison.send_hot_alerts       # envoie les alertes Discord des hot
+uv run python -m scripts.livraison.send_digest --dry-run # aperçu du digest dans /tmp/digest_preview.html
 ```
 
 ---
@@ -114,7 +114,7 @@ Formats d'URL selon le type :
 En ligne de commande, l'équivalent reste disponible :
 
 ```bash
-uv run python -m scripts.add_source --name "Nom" --type x --url "https://x.com/compte" --genre electronic
+uv run python -m scripts.sources.add_source --name "Nom" --type x --url "https://x.com/compte" --genre electronic
 ```
 
 Désactiver une source (via le dashboard ou en base) la retire de l'ingestion sans

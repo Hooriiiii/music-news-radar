@@ -1,4 +1,4 @@
-"""Branchement de `scripts/grouper_sources.py` sur le passage horaire
+"""Branchement de `scripts/reparations/grouper_sources.py` sur le passage horaire
 (`app.pipeline.source_groups.regrouper_sources_et_propager`).
 
 Trois choses a prouver : le cas normal ne coute rien de plus (aucun groupe a

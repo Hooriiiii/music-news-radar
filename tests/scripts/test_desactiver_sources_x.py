@@ -1,5 +1,5 @@
 from app.models import Source, SourceType
-from scripts.desactiver_sources_x import desactiver_sources_x
+from scripts.sources.desactiver_sources_x import desactiver_sources_x
 
 
 def _source(db, nom, type_, active=True):

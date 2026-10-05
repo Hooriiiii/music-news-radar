@@ -29,7 +29,7 @@
 
 | Fichier | Responsabilité |
 |---|---|
-| `scripts/desactiver_sources_x.py` (créer) | Éteindre les sources X mortes, idempotent, réversible |
+| `scripts/sources/desactiver_sources_x.py` (créer) | Éteindre les sources X mortes, idempotent, réversible |
 | `tests/scripts/test_desactiver_sources_x.py` (créer) | Le script sur base SQLite |
 
 ---
@@ -39,7 +39,7 @@
 Indépendante de tout le reste et livrable seule. Chaque run produit aujourd'hui ~1000 erreurs 402 qui noient `diagnostiquer()` — la supervision doit redevenir lisible avant qu'on lui ajoute des sources.
 
 **Files:**
-- Create: `scripts/desactiver_sources_x.py`
+- Create: `scripts/sources/desactiver_sources_x.py`
 - Test: `tests/scripts/test_desactiver_sources_x.py`
 
 **Interfaces:**
@@ -51,7 +51,7 @@ Indépendante de tout le reste et livrable seule. Chaque run produit aujourd'hui
 ```python
 # tests/scripts/test_desactiver_sources_x.py
 from app.models import Source, SourceType
-from scripts.desactiver_sources_x import desactiver_sources_x
+from scripts.sources.desactiver_sources_x import desactiver_sources_x
 
 
 def _source(db, nom, type_, active=True):
@@ -90,12 +90,12 @@ def test_idempotent_une_source_deja_eteinte_n_est_pas_listee(db_session):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/scripts/test_desactiver_sources_x.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.desactiver_sources_x'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.sources.desactiver_sources_x'`
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# scripts/desactiver_sources_x.py
+# scripts/sources/desactiver_sources_x.py
 """Eteindre les sources X, devenues inutilisables.
 
 La facturation developer.x.com n'est plus active : les 100 sources X renvoient
@@ -160,7 +160,7 @@ Expected: 4 passed
 
 - [ ] **Step 5: Vérifier le plan sur la vraie base, sans appliquer**
 
-Run: `uv run python -m scripts.desactiver_sources_x`
+Run: `uv run python -m scripts.sources.desactiver_sources_x`
 Expected: affiche « 85 source(s) X a desactiver » suivi de dix noms. **Ne pas passer `--apply` ici** — c'est une modification de la base de l'utilisateur, elle lui revient.
 
 - [ ] **Step 6: Lint et suite complète**
@@ -171,7 +171,7 @@ Expected: tout passe
 - [ ] **Step 7: Commit**
 
 ```bash
-git add scripts/desactiver_sources_x.py tests/scripts/test_desactiver_sources_x.py
+git add scripts/sources/desactiver_sources_x.py tests/scripts/test_desactiver_sources_x.py
 git commit -m "feat(sources): eteindre les sources X, la facturation X n'est plus active"
 ```
 
@@ -179,7 +179,7 @@ git commit -m "feat(sources): eteindre les sources X, la facturation X n'est plu
 
 ## Ce qui reste à la main de l'utilisateur
 
-1. **Éteindre les sources X** : `uv run python -m scripts.desactiver_sources_x --apply` — modification de sa base, elle lui revient.
+1. **Éteindre les sources X** : `uv run python -m scripts.sources.desactiver_sources_x --apply` — modification de sa base, elle lui revient.
 2. **Trancher le sort des reels** : sans X ni source Instagram, aucune vidéo n'entre plus en base. Réactiver la facturation X pour les seules sources vidéo (UGC, radar) avant l'étape 1, ou accepter une file sans reels.
 
 Déjà fait le 2026-09-16 : app Meta « Kinda Radar » (connexion Instagram), compte `kindanewsfrance` testeur, `META_ACCESS_TOKEN` et `META_IG_USER_ID` dans `.env`, droit de publier vérifié en lecture seule.

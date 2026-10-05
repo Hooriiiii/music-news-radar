@@ -1,5 +1,5 @@
 from app.models import Source, SourceCategorie, SourceType
-from scripts.categoriser_sources import categorie_attendue, categoriser_sources
+from scripts.sources.categoriser_sources import categorie_attendue, categoriser_sources
 
 
 def _source(db, nom, type_, url, categorie=None):

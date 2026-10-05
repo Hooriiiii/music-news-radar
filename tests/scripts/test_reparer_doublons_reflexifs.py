@@ -13,7 +13,7 @@ import datetime as dt
 
 from app.models import Article, Source, SourceType
 from app.pipeline.cluster import RAISON_DOUBLON_PREFIXE
-from scripts.reparer_doublons_reflexifs import reparer_doublons_reflexifs
+from scripts.reparations.reparer_doublons_reflexifs import reparer_doublons_reflexifs
 
 UTC = dt.timezone.utc
 

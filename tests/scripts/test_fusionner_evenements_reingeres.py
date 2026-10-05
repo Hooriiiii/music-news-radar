@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 
 from app.models import Event, EventObservation, Source, SourceRole, SourceType
 from app.pipeline.events import TITRE_FENETRE_HEURES
-from scripts.fusionner_evenements_reingeres import composer_les_groupes, fusionner
+from scripts.reparations.fusionner_evenements_reingeres import composer_les_groupes, fusionner
 
 UTC = dt.timezone.utc
 

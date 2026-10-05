@@ -37,7 +37,7 @@ Trois defauts corriges ici :
    d'abord les paires JAMAIS tentees avant de rejouer celles deja en echec :
    voir le commentaire sur les deux passes dans ce module-la.
 2. Le temporaire d'ecriture portait un nom FIXE (`.tmp`) : deux processus qui
-   ecrivent (le passage horaire et `scripts.marquer_doublon_manuel` lance
+   ecrivent (le passage horaire et `scripts.reparations.marquer_doublon_manuel` lance
    pendant ce passage) auraient pu se marcher dessus. Nom de temporaire PAR
    PROCESSUS desormais (`tempfile.mkstemp`), meme mecanique que
    `app/pipeline/quota_graph.py`.
@@ -48,7 +48,7 @@ Trois defauts corriges ici :
    relit le disque juste avant d'ecrire et ne laisse jamais une decision
    automatique de ce passage remplacer un verdict manuel pose entre-temps.
 
-Un verdict MANUEL (pose par `scripts.marquer_doublon_manuel`) prime sur tout
+Un verdict MANUEL (pose par `scripts.reparations.marquer_doublon_manuel`) prime sur tout
 rapprochement automatique ulterieur, y compris sur la bande certaine : c'est ce
 qui rend enfin reelle la procedure de reparation d'un faux positif d'archive
 (l'ancienne procedure de CLAUDE.md -- effacer `duplicate_of_id` et
@@ -225,7 +225,7 @@ def cle_paire(id_a: int, id_b: int) -> str:
 class EntreeArbitrage:
     meme_actu: bool
     raison: str
-    # Pose par l'utilisateur (`scripts.marquer_doublon_manuel`), jamais par
+    # Pose par l'utilisateur (`scripts.reparations.marquer_doublon_manuel`), jamais par
     # `link_duplicates` -- c'est ce champ qui lui fait primer sur tout.
     manuel: bool = False
 
@@ -319,7 +319,7 @@ def _contenu_json(cache: Cache) -> dict:
 def _ecrire_strict(cache: Cache, chemin: Path) -> None:
     """Ecriture ATOMIQUE (fichier temporaire NOMME PAR PROCESSUS +
     `os.replace`), comme `app/pipeline/quota_graph.py` : un `.tmp` fixe serait
-    ecrit a deux mains par le passage horaire et `scripts.marquer_doublon_manuel`
+    ecrit a deux mains par le passage horaire et `scripts.reparations.marquer_doublon_manuel`
     lance pendant ce passage. Leve sur toute panne -- c'est le comportement
     voulu pour `marquer_manuel` (voir plus bas) ; `ecrire_cache` l'attrape."""
     chemin.parent.mkdir(parents=True, exist_ok=True)
@@ -357,8 +357,8 @@ def fusionner_et_ecrire(
     avec l'etat ACTUEL du disque, juste avant d'ecrire -- jamais l'inverse.
 
     Un `link_duplicates` peut passer plusieurs minutes a arbitrer (jusqu'a
-    `cluster_arbitrage_max_par_passage` appels). Si `scripts.
-    marquer_doublon_manuel` pose un verdict manuel sur une paire PENDANT cette
+    `cluster_arbitrage_max_par_passage` appels). Si
+    `scripts.reparations.marquer_doublon_manuel` pose un verdict manuel sur une paire PENDANT cette
     fenetre, une reecriture en bloc a la fin du passage l'effacerait purement
     et simplement (reproduit en revue). Cette fonction relit le disque a
     l'instant de l'ecriture : un verdict manuel qui y figure GAGNE toujours,
@@ -404,7 +404,7 @@ def marquer_manuel(
     positif d'archive, ou confirmation d'un lien qu'on veut garder quoi qu'il
     arrive. Prime sur tout rapprochement automatique ulterieur, y compris la
     bande "certaine" de `link_duplicates`. Utilise par
-    `scripts.marquer_doublon_manuel`.
+    `scripts.reparations.marquer_doublon_manuel`.
 
     LEVE si l'ecriture n'est pas confirmee par une relecture : l'appelant (le
     script) ne doit jamais delier un article en base sur la foi d'un verdict

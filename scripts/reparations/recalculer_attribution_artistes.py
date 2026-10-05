@@ -16,8 +16,8 @@ qu'on ne peut plus lire, ni nommee dans son titre, reste donc INCONNUE
 (`principal = NULL`, lu comme principal partout) plutot que degradee a tort :
 la regle du doute du depot. On ne degrade QUE ce qu'on sait secondaire.
 
-    uv run python -m scripts.recalculer_attribution_artistes            # le plan
-    uv run python -m scripts.recalculer_attribution_artistes --apply    # ecrit
+    uv run python -m scripts.reparations.recalculer_attribution_artistes            # le plan
+    uv run python -m scripts.reparations.recalculer_attribution_artistes --apply    # ecrit
 
 Idempotent, aucun appel paye, aucun reseau hors Postgres.
 """

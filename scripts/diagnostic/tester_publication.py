@@ -7,7 +7,7 @@ assemble en MP4 -- video de l'API, sinon yt-dlp : l'essai consomme donc un
 telechargement et partage la pause de l'agent -- et envoye en conteneur REELS.
 
 Usage :
-    uv run python -m scripts.tester_publication --post 12
+    uv run python -m scripts.diagnostic.tester_publication --post 12
 """
 
 import argparse

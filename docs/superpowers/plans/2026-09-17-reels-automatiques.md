@@ -63,7 +63,7 @@ Ce que la révision change dans ce plan :
   Claude-Session: https://claude.ai/code/session_01Dvb254Kc9aGX1aTK64nMyM
   ```
 - `uv run ruff check .` et `uv run pytest` passent à la fin de chaque tâche.
-- **Rien n'est publié pendant l'implémentation.** Le mode reste celui de l'utilisateur ; aucun agent ne lance `scripts.tester_publication`, ne lance yt-dlp sur une vraie URL, ni ne change le mode ou `reels_actifs`. **Aucun appel en direct à Meta** (quota Graph).
+- **Rien n'est publié pendant l'implémentation.** Le mode reste celui de l'utilisateur ; aucun agent ne lance `scripts.diagnostic.tester_publication`, ne lance yt-dlp sur une vraie URL, ni ne change le mode ou `reels_actifs`. **Aucun appel en direct à Meta** (quota Graph).
 
 ## Écarts assumés, et pourquoi
 
@@ -104,7 +104,7 @@ Ce que la révision change dans ce plan :
 | `app/publish/publier.py` (modifier) | `publier_reel()` |
 | `app/schedule/runner.py` (modifier) | Dispatch par format, panne systémique par format, attente sans notification, ménage |
 | `scripts/run_publication.py` (modifier) | `outils_reel()` : préparateur avec récupérateur yt-dlp neuf, publieur ; coupés par `reels_actifs` |
-| `scripts/tester_publication.py` (modifier) | Essai d'un post `kinda_reel` sans publier |
+| `scripts/diagnostic/tester_publication.py` (modifier) | Essai d'un post `kinda_reel` sans publier |
 | `app/schemas.py` (modifier) | `CreneauOut.format`, `OffreReelsOut`, `ReelsOut`, `ReelsUpdate` |
 | `app/api/schedule.py` (modifier) | Format dans la vue, décaler par format, éligibilité au remplacement, `GET /schedule/offre-reels`, `GET/PUT /publication/reels` |
 | `app/static/dashboard.html` (modifier) | Pastille de format, ligne d'offre reels, interrupteur « Reels auto » |
@@ -3822,7 +3822,7 @@ EOF
 
 **Files:**
 - Modify: `scripts/run_publication.py`
-- Modify: `scripts/tester_publication.py`
+- Modify: `scripts/diagnostic/tester_publication.py`
 - Test: `tests/scripts/test_run_publication.py`
 
 **Interfaces:**
@@ -3929,7 +3929,7 @@ et compléter l'appel à `tourner` :
             )
 ```
 
-Dans `scripts/tester_publication.py`, importer `preparer_reel`, `publier_reel` et `RecuperateurYtdlp`, mettre à jour la docstring (« un post `kinda_reel` est assemblé en MP4 — vidéo de l'API, sinon yt-dlp : l'essai consomme donc un téléchargement et partage la pause de l'agent — et envoyé en conteneur REELS »), et remplacer les quatre lignes qui suivent `dossier = ...` par :
+Dans `scripts/diagnostic/tester_publication.py`, importer `preparer_reel`, `publier_reel` et `RecuperateurYtdlp`, mettre à jour la docstring (« un post `kinda_reel` est assemblé en MP4 — vidéo de l'API, sinon yt-dlp : l'essai consomme donc un téléchargement et partage la pause de l'agent — et envoyé en conteneur REELS »), et remplacer les quatre lignes qui suivent `dossier = ...` par :
 
 ```python
         legende = texte_legende(post)
@@ -3949,7 +3949,7 @@ Dans `scripts/tester_publication.py`, importer `preparer_reel`, `publier_reel` e
 
 - [ ] **Step 4: Run tests et import du script**
 
-Run: `uv run pytest tests/scripts/test_run_publication.py -v && uv run python -c "import scripts.tester_publication"`
+Run: `uv run pytest tests/scripts/test_run_publication.py -v && uv run python -c "import scripts.diagnostic.tester_publication"`
 Expected: tout passe, l'import ne lève rien
 
 - [ ] **Step 5: Lint et suite complète**
@@ -3960,7 +3960,7 @@ Expected: tout passe
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/run_publication.py scripts/tester_publication.py tests/scripts/test_run_publication.py
+git add scripts/run_publication.py scripts/diagnostic/tester_publication.py tests/scripts/test_run_publication.py
 git commit -F - <<'EOF'
 feat(agent): brancher le gel et la publication des reels
 
@@ -4550,7 +4550,7 @@ Aucune de ces étapes n'est exécutée par un agent d'implémentation. Rien n'es
 3. **Fusionner** `feat/reels-auto` dans `main`, puis **redémarrer le dashboard** pour charger la nouvelle API : `launchctl kickstart -k gui/$(id -u)/com.musicnewsradar.dashboard`. Les reels restent **coupés** après la fusion (opt-in, `reels_actifs` absent = false), quel que soit le mode.
 4. **Vérifier ffmpeg et ffprobe** : `which ffmpeg ffprobe` (sinon `brew install ffmpeg`) — l'assemblage en a besoin, et yt-dlp reçoit le chemin de ffmpeg pour fusionner vidéo et audio.
 5. **Mode `apercu` d'abord** (décision du 2026-09-17) : sélecteur du panneau Programmation — la production tournait en `reel`, repasser en `apercu` AVANT d'allumer les reels. **Puis cocher « Reels auto »** (décochée par défaut) : c'est le seul geste qui allume les reels.
-6. **Essai sans publier** d'un post `kinda_reel` : `uv run python -m scripts.tester_publication --post <ID>`. Si l'article n'a pas de `media_url`, l'essai lance **un** téléchargement yt-dlp (même état de pause que l'agent). Le conteneur créé chez Meta n'est pas public et expire en 24 h.
+6. **Essai sans publier** d'un post `kinda_reel` : `uv run python -m scripts.diagnostic.tester_publication --post <ID>`. Si l'article n'a pas de `media_url`, l'essai lance **un** téléchargement yt-dlp (même état de pause que l'agent). Le conteneur créé chez Meta n'est pas public et expire en 24 h.
 7. **Observer en `apercu`** quelques jours : créneaux reel « Programmé » → « Gelé » → « Aperçu, non publié » ; ligne d'offre (éligibles, dont directes) ; raisons « gel differe : yt-dlp en pause… » sur les créneaux ; `x-app-usage` au premier aperçu. Si l'offre reste à zéro, les créneaux reel restent vides sans dégât.
 8. **Mettre yt-dlp à jour** quand une notification « yt-dlp en panne » revient (Instagram change souvent) : `uv lock --upgrade-package yt-dlp && uv sync`, relancer l'essai de l'étape 6, puis committer `uv.lock`. La pause de 60 minutes se lève seule ; pour la lever tout de suite, supprimer `~/Library/Application Support/Kinda/ytdlp_etat.json`.
 9. **Coupe-circuits** : décocher « Reels auto » au dashboard coupe tous les reels (les créneaux reel à venir disparaissent ; un reel déjà gelé ne part plus et finit en « Manqué ») ; `PUBLICATION_REEL_YTDLP=false` dans `.env` coupe yt-dlp seul (seules les vidéos à lien direct restent éligibles, pris en compte au passage suivant de l'agent, et au redémarrage du dashboard pour l'API).

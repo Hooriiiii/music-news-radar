@@ -14,9 +14,9 @@
 
 - Toutes les commandes passent par `uv run` (jamais `python` ou `pytest` nus).
 - Lint : `uv run ruff check .` doit passer. `line-length = 100`, `target-version = "py311"`.
-- **Commentaires et docstrings en français, SANS accents** — le style établi de `app/` et `scripts/`. Les chaînes affichées à l'utilisateur peuvent être accentuées (voir `scripts/seed_fr_sources.py`).
+- **Commentaires et docstrings en français, SANS accents** — le style établi de `app/` et `scripts/`. Les chaînes affichées à l'utilisateur peuvent être accentuées (voir `scripts/sources/seed_fr_sources.py`).
 - Les commentaires expliquent le **pourquoi**, pas le quoi.
-- **Idiome des scripts de ce projet :** sans `--apply`, on affiche le plan ; avec, on écrit. Copié de `scripts/seed_fr_sources.py`.
+- **Idiome des scripts de ce projet :** sans `--apply`, on affiche le plan ; avec, on écrit. Copié de `scripts/sources/seed_fr_sources.py`.
 - **Aucune commande ne doit toucher la base de données** pendant l'implémentation : `DATABASE_URL` pointe sur l'instance Neon de production. Les tests utilisent des doubles injectés, jamais l'engine réel.
 - **Aucun `launchctl` ni écriture dans `~/Library/LaunchAgents` sans accord explicite de l'utilisateur** — cela modifie ses agents de session. Les tests écrivent dans `tmp_path`.
 - Commit après chaque tâche, message en français, préfixe `feat(deploy):` / `fix(deploy):` / `docs(deploy):`.
@@ -1212,7 +1212,7 @@ un démon système étranger au projet. Vérifié contre `man 5 newsyslog.conf`.
 `RunAtLoad`, donc il commençait à écrire avant d'être tronqué : les premières
 secondes du premier run étaient jetées, et comptées comme octets libérés.
 
-**`scripts/send_digest.py` n'avait pas le préambule réseau** — le script dont les
+**`scripts/livraison/send_digest.py` n'avait pas le préambule réseau** — le script dont les
 cinq semaines d'échecs DNS motivent précisément ce préambule, et le seul point
 d'entrée à ne pas l'avoir reçu.
 

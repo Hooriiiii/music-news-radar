@@ -29,7 +29,7 @@
   Claude-Session: https://claude.ai/code/session_01Dvb254Kc9aGX1aTK64nMyM
   ```
 - `uv run ruff check .` et `uv run pytest` passent à la fin de chaque tâche.
-- **Rien n'est publié pendant l'implémentation.** Le mode par défaut est `arret`. Seul `scripts/tester_publication.py` (tâche 6) crée des conteneurs, qui ne sont pas publics et expirent seuls en 24 h. Passer en mode `reel` est une décision de l'utilisateur.
+- **Rien n'est publié pendant l'implémentation.** Le mode par défaut est `arret`. Seul `scripts/diagnostic/tester_publication.py` (tâche 6) crée des conteneurs, qui ne sont pas publics et expirent seuls en 24 h. Passer en mode `reel` est une décision de l'utilisateur.
 
 ## Écarts assumés par rapport au design, et pourquoi
 
@@ -53,7 +53,7 @@
 | `app/content/legende.py` (créer) | Texte de légende commun à l'export et à la publication |
 | `app/publish/preparation.py` (créer) | Le gel : cover rendue + photos, normalisées, écrites sur disque |
 | `app/publish/publier.py` (créer) | Héberger un dossier figé et le passer au client Instagram |
-| `scripts/tester_publication.py` (créer) | Essai de bout en bout SANS `media_publish` |
+| `scripts/diagnostic/tester_publication.py` (créer) | Essai de bout en bout SANS `media_publish` |
 | `app/models.py` (modifier) | `EtatCreneau`, `Creneau`, `Article.file_exclu_raison` |
 | `alembic/versions/0014_creneaux.py` (créer) | Table `creneaux`, colonne `file_exclu_raison` |
 | `app/schedule/__init__.py` (créer) | Paquet vide |
@@ -1532,7 +1532,7 @@ EOF
 
 **Files:**
 - Create: `app/publish/publier.py`
-- Create: `scripts/tester_publication.py`
+- Create: `scripts/diagnostic/tester_publication.py`
 - Test: `tests/publish/test_publish_publier.py`
 
 **Interfaces:**
@@ -1673,7 +1673,7 @@ def publier_fichiers(
 ```
 
 ```python
-# scripts/tester_publication.py
+# scripts/diagnostic/tester_publication.py
 """Essai de bout en bout SANS publier : gel reel, tunnel reel, conteneur reel.
 
 Rien n'est publie : le conteneur cree chez Meta n'est pas public et expire seul
@@ -1681,7 +1681,7 @@ en 24 h. C'est l'essai qui valide pour de vrai le format des images, le tunnel
 et le jeton, avant toute publication.
 
 Usage :
-    uv run python -m scripts.tester_publication --post 12
+    uv run python -m scripts.diagnostic.tester_publication --post 12
 """
 
 import argparse
@@ -1742,7 +1742,7 @@ Run: `uv run python -c "from app.db import SessionLocal; from app.models import 
 Si Chromium manque dans ce worktree (erreur « Chromium Playwright est absent »), lancer d'abord `uv run playwright install chromium`.
 
 Puis, avec l'identifiant d'un post `kinda_post` :
-Run: `uv run python -m scripts.tester_publication --post <ID>`
+Run: `uv run python -m scripts.diagnostic.tester_publication --post <ID>`
 Expected: `conteneur <nombre> FINISHED chez Meta -- rien n'a ete publie`
 
 Si Meta refuse le format, le tunnel ou le jeton, **s'arrêter et rapporter le message exact** : c'est précisément ce que cet essai doit révéler avant d'aller plus loin. Ne jamais appeler `publier_fichiers(..., publier_vraiment=True)` ici.
@@ -1750,7 +1750,7 @@ Si Meta refuse le format, le tunnel ou le jeton, **s'arrêter et rapporter le me
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/publish/publier.py scripts/tester_publication.py tests/publish/test_publish_publier.py
+git add app/publish/publier.py scripts/diagnostic/tester_publication.py tests/publish/test_publish_publier.py
 git commit -F - <<'EOF'
 feat(publication): publier un dossier fige, et l'essayer sans publier
 
@@ -3444,7 +3444,7 @@ n'est jamais exposé. `cloudflared` est cherché hors du PATH de launchd, comme 
 « saute », reçoit `articles.file_exclu_raison` et ne revient plus. Une panne
 systémique (crédits Anthropic, réseau) n'exclut rien.
 
-Essai sans publier : `uv run python -m scripts.tester_publication --post <ID>`.
+Essai sans publier : `uv run python -m scripts.diagnostic.tester_publication --post <ID>`.
 ```
 
 - [ ] **Step 7: Lint et suite complète**

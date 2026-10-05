@@ -136,7 +136,7 @@ Ce qui en reste :
 ## Nettoyage joint
 
 Les sources X — **85 encore actives au 2026-09-16**, 15 déjà coupées — sont désactivées
-(`scripts/desactiver_sources_x.py`, idempotent, réversible). Sans ça chaque run
+(`scripts/sources/desactiver_sources_x.py`, idempotent, réversible). Sans ça chaque run
 continue de produire un millier d'erreurs 402 qui noient la supervision — celle-là
 même qui doit rester lisible pour signaler les vraies pannes.
 

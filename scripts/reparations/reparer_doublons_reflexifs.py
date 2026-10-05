@@ -37,8 +37,8 @@ rapprochement, c'est l'ECRITURE du lien qui etait fautive. Poser un
 Idempotent : relance sans rien a faire -> plan vide.
 
 Usage :
-    uv run python -m scripts.reparer_doublons_reflexifs            # plan
-    uv run python -m scripts.reparer_doublons_reflexifs --apply    # ecrit
+    uv run python -m scripts.reparations.reparer_doublons_reflexifs            # plan
+    uv run python -m scripts.reparations.reparer_doublons_reflexifs --apply    # ecrit
 """
 
 import argparse

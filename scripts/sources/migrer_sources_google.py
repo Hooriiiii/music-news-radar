@@ -14,8 +14,8 @@ Deux remplacements, de nature différente :
     elles passent sur Bing, qui porte l'URL réelle dans son paramètre `url=`.
 
 Usage :
-    uv run python -m scripts.migrer_sources_google            # affiche le plan
-    uv run python -m scripts.migrer_sources_google --apply
+    uv run python -m scripts.sources.migrer_sources_google            # affiche le plan
+    uv run python -m scripts.sources.migrer_sources_google --apply
 """
 
 import argparse

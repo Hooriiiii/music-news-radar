@@ -1,7 +1,7 @@
 """Envoie les alertes Discord pour les articles hot jamais alertés.
 
 Usage :
-    uv run python -m scripts.send_hot_alerts
+    uv run python -m scripts.livraison.send_hot_alerts
 """
 
 import logging

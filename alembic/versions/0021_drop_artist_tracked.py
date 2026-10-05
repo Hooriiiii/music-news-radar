@@ -8,7 +8,7 @@ categorie artiste (88 en production), via `comptes_artistes.IndexComptes` : c'es
 elle qui ouvre l'exception au pre-filtre (`scoring.ContexteScoring`) et la
 reserve de visuels (`content/choix_visuels.py`).
 
-Elle a deja coute une FAUSSE ALERTE : `scripts/etat_notion.py` la comptait pour
+Elle a deja coute une FAUSSE ALERTE : `scripts/diagnostic/etat_notion.py` la comptait pour
 conclure « 0 artiste suivi sur 4 684, les chemins qui en dependent ne se
 declenchent jamais » -- faux, et relaye a l'utilisateur puis ecrit dans sa
 documentation. Une colonne qu'on peut confondre avec une vraie est pire qu'une

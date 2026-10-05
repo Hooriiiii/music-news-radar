@@ -14,8 +14,8 @@ scoring. Les requêtes Google News ciblées ci-dessous rendent le même service 
 maille locale, sans le bruit.
 
 Usage :
-    uv run python -m scripts.seed_fr_sources            # affiche le plan
-    uv run python -m scripts.seed_fr_sources --apply    # écrit en base
+    uv run python -m scripts.sources.seed_fr_sources            # affiche le plan
+    uv run python -m scripts.sources.seed_fr_sources --apply    # écrit en base
 """
 
 import argparse

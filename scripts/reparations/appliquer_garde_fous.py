@@ -15,9 +15,9 @@ que la premiere phrase de la premiere ligne de la caption. D'ou deux niveaux :
 Les articles publies (USED) ne sont jamais modifies : c'est l'archive.
 
 Usage :
-    uv run python -m scripts.appliquer_garde_fous                   # plan
-    uv run python -m scripts.appliquer_garde_fous --titres-courts   # plan elargi
-    uv run python -m scripts.appliquer_garde_fous --apply [--titres-courts]
+    uv run python -m scripts.reparations.appliquer_garde_fous                   # plan
+    uv run python -m scripts.reparations.appliquer_garde_fous --titres-courts   # plan elargi
+    uv run python -m scripts.reparations.appliquer_garde_fous --apply [--titres-courts]
 """
 
 import argparse

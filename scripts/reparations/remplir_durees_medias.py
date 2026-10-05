@@ -19,8 +19,8 @@ duree deja connue (sonde, API X) n'est JAMAIS ecrasee -- elle est mesuree, celle
 de l'URL n'est que declarative.
 
 Usage :
-    uv run python -m scripts.remplir_durees_medias            # affiche le plan
-    uv run python -m scripts.remplir_durees_medias --apply
+    uv run python -m scripts.reparations.remplir_durees_medias            # affiche le plan
+    uv run python -m scripts.reparations.remplir_durees_medias --apply
 """
 
 import argparse

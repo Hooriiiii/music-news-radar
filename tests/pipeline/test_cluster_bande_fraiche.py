@@ -496,7 +496,7 @@ def test_un_doublon_promu_representant_perd_sa_trace_de_doublon(db_session, tmp_
     comportement de publication » (tour de correction 1, 2026-09-24).
 
     Le cas existe independamment de la bande fraiche, et meme avec
-    `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` : `scripts.marquer_doublon_manuel
+    `CLUSTER_ARBITRAGE_FRAIS_ENABLED=false` : `scripts.reparations.marquer_doublon_manuel
     --meme-actu` sur deux articles FRAIS passe par la branche « archive » de
     `appliquer` (l'origine `manuel` n'est ni `frais` ni `arbitre_frais`) et
     pose donc `RAISON_DOUBLON_PREFIXE` sur un doublon dont le representant

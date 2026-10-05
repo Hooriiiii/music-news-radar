@@ -1,5 +1,5 @@
 """Regroupement des sources qui sont le meme media sur plusieurs canaux
-(`scripts/grouper_sources.py`) et la preuve du piege qu'il corrige dans
+(`scripts/reparations/grouper_sources.py`) et la preuve du piege qu'il corrige dans
 `app/pipeline/events.py::_recalculer`."""
 
 import datetime as dt
@@ -7,7 +7,7 @@ import datetime as dt
 
 from app.models import Event, EventObservation, Source, SourceRole, SourceType
 from app.pipeline import events
-from scripts.grouper_sources import GROUPES, grouper_sources
+from scripts.reparations.grouper_sources import GROUPES, grouper_sources
 
 UTC = dt.timezone.utc
 
@@ -105,7 +105,7 @@ def test_demi_groupe_ne_sert_a_rien(db_session):
     assert event.independent_source_count == 2  # le regroupement a moitie ne sert a rien
 
 
-# -- scripts/grouper_sources.py --------------------------------------------
+# -- scripts/reparations/grouper_sources.py --------------------------------------------
 
 
 def test_plan_ne_modifie_rien_sans_apply(db_session):

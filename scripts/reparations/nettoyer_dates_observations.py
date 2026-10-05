@@ -25,8 +25,8 @@ Idempotent : une seconde passe ne trouve plus rien (les lignes visees sont
 alors a NULL).
 
 Usage :
-    uv run python -m scripts.nettoyer_dates_observations            # le plan
-    uv run python -m scripts.nettoyer_dates_observations --apply
+    uv run python -m scripts.reparations.nettoyer_dates_observations            # le plan
+    uv run python -m scripts.reparations.nettoyer_dates_observations --apply
 """
 
 import argparse

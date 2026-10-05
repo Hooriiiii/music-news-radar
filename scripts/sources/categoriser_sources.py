@@ -16,8 +16,8 @@ par DEFAUT (artiste, media) ne remplissent qu'une categorie vide : un classement
 manuel fait depuis le dashboard n'est jamais ecrase par une supposition.
 
 Usage :
-    uv run python -m scripts.categoriser_sources           # affiche le plan
-    uv run python -m scripts.categoriser_sources --apply   # ecrit
+    uv run python -m scripts.sources.categoriser_sources           # affiche le plan
+    uv run python -m scripts.sources.categoriser_sources --apply   # ecrit
 """
 
 import argparse

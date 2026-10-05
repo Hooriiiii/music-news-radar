@@ -334,7 +334,7 @@ def link_duplicates(
     publication. Chaque paire n'est arbitrée QU'UNE FOIS : le verdict est
     mémorisé dans `cluster_arbitrage_cache_path`, relu à chaque passage avant
     d'appeler l'API. Un verdict MANUEL (posé par
-    `scripts.marquer_doublon_manuel`) est vérifié AVANT toute mesure et prime
+    `scripts.reparations.marquer_doublon_manuel`) est vérifié AVANT toute mesure et prime
     sur tout, y compris sur la bande certaine -- et vaut aussi pour une paire
     de deux articles FRAIS : l'utilisateur a le droit de défaire n'importe
     quel lien, pas seulement un lien d'archive.
@@ -487,7 +487,7 @@ def link_duplicates(
     # un lien déjà posé EN BASE dont la paire porte un verdict manuel
     # "différent" est défait ici, quelle que soit la façon
     # dont il est apparu -- une course non prévue entre l'arbitre et
-    # `scripts.marquer_doublon_manuel` (l'utilisateur corrige PENDANT que
+    # `scripts.reparations.marquer_doublon_manuel` (l'utilisateur corrige PENDANT que
     # Claude répond "même actu" dans le même passage), un crash entre deux
     # écritures, ou un lien posé par une version antérieure du code. Posé
     # AVANT les requêtes ci-dessous : un article tout juste délié doit pouvoir
@@ -1035,7 +1035,7 @@ def link_duplicates(
         # `file_exclu_raison` est le champ que le projet utilise déjà pour
         # « pourquoi cet article ne sera pas publié » -- réparer un faux
         # positif suppose désormais un verdict manuel « différent »
-        # (`scripts.marquer_doublon_manuel`), pas seulement effacer ce champ :
+        # (`scripts.reparations.marquer_doublon_manuel`), pas seulement effacer ce champ :
         # sinon le passage suivant relie l'article tant qu'il reste dans la
         # fenêtre de sa vie publiable (voir CLAUDE.md, « Dédup à deux étages »).
         if origine == "certain":

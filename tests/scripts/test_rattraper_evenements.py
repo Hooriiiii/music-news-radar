@@ -1,5 +1,5 @@
 """Le rattrapage des groupes de doublons formes avant `events.attacher` :
-`scripts/rattraper_evenements.py`.
+`scripts/reparations/rattraper_evenements.py`.
 
 `events.attacher` n'est appelee que depuis `cluster.lier()`, donc seulement
 quand un NOUVEAU lien de doublon est pose -- un groupe forme avant la mise en
@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.models import Article, ArticleStatus, Event, EventObservation, Source, SourceType
 from app.pipeline import events
-from scripts.rattraper_evenements import rattraper
+from scripts.reparations.rattraper_evenements import rattraper
 
 UTC = dt.timezone.utc
 

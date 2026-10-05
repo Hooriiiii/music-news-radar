@@ -2,15 +2,15 @@
 
 La logique (mapping explicite, pose des `source_group_id`) vit dans
 `app.pipeline.source_groups` -- ce script n'est plus qu'un point d'entree en
-ligne de commande, sur le meme motif que `scripts/rattraper_evenements.py`
+ligne de commande, sur le meme motif que `scripts/reparations/rattraper_evenements.py`
 (voir le docstring de ce module pour le pourquoi du deplacement, tour de
 correction 1, 2026-09-24). `GROUPES`, `LignePlan` et `grouper_sources` sont
 RE-EXPORTES ici pour que ce script et ses tests existants continuent de les
-importer depuis `scripts.grouper_sources` sans rien changer.
+importer depuis `scripts.reparations.grouper_sources` sans rien changer.
 
 Usage :
-    uv run python -m scripts.grouper_sources           # affiche le plan
-    uv run python -m scripts.grouper_sources --apply    # ecrit
+    uv run python -m scripts.reparations.grouper_sources           # affiche le plan
+    uv run python -m scripts.reparations.grouper_sources --apply    # ecrit
 """
 
 import argparse
@@ -53,7 +53,7 @@ def main() -> None:
         # ce message ne concerne que ce script lance a la main.
         print(
             "\nCe regroupement ne propage rien tout seul : lancer ensuite "
-            "`uv run python -m scripts.rattraper_evenements --recalculer` "
+            "`uv run python -m scripts.reparations.rattraper_evenements --recalculer` "
             "(puis `--recalculer --apply`) pour mettre a jour les compteurs "
             "des evenements deja en base."
         )

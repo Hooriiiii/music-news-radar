@@ -1,7 +1,7 @@
 """Construit et envoie le digest quotidien par mail.
 
 Usage :
-    uv run python -m scripts.send_digest [--dry-run] [--date YYYY-MM-DD]
+    uv run python -m scripts.livraison.send_digest [--dry-run] [--date YYYY-MM-DD]
 
 --dry-run : génère l'aperçu HTML dans /tmp/digest_preview.html sans rien
             écrire en base ni envoyer de mail.

@@ -388,7 +388,7 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             f"{reflexifs} doublon(s) de soi",
             f"{reflexifs} article(s) pointent sur eux-mêmes comme doublon : ils ne seront "
             "jamais notés ni publiés. Réparer avec "
-            "`uv run python -m scripts.reparer_doublons_reflexifs --apply`.",
+            "`uv run python -m scripts.reparations.reparer_doublons_reflexifs --apply`.",
             details,
         )
     if recente:

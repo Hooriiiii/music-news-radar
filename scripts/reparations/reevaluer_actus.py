@@ -23,8 +23,8 @@ Le plan, sur --jours jours (non doublons, non publies, non exclus, deja notes) :
   sans re-noter toute la presse.
 
 Usage :
-    uv run python -m scripts.reevaluer_actus                    # plan
-    uv run python -m scripts.reevaluer_actus --apply [--jours 3] [--limite 100]
+    uv run python -m scripts.reparations.reevaluer_actus                    # plan
+    uv run python -m scripts.reparations.reevaluer_actus --apply [--jours 3] [--limite 100]
 """
 
 import argparse

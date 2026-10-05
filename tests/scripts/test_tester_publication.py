@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import scripts.tester_publication as script
+import scripts.diagnostic.tester_publication as script
 from app.config import settings
 
 

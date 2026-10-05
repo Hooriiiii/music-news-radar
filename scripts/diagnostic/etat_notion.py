@@ -6,7 +6,7 @@ plus SILENCIEUSEMENT : une doc qui date est pire que pas de doc, parce qu'on la
 croit. Ce script le regenere en une commande, pour qu'aucun chiffre ne soit
 jamais recopie de memoire.
 
-    uv run python -m scripts.etat_notion
+    uv run python -m scripts.diagnostic.etat_notion
 
 Lecture seule : aucune ecriture en base, aucun appel reseau hors Postgres.
 

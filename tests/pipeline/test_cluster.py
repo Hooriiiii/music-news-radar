@@ -639,10 +639,10 @@ def test_un_verdict_manuel_pose_par_le_script_survit_aux_passages_suivants(
     db_session, tmp_path, monkeypatch
 ):
     """Meme preuve que ci-dessus, mais en passant reellement par
-    `scripts.marquer_doublon_manuel` -- l'outil que l'utilisateur emploie pour
+    `scripts.reparations.marquer_doublon_manuel` -- l'outil que l'utilisateur emploie pour
     de vrai, pas un appel direct a `marquer_manuel`."""
     from app.config import settings as reglages
-    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+    from scripts.reparations.marquer_doublon_manuel import appliquer as appliquer_script
 
     monkeypatch.setattr(reglages, "cluster_arbitrage_cache_path", tmp_path / "cache.json")
     old_src = _src(db_session, "mixmag")
@@ -668,14 +668,14 @@ def test_un_verdict_manuel_pose_par_le_script_survit_aux_passages_suivants(
 def test_i2_un_verdict_manuel_pose_pendant_le_passage_n_est_pas_efface(db_session, tmp_path):
     """Reproduit en revue : `link_duplicates` relit le cache une fois au debut
     et le reecrivait en bloc a la fin -- un verdict manuel pose PENDANT ce
-    passage (par un AUTRE processus, ex. `scripts.marquer_doublon_manuel`, sur
+    passage (par un AUTRE processus, ex. `scripts.reparations.marquer_doublon_manuel`, sur
     une paire qui n'a rien a voir avec celle en cours d'arbitrage) disparaissait
     a l'ecriture finale. L'arbitre factice simule cette ecriture concurrente."""
     chemin = tmp_path / "cluster_arbitrage.json"
     publie, reprise = _paire_douteuse(db_session)
 
     def arbitre_qui_ecrit_une_autre_paire_pendant_l_appel(publie_art, nouveau_art):
-        # Simule un `scripts.marquer_doublon_manuel` lance par un AUTRE
+        # Simule un `scripts.reparations.marquer_doublon_manuel` lance par un AUTRE
         # processus PENDANT que ce passage-ci arbitre encore une autre paire.
         marquer_manuel(9001, 9002, False, "posee par un autre processus pendant le passage",
                         chemin)
@@ -802,7 +802,7 @@ def test_i2_cas_2_l_utilisateur_corrige_pendant_que_claude_repond_meme_actu(
     jamais) : les deux passent par `settings.cluster_arbitrage_cache_path`,
     isole par la fixture autouse. Un `cache_chemin` explicite aurait pu
     masquer le defaut en pointant le script ailleurs que `link_duplicates`."""
-    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+    from scripts.reparations.marquer_doublon_manuel import appliquer as appliquer_script
 
     monkeypatch.setattr(settings, "cluster_arbitrage_cache_path", tmp_path / "cluster_arbitrage.json")
     publie, reprise = _paire_douteuse(db_session)
@@ -833,7 +833,7 @@ def test_i2_cas_2_auto_reparation_delie_un_lien_deja_pose_a_chaque_passage(
     anterieure du code) dont la paire porte un verdict manuel "different" est
     defait a CHAQUE passage -- pas seulement empeche a l'avenir. Teste sur
     PLUSIEURS passages, avec le VRAI script pour poser le verdict manuel."""
-    from scripts.marquer_doublon_manuel import appliquer as appliquer_script
+    from scripts.reparations.marquer_doublon_manuel import appliquer as appliquer_script
 
     chemin = tmp_path / "cluster_arbitrage.json"
     publie, reprise = _paire_douteuse(db_session)

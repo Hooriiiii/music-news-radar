@@ -312,7 +312,7 @@ class TestUneObservationNeMentJamaisSaDate:
 
 
 class TestScriptDeRattrapage:
-    """`scripts/nettoyer_dates_observations.py` : le plan par defaut,
+    """`scripts/reparations/nettoyer_dates_observations.py` : le plan par defaut,
     l'ecriture sous `--apply`, idempotent, et surtout PRUDENT -- il ne touche
     jamais une observation dont l'article a ete purge, ou une date de
     publication legitime."""
@@ -347,7 +347,7 @@ class TestScriptDeRattrapage:
         return obs
 
     def test_repare_seulement_la_date_d_ingestion_deguisee(self, db_session):
-        from scripts.nettoyer_dates_observations import nettoyer_dates
+        from scripts.reparations.nettoyer_dates_observations import nettoyer_dates
 
         ingestion = dt.datetime(2026, 9, 25, 9, 0, tzinfo=UTC)
         publication = dt.datetime(2026, 9, 25, 8, 0, tzinfo=UTC)
@@ -379,7 +379,7 @@ class TestScriptDeRattrapage:
         assert purgee.published_at is not None
 
     def test_idempotent(self, db_session):
-        from scripts.nettoyer_dates_observations import nettoyer_dates
+        from scripts.reparations.nettoyer_dates_observations import nettoyer_dates
 
         self._observation(
             db_session,

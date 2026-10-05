@@ -42,10 +42,10 @@ d'article : `attacher` ne lit que `Article`, n'ecrit que `Event` et
 `cluster.lier`) : la dedup elle-meme n'est pas rejouee.
 
 Usage :
-    uv run python -m scripts.rattraper_evenements            # affiche le plan
-    uv run python -m scripts.rattraper_evenements --apply
+    uv run python -m scripts.reparations.rattraper_evenements            # affiche le plan
+    uv run python -m scripts.reparations.rattraper_evenements --apply
 
---recalculer : propager un changement de regroupement (`scripts/grouper_sources.py`)
+--recalculer : propager un changement de regroupement (`scripts/reparations/grouper_sources.py`)
 ou une correction future du calcul lui-meme aux evenements DEJA en base.
 
 Les compteurs (`source_count`, `platform_count`, `independent_source_count`,
@@ -73,7 +73,7 @@ dans `app.pipeline.events`** (tour de correction 1, 2026-09-24), a cote de
 `_recalculer`, leur seul autre ecrivain -- `app.pipeline.source_groups` en a
 besoin pour le passage horaire, et `app/` ne doit jamais dependre d'un module
 qui fait de l'`argparse`. Re-exportes ici pour que ce script et ses tests
-existants continuent de les importer depuis `scripts.rattraper_evenements`
+existants continuent de les importer depuis `scripts.reparations.rattraper_evenements`
 sans rien changer.
 """
 

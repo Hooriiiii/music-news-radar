@@ -1,4 +1,4 @@
-"""Le rattrapage des durees deja en base : `scripts/remplir_durees_medias.py`.
+"""Le rattrapage des durees deja en base : `scripts/reparations/remplir_durees_medias.py`.
 
 La lecture a l'ingestion ne vaut que pour les nouvelles lignes. Celles posees
 avant -- dont la video de 190 s qui a fait exclure l'article 18951 le
@@ -10,7 +10,7 @@ import datetime as dt
 import json
 
 from app.models import Article, Post, Source, SourceType
-from scripts.remplir_durees_medias import remplir_durees
+from scripts.reparations.remplir_durees_medias import remplir_durees
 
 
 def _url(duree_s: int | None) -> str:

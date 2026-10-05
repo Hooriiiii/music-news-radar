@@ -14,8 +14,8 @@ posees avant : sans lui, un post deja compose repartirait avec son `&amp;`.
 Une seule passe suffit : idempotent, il ne touche que ce qui change.
 
 Usage :
-    uv run python -m scripts.nettoyer_urls_medias            # affiche le plan
-    uv run python -m scripts.nettoyer_urls_medias --apply
+    uv run python -m scripts.reparations.nettoyer_urls_medias            # affiche le plan
+    uv run python -m scripts.reparations.nettoyer_urls_medias --apply
 """
 
 import argparse

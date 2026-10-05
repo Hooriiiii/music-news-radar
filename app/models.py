@@ -242,7 +242,7 @@ class Artist(Base):
     # `comptes_artistes.IndexComptes`, c'est-a-dire les sources Instagram ACTIVES
     # de categorie artiste, jamais un booleen sur la fiche. La colonne morte a
     # deja coute une fausse alerte relayee a l'utilisateur
-    # (`scripts/etat_notion.py` concluait « 0 artiste suivi, les chemins qui en
+    # (`scripts/diagnostic/etat_notion.py` concluait « 0 artiste suivi, les chemins qui en
     # dependent ne se declenchent jamais » alors que 88 comptes tournaient).
     # Le lien UTILE est celui-ci, juste en dessous.
     # Le compte Instagram suivi de cet artiste, quand le nom ne suffit pas a le

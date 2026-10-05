@@ -160,7 +160,7 @@ def run_pipeline(
     report.ingest = ingest(db)
 
     # Avant le cluster : un media qui vient de rejoindre son groupe (RSS +
-    # Instagram, voir `scripts/grouper_sources.py`) doit compter pour une
+    # Instagram, voir `scripts/reparations/grouper_sources.py`) doit compter pour une
     # seule confirmation independante des le meme passage, pas seulement au
     # suivant. `regrouper_sources_et_propager` ne leve deja jamais (voir
     # `app.pipeline.source_groups`) ; ce `try/except` est une seconde

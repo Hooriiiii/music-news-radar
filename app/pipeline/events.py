@@ -498,12 +498,12 @@ def recalculer_tout(
     (utilisé par `app.pipeline.source_groups`, qui ne veut recalculer QUE les
     événements touchés par un regroupement de sources tout juste posé, jamais
     la base entière à chaque passage horaire) ; par défaut (`None`, le chemin
-    de `scripts/rattraper_evenements.py --recalculer`), TOUS les événements
+    de `scripts/reparations/rattraper_evenements.py --recalculer`), TOUS les événements
     sont relus, comportement inchangé.
 
     `finaliser` (tour de correction 2, 2026-09-24) : par défaut (`True`), la
     fonction clôt elle-même la transaction (`commit` si `appliquer`, sinon
-    `rollback`) -- comportement inchangé pour `scripts/rattraper_evenements.py`.
+    `rollback`) -- comportement inchangé pour `scripts/reparations/rattraper_evenements.py`.
     `app.pipeline.source_groups.regrouper_sources_et_propager` passe `False` :
     poser `sources.source_group_id` et recalculer les compteurs doivent être
     une SEULE transaction (tout ou rien), pour qu'une panne pendant le recalcul
@@ -511,7 +511,7 @@ def recalculer_tout(
     plus rien ne retente. C'est alors à cet appelant de committer ou d'annuler.
 
     Point d'écriture unique de ces compteurs (avec `_recalculer` lui-même) :
-    déplacé depuis `scripts/rattraper_evenements.py` (tour de correction 1,
+    déplacé depuis `scripts/reparations/rattraper_evenements.py` (tour de correction 1,
     2026-09-24) pour que `app/` cesse de dépendre d'un module qui fait de
     l'`argparse` -- le script en reste un simple appelant, ré-exportant cette
     fonction pour sa ligne de commande et ses tests existants."""

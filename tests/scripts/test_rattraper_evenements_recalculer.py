@@ -1,5 +1,5 @@
-"""`scripts/rattraper_evenements.py --recalculer` : propager un changement de
-regroupement des sources (`scripts/grouper_sources.py`) aux `Event` DEJA en
+"""`scripts/reparations/rattraper_evenements.py --recalculer` : propager un changement de
+regroupement des sources (`scripts/reparations/grouper_sources.py`) aux `Event` DEJA en
 base -- ils ne se recalculent jamais tout seuls (`independent_source_count`
 et les autres compteurs sont STOCKES, voir le docstring du module).
 """
@@ -9,7 +9,7 @@ import datetime as dt
 from sqlalchemy import select
 
 from app.models import Article, ArticleStatus, Event, EventObservation, Source, SourceRole, SourceType
-from scripts.rattraper_evenements import recalculer_tout
+from scripts.reparations.rattraper_evenements import recalculer_tout
 
 UTC = dt.timezone.utc
 
@@ -162,7 +162,7 @@ def test_ne_touche_que_les_compteurs_d_event_empreinte_avant_apres(db_session):
     premier_seen_avant = event.first_seen_at
     dernier_seen_avant = event.last_seen_at
 
-    # `scripts/grouper_sources.py --apply` vient de tourner : les deux
+    # `scripts/reparations/grouper_sources.py --apply` vient de tourner : les deux
     # sources partagent maintenant un groupe. C'est CE recalcul-la que le
     # test observe.
     rss.source_group_id = rss.id

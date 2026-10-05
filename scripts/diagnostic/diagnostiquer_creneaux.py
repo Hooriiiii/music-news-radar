@@ -1,6 +1,6 @@
 """Pourquoi les creneaux de publication sont manques, avec des effectifs.
 
-    uv run python -m scripts.diagnostiquer_creneaux [--jours N] [--detail]
+    uv run python -m scripts.diagnostic.diagnostiquer_creneaux [--jours N] [--detail]
 
 Lecture seule. Aucune ecriture, aucun appel reseau, aucun appel paye.
 

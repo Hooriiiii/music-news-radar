@@ -1,6 +1,6 @@
 """Tout ce qu'il faut pour examiner les posts publies, en un passage.
 
-    uv run python -m scripts.revue_posts [--limite N] [--brut]
+    uv run python -m scripts.diagnostic.revue_posts [--limite N] [--brut]
 
 Lecture seule. Aucune ecriture, aucun appel reseau, aucun appel paye.
 

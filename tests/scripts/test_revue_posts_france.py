@@ -1,6 +1,6 @@
 """La mesure de derive editoriale lit l'accroche ET la legende.
 
-POURQUOI CE FICHIER. `scripts/revue_posts.py` alerte quand moins de 20 % des
+POURQUOI CE FICHIER. `scripts/diagnostic/revue_posts.py` alerte quand moins de 20 % des
 posts publies portent un marqueur France -- le compte se veut francais NATIONAL
 (CLAUDE.md). Mesure du 2026-10-04 sur les 55 posts reellement publies :
 l'accroche seule porte un marqueur 8 fois (14,5 %), l'accroche PLUS la legende
@@ -19,7 +19,7 @@ fois ce mois-ci.
 import datetime as dt
 
 from app.models import Article, Post, PostStatus, Source, SourceCategorie, SourceType
-from scripts.revue_posts import examiner
+from scripts.diagnostic.revue_posts import examiner
 
 UTC = dt.timezone.utc
 
