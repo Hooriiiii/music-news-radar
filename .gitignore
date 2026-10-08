@@ -1,5 +1,10 @@
 .venv/
+# Tout fichier d'environnement est un porteur de secrets : on ignore le MOTIF,
+# pas les noms vus un par un. Trois .env.bak-* avaient echappe au seul `.env`
+# et sont entres dans l'historique avec les jetons Meta et l'URL Neon dedans.
 .env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 .pytest_cache/
