@@ -389,3 +389,42 @@ def test_les_deux_chemins_s_accordent_sur_les_trois_formes_d_engagement(db_sessi
 
     assert articles_engages(db_session, []) == set()
     assert articles_engages(db_session, [None]) == set()
+
+
+# -- le sursis des non-juges traverse le predicat PARTAGE --------------------
+
+
+def test_l_evenement_d_un_article_jamais_juge_survit_avec_lui(db_session):
+    """L'invariant de `_predicat_purgeable` applique au sursis.
+
+    Les deux etapes doivent viser EXACTEMENT le meme ensemble. Si le sursis
+    n'etait cable que dans `purge_old_articles`, cette fonction supprimerait
+    l'evenement d'un article qui RESTE en base -- le pire des deux cas que le
+    docstring du predicat decrit. Le sursis vit donc dans le predicat partage,
+    et il suffit de le verifier ici : l'evenement d'un non-juge sous sursis
+    n'est meme pas EXAMINE.
+    """
+    db_session.autoflush = False
+    src = _src(db_session)
+    art = _art(db_session, src, n=1, jours=4, relevance=None)
+    event = _evenement(db_session, art)
+
+    stats = purger_evenements_sans_valeur(db_session, RETENTION, sursis_days=7)
+    assert stats.evenements_examines == 0
+    assert stats.evenements_supprimes == 0
+    assert db_session.get(Event, event.id) is not None
+    assert purge_old_articles(db_session, retention_days=RETENTION, sursis_days=7) == 0
+
+
+def test_passe_le_sursis_l_evenement_d_un_non_juge_meurt_comme_les_autres(db_session):
+    """Le sursis repousse la decision, il ne la supprime pas : au-dela, le
+    non-juge et son evenement solitaire partent comme n'importe quel bruit."""
+    db_session.autoflush = False
+    src = _src(db_session)
+    art = _art(db_session, src, n=1, jours=10, relevance=None)
+    event = _evenement(db_session, art)
+
+    stats = purger_evenements_sans_valeur(db_session, RETENTION, sursis_days=7)
+    assert stats.evenements_supprimes == 1
+    assert db_session.get(Event, event.id) is None
+    assert purge_old_articles(db_session, retention_days=RETENTION, sursis_days=7) == 1

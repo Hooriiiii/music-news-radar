@@ -2,7 +2,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, and_, delete, func, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -13,7 +13,45 @@ from app.pipeline.election import articles_engages
 logger = logging.getLogger(__name__)
 
 
-def _predicat_purgeable(cutoff: dt.datetime) -> ColumnElement[bool]:
+def _cutoff(jours: int) -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=jours)
+
+
+def _trop_vieux(cutoff: dt.datetime) -> ColumnElement[bool]:
+    """« Hors fenetre », par DATE DE POST, avec la date d'ajout pour seul filet."""
+    return or_(
+        Article.published_at < cutoff,
+        (Article.published_at.is_(None)) & (Article.fetched_at < cutoff),
+    )
+
+
+def _jamais_juge() -> ColumnElement[bool]:
+    """Un article sur lequel AUCUNE machine ne s'est prononcee.
+
+    Definition MESUREE le 2026-10-08 sur les 452 articles sans note laisses en
+    production par la panne de credits Anthropic du 2026-10-07 :
+
+    | nature                                  | effectif |
+    |-----------------------------------------|----------|
+    | jamais juge (`duplicate_of_id IS NULL`) |   399    |
+    | doublon (`duplicate_of_id` renseigne)   |    53    |
+
+    La clause `duplicate_of_id IS NULL` n'est donc pas decorative : un doublon
+    A ete juge -- par la dedup, qui a decide qu'il repetait une actu deja
+    representee. Il n'a pas de note parce qu'il n'en a pas besoin, pas parce
+    que la machine est tombee. Ces 53 lignes restent a `retention_days` ; leur
+    donner le sursis ferait grossir la table pour rien.
+
+    Un article note par le pre-filtre local (`scored_by='local'`) porte une
+    `relevance_score` : il est juge, donc hors sursis. C'est voulu.
+    """
+    return and_(
+        Article.relevance_score.is_(None),
+        Article.duplicate_of_id.is_(None),
+    )
+
+
+def _predicat_purgeable(retention_days: int, sursis_days: int) -> ColumnElement[bool]:
     """Ce qu'est « un article que la purge va supprimer », en UN seul endroit.
 
     `purge_old_articles` et `purger_evenements_sans_valeur` doivent viser
@@ -21,18 +59,41 @@ def _predicat_purgeable(cutoff: dt.datetime) -> ColumnElement[bool]:
     vu de l'article que la premiere s'apprete a effacer. Deux copies de ce
     predicat qui divergeraient laisseraient soit des evenements sans valeur
     derriere elles, soit -- pire -- supprimeraient l'evenement d'un article qui
-    reste en base.
+    reste en base. Le SURSIS vit donc ici, pas chez les appelants.
+
+    Deux fenetres, pas une : un article que la machine n'a pas pu juger
+    beneficie d'un sursis (`_jamais_juge`). `CLAUDE.md` : « une panne MACHINE
+    n'exclut JAMAIS un article de la file -- reseau, tunnel injoignable,
+    credits Anthropic epuises ». La regle etait tenue dans la file de
+    publication (les creneaux passent en `manque`, jamais en `exclu`) et nulle
+    part en amont : l'article n'etait pas exclu, il etait EFFACE a
+    `retention_days`, exactement comme un article note et rejete.
     """
+    # PLANCHER, jamais substitution. Les appelants peuvent passer un
+    # `retention_days` plus long que le sursis (les tests passent 14 ; une
+    # fenetre de production allongee ferait de meme) : si le sursis REMPLACAIT
+    # la retention, un non-juge tomberait de 14 jours a 7, c'est-a-dire que le
+    # sursis RACCOURCIRAIT la conservation -- l'exact inverse de son intention,
+    # et silencieusement.
+    jours_non_juge = max(retention_days, sursis_days)
+    cutoff_juge = _cutoff(retention_days)
+    cutoff_non_juge = _cutoff(jours_non_juge)
     return and_(
         Article.status != ArticleStatus.USED,
         or_(
-            Article.published_at < cutoff,
-            (Article.published_at.is_(None)) & (Article.fetched_at < cutoff),
+            and_(_jamais_juge(), _trop_vieux(cutoff_non_juge)),
+            and_(not_(_jamais_juge()), _trop_vieux(cutoff_juge)),
         ),
     )
 
 
-def purge_old_articles(db: Session, retention_days: int) -> int:
+def _sursis(sursis_days: int | None) -> int:
+    return settings.retention_sursis_non_juges_days if sursis_days is None else sursis_days
+
+
+def purge_old_articles(
+    db: Session, retention_days: int, *, sursis_days: int | None = None
+) -> int:
     """Supprime les articles trop vieux, par DATE DE PUBLICATION (pas d'ajout).
 
     Les articles sans date de publication n'ont pas de date de post exploitable :
@@ -43,9 +104,17 @@ def purge_old_articles(db: Session, retention_days: int) -> int:
     indéfiniment. C'est l'archive éditoriale -- elle sert à ne pas reposter deux
     fois la même actu et à mesurer ce qui a été publié. Le statut REVIEWED n'est
     que du tri, il ne protège pas de la purge.
+
+    Seconde exception : un article que la machine n'a PAS PU juger beneficie
+    d'un sursis -- `sursis_days`, par defaut
+    `settings.retention_sursis_non_juges_days` (7 jours). La definition de
+    « jamais juge » et le PLANCHER `max(retention_days, sursis_days)` vivent
+    dans `_predicat_purgeable`, partage avec
+    `purger_evenements_sans_valeur`.
     """
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
-    result = db.execute(delete(Article).where(_predicat_purgeable(cutoff)))
+    result = db.execute(
+        delete(Article).where(_predicat_purgeable(retention_days, _sursis(sursis_days)))
+    )
     db.commit()
     return result.rowcount
 
@@ -77,7 +146,11 @@ class PurgeEvenementsStats:
 
 
 def purger_evenements_sans_valeur(
-    db: Session, retention_days: int, *, seuil_pertinence: int | None = None
+    db: Session,
+    retention_days: int,
+    *,
+    seuil_pertinence: int | None = None,
+    sursis_days: int | None = None,
 ) -> PurgeEvenementsStats:
     """Supprime les evenements qui n'ont jamais rien prouve, AVANT la purge des
     articles qui les portent.
@@ -131,8 +204,6 @@ def purger_evenements_sans_valeur(
         seuil = (
             settings.digest_relevance_threshold if seuil_pertinence is None else seuil_pertinence
         )
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
-
         # OBLIGATOIRE : la production tourne en `autoflush=False` (`app/db.py`).
         # Le passage horaire vient d'ecrire des observations (`observer_articles`
         # committe, mais `record_mentions` ou une injection de test peuvent
@@ -147,7 +218,7 @@ def purger_evenements_sans_valeur(
                 Article.relevance_score,
             )
             .join(Article, Article.id == EventObservation.article_id)
-            .where(_predicat_purgeable(cutoff))
+            .where(_predicat_purgeable(retention_days, _sursis(sursis_days)))
         ).all()
         if not candidats:
             return stats

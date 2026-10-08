@@ -17,6 +17,23 @@ class Settings(BaseSettings):
     # jamais purgés (archive éditoriale), voir `pipeline/retention.py`.
     retention_days: int = 2
 
+    # Sursis de rétention pour les articles que la machine n'a PAS PU juger
+    # (`relevance_score IS NULL AND duplicate_of_id IS NULL`, voir
+    # `pipeline/retention._predicat_purgeable`). `CLAUDE.md` : « une panne
+    # MACHINE n'exclut JAMAIS un article de la file -- crédits Anthropic
+    # épuisés » ; la règle était tenue dans la file de publication mais pas en
+    # amont, où l'article n'était pas exclu, il était EFFACÉ à
+    # `retention_days`.
+    # 7 jours : décision utilisateur du 2026-10-08, après la panne de crédits
+    # Anthropic commencée le 2026-10-07 à 15h25 qui a laissé 452 articles sans
+    # note (dont 399 jamais jugés et 53 doublons, qui restent à
+    # `retention_days`). 7 jours couvrent un week-end PLUS une panne.
+    # Le coût est borné : en régime normal ce bucket est quasi vide (un article
+    # est noté dans l'heure qui suit son ingestion), et au pire d'une panne
+    # totale de 7 jours il retient l'ingestion d'une semaine, soit ~650 lignes
+    # à la cadence mesurée (647 articles ingérés sur 7 jours).
+    retention_sursis_non_juges_days: int = 7
+
     # Cadence du passage de `run_pipeline` (agent launchd
     # `com.musicnewsradar.pipeline`). Elle ne vivait que dans
     # `scripts/install_agents.py`, et le dashboard annonçait « toutes les 2 h »
