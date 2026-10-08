@@ -440,6 +440,44 @@ Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hor
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
 Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.env`.
 
+**Un article que la machine n'a PAS PU juger bénéficie d'un SURSIS**
+(2026-10-08, `retention_sursis_non_juges_days`, **7 jours**). Le prédicat ne
+regardait pas `relevance_score` : un article que Claude n'a jamais pu noter —
+parce que le solde API était à zéro — était effacé à `retention_days` (2 jours)
+exactement comme un article noté et rejeté. Cela défaisait une règle que
+`CLAUDE.md` énonce explicitement (« une panne MACHINE n'exclut JAMAIS un article
+de la file — crédits Anthropic épuisés »), tenue dans la file de publication (les
+créneaux passent en `manque`, jamais en `exclu` : 0 article exclu sur 7 jours) et
+nulle part en amont — l'article n'était pas exclu, il était EFFACÉ.
+
+Mesure du 2026-10-08, en production : la panne de crédits commencée le 2026-10-07
+à 15h25 (`credit balance` 2056 fois dans `pipeline.err.log`) a laissé **452
+articles sans note** (93 du 08/10, 251 du 07/10, 108 du 06/10 — ces derniers à la
+limite de purge le jour de la mesure). Sur ces 452 : **399 jamais jugés**
+(`duplicate_of_id IS NULL`) et **53 doublons**. « Jamais jugé » est donc
+`relevance_score IS NULL AND duplicate_of_id IS NULL` : un doublon A été jugé —
+par la dédup, qui a décidé qu'il répétait une actu déjà représentée — il n'a pas
+de note parce qu'il n'en a pas besoin, pas parce que la machine est tombée ; les
+53 restent à `retention_days`. Un article noté par le pré-filtre local porte une
+note : il est jugé, hors sursis.
+
+**Le sursis est un PLANCHER, jamais une substitution** :
+`max(retention_days, sursis_days)`, et c'est le piège principal du réglage. Les
+appelants peuvent passer un `retention_days` plus long que le sursis (toute la
+suite de tests passe 14) ; s'il le REMPLAÇAIT, un non-jugé tomberait de 14 jours
+à 7, c'est-à-dire que le sursis RACCOURCIRAIT la conservation — l'exact inverse
+de son intention, et silencieusement. Verrouillé par
+`test_le_sursis_est_un_plancher_jamais_une_substitution`.
+
+7 jours couvrent un week-end PLUS une panne. Le coût est borné : en régime normal
+ce bucket est quasi vide (un article est noté dans l'heure qui suit son
+ingestion), et au pire d'une panne totale de 7 jours il retient l'ingestion d'une
+semaine, soit ~650 lignes à la cadence mesurée (647 articles ingérés sur 7
+jours). Le sursis vit DANS `_predicat_purgeable`, donc la purge des événements le
+suit par construction — sinon elle supprimerait l'événement d'un article qui
+RESTE en base. Aucune migration de données : les 399 articles en attente sont
+couverts d'office par le prédicat.
+
 **Les événements sans valeur sont purgés, et l'ORDRE est l'invariant**
 (2026-09-24, phase 2B Task 2, `retention.purger_evenements_sans_valeur`). Depuis
 la Task 1, TOUT article devient l'observation d'un événement, même seul : sans
