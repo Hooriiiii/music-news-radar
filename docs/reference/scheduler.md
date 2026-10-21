@@ -20,7 +20,11 @@ Le reste des commandes du projet est dans `CLAUDE.md`.
   la raison d'être disparaît, et avec elle le cloisonnement par script qui
   n'existait que pour éviter le doublon avec le cloud. `.github/workflows/
   pipeline.yml` est supprimé ; plus aucun secret de dépôt n'est nécessaire.
-  `ci.yml` (tests à chaque push) n'est PAS un ordonnanceur et reste tel quel.
+  `ci.yml` (tests à chaque push) a suivi le 2026-10-21, à la demande de
+  l'utilisateur, pour ne plus recevoir aucune alerte GitHub : `ruff`, `pytest`
+  et la parité des migrations (`alembic upgrade head` puis `alembic check` sur
+  une base vide, puis `alembic downgrade base`) se lancent désormais à la main
+  en local — plus rien ne les exécute à chaque push.
 
   *Ce qu'on y gagne.* Le pipeline tourne désormais depuis l'IP **résidentielle** :
   Mixmag ne renvoie plus 403 (Cloudflare) et Reddit plus 429 — deux blocages
