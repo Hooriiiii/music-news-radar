@@ -345,8 +345,7 @@
 
   /* --- Relecture avant publication -----------------------------------------
      Pas de rouge par defaut : un post qui attend une relecture n'est PAS une
-     alerte, il part quand meme a l'heure. Le rouge (var(--alerte)) reste
-     reserve a ce que personne d'autre ne rattrapera -- une cover qui deborde. */
+     alerte, il part quand meme a l'heure. */
   .relecture-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
   .relecture-row { display: flex; align-items: center; gap: 12px; background: var(--panel);
     border: 1px solid var(--border); border-left: 3px solid var(--accent);
@@ -358,7 +357,6 @@
   .relecture-row .hl { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   .relecture-row .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
-  .relecture-row.deborde { border-left-color: var(--alerte); }
   /* « Ce qui va partir » : du texte PRE, parce que les retours a la ligne et les
      lignes vides que `aerer_legende` fabrique sont justement ce qu'on relit. */
   .depart-apercu { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border);
@@ -1731,7 +1729,7 @@ async function loadRelectureList() {
   zone.innerHTML = "";
   for (const d of lignes) {
     const row = document.createElement("div");
-    row.className = "relecture-row" + (d.deborde ? " deborde" : "");
+    row.className = "relecture-row";
     row.innerHTML = `
       <span class="quand"></span>
       <div class="grow"><div class="hl"></div><div class="sub"></div></div>`;
@@ -1744,9 +1742,6 @@ async function loadRelectureList() {
       `${d.legende_longueur}/${d.legende_maximum} car.`,
       `${d.hashtags_publies.length}/${d.hashtags_maximum} #`,
     ];
-    // Une cover qui deborde est la seule chose que personne d'autre ne
-    // rattrapera : elle s'ecrit, et en rouge.
-    if (d.deborde) parties.push("⚠ cover qui déborde");
     if (!d.editable) parties.push(d.raison_non_editable);
     poserParties(row.querySelector(".sub"), parties);
     row.onclick = () => ouvrirPost(d.post_id);
@@ -2449,14 +2444,9 @@ function renderPostDetail(post, article, covers) {
     mesures.push(depart.elements_figes != null
       ? `<span>${depart.elements_figes} élément(s) figé(s)</span>`
       : `<span class="inconnu">éléments pas encore figés</span>`);
-    // Le debordement de la cover : `null` = aucun rendu ne l'a mesure. Un
-    // « ça tient » par defaut serait un faux feu vert sur le seul signal qui doit
-    // empecher une publication en defaut.
-    mesures.push(depart.deborde == null
-      ? `<span class="inconnu">débordement de la cover inconnu (aucun rendu enregistré)</span>`
-      : depart.deborde
-        ? `<span class="limite">⚠ la cover déborde et partira ainsi</span>`
-        : `<span>cover mesurée : elle tient</span>`);
+    // Pas de compteur de debordement ici (decision du 2026-10-30) : la mesure
+    // vivante est `/covers`, rendue a l'ouverture, et son avertissement est en tete
+    // de fiche (`avertissementHtml`). « Inconnu » a cote d'elle se contredisait.
     mesuresHtml = `<div class="depart-mesures">${mesures.join("")}</div>`;
     apercuHtml = `
       <details class="apercu-publie">

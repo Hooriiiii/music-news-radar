@@ -475,12 +475,6 @@ class DepartOut(BaseModel):
     credit obligatoire et tronque l'ensemble a 2150 points de code. Et
     `posts.credit` n'etait affiche NULLE PART. Un utilisateur qui relit avant
     publication relit donc ce champ-ci, pas `posts.caption`.
-
-    Regle du bandeau de supervision, appliquee telle quelle : une valeur qu'on
-    n'a pas pu lire vaut INCONNUE, jamais « tout va bien ». `deborde` est
-    `None` tant qu'aucun rendu n'a mesure la cover -- un `false` par defaut
-    serait un faux feu vert sur le seul signal qui doit empecher une
-    publication en defaut.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -531,8 +525,6 @@ class DepartOut(BaseModel):
     # La liste a-t-elle ete ARRETEE a la main ? Si oui, le gel ne reprend plus
     # ni les actifs ni les medias de l'actu : les slides font foi.
     liste_arretee: bool = False
-    # La cover deborde-t-elle ? `None` = aucun rendu ne l'a mesure (inconnu).
-    deborde: bool | None = None
     # Editable maintenant ? Et, sinon, POURQUOI -- un controle desactive
     # imprime toujours sa raison (regle de la refonte du 2026-10-02).
     editable: bool

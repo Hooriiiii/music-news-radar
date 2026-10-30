@@ -58,9 +58,12 @@ six notifications par post est la facon la plus sure d'apprendre a les ignorer.
 Plus un voyant `relecture` au bandeau, et un compteur `annonces_relecture` dans
 le log de `run_publication`. Le voyant reste **`ok`** quand des posts attendent :
 peindre en ATTENTION ce qui part tout seul reapprendrait a ignorer le bandeau
-(lecon du voyant de composition qui criait au loup, 2026-10-02). Il passe a
-ATTENTION pour une seule chose, une cover qui DEBORDE — celle-la, personne
-d'autre ne la rattrapera.
+(lecon du voyant de composition qui criait au loup, 2026-10-02). **Depuis le
+2026-10-30 il ne passe plus a ATTENTION sur une cover qui deborde** : ce signal
+lisait `render_report`, qu'aucun bouton n'ecrit, et il valait donc vert sans mesure ;
+et « partiront ainsi » etait faux, le gel refuse une telle cover
+(`preparation.py`). Detail : `docs/reference/dashboard.md`, « Bandeau de
+supervision ».
 
 **2. Rien ne montrait ce qui va PARTIR.** `GET /relecture` (`app/api/relecture.py`,
 `DepartOut`) rend, par creneau a venir portant un post, le texte EXACT que Meta
@@ -73,9 +76,10 @@ que `GET /supervision` : la question croise `creneaux`, `posts` et un pipeline
 dont le resultat n'est stocke nulle part (il est calcule a l'instant de publier),
 et chaque lecteur de post paierait ce calcul pour rien. Au dashboard : une liste
 « À relire avant publication » en tete du panneau Posts, et une section « Ce qui
-va partir » dans la fiche. `deborde` vaut **`None`** tant qu'aucun rendu ne l'a
-mesure et s'affiche « inconnu » : un `false` par defaut serait un faux feu vert
-sur le seul signal qui doit empecher une publication en defaut.
+va partir » dans la fiche. **`GET /relecture` ne rend plus de champ `deborde`
+(decision du 2026-10-30)** : il affichait « inconnu » a cote de la mesure vivante
+que la fiche demande a `/covers` en s'ouvrant, seul avertissement conserve. Rien
+n'affirme plus qu'une cover tient sans l'avoir mesuree.
 
 **3. Le gel fermait la porte, et il la fermait TROP LARGE.** `PATCH /posts/{id}`
 repondait 409 sur un creneau GELE pour les cinq champs de contenu. Or

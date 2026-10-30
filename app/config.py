@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # recopie un réglage finit toujours par mentir : la valeur vit donc ici,
     # `install_agents` la lit, et l'interface la DÉRIVE (`GET /reglages`).
     pipeline_intervalle_s: int = 3600
+    # Meme regle pour l'agent de publication : `install_agents` le lit, et le seuil
+    # du voyant `agent_publication` en DERIVE (`app/supervision.py`).
+    publication_intervalle_s: int = 600
 
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None

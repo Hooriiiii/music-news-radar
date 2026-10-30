@@ -4,7 +4,8 @@ Usage :
     uv run python -m scripts.run_publication
 
 En mode `arret` (defaut), il sort immediatement sans toucher la base. Sinon il
-surveille le jeton Instagram, puis fait un passage de la file.
+surveille le jeton Instagram, puis fait un passage de la file. Dans tous les cas
+il consigne sa fin (`app/schedule/passage.py`), que le bandeau relit.
 
 Une exception inattendue ne doit pas mourir en silence dans un log que personne
 ne lit (l'agent digest a echoue cinq semaines ainsi) : elle est notifiee -- au
@@ -29,6 +30,7 @@ from app.publish.preparation import preparer_fichiers
 from app.publish.preparation_reel import preparer_reel
 from app.publish.publier import publier_fichiers, publier_reel
 from app.publish.ytdlp import RecuperateurYtdlp
+from app.schedule.passage import consigner_passage
 from app.schedule.runner import RapportPublication, tourner
 from app.schedule.store import utc
 
@@ -121,8 +123,27 @@ def choix_du_passage():
 
 
 def main() -> None:
+    """Un passage, puis sa consignation -- quelle que soit la sortie.
+
+    Le `finally` est le seul point d'ecriture : il couvre le retour du mode `arret`,
+    `SystemExit` (base injoignable, panne) et l'exception imprevue. Il vient APRES
+    la publication, donc il ne peut pas la retarder. Ce qu'il ne couvre pas -- un
+    processus tue, un import casse, launchd decharge -- laisse le fichier vieillir,
+    et c'est exactement ce que le bandeau mesure (`voyant_agent_publication`).
+    """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    mode = mode_effectif()
+    constat = {"mode": None, "pannes": []}
+    try:
+        _un_passage(constat)
+    except Exception as exc:  # noqa: BLE001 -- consignee, puis relevee telle quelle
+        constat["pannes"].append(f"erreur imprevue ({type(exc).__name__})")
+        raise
+    finally:
+        consigner_passage(_maintenant(), constat["mode"], " ; ".join(constat["pannes"])[:300] or None)
+
+
+def _un_passage(constat: dict) -> None:
+    mode = constat["mode"] = mode_effectif()
     if mode == "arret":
         return
     # Lance par launchd, parfois au reveil du Mac avant que le DNS reponde.
@@ -130,6 +151,7 @@ def main() -> None:
         attendre_base()
     except BaseInjoignable as exc:
         print(f"[ERREUR] {exc}")
+        constat["pannes"].append("base injoignable")
         raise SystemExit(1) from exc
 
     maintenant = _maintenant()
@@ -140,6 +162,7 @@ def main() -> None:
         surveiller_jeton(maintenant, notifier=notifier)
     except Exception as exc:  # noqa: BLE001
         en_panne = True
+        constat["pannes"].append(f"surveillance du jeton en panne ({type(exc).__name__})")
         signaler_panne(f"surveillance du jeton Instagram en panne : {exc}", maintenant)
     rapport = RapportPublication()
     try:
@@ -155,7 +178,12 @@ def main() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         en_panne = True
+        constat["pannes"].append(f"passage interrompu ({type(exc).__name__})")
         signaler_panne(f"agent de publication en panne : {exc}", maintenant)
+    # `tourner` avale les pannes d'etape pour que les suivantes tournent : sans ce
+    # report, un agent dont toutes les etapes echouent se lirait « passe, tout va
+    # bien ». Le nom de l'etape seulement : son message peut porter un jeton.
+    constat["pannes"] += [erreur.split(" : ")[0] for erreur in rapport.erreurs]
 
     compteurs = {
         "composes": rapport.composes, "geles": rapport.geles, "publies": rapport.publies,

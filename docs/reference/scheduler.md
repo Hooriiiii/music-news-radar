@@ -54,6 +54,10 @@ Le reste des commandes du projet est dans `CLAUDE.md`.
     une seconde instance tant que la première tourne (`StartInterval` ne
     chevauche pas), le passage suivant part simplement en retard. D'où la
     relecture du mode avant chaque réclamation (voir « Publication automatique »).
+    Chaque sortie, mode `arret` compris, consigne sa fin dans
+    `publication_passage.json` à côté du jeton : c'est ce que relit le voyant
+    `agent_publication` (voir « Bandeau de supervision », `dashboard.md`).
+    L'intervalle vit dans `settings.publication_intervalle_s`.
   - `com.musicnewsradar.veille` — `run_veille` toutes les **5 minutes** : la
     veille rapide, c'est-à-dire les seuls comptes de `VEILLE_COMPTES` (voir
     « Veille rapide »). Silencieux quand il n'y a rien ; une exception est

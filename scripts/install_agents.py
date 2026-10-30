@@ -71,7 +71,7 @@ INTERVALLE_PIPELINE = settings.pipeline_intervalle_s
 
 # Dix minutes : c'est la precision de l'heure de publication. L'agent ne coute
 # rien a ce rythme -- il ne score pas, et ne compose qu'a J-1.
-INTERVALLE_PUBLICATION = 600
+INTERVALLE_PUBLICATION = settings.publication_intervalle_s
 
 # Cinq minutes : la cadence de la VEILLE RAPIDE. Elle ne lit que les comptes de
 # `VEILLE_COMPTES` (douze), soit 144 appels Graph par heure -- loin des ~430/h qui

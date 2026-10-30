@@ -213,7 +213,7 @@ def test_les_compteurs_restent_visibles_et_l_apercu_est_replie():
         "legende_publiee": "Le texte exact qui part.", "legende_longueur": 24,
         "legende_maximum": 2150, "hashtags_publies": ["#a"], "hashtags_maximum": 30,
         "credit": "@x", "fond": None, "fond_origine": "article", "elements_figes": None,
-        "elements": None, "candidats": [], "liste_arretee": False, "deborde": None,
+        "elements": None, "candidats": [], "liste_arretee": False,
         "editable": True, "raison_non_editable": None, "reouvrable": True,
         "raison_non_reouvrable": None, "minutes_restantes": 180,
     }
