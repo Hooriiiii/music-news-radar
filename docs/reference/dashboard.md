@@ -165,7 +165,9 @@ par la dedup d'archive** et renvoie vers `scripts.reparations.marquer_doublon_ma
 effacer la raison seule ne tient pas, `link_duplicates` relierait l'article au
 passage suivant (voir « Dedup a deux etages »). Une exclusion de gel sur un
 article par ailleurs doublon se leve, elle : c'est la RAISON qui decide, pas le
-statut de doublon.
+statut de doublon. Si le post est peut-etre en ligne, le bouton ouvre une
+verification sur la carte et n'envoie la confirmation qu'apres « Vérifié, il
+n'est pas parti » (`publication.md`, « Exclusion »).
 
 **Une legende tapee survit desormais a un re-rendu de la fiche.** Six gestes
 reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et

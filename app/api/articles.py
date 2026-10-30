@@ -3,15 +3,22 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.content.visuels import origine_interdite
 from app.db import get_db
-from app.models import Article, ArticleStatus, Source, SourceType
+from app.config import settings
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
 from app.pipeline.cluster import raison_de_doublon
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
-from app.schedule.store import etiquette_visuel, raison_sans_visuel
+from app.schedule.publication_incertaine import (
+    RAISON_RECLAMATION,
+    erreur_incertaine,
+    publication_incertaine,
+)
+from app.schedule.runner import RECLAMATION_EN_COURS
+from app.schedule.store import etiquette_visuel, raison_sans_visuel, utc
 from app.schemas import ArticleOut
 
 router = APIRouter(prefix="/articles", tags=["articles"])
@@ -22,6 +29,7 @@ def _avec_visuel(article: Article, index: IndexComptes) -> ArticleOut:
     sortie.visuel = etiquette_visuel(article, index)
     sortie.raison_sans_visuel = raison_sans_visuel(article, index)
     sortie.visuels_interdits = origine_interdite(article.source)
+    sortie.exclusion_a_verifier = publication_incertaine(article.file_exclu_raison)
     return sortie
 
 
@@ -92,8 +100,27 @@ def get_article(article_id: int, db: Session = Depends(get_db)):
     return _avec_visuel(article, construire_index(db))
 
 
+CONFIRMATION_PAS_PARTI = "PAS_PARTI"
+
+
+class ReintegrationIn(BaseModel):
+    confirmation: str | None = None
+
+
+def _robot_peut_encore_publier(creneau: Creneau, maintenant: dt.datetime) -> bool:
+    """Une reclamation peut etre prise jusqu'a `publication_retard_max_minutes`
+    apres l'heure, puis attendre Meta : avant cette limite, ne rien voir sur le
+    compte ne prouve pas que rien ne partira. Plus large que `RECLAMATION_EN_COURS`
+    seule, qui ne couvre que l'affichage d'un creneau pris a l'heure.
+    """
+    limite = dt.timedelta(minutes=settings.publication_retard_max_minutes) + RECLAMATION_EN_COURS
+    return creneau.erreur == RAISON_RECLAMATION and utc(creneau.publier_a) > maintenant - limite
+
+
 @router.post("/{article_id}/reintegrer", response_model=ArticleOut)
-def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
+def reintegrer_article(
+    article_id: int, corps: ReintegrationIn | None = None, db: Session = Depends(get_db)
+):
     """Leve `file_exclu_raison` : l'article redevient candidat a la file.
 
     C'etait le seul champ sans retour en arriere de tout le dashboard. « Sauter »
@@ -105,11 +132,17 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
     scrupule : `link_duplicates` relie l'article au passage suivant, donc
     effacer la raison seule ne tient pas (docs/reference/dedup-et-retention.md, « Reparer un faux positif
     exige un verdict MANUEL »). On nomme donc l'outil qui, lui, tient.
+
+    Une exclusion qui laisse le post peut-etre EN LIGNE exige `confirmation ==
+    "PAS_PARTI"` : seul un humain qui a regarde le compte sait. La confirmation
+    reecrit aussi l'erreur du creneau, sinon `_articles_publiables` continuerait
+    d'ecarter l'article (docs/reference/publication.md, « Exclusion »).
     """
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    if article.file_exclu_raison is None:
+    confirme = corps is not None and corps.confirmation == CONFIRMATION_PAS_PARTI
+    if article.file_exclu_raison is None and not confirme:
         # Idempotent : reclamer deux fois la meme remise en file n'est pas une
         # erreur, et l'UI peut avoir une grille d'une seconde en retard.
         return _avec_visuel(article, construire_index(db))
@@ -123,6 +156,43 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
                 "--article-b ID --different --raison \"...\"`."
             ),
         )
+    douteux = db.scalars(
+        select(Creneau).where(
+            Creneau.article_id == article.id,
+            Creneau.etat == EtatCreneau.ECHEC,
+            erreur_incertaine(Creneau.erreur),
+        )
+    ).all()
+    if publication_incertaine(article.file_exclu_raison) or douteux:
+        if not confirme:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Le post est peut-être en ligne : la publication s'est interrompue sans "
+                    "confirmation. Vérifie d'abord le compte Instagram, puis confirme qu'il "
+                    "n'est pas parti."
+                ),
+            )
+        maintenant = dt.datetime.now(dt.timezone.utc)
+        if any(_robot_peut_encore_publier(creneau, maintenant) for creneau in douteux):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Publication peut-être encore en cours : ne rien voir sur le compte ne "
+                    "prouve pas encore qu'il n'est pas parti. Réessaie dans quelques minutes."
+                ),
+            )
+        for creneau in douteux:
+            # UPDATE conditionnel : si l'etat a bouge depuis la lecture, on n'ecrit rien.
+            db.execute(
+                update(Creneau)
+                .where(
+                    Creneau.id == creneau.id,
+                    Creneau.etat == EtatCreneau.ECHEC,
+                    Creneau.erreur == creneau.erreur,
+                )
+                .values(erreur=f"verifie a la main, pas parti — {creneau.erreur}"[:1000])
+            )
     article.file_exclu_raison = None
     db.commit()
     db.refresh(article)

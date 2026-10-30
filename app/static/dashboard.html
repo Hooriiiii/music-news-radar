@@ -147,6 +147,9 @@
   .meta { color: #6a6a78; font-size: 11px; margin-top: auto; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .actions button.reintegrer { flex-basis: 100%; border-color: var(--alerte-bord); color: var(--alerte); }
+  .verif-publication { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
+    font-size: 12px; color: var(--alerte); }
+  .verif-publication[hidden] { display: none; }
   .actions button { flex: 1; border: 1px solid var(--border); background: #20202a;
     color: var(--text); border-radius: 8px; padding: 6px 0; cursor: pointer; font-size: 12px; }
   .actions button:hover { border-color: var(--accent); }
@@ -1040,6 +1043,11 @@ async function load() {
           <button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>
           <button class="gen-post">Générer le post</button>
           ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
+          ${a.exclusion_a_verifier ? `<div class="verif-publication" hidden>
+            <span>Le post est peut-être en ligne. Vérifie le compte</span>
+            <button class="pas-parti">Vérifié, il n'est pas parti</button>
+          </div>` : ""}
+          ${a.file_exclu_raison ? '<span class="etat-geste erreur refus-reintegrer"></span>' : ""}
         </div>
       </div>`;
     card.querySelector(".title").textContent = a.title;
@@ -1062,20 +1070,36 @@ async function load() {
     // a la main en base.
     const btnReintegrer = card.querySelector(".reintegrer");
     if (btnReintegrer) {
-      btnReintegrer.onclick = async () => {
-        btnReintegrer.disabled = true;
+      const refus = card.querySelector(".refus-reintegrer");
+      const envoyer = async (bouton, options) => {
+        bouton.disabled = true;
+        refus.textContent = "";
         try {
-          const reponse = await fetch(`/articles/${a.id}/reintegrer`, { method: "POST" });
+          const reponse = await fetch(`/articles/${a.id}/reintegrer`, options);
           if (!reponse.ok) {
             const corps = await reponse.json().catch(() => ({}));
             throw new Error(corps.detail || "HTTP " + reponse.status);
           }
           load();
         } catch (erreur) {
-          alert("Remise dans la file refusée : " + erreur.message);
-          btnReintegrer.disabled = false;
+          refus.textContent = "Remise dans la file refusée : " + erreur.message;
+          bouton.disabled = false;
         }
       };
+      // Le post est peut-etre en ligne (machine coupee apres media_publish,
+      // delai depasse) : le clic ouvre la verification, il ne remet rien en file.
+      const verification = card.querySelector(".verif-publication");
+      btnReintegrer.onclick = verification
+        ? () => { verification.hidden = false; btnReintegrer.hidden = true; }
+        : () => envoyer(btnReintegrer, { method: "POST" });
+      if (verification) {
+        const btnPasParti = verification.querySelector(".pas-parti");
+        btnPasParti.onclick = () => envoyer(btnPasParti, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmation: "PAS_PARTI" }),
+        });
+      }
     }
     grid.appendChild(card);
   }

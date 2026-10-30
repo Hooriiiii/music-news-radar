@@ -298,4 +298,5 @@ def test_sauter_demande_une_confirmation_qui_nomme_l_article():
 def test_la_grille_montre_l_exclusion_et_propose_de_la_lever():
     assert "a.file_exclu_raison" in PAGE
     assert "⛔ hors file" in PAGE
-    assert "/reintegrer`, { method: \"POST\" }" in PAGE
+    assert "/reintegrer`, options)" in PAGE
+    assert "envoyer(btnReintegrer, { method: \"POST\" })" in PAGE

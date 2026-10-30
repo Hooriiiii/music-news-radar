@@ -34,6 +34,7 @@ from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, construir
 from app.sources.instagram import compte_depuis_url
 from app.publish.mode import reels_actifs
 from app.schedule.pause_visuels import articles_en_pause
+from app.schedule.publication_incertaine import erreur_incertaine
 from app.schedule.queue import Candidat, Place, arbitrer
 from app.schedule.slots import FenetresInvalides, prochains_horaires
 
@@ -333,6 +334,19 @@ def _articles_publiables(db: Session, maintenant: dt.datetime, limite: int) -> l
                 select(Creneau.article_id).where(
                     Creneau.etat.in_([EtatCreneau.APERCU, EtatCreneau.PUBLIE]),
                     Creneau.article_id.is_not(None),
+                )
+            )
+        )
+        # Seconde ceinture : ce post est peut-etre en ligne. `file_exclu_raison`
+        # le dit deja, mais un champ s'efface (reparation, election, UPDATE a la
+        # main) et le prix d'un oubli est un doublon public. Seule la confirmation
+        # humaine (`POST /articles/{id}/reintegrer`) reecrit cette erreur.
+        .where(
+            ~Article.id.in_(
+                select(Creneau.article_id).where(
+                    Creneau.etat == EtatCreneau.ECHEC,
+                    Creneau.article_id.is_not(None),
+                    erreur_incertaine(Creneau.erreur),
                 )
             )
         )

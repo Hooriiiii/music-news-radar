@@ -84,6 +84,7 @@ from app.publish.hosting import HebergementIndisponible
 from app.publish.manifeste import normaliser as normaliser_figement
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
 from app.publish.preparation_reel import ReelInadapte
+from app.schedule.publication_incertaine import PREFIXE_ECHEC_PUBLICATION, RAISON_RECLAMATION
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.relecture import RAISON_RELECTURE, deja_annonce, marquer_annonce
 from app.schedule.store import (
@@ -98,10 +99,8 @@ from app.schedule.store import (
 logger = logging.getLogger(__name__)
 
 MODES = ("arret", "apercu", "reel")
-# Erreur posee a la reclamation. Recente, elle signifie « publication en cours »
-# (conteneur, attente de l'heure) : le dashboard l'affiche ainsi et refuse les
-# editions de contenu (voir api/posts.py).
-RAISON_RECLAMATION = "publication interrompue avant confirmation"
+# Duree pendant laquelle `RAISON_RECLAMATION` (publication_incertaine.py) se lit
+# « publication en cours » au dashboard et dans api/posts.py.
 RECLAMATION_EN_COURS = dt.timedelta(minutes=20)
 
 
@@ -1207,10 +1206,12 @@ def _publier(
 
             def echec():
                 creneau.etat = EtatCreneau.ECHEC
-                creneau.erreur = str(faute)[:1000]
+                # Le prefixe est la trace du doute : `store._articles_publiables`
+                # le lit si l'exclusion ci-dessous venait a disparaitre.
+                creneau.erreur = f"{PREFIXE_ECHEC_PUBLICATION}{faute}"[:1000]
                 if article is not None:
                     # Un article refuse par Meta ne revient pas dans la file.
-                    article.file_exclu_raison = f"echec de publication : {faute}"[:500]
+                    article.file_exclu_raison = f"{PREFIXE_ECHEC_PUBLICATION}{faute}"[:500]
                 db.commit()
 
             _ecrire_apres_publication(db, echec)

@@ -226,6 +226,33 @@ systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'u
 post qui ne porte plus l'article de son créneau (gel ou publication refusés,
 erreur posée).
 
+**Le retour en arrière ne doit pas rouvrir le doublon** (2026-10-30, déduit du
+code, **jamais observé en production**). La machine coupe juste après
+`media_publish` : le post est en ligne, la base dit ECHEC de réclamation, article
+exclu et non USED. `POST /articles/{id}/reintegrer` effaçait cette exclusion en un
+clic ; `_articles_publiables` ne filtrant pas ECHEC, l'article redevenait candidat
+et le brouillon se raccrochait. Reproduit par test : **deux** `media_publish`
+(`test_la_seconde_ceinture_tient_si_l_exclusion_a_disparu`, `2 == 1` avant
+correctif). Même chemin après « echec de publication : … », un délai dépassé
+pouvant cacher une publication réussie. Deux ceintures, sur les mêmes traces
+(`app/schedule/publication_incertaine.py`) :
+
+- `reintegrer` répond 409 sans `confirmation: "PAS_PARTI"` : seul un humain qui a
+  regardé le compte sait. Une exclusion « saute depuis le dashboard » reste en un clic.
+- `_articles_publiables` écarte l'article d'un créneau ECHEC portant ces traces,
+  même si l'exclusion a disparu. La confirmation réécrit l'erreur du créneau
+  (« verifie a la main, pas parti — … », l'état reste ECHEC), seul moyen de lever
+  cette ceinture : l'article repart (`test_apres_confirmation_humaine_l_article_repart`).
+
+La confirmation est **refusée tant que le robot peut encore publier**
+(`publication_retard_max_minutes` + `RECLAMATION_EN_COURS` après l'heure) : pendant
+l'attente dans le tunnel, l'utilisateur ne voit rien sur le compte, son « pas parti »
+est vrai, et le post part quand même ensuite. L'erreur du créneau porte le préfixe
+depuis ce correctif : les échecs plus anciens (`str(faute)` nu) ne sont couverts que
+par leur exclusion, pas par la seconde ceinture. Une panne d'hébergement n'est pas
+concernée : rien n'a pu partir, `rendre()` repasse GELE sans exclusion
+(`test_une_panne_de_tunnel_reste_retentee_et_n_est_pas_ecartee`).
+
 **Une VIDÉO inadaptée n'est pas une faute de l'ARTICLE** (2026-09-21,
 `preparation_reel.ReelInadapte`). L'article 18951 (Billboard, « The Weeknd
 Debuts New Song Sampling "Neon Genesis Evangelion" Theme ») a été exclu à vie

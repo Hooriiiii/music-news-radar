@@ -7,8 +7,17 @@ endpoint ne le remettait a NULL. Le seul recours etait un UPDATE a la main.
 
 import datetime as dt
 
-from app.models import Article, ArticleStatus, Source, SourceType
+import pytest
+
+from app.config import settings
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
 from app.pipeline.cluster import RAISON_DOUBLON_PREFIXE
+from app.schedule.publication_incertaine import (
+    PREFIXE_ECHEC_PUBLICATION,
+    RAISON_RECLAMATION,
+    publication_incertaine,
+)
+from app.schedule.runner import RECLAMATION_EN_COURS
 
 
 def _source(db):
@@ -106,3 +115,124 @@ def test_une_exclusion_de_gel_sur_un_doublon_se_leve_quand_meme(client, db_sessi
     db_session.refresh(article)
     assert article.file_exclu_raison is None
     assert article.duplicate_of_id == representant.id
+
+
+# --- « Le post est peut-etre en ligne » : un clic ne suffit plus ---
+
+
+ECHEC_DELAI = f"{PREFIXE_ECHEC_PUBLICATION}delai depasse"
+
+
+def _echec(db, article, erreur, publier_a=dt.datetime(2026, 10, 1, 12, tzinfo=dt.timezone.utc)):
+    creneau = Creneau(publier_a=publier_a, etat=EtatCreneau.ECHEC, article_id=article.id, erreur=erreur)
+    db.add(creneau)
+    db.commit()
+    return creneau
+
+
+@pytest.mark.parametrize("raison", [RAISON_RECLAMATION, ECHEC_DELAI])
+def test_une_exclusion_de_publication_exige_la_confirmation(client, db_session, raison):
+    article = _article(db_session, _source(db_session), raison=raison)
+
+    for corps in ({}, {"confirmation": "oui"}):
+        reponse = client.post(f"/articles/{article.id}/reintegrer", json=corps)
+        assert reponse.status_code == 409
+        assert "compte Instagram" in reponse.json()["detail"]
+    assert client.post(f"/articles/{article.id}/reintegrer").status_code == 409
+
+    db_session.refresh(article)
+    assert article.file_exclu_raison == raison
+
+
+@pytest.mark.parametrize("raison", [RAISON_RECLAMATION, ECHEC_DELAI])
+def test_la_confirmation_leve_l_exclusion_et_le_doute_du_creneau(client, db_session, raison):
+    article = _article(db_session, _source(db_session), raison=raison)
+    creneau = _echec(db_session, article, raison)
+
+    reponse = client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+
+    assert reponse.status_code == 200
+    db_session.refresh(article)
+    db_session.refresh(creneau)
+    assert article.file_exclu_raison is None
+    assert creneau.etat == EtatCreneau.ECHEC
+    assert not publication_incertaine(creneau.erreur)
+    assert raison in creneau.erreur, "l'historique de ce qui s'est passe reste lisible"
+
+
+def test_la_confirmation_ne_touche_pas_le_creneau_d_un_autre_article(client, db_session):
+    source = _source(db_session)
+    article = _article(db_session, source, raison=RAISON_RECLAMATION, hash_="a")
+    autre = _article(db_session, source, raison=RAISON_RECLAMATION, hash_="b")
+    creneau_autre = _echec(db_session, autre, RAISON_RECLAMATION)
+
+    client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+
+    db_session.refresh(creneau_autre)
+    assert creneau_autre.erreur == RAISON_RECLAMATION
+
+
+def test_la_confirmation_est_refusee_tant_que_le_robot_peut_encore_publier(client, db_session):
+    """L'utilisateur regarde Instagram, ne voit rien, et confirme : c'est VRAI
+    pendant que le robot attend l'heure dans le tunnel, ou reprend un creneau en
+    retard. Le post partirait APRES ce « il n'est pas parti »."""
+    article = _article(db_session, _source(db_session), raison=RAISON_RECLAMATION)
+    limite = dt.timedelta(minutes=settings.publication_retard_max_minutes) + RECLAMATION_EN_COURS
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    creneau = _echec(db_session, article, RAISON_RECLAMATION, publier_a=maintenant - limite + dt.timedelta(minutes=5))
+
+    reponse = client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+
+    assert reponse.status_code == 409
+    assert "en cours" in reponse.json()["detail"]
+    db_session.refresh(article)
+    db_session.refresh(creneau)
+    assert article.file_exclu_raison == RAISON_RECLAMATION
+    assert creneau.erreur == RAISON_RECLAMATION
+
+    creneau.publier_a = maintenant - limite - dt.timedelta(minutes=5)
+    db_session.commit()
+    reponse = client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+    assert reponse.status_code == 200
+
+
+def test_un_doute_de_creneau_sous_une_autre_raison_demande_aussi_la_confirmation(client, db_session):
+    """Une autre raison peut recouvrir le doute (dedup, reparation) : la lever d'un
+    clic annoncerait un retour en file que la ceinture refuserait."""
+    article = _article(db_session, _source(db_session), raison="saute depuis le dashboard")
+    _echec(db_session, article, RAISON_RECLAMATION)
+
+    assert client.post(f"/articles/{article.id}/reintegrer").status_code == 409
+
+
+def test_saute_depuis_le_dashboard_reste_en_un_clic(client, db_session):
+    article = _article(db_session, _source(db_session), raison="saute depuis le dashboard")
+
+    assert client.post(f"/articles/{article.id}/reintegrer").status_code == 200
+    db_session.refresh(article)
+    assert article.file_exclu_raison is None
+
+
+def test_la_confirmation_ne_contourne_pas_la_dedup_d_archive(client, db_session):
+    article = _article(db_session, _source(db_session), raison=f"{RAISON_DOUBLON_PREFIXE} (article 1, x)")
+
+    reponse = client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+    assert reponse.status_code == 409
+    assert "marquer_doublon_manuel" in reponse.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("raison", "attendu"),
+    [
+        (RAISON_RECLAMATION, True),
+        (ECHEC_DELAI, True),
+        ("saute depuis le dashboard", False),
+        ("gel impossible : echec de publication : x", False),
+        (None, False),
+    ],
+)
+def test_l_api_dit_a_la_grille_quelle_exclusion_demande_une_verification(client, db_session, raison, attendu):
+    _article(db_session, _source(db_session), raison=raison)
+
+    (vu,) = client.get("/articles").json()
+    assert vu["exclusion_a_verifier"] is attendu

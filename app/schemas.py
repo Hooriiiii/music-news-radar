@@ -76,6 +76,9 @@ class ArticleOut(BaseModel):
     # article est hors file, ni dire pourquoi -- alors que c'est le champ qui
     # refuse l'article PARTOUT (`store._articles_publiables`).
     file_exclu_raison: str | None = None
+    # Calcule par l'API : le post est peut-etre en ligne, la remise en file
+    # demande de verifier le compte. La grille ne relit pas les chaines du runner.
+    exclusion_a_verifier: bool = False
 
     # Calcules par l'API (pas des colonnes) : l'origine du visuel a venir, la
     # raison de son absence, et si les medias propres sont interdits (compte

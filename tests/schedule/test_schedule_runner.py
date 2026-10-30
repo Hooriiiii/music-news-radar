@@ -17,7 +17,7 @@ from app.publish.instagram import ErreurInstagram
 from app.publish.preparation import PreparationImpossible
 from app.schedule.runner import tourner
 from app.schedule.slots import prochains_horaires
-from app.schedule.store import utc
+from app.schedule.store import _articles_publiables, utc
 
 
 @pytest.fixture(autouse=True)
@@ -1110,3 +1110,114 @@ def test_un_manque_sans_cause_prealable_garde_la_raison_generique(db_session, ar
         "creneau manque : gele mais jamais publie, plus de "
         f"{settings.publication_retard_max_minutes} min de retard"
     )
+
+
+# --- Le post est peut-etre en ligne : ni un clic, ni l'arbitrage ne le relancent ---
+
+
+def _crash_apres_media_publish(outils, db, heure):
+    """`media_publish` a repondu, puis la machine coupe : le post est EN LIGNE,
+    la base dit ECHEC de reclamation, l'article est exclu et n'est pas USED."""
+
+    def publier_puis_crash(dossier, noms, legende, publier_vraiment, **_crochets):
+        outils.publies.append((noms, publier_vraiment))
+        raise KeyboardInterrupt
+
+    outils.publier = publier_puis_crash
+    with pytest.raises(KeyboardInterrupt):
+        _jusqu_a_publication(outils, db, heure)
+    db.rollback()
+    db.expire_all()
+    # La machine redemarre, le robot retrouve son vrai publieur.
+    del outils.publier
+
+
+def test_un_crash_apres_media_publish_ne_se_rejoue_pas_d_un_clic(client, db_session, article):
+    """Le scenario du doublon public, de bout en bout."""
+    outils = Outils()
+    _crash_apres_media_publish(outils, db_session, H0)
+    assert len(outils.publies) == 1
+
+    reponse = client.post(f"/articles/{article.id}/reintegrer")
+
+    assert reponse.status_code == 409
+    assert "compte Instagram" in reponse.json()["detail"]
+    db_session.expire_all()
+    assert db_session.get(Article, article.id).file_exclu_raison == runner.RAISON_RECLAMATION
+    _jusqu_a_publication(outils, db_session, H1)
+    assert len(outils.publies) == 1
+
+
+def test_la_seconde_ceinture_tient_si_l_exclusion_a_disparu(db_session, article):
+    """Effacee par un UPDATE a la main ou par un outil de reparation : le creneau
+    ECHEC reste la trace du doute, et l'arbitrage ne reprend pas l'article."""
+    outils = Outils()
+    _crash_apres_media_publish(outils, db_session, H0)
+    db_session.get(Article, article.id).file_exclu_raison = None
+    db_session.commit()
+
+    _jusqu_a_publication(outils, db_session, H1)
+
+    assert len(outils.publies) == 1
+    assert _creneau(db_session, H1).article_id is None
+
+
+def test_la_seconde_ceinture_tient_aussi_apres_un_echec_de_publication(db_session, article):
+    """Un delai depasse sur `media_publish` peut cacher une publication reussie."""
+    outils = Outils()
+    outils.erreur_publication = ErreurInstagram("delai depasse")
+    _jusqu_a_publication(outils, db_session, H0)
+    assert _creneau_h0(db_session).erreur == "echec de publication : delai depasse"
+    db_session.get(Article, article.id).file_exclu_raison = None
+    db_session.commit()
+    outils.erreur_publication = None
+
+    _jusqu_a_publication(outils, db_session, H1)
+
+    assert len(outils.publies) == 1
+    assert _creneau(db_session, H1).article_id is None
+
+
+def test_apres_confirmation_humaine_l_article_repart(client, db_session, article):
+    """Sinon la ceinture rendrait la confirmation mensongere : « remis dans la
+    file », et ecarte quand meme a chaque passage."""
+    outils = Outils()
+    _crash_apres_media_publish(outils, db_session, H0)
+    outils.publies.clear()
+
+    reponse = client.post(f"/articles/{article.id}/reintegrer", json={"confirmation": "PAS_PARTI"})
+
+    assert reponse.status_code == 200
+    assert reponse.json()["file_exclu_raison"] is None
+    db_session.expire_all()
+    assert _creneau_h0(db_session).etat == EtatCreneau.ECHEC
+    _jusqu_a_publication(outils, db_session, H1)
+    assert len(outils.publies) == 1
+    creneau = _creneau(db_session, H1)
+    assert (creneau.etat, creneau.article_id) == (EtatCreneau.PUBLIE, article.id)
+
+
+def test_une_panne_de_tunnel_reste_retentee_et_n_est_pas_ecartee(db_session, article):
+    """Une panne MACHINE n'exclut jamais. `rendre()` repasse GELE, sans exclusion
+    ni erreur reconnue : aucune ceinture, aucune confirmation demandee."""
+    outils = Outils()
+    outils.erreur_publication = TunnelInjoignable("injoignable apres 90 s")
+    _jusqu_a_publication(outils, db_session, H0)
+    creneau = _creneau_h0(db_session)
+    assert (creneau.etat, creneau.article_id) == (EtatCreneau.GELE, article.id)
+    assert creneau.erreur.startswith("hebergement indisponible")
+    assert db_session.get(Article, article.id).file_exclu_raison is None
+    assert article.id in [a.id for a in _articles_publiables(db_session, H0, 10)]
+
+    outils.erreur_publication = None
+    outils.tourner(db_session, H0 + dt.timedelta(minutes=30))
+    assert creneau.etat == EtatCreneau.PUBLIE
+
+
+def test_un_refus_avant_tout_appel_a_meta_n_est_pas_un_doute(db_session, article):
+    """« post supprime apres le gel » : ECHEC, mais rien n'a pu partir."""
+    creneau = Creneau(publier_a=H0, etat=EtatCreneau.ECHEC, article_id=article.id,
+                      erreur="publication refusee : le post ne correspond pas a l'article du creneau")
+    db_session.add(creneau)
+    db_session.commit()
+    assert article.id in [a.id for a in _articles_publiables(db_session, H0, 10)]
