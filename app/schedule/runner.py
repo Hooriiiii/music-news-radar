@@ -267,7 +267,8 @@ def _memoriser_duree(db, exc: ReelInadapte) -> bool:
 
 
 def _deja_publie(article: Article | None, post: Post | None) -> bool:
-    # Publie a la main depuis le dashboard pendant que l'article attendait son creneau.
+    # Deja parti par un autre creneau, ou ligne ecrite du temps ou le dashboard
+    # posait ces statuts a la main (les routes le refusent depuis le 2026-10-30).
     return (article is not None and article.status == ArticleStatus.USED) or (
         post is not None and post.status == PostStatus.PUBLISHED
     )

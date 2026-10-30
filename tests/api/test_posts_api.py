@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.content.compose import CoverVariante, PostDraft
 from app.schedule.relecture import RAISON_RELECTURE
 from app.content.render import RenduSlide
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
+from app.models import Article, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
 from app.schemas import PostOut
 
 
@@ -250,19 +250,6 @@ def test_editer_une_slide_au_kind_inconnu_est_refuse(client, db_session):
     )
 
     assert response.status_code == 422
-
-
-def test_publier_un_post_marque_l_article_comme_poste(client, db_session):
-    """C'est ce qui protege l'article de la purge : USED n'est jamais purge."""
-    article = _article(db_session)
-    post = _post(db_session, article)
-
-    response = client.patch(f"/posts/{post.id}", json={"status": "published"})
-
-    assert response.status_code == 200
-    assert response.json()["published_at"] is not None
-    db_session.refresh(article)
-    assert article.status == ArticleStatus.USED
 
 
 def test_editer_un_post_inexistant(client):

@@ -1,7 +1,7 @@
 """L'exclusion de la file a enfin un retour en arriere.
 
 `articles.file_exclu_raison` refuse l'article PARTOUT (`store._articles_publiables`),
-il est ecrit par « 🚫 Sauter », par le gel et par la composition -- et aucun
+il est ecrit par « 🚫 Ne pas publier », par le gel et par la composition -- et aucun
 endpoint ne le remettait a NULL. Le seul recours etait un UPDATE a la main.
 """
 

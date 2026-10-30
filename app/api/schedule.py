@@ -5,12 +5,16 @@ gele a deja ses fichiers prets, et changer son article a T-2h publierait autre
 chose que ce qui a ete fige. Toute action manuelle EPINGLE le creneau, sinon
 l'arbitrage suivant la defait dans les 10 minutes.
 
+Une seule exception, « Ne pas publier » (`sauter`) : RETIRER ne publie rien d'autre,
+donc ce geste vaut aussi sur un GELE, et apres l'heure tant que le robot peut partir.
+
 Un creneau reel n'accepte qu'un article eligible en reel, et decaler n'echange
 qu'avec un creneau du meme format. `/publication/reels` coupe ou rallume les reels
 automatiques ; yt-dlp seul se coupe dans `.env`.
 """
 
 import datetime as dt
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -20,7 +24,7 @@ from app.db import get_db
 from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau
 from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
-from app.schedule.reouverture import ReouvertureRefusee, rouvrir
+from app.schedule.reouverture import ReouvertureRefusee, ne_pas_publier, rouvrir
 from app.schedule.store import (
     MODIFIABLES,
     TEMPLATES,
@@ -33,6 +37,8 @@ from app.schedule.store import (
     utc,
 )
 from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate, OffreReelsOut, ReelsOut, ReelsUpdate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["schedule"])
 
@@ -135,11 +141,13 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     if creneau is None:
         raise HTTPException(status_code=404, detail="Creneau introuvable")
     maintenant = _maintenant()
-    if creneau.etat not in MODIFIABLES or utc(creneau.publier_a) <= maintenant:
-        raise HTTPException(status_code=409, detail="Creneau gele ou passe : il ne se modifie plus")
     actions = [payload.epingle is not None, payload.article_id is not None, payload.sauter, payload.decaler]
     if sum(actions) != 1:
         raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou decaler")
+    if payload.sauter:
+        return _ne_pas_publier(db, creneau, maintenant)
+    if creneau.etat not in MODIFIABLES or utc(creneau.publier_a) <= maintenant:
+        raise HTTPException(status_code=409, detail="Creneau gele ou passe : il ne se modifie plus")
 
     if payload.epingle is not None:
         if payload.epingle and creneau.article_id is None:
@@ -192,14 +200,6 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         # carrousel accroche a un reel, ni l'inverse.
         creneau.post_id = post_a_reprendre(db, article.id, TEMPLATES[creneau.format])
         _reprogrammer(creneau)
-    elif payload.sauter:
-        article = db.get(Article, creneau.article_id) if creneau.article_id else None
-        if article is not None:
-            article.file_exclu_raison = "saute depuis le dashboard"
-        creneau.article_id = None
-        creneau.post_id = None
-        creneau.etat = EtatCreneau.LIBRE
-        creneau.epingle = False
     else:
         suivant = db.scalar(
             select(Creneau)
@@ -221,10 +221,23 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         _reprogrammer(suivant)
 
     db.commit()
+    return _vue(db, creneau)
+
+
+def _ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime) -> CreneauOut:
+    try:
+        ne_pas_publier(db, creneau)
+    except ReouvertureRefusee as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     vue = _vue(db, creneau)
-    if payload.sauter:
-        # Le creneau libere se remplit tout de suite avec le candidat suivant.
+    # Le creneau libere se remplit tout de suite avec le candidat suivant ; a defaut
+    # l'agent le fera au passage suivant. Le retrait est committe : un 500 ici dirait
+    # a l'utilisateur qu'il a echoue.
+    try:
         appliquer_arbitrage(db, maintenant)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("arbitrage impossible apres « Ne pas publier » du creneau %s", vue.id)
     return vue
 
 

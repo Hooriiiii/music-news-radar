@@ -339,6 +339,8 @@
      re-rendu de la fiche (`dernierGeste`). */
   .etat-geste { font-size: 12px; min-height: 1em; }
   .etat-geste:empty { display: none; }
+  .relecture-actions, .depart-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .relecture-actions:empty, .depart-actions:empty { display: none; }
   .etat-geste.en-cours { color: var(--muted); }
   .etat-geste.ok { color: var(--accent-clair); }
   .etat-geste.erreur { color: var(--alerte); }
@@ -780,12 +782,12 @@
        seule chose dont l'heure impose de s'occuper maintenant. Elle ne retient
        rien -- un post non relu part quand meme a son heure. -->
   <div class="section-title">À relire avant publication</div>
+  <div class="etat-geste ok" id="retrait-relecture"></div>
   <div id="relecture-list" class="relecture-list"></div>
   <div class="posts-bar">
     <select id="post-status">
       <option value="">Tous statuts</option>
       <option value="draft">Brouillon</option>
-      <option value="approved">Validé</option>
       <option value="published">Publié</option>
     </select>
   </div>
@@ -806,6 +808,7 @@
   </div>
   <div id="mode-explication" class="mode-explication"></div>
   <div id="offre-reels" class="mode-explication"></div>
+  <div class="etat-geste ok" id="retrait-programmation"></div>
   <div id="schedule-list"></div>
 </section>
 
@@ -1014,13 +1017,16 @@ async function load() {
         ? `<span class="badge sans-visuel" title="${escapeHtml(a.raison_sans_visuel)}">🚫 sans visuel</span>`
         : "";
     // Hors file, et POURQUOI. Le champ refuse l'article partout (le gel, la
-    // composition et « Sauter » l'ecrivent) et n'etait affiche nulle part : un
+    // composition et « Ne pas publier » l'ecrivent) et n'etait affiche nulle part : un
     // article invisible de la file semblait simplement ne jamais sortir.
     const excluBadge = a.file_exclu_raison
       ? `<span class="badge exclu" title="${escapeHtml(a.file_exclu_raison)}">⛔ hors file : ${escapeHtml(a.file_exclu_raison)}</span>`
       : "";
     // « ↩ » seul ne disait pas ou l'on revient : ce geste remet l'article en
     // statut "new", c'est-a-dire dans la vue « A traiter ». D'ou son libelle.
+    // Un geste n'apparait que s'il a un effet, et jamais sur un article USED : le
+    // robot seul pose ce statut, et le serveur refuse d'en faire sortir l'article
+    // (c'est ce qui le protege de la purge et d'une republication).
     card.innerHTML = `
       ${img ? `<img class="thumb" src="${escapeHtml(img)}" loading="lazy" onerror="this.remove()">` : ""}
       <div class="body">
@@ -1036,9 +1042,8 @@ async function load() {
         <div class="summary"></div>
         <div class="meta"></div>
         <div class="actions">
-          <button data-status="reviewed">✓ Vu</button>
-          <button data-status="used">📸 Posté</button>
-          <button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>
+          ${a.status === "new" ? '<button data-status="reviewed">✓ Vu</button>' : ""}
+          ${a.status === "reviewed" ? `<button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>` : ""}
           <button class="gen-post">Générer le post</button>
           ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
           ${a.exclusion_a_verifier ? `<div class="verif-publication" hidden>
@@ -1046,24 +1051,33 @@ async function load() {
             <button class="pas-parti">Vérifié, il n'est pas parti</button>
           </div>` : ""}
           ${a.file_exclu_raison ? '<span class="etat-geste erreur refus-reintegrer"></span>' : ""}
+          <span class="etat-geste erreur refus-statut"></span>
         </div>
       </div>`;
     card.querySelector(".title").textContent = a.title;
     card.querySelector(".summary").textContent = a.summary || "";
     card.querySelector(".meta").textContent =
       `#${a.id} · ${sourceName(a.source_id)} · publié ${fmtDate(a.published_at) || "?"}`;
+    const refusStatut = card.querySelector(".refus-statut");
     for (const btn of card.querySelectorAll(".actions button[data-status]")) {
       btn.onclick = async () => {
-        await fetch(`/articles/${a.id}`, {
+        btn.disabled = true;
+        refusStatut.textContent = "";
+        const reponse = await fetch(`/articles/${a.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: btn.dataset.status }),
         });
+        if (!reponse.ok) {
+          refusStatut.textContent = "Refusé : " + await raisonDuRefus(reponse);
+          btn.disabled = false;
+          return;
+        }
         load();
       };
     }
-    card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target);
-    // Le retour en arriere de « 🚫 Sauter » -- et de toute exclusion posee par
+    card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target, refusStatut);
+    // Le retour en arriere de « 🚫 Ne pas publier » -- et de toute exclusion posee par
     // l'agent (gel, composition). Avant lui, le seul recours etait un UPDATE
     // a la main en base.
     const btnReintegrer = card.querySelector(".reintegrer");
@@ -1381,16 +1395,17 @@ document.getElementById("src-form").onsubmit = async (e) => {
 
 // --- Génération et file éditoriale des posts ---
 
-async function genererPost(articleId, bouton) {
+async function genererPost(articleId, bouton, zoneRefus) {
   bouton.disabled = true;
+  zoneRefus.textContent = '';
   bouton.textContent = 'Génération…';
   try {
     const reponse = await fetch(`/articles/${articleId}/posts`, { method: 'POST' });
-    if (!reponse.ok) throw new Error(await reponse.text());
+    if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
     const post = await reponse.json();
     ouvrirPost(post.id);
   } catch (erreur) {
-    alert('Échec de la génération : ' + erreur.message);
+    zoneRefus.textContent = 'Échec de la génération : ' + erreur.message;
     bouton.disabled = false;
     bouton.textContent = 'Générer le post';
   }
@@ -1407,6 +1422,9 @@ const ETATS_CRENEAU = {
   apercu: "Aperçu, non publié", echec: "Échec", manque: "Manqué",
 };
 const CRENEAUX_MODIFIABLES = new Set(["libre", "programme"]);
+// D'ou un post peut encore partir sans que l'agent l'ait reclame. Pas « echec » : la
+// publication en vol n'a plus de bouton, et le serveur la refuserait de toute facon.
+const RETIRABLES = new Set(["programme", "gele"]);
 const FORMATS_CRENEAU = { carrousel: "🖼 Carrousel", reel: "🎬 Reel" };
 
 async function chargerOffreReels() {
@@ -1584,7 +1602,7 @@ async function loadSchedulePanel() {
       row.style.cursor = "pointer";
       row.title = "Voir et modifier ce qui va partir";
       row.onclick = (evenement) => {
-        // Les boutons d'action de la ligne (épingler, remplacer, décaler, sauter)
+        // Les boutons d'action de la ligne (épingler, remplacer, décaler, ne pas publier)
         // et les liens ne doivent pas ouvrir la fiche par-dessus leur effet.
         if (evenement.target.closest("button, a")) return;
         ouvrirPost(c.post_id);
@@ -1596,24 +1614,17 @@ async function loadSchedulePanel() {
     const pastille = row.querySelector(".status-pill");
     pastille.classList.add(enCours ? "gele" : c.etat);
     pastille.textContent = enCours ? "Publication en cours" : (ETATS_CRENEAU[c.etat] || c.etat);
+    const actions = row.querySelector(".slot-actions");
     if (CRENEAUX_MODIFIABLES.has(c.etat)) {
-      const actions = row.querySelector(".slot-actions");
-      // `confirmer` est optionnel : seul le geste IRREVERSIBLE en demande un.
-      // Le budget de confirmation etait depense a l'envers -- supprimer un
-      // BROUILLON en demandait une, sortir un article de la file pour de bon
-      // n'en demandait aucune.
       // `libelle` est VISIBLE, `titre` reste l'explication longue. Quatre icones
       // nues ne disaient rien -- et « 📌 » / « 📍 » sont deux actions opposees
       // que seule l'inclinaison du dessin separait.
-      const bouton = (libelle, titre, donnees, confirmer) => {
+      const bouton = (libelle, titre, donnees) => {
         const b = document.createElement("button");
         b.textContent = libelle;
         b.title = titre;
         b.setAttribute("aria-label", titre);
-        b.onclick = () => {
-          if (confirmer && !confirmer()) return;
-          modifierCreneau(c.id, donnees);
-        };
+        b.onclick = () => modifierCreneau(c.id, donnees);
         actions.appendChild(b);
       };
       if (c.article_id) {
@@ -1632,21 +1643,72 @@ async function loadSchedulePanel() {
       );
       if (c.article_id) {
         bouton("⏬ Décaler", "Décaler au créneau suivant", { decaler: true });
-        // La confirmation NOMME l'article : « Sauter cet article » ne disait pas
-        // lequel, et un clic sur une icone sans libelle l'ecartait de la file.
-        bouton(
-          "🚫 Sauter",
-          "Sauter : l'article sort de la file (reversible depuis sa carte, « Remettre dans la file »)",
-          { sauter: true },
-          () => confirm(
-            "Sortir « " + (c.article_title || "article #" + c.article_id) + " » de la file ?\n\n"
-            + "Il ne sera plus jamais choisi pour un créneau. Pour l'y remettre : sa carte, "
-            + "bouton « ↩ Remettre dans la file »."),
-        );
       }
+    }
+    if (RETIRABLES.has(c.etat) && (c.article_id || c.post_id)) {
+      boutonNePasPublier(actions, {
+        creneauId: c.id,
+        titre: c.article_title,
+        postId: c.post_id,
+        publierA: c.publier_a,
+        articleConnu: c.article_id != null,
+        zoneResultat: "retrait-programmation",
+        apres: loadSchedulePanel,
+      });
     }
     list.appendChild(row);
   }
+}
+
+// --- Ne pas publier ---------------------------------------------------------
+//
+// Le seul retrait de la console (decision du 2026-10-30), sur les trois surfaces qui
+// montrent ce qui va partir. Un RETRAIT, jamais une condition : ne rien faire publie
+// a l'heure. A ne pas confondre avec `RAISON_RELECTURE`, l'etat d'un gel refait.
+async function envoyerRetrait(creneauId) {
+  const reponse = await fetch(`/schedule/${creneauId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sauter: true }),
+  });
+  if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
+  return "retrait";
+}
+
+// `postId` nomme le post quand l'article a ete purge : plus de carte, donc plus de
+// retour possible, et la confirmation ne le promet pas.
+function boutonNePasPublier(parent, { creneauId, titre, postId, publierA, articleConnu, zoneResultat, apres }) {
+  const b = document.createElement("button");
+  b.className = "ne-pas-publier";
+  b.textContent = "🚫 Ne pas publier";
+  const nom = titre || `post ${postId}`;
+  const heure = fmtDate(publierA) || "heure inconnue";
+  const retour = articleConnu
+    ? "Réversible depuis sa carte, bouton « ↩ Remettre dans la file »."
+    : "Son article a été purgé : ce retrait ne se défait pas.";
+  b.title = `Retirer du programme. ${retour}`;
+  b.setAttribute("aria-label", b.title);
+  const refus = document.createElement("span");
+  refus.className = "etat-geste erreur refus-retrait";
+  b.onclick = async (evenement) => {
+    evenement.stopPropagation();
+    if (!confirm(`Ne pas publier « ${nom} » à ${heure} ?\n\n`
+      + `Le créneau se libère, le robot peut y mettre une autre actu. Le brouillon reste en base.\n${retour}`)) return;
+    b.disabled = true;
+    refus.textContent = "";
+    try {
+      await envoyerRetrait(creneauId);
+    } catch (erreur) {
+      refus.textContent = "Retrait refusé : " + erreur.message;
+      b.disabled = false;
+      return;
+    }
+    const resultat = `✓ « ${nom} » ne partira pas à ${heure}.`;
+    const zone = zoneResultat && document.getElementById(zoneResultat);
+    if (zone) zone.textContent = resultat;
+    await apres(resultat);
+  };
+  parent.append(b, refus);
 }
 
 async function modifierCreneau(id, donnees) {
@@ -1732,7 +1794,7 @@ async function loadRelectureList() {
     row.className = "relecture-row";
     row.innerHTML = `
       <span class="quand"></span>
-      <div class="grow"><div class="hl"></div><div class="sub"></div></div>`;
+      <div class="grow"><div class="hl"></div><div class="sub"></div><div class="relecture-actions"></div></div>`;
     row.querySelector(".quand").textContent =
       `${fmtDate(d.publier_a) || "?"} · ${minutesLisibles(d.minutes_restantes)}`;
     row.querySelector(".hl").textContent = d.accroche || `post ${d.post_id}`;
@@ -1745,6 +1807,17 @@ async function loadRelectureList() {
     if (!d.editable) parties.push(d.raison_non_editable);
     poserParties(row.querySelector(".sub"), parties);
     row.onclick = () => ouvrirPost(d.post_id);
+    if (RETIRABLES.has(d.etat)) {
+      boutonNePasPublier(row.querySelector(".relecture-actions"), {
+        creneauId: d.creneau_id,
+        titre: d.article_title || d.accroche,
+        postId: d.post_id,
+        publierA: d.publier_a,
+        articleConnu: d.article_title != null,
+        zoneResultat: "retrait-relecture",
+        apres: loadRelectureList,
+      });
+    }
     zone.appendChild(row);
   }
 }
@@ -2277,6 +2350,7 @@ function renderPostDetail(post, article, covers) {
         <span class="dans">${escapeHtml(minutesLisibles(depart.minutes_restantes))}</span>
         <span class="etat">${escapeHtml(depart.format)} · ${escapeHtml(depart.etat)}</span>
       </div>
+      <div class="depart-actions"></div>
       ${depart.raison_non_editable ? `<div class="reel-reason">${escapeHtml(depart.raison_non_editable)}</div>` : ""}
       ${noteRegel}`;
   }
@@ -2510,14 +2584,31 @@ function renderPostDetail(post, article, covers) {
 
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
-        <button id="btn-approve">Valider le statut</button>
-        <button id="btn-publish">Marquer comme publié</button>
         <a href="/posts/${post.id}/export.zip">⬇ Télécharger</a>
         <div class="etat-geste" id="etat-geste"></div>
-        ${post.status === "draft" ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
+        ${post.status === "draft" && departsParPost && !depart ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
       </div>
     </div>`;
   peindreGeste(detailEl.querySelector("#etat-geste"), post.id);
+  // Au programme, le retrait c'est ceci : « Supprimer » n'apparait qu'une fois le
+  // post sorti du creneau (le serveur le refuse avant).
+  const zoneDepart = detailEl.querySelector(".depart-actions");
+  if (zoneDepart && depart && RETIRABLES.has(depart.etat)) {
+    boutonNePasPublier(zoneDepart, {
+      creneauId: depart.creneau_id,
+      titre: depart.article_title || depart.accroche,
+      postId: post.id,
+      publierA: depart.publier_a,
+      articleConnu: depart.article_title != null,
+      apres: async (resultat) => {
+        annoncerGeste(post.id, "ok", resultat);
+        await chargerDeparts();
+        renderPostDetail(post, article, covers);
+        if (!postsPanelEl.hidden) loadPostsPanel();
+        if (!schedulePanelEl.hidden) loadSchedulePanel();
+      },
+    });
+  }
   // `article_url` etait dans la reponse de l'API et n'etait lu NULLE PART :
   // le titre s'affichait en clair, et ouvrir l'actu se faisait a la main.
   const titreFiche = detailEl.querySelector("h2");
@@ -2765,28 +2856,6 @@ function renderPostDetail(post, article, covers) {
     await chargerDeparts();
     renderPostDetail(updated, article, covers);
   };
-  const btnApprove = detailEl.querySelector("#btn-approve");
-  btnApprove.onclick = async () => {
-    const updated = await ecrireDepuisLaFiche(post.id, {
-      bouton: btnApprove,
-      libelle: "Statut « validé »",
-      action: () => enregistrerPost(post.id, { status: "approved" }),
-    });
-    if (!updated) return;
-    renderPostDetail(updated, article, covers);
-    if (!postsPanelEl.hidden) loadPostsPanel();
-  };
-  const btnPublish = detailEl.querySelector("#btn-publish");
-  btnPublish.onclick = async () => {
-    const updated = await ecrireDepuisLaFiche(post.id, {
-      bouton: btnPublish,
-      libelle: "Statut « publié »",
-      action: () => enregistrerPost(post.id, { status: "published" }),
-    });
-    if (!updated) return;
-    renderPostDetail(updated, article, covers);
-    if (!postsPanelEl.hidden) loadPostsPanel();
-  };
   const btnDelete = detailEl.querySelector("#btn-delete");
   if (btnDelete) {
     btnDelete.onclick = async () => {
@@ -2796,7 +2865,7 @@ function renderPostDetail(post, article, covers) {
         libelle: "Suppression du brouillon",
         action: async () => {
           const reponse = await fetch(`/posts/${post.id}`, { method: "DELETE" });
-          if (!reponse.ok) throw new Error(await reponse.text());
+          if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
           return true;
         },
       });

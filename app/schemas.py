@@ -245,6 +245,8 @@ class PostUpdate(BaseModel):
     caption: str | None = None
     hashtags: list[str] | None = None
     slides: list[SlideIn] | None = None
+    # Declare pour etre REFUSE en 409 avec sa raison (`api/posts.py`) : ignore en
+    # silence, un client croirait avoir change le statut sur un 200.
     status: PostStatus | None = None
     # `template` : verifiable ici, sans la base -- `layout.GABARITS` est un
     # registre statique. `variante_retenue` ne l'est pas : ses bornes valides

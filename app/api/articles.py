@@ -123,8 +123,8 @@ def reintegrer_article(
 ):
     """Leve `file_exclu_raison` : l'article redevient candidat a la file.
 
-    C'etait le seul champ sans retour en arriere de tout le dashboard. « Sauter »
-    l'ecrit en un clic, le gel et la composition l'ecrivent tout seuls sur un
+    C'etait le seul champ sans retour en arriere de tout le dashboard. « Ne pas
+    publier » l'ecrit en un clic, le gel et la composition l'ecrivent tout seuls sur un
     echec -- et AUCUN endpoint ne le remettait a NULL : le seul recours etait un
     UPDATE a la main en base.
 
@@ -207,10 +207,37 @@ class ArticleStatusUpdate(BaseModel):
 def update_article_status(
     article_id: int, payload: ArticleStatusUpdate, db: Session = Depends(get_db)
 ):
+    """Le tri manuel : « new » <-> « reviewed », rien d'autre.
+
+    USED n'appartient qu'au robot, qui le pose a la publication
+    (`runner._publier`, sans passer par ici). A la main dans un sens, un article
+    jamais publie sortait de la file pour de bon ; dans l'autre, il perdait ce qui le
+    protege de la purge et d'une republication.
+    """
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    article.status = payload.status
+    if payload.status == ArticleStatus.USED and article.status != ArticleStatus.USED:
+        raise HTTPException(
+            status_code=409,
+            detail="Le statut « utilisé » est posé par le robot quand le post part : il ne se pose pas à la main.",
+        )
+    # UPDATE conditionnel : le robot peut publier entre la lecture et l'ecriture.
+    ecrit = db.execute(
+        update(Article)
+        .where(Article.id == article.id, Article.status != ArticleStatus.USED)
+        .values(status=payload.status)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if ecrit != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cet article a été publié : il garde son statut, c'est ce qui le protège "
+                "de la purge et d'une republication."
+            ),
+        )
     db.commit()
     db.refresh(article)
     return article

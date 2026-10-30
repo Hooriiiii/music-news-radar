@@ -213,6 +213,19 @@ comme actif). Les deux premiers sont desormais **derives de la config** via
 `GET /reglages` -- un nombre recopie dans une chaine d'interface derive au
 premier changement de reglage.
 
+**La console publie seule avec verification humaine (decision de l'utilisateur,
+2026-10-30)** : il ne publie jamais a la main, il gere le programme. Sont donc retires
+« Valider le statut » (`approved`, lu par aucun code), « Marquer comme publié » et
+« 📸 Posté » (ils mentaient sur le compte, et USED ecartait l'article de la file), plus
+l'option « Validé » du filtre : une ligne ancienne s'affiche encore « Validé », on ne
+reecrit pas l'historique. La vue « 📸 Postés » reste, en lecture. Sur la carte, « ✓ Vu »
+n'apparait que sur un article `new` et « ↩ À traiter » que sur un `reviewed` : un geste
+sans effet ou que le serveur refuserait n'est pas offert, et sur un USED il n'y en a
+aucun. Les gestes de carte lisent la reponse et disent un refus a cote du bouton
+(`.refus-statut`), plus d'`alert`. « 🚫 Ne pas publier » remplace « Sauter » partout :
+`relecture-et-controle-editorial.md`, « Ne pas publier ». Preuves sur Chromium, mutations
+comprises : `tests/dashboard/test_dashboard_verification_humaine.py`.
+
 **Remettre un article dans la file** : `POST /articles/{id}/reintegrer`
 (bouton « ↩ Remettre dans la file » sur la carte, pastille « ⛔ hors file »
 depuis `ArticleOut.file_exclu_raison`). Il **refuse (409) une exclusion posee

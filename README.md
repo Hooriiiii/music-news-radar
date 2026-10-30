@@ -28,10 +28,12 @@ page), tu vois tout ce que le cloud a récolté, y compris pendant que ton Mac d
 ### Ce que tu peux y faire
 
 - **Vues préréglées** : 🔎 À traiter · 📰 Pertinents (≥60) · 🔥 Hot (≥80) ·
-  🖼 Avec média · ✓ Vus · 📸 Postés
+  🖼 Avec média · ✓ Vus · 📸 Postés (posés par le robot quand il publie)
 - **Filtres** : par catégorie, par source, tri par pertinence ou par date
-- **Workflow éditorial** : les boutons **✓ Vu** / **📸 Posté** sur chaque carte — un
-  article posté ne réapparaît plus dans « À traiter »
+- **Tri** : **✓ Vu** / **↩ À traiter** sur chaque carte. Un article publié garde son
+  statut : seul le robot le pose, et il ne se défait pas
+- **Programme** : **🚫 Ne pas publier** retire un post de ce qui va sortir ; sans geste,
+  il part à son heure
 - Les **vignettes** des photos/vidéos et les résumés français générés par Claude
 
 > Pour arrêter le serveur : `Ctrl+C` dans le terminal.

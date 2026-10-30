@@ -334,6 +334,62 @@ vignette est le FICHIER FIGE, avec son recadrage reel. Et le nom du fichier
 depose n'est garde nulle part : la reserve le montre comme « photo 1200x1500 ·
 fichier depose depuis le disque ».
 
+### Ne pas publier (2026-10-30)
+
+Decision de l'utilisateur : la console est un outil qui publie seul avec verification
+humaine, et il veut gerer ce qui va sortir, dont « supprimer un post du programme ».
+Le bouton **« 🚫 Ne pas publier »** remplace « Sauter », sur la ligne de Programmation,
+dans « À relire » et dans la fiche, sur un creneau PROGRAMME ou GELE. **C'est un
+retrait, jamais une condition** : ne rien faire publie a l'heure, et
+`test_la_relecture_n_est_jamais_une_condition_de_publication` n'a pas bouge.
+
+`PATCH /schedule/{id}` avec `sauter` etait limite a LIBRE/PROGRAMME a venir ; il a ete
+etendu, sans second chemin d'ecriture. `reouverture.ne_pas_publier` partage avec
+`rouvrir` la meme ecriture (`_invalider_le_gel`, sur `runner._reclamer`), seule la
+destination change : LIBRE, desepingle, `article_id`, `post_id`, `fichiers`, `elements`
+et `erreur` effaces, dossier fige supprime. A ne pas confondre avec `RAISON_RELECTURE`,
+qui marque un gel a refaire : ici rien n'est refait, et l'erreur est effacee.
+
+- **Pas de plancher de 20 minutes** : il protege un re-gel, or rien n'est refait. Le
+  geste vaut aussi APRES l'heure, tant que le robot peut encore partir (Mac reveille en
+  retard). Un creneau passe et libere n'est jamais rempli : l'arbitrage ne voit que les
+  creneaux futurs. Les autres gestes restent refuses sur un GELE.
+- **Atomique** : le creneau et l'exclusion de l'article partent dans la meme
+  transaction. Une raison deja posee (dedup d'archive) n'est pas ecrasee.
+- **Anti-doublon** : si l'agent a reclame, zero ligne touchee, 409 « Publication en
+  cours ». Si nous passons les premiers, `_publier` ne selectionne que `etat == GELE`.
+  Le retrait d'un PROGRAMME ne touche pas au dossier : un gel en cours perd sa propre
+  ecriture conditionnelle, et `_menage` ramasse ses fichiers.
+- **Le brouillon reste, Claude n'est pas repaye** : apres « Remettre dans la file »,
+  `post_a_reprendre` raccroche le meme post. Le creneau libere peut etre repris par un
+  autre article (normal) ; l'article ecarte, lui, ne revient pas (`file_exclu_raison`).
+- **Un post sans article** (purge, `porte_un_post_orphelin`) se retire aussi, mais sans
+  retour possible : la confirmation le dit au lieu de promettre une carte qui n'existe
+  plus. Meme chose a terme pour tout article ecarte : non USED, il part a la purge
+  (`retention_days`), et le retour avec lui.
+- **Un arbitrage en panne apres le retrait ne rend pas 500** : le retrait est committe,
+  et l'agent remplira le creneau a son passage.
+
+`DELETE /posts/{id}` refuse desormais (409) une publication en vol, un post porte par un
+creneau LIBRE, PROGRAMME ou GELE (la suppression vidait `post_id` et repayait Claude :
+la raison renvoie vers « Ne pas publier ») et un post peut-etre en ligne (ECHEC portant
+une trace de `publication_incertaine`, meme ancienne : une reclamation prise en retard
+reste en vol au-dela de `_publication_en_vol`). La fiche masque « Supprimer » tant que le
+post est au programme, ou si cette information n'a pas pu etre lue.
+
+**Limites connues, deduites du code.** Un article ecarte SANS post compose n'est plus
+« engage » (`election.articles_engages`) : l'election peut elire un autre membre de son
+groupe, et la meme actu revenir par un autre article. Et l'annonce de relecture vaut un
+par creneau : le post qui reprend un creneau deja annonce n'est pas annonce a nouveau.
+
+**Preuves par mutation** (`tests/api/test_console_verification.py`, a la main) : retirer
+la condition d'etat de `_reclamer` rougit
+`test_une_reclamation_concurrente_fait_echouer_l_ecriture`, celle du post
+`test_un_post_change_entre_temps_fait_echouer_l_ecriture`, committer avant l'exclusion
+`test_l_exclusion_et_le_creneau_partent_ensemble_ou_pas_du_tout`. Temoin de
+`test_un_passage_du_robot_apres_le_retrait_ne_publie_rien` : le meme creneau, sans
+retrait, publie.
+
 ### Anti-doublon, demontre
 
 Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur

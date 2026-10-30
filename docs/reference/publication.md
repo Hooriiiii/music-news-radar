@@ -226,6 +226,20 @@ systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'u
 post qui ne porte plus l'article de son créneau (gel ou publication refusés,
 erreur posée).
 
+**« Ne pas publier » n'ajoute aucun chemin vers `media_publish`** (2026-10-30) : c'est
+un retrait humain, seule exclusion qui ne soit la faute ni de l'article ni de la
+machine, écrit dans la même transaction que la libération du créneau et sous la même
+condition (état, article, post) que la réclamation. Détail et course :
+`relecture-et-controle-editorial.md`, « Ne pas publier ».
+
+**Les statuts de publication n'appartiennent qu'au robot** (2026-10-30, décision de
+l'utilisateur : la console publie seule avec vérification humaine). `_publier` écrit
+`PUBLISHED` et `USED` sans passer par l'API ; `PATCH /posts/{id}` refuse tout `status`
+et `PATCH /articles/{id}` refuse de poser `used` ou d'en sortir (409, UPDATE conditionnel
+contre une publication simultanée). `USED` est ce qui protège l'article de la purge et
+d'une republication. `PostStatus.APPROVED` n'est lu par aucun code : l'enum et les
+lignes existantes restent, sans migration, mais plus rien ne le pose.
+
 **Le retour en arrière ne doit pas rouvrir le doublon** (2026-10-30, déduit du
 code, **jamais observé en production**). La machine coupe juste après
 `media_publish` : le post est en ligne, la base dit ECHEC de réclamation, article
@@ -238,7 +252,8 @@ pouvant cacher une publication réussie. Deux ceintures, sur les mêmes traces
 (`app/schedule/publication_incertaine.py`) :
 
 - `reintegrer` répond 409 sans `confirmation: "PAS_PARTI"` : seul un humain qui a
-  regardé le compte sait. Une exclusion « saute depuis le dashboard » reste en un clic.
+  regardé le compte sait. Une exclusion « Ne pas publier » reste en un clic (les
+  lignes anciennes disent « saute depuis le dashboard », même traitement).
 - `_articles_publiables` écarte l'article d'un créneau ECHEC portant ces traces,
   même si l'exclusion a disparu. La confirmation réécrit l'erreur du créneau
   (« verifie a la main, pas parti — … », l'état reste ECHEC), seul moyen de lever

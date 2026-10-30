@@ -101,11 +101,11 @@ def test_patch_article_status(client, db_session):
     source = make_source(db_session)
     article = make_article(db_session, source, title="À traiter", raw_hash="patch1")
 
-    response = client.patch(f"/articles/{article.id}", json={"status": "used"})
+    response = client.patch(f"/articles/{article.id}", json={"status": "reviewed"})
     assert response.status_code == 200
-    assert response.json()["status"] == "used"
+    assert response.json()["status"] == "reviewed"
     db_session.refresh(article)
-    assert article.status == ArticleStatus.USED
+    assert article.status == ArticleStatus.REVIEWED
 
 
 def test_patch_article_rejects_unknown_status(client, db_session):
@@ -116,7 +116,7 @@ def test_patch_article_rejects_unknown_status(client, db_session):
 
 
 def test_patch_article_404(client):
-    assert client.patch("/articles/99999", json={"status": "used"}).status_code == 404
+    assert client.patch("/articles/99999", json={"status": "reviewed"}).status_code == 404
 
 
 def test_filter_articles_with_media_only(client, db_session):

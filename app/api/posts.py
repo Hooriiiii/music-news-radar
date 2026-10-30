@@ -27,7 +27,8 @@ from app.content.render import RenduIndisponible, render_covers, render_post
 from app.content.teinte import palette_du_post
 from app.content.visuels import fond_de_cover
 from app.db import get_db
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
+from app.models import Article, Creneau, EtatCreneau, Post, PostStatus
+from app.schedule.publication_incertaine import erreur_incertaine
 from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.publish.preparation import candidats_editables
@@ -184,11 +185,21 @@ def _regel_automatique(db: Session, post: Post) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+# Le statut d'un post n'appartient qu'au robot (`runner._publier`, sans passer par
+# ici). « Valider » n'etait lu par personne, et « publie » a la main mentait sur le
+# compte et bloquait la publication reelle ; revenir a « brouillon » rendait un post
+# publie supprimable, donc l'archive editoriale.
+STATUT_REFUSE = "Le statut d'un post est posé par le robot quand il publie : il ne se change pas à la main."
+
+
 @router.patch("/posts/{post_id}", response_model=PostOut)
 def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_db)):
     post = db.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
+    if payload.status is not None:
+        # AVANT tout le reste : un refus n'applique rien et ne rouvre aucun gel.
+        raise HTTPException(status_code=409, detail=STATUT_REFUSE)
 
     edite_le_contenu = any(
         valeur is not None
@@ -234,15 +245,6 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # dire -- et un ancien "clean" perime serait un faux feu vert sur le
         # signal qui doit justement empecher une publication en defaut.
         post.render_report = None
-    if payload.status is not None:
-        post.status = payload.status
-        if payload.status is PostStatus.PUBLISHED:
-            post.published_at = dt.datetime.now(dt.timezone.utc)
-            # L'article passe en USED : c'est ce qui le protege de la purge et
-            # evite qu'il soit repropose plus tard
-            article = db.get(Article, post.article_id) if post.article_id else None
-            if article is not None:
-                article.status = ArticleStatus.USED
     if payload.template is not None:
         # `layout.GABARITS` deja verifie par le schema : ici on ne fait que
         # persister. La cover (slides[0]) porte deja les trois textes -- la
@@ -378,10 +380,47 @@ def supprimer_post(post_id: int, db: Session = Depends(get_db)):
     choix d'une variante. Un brouillon dont l'utilisateur a retenu une
     variante puis change d'avis doit rester supprimable ; seuls APPROVED et
     PUBLISHED repondent 409.
+
+    Un post encore porte par un creneau non plus (2026-10-30) : la suppression
+    vidait `post_id` (ON DELETE SET NULL), et le creneau repayait Claude pour le
+    recomposer. Son retrait, c'est « Ne pas publier ». Un post peut-etre en ligne
+    (ECHEC de reclamation, meme ancienne) non plus : un retard jusqu'a la limite peut
+    encore etre en vol apres `_publication_en_vol`, et ce brouillon est la seule trace
+    de ce qui est parti.
     """
     post = _post_ou_404(db, post_id)
+    if _publication_en_vol(db, post):
+        raise HTTPException(
+            status_code=409,
+            detail="Publication en cours : le conteneur est cree chez Meta, le post ne se modifie plus",
+        )
     if post.status is not PostStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Seul un brouillon peut etre supprime")
+    if db.scalar(
+        select(Creneau.id)
+        .where(
+            Creneau.post_id == post.id,
+            Creneau.etat.in_([EtatCreneau.LIBRE, EtatCreneau.PROGRAMME, EtatCreneau.GELE]),
+        )
+        .limit(1)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ce post est au programme : utilise « Ne pas publier » pour le retirer, le brouillon pourra se supprimer ensuite.",
+        )
+    if db.scalar(
+        select(Creneau.id)
+        .where(
+            Creneau.post_id == post.id,
+            Creneau.etat == EtatCreneau.ECHEC,
+            erreur_incertaine(Creneau.erreur),
+        )
+        .limit(1)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ce post est peut-être en ligne : sa publication s'est interrompue sans confirmation. Vérifie le compte depuis la carte de l'article.",
+        )
     db.delete(post)
     db.commit()
     return Response(status_code=204)
