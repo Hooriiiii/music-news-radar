@@ -262,7 +262,7 @@ def test_le_patch_rend_409_si_l_agent_a_gele_pendant_sa_lecture(client_web, fabr
         db.get(Article, file_["a"]).published_at = futur
         db.commit()
     corps = {"article_id": {"article_id": file_["b"]}, "echanger": {"echanger_avec": file_["tard"]},
-             "epingle": {"epingle": True}}[action]
+             "epingle": {"epingle": True, "occupant_attendu": file_["a"], "post_attendu": file_["post_a"]}}[action]
 
     reponse = client_web.patch(f"/schedule/{file_['tot']}", json=corps)
 

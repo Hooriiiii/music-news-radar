@@ -217,7 +217,7 @@ def test_un_creneau_mort_sans_candidat_redevient_libre(db_session):
 def test_desepingler_reste_possible_sur_un_creneau_mort(client, db_session):
     creneau = _creneau_mort(db_session)
 
-    assert client.patch(f"/schedule/{creneau.id}", json={"epingle": False}).status_code == 200
+    assert client.patch(f"/schedule/{creneau.id}", json={"epingle": False, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id}).status_code == 200
 
     db_session.refresh(creneau)
     assert creneau.epingle is False

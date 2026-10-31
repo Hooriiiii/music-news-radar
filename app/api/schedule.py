@@ -26,7 +26,7 @@ from app.models import Article, Creneau, EtatCreneau
 from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
 from app.schedule import programmation
 from app.schedule.relecture import RAISON_RELECTURE
-from app.schedule.reouverture import ReouvertureRefusee, ne_pas_publier, rouvrir
+from app.schedule.reouverture import OCCUPANT_CHANGE, ReouvertureRefusee, ne_pas_publier, rouvrir
 from app.schedule.store import (
     MODIFIABLES,
     TEMPLATES,
@@ -58,7 +58,7 @@ router = APIRouter(tags=["schedule"])
 # facon irreversible : on exige que l'utilisateur tape ce mot en confirmation,
 # pas une simple case a cocher qu'un clic malheureux activerait.
 CONFIRMATION_REEL = "PUBLIER"
-OCCUPANT_CHANGE = "L'occupant de ce créneau a changé depuis l'affichage : rien n'a été changé, recharge le choix."
+VU_OBLIGATOIRE = "occupant_attendu et post_attendu sont obligatoires : ce geste vise ce que l'écran montre"
 MODIFIE_ENTRE_TEMPS = "Creneau modifie entre-temps (l'agent vient peut-etre de le geler) : rien n'a ete change"
 
 
@@ -103,6 +103,13 @@ def _reprogramme(occupant: int | None) -> dict:
         "etat": EtatCreneau.PROGRAMME if occupant else EtatCreneau.LIBRE,
         "epingle": occupant is not None,
     }
+
+
+def _vu(payload: CreneauUpdate) -> tuple[int | None, int | None]:
+    """(article, post) que l'ecran montrait. `null` est une valeur : un creneau vu vide."""
+    if not {"occupant_attendu", "post_attendu"} <= payload.model_fields_set:
+        raise HTTPException(status_code=422, detail=VU_OBLIGATOIRE)
+    return payload.occupant_attendu, payload.post_attendu
 
 
 def _marqueur_du_post(creneau: Creneau) -> str | None:
@@ -215,7 +222,7 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     if sum(actions) != 1:
         raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou echanger_avec")
     if payload.sauter:
-        return _ne_pas_publier(db, creneau, maintenant)
+        return _ne_pas_publier(db, creneau, _vu(payload), maintenant)
     if payload.echanger_avec is not None:
         return _echanger(db, creneau.id, payload, maintenant)
     raison = programmation.raison_creneau(creneau, maintenant)
@@ -224,9 +231,15 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     lu = lecture(creneau)
 
     if payload.epingle is not None:
-        if payload.epingle and creneau.article_id is None:
+        vu = _vu(payload)
+        if payload.epingle and vu[0] is None and creneau.article_id is None:
             raise HTTPException(status_code=409, detail="rien a epingler")
-        _ecrire(db, creneau, lu, epingle=payload.epingle)
+        # Conditionnelle sur ce que l'ecran montrait, pas sur ce qu'on vient de lire.
+        if not ecrire_si_inchange(db, creneau, (lu[0], *vu), epingle=payload.epingle):
+            db.rollback()
+            db.refresh(creneau)
+            change = (creneau.article_id, creneau.post_id) != vu
+            raise HTTPException(status_code=409, detail=OCCUPANT_CHANGE if change else MODIFIE_ENTRE_TEMPS)
     else:
         article = db.get(Article, payload.article_id)
         if article is None:
@@ -319,9 +332,9 @@ def _arrivee(db: Session, depart: Creneau, arrivee: Creneau) -> tuple[Creneau, t
     }
 
 
-def _ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime) -> CreneauOut:
+def _ne_pas_publier(db: Session, creneau: Creneau, vu: tuple, maintenant: dt.datetime) -> CreneauOut:
     try:
-        ne_pas_publier(db, creneau, maintenant)
+        ne_pas_publier(db, creneau, vu, maintenant)
     except ReouvertureRefusee as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     vue = _vue(db, creneau)

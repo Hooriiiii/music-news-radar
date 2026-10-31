@@ -102,7 +102,7 @@ def _sur_la_grille(db, creneau):
 
 
 def _retirer(client, creneau):
-    return client.patch(f"/schedule/{creneau.id}", json={"sauter": True})
+    return client.patch(f"/schedule/{creneau.id}", json={"sauter": True, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id})
 
 
 class Agent:
@@ -306,7 +306,7 @@ def test_ne_pas_publier_efface_fichiers_et_manifeste(db_session):
     from app.schedule.reouverture import ne_pas_publier
 
     _, _, creneau, _ = _gele(db_session)
-    ne_pas_publier(db_session, creneau)
+    ne_pas_publier(db_session, creneau, (creneau.article_id, creneau.post_id))
     db_session.refresh(creneau)
     assert (creneau.etat, creneau.fichiers, creneau.elements) == (EtatCreneau.LIBRE, None, None)
 
@@ -415,7 +415,7 @@ def test_l_exclusion_et_le_creneau_partent_ensemble_ou_pas_du_tout(client, db_se
     event.listen(db_session, "before_flush", casser)
     try:
         with pytest.raises(RuntimeError):
-            ne_pas_publier(db_session, creneau)
+            ne_pas_publier(db_session, creneau, (creneau.article_id, creneau.post_id))
     finally:
         event.remove(db_session, "before_flush", casser)
     db_session.rollback()
@@ -466,7 +466,7 @@ def test_un_arbitrage_en_panne_ne_fait_pas_mentir_le_retrait(client, db_session,
 def test_les_autres_gestes_restent_refuses_sur_un_creneau_gele(client, db_session):
     _, _, creneau, _ = _gele(db_session)
 
-    assert client.patch(f"/schedule/{creneau.id}", json={"epingle": True}).status_code == 409
+    assert client.patch(f"/schedule/{creneau.id}", json={"epingle": True, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id}).status_code == 409
     libre = Creneau(publier_a=creneau.publier_a + dt.timedelta(hours=6), etat=EtatCreneau.LIBRE)
     db_session.add(libre)
     db_session.commit()

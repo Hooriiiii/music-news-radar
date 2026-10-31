@@ -345,7 +345,12 @@ class CreneauUpdate(BaseModel):
     # Avec `article_id` ou `echanger_avec` : l'article que l'ecran a nomme comme sortant,
     # `null` pour un creneau vu vide. Absent : aucun controle. Present et faux, 409 : la
     # validation a nomme ce qui sort, l'arbitrage a pu changer d'occupant depuis.
+    #
+    # Avec `sauter` et `epingle`, ce champ et `post_attendu` sont OBLIGATOIRES (422 sinon) :
+    # ces gestes visent ce que l'ecran montre, et la liste a pu vieillir (2026-10-31).
     occupant_attendu: int | None = None
+    # Le post que l'ecran montre, `null` s'il n'en montre aucun.
+    post_attendu: int | None = None
     # Avec `echanger_avec` seulement : le meme controle, sur le creneau de depart.
     occupant_source_attendu: int | None = None
 
@@ -625,6 +630,8 @@ class DepartOut(BaseModel):
     format: FormatCreneau
     etat: EtatCreneau
     epingle: bool = False
+    # L'occupant de la ligne, renvoye tel quel par « Ne pas publier » et « Desepingler ».
+    article_id: int | None = None
     post_id: int
     accroche: str
     article_title: str | None = None

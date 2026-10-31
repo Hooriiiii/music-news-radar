@@ -46,7 +46,7 @@ def _creneau(etat="programme", **champs):
 
 def _depart(etat="gele", **champs):
     return {"creneau_id": 7, "publier_a": "2099-10-30T14:00:00+00:00", "format": "carrousel", "etat": etat,
-            "post_id": 167, "accroche": "Accroche", "article_title": "Une actu",
+            "article_id": 42, "post_id": 167, "accroche": "Accroche", "article_title": "Une actu",
             "article_url": "https://exemple.test/a", "legende_publiee": "Legende", "legende_longueur": 7,
             "legende_maximum": 2150, "hashtags_publies": [], "hashtags_maximum": 30, "credit": None,
             "fond": None, "fond_origine": None, "elements_figes": 1, "elements": [], "candidats": [],
@@ -295,7 +295,7 @@ def test_le_retrait_part_et_dit_son_resultat():
 
     resultat, ecritures, _ = _jouer(geste, creneaux=[_creneau("gele")], confirme=True)
 
-    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True})]
+    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True, "occupant_attendu": 42, "post_attendu": 167})]
     assert "Une actu" in resultat and "ne partira pas" in resultat
 
 
@@ -355,7 +355,7 @@ def test_le_bouton_de_a_relire_n_ouvre_pas_la_fiche():
     (fiches, resultat), ecritures, dialogues = _jouer(geste, departs=[_depart("gele")], confirme=True)
 
     assert fiches == 0
-    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True})]
+    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True, "occupant_attendu": 42, "post_attendu": 167})]
     assert "Une actu" in dialogues[0] and "ne partira pas" in resultat
 
 
@@ -383,7 +383,7 @@ def test_la_fiche_dit_le_resultat_et_son_refus():
 
     (etat, _), toutes, _ = _jouer(geste, departs=[_depart("gele")], confirme=True)
     ecritures = [e for e in toutes if e[1].startswith("/schedule")]
-    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True})]
+    assert ecritures == [("PATCH", "/schedule/7", {"sauter": True, "occupant_attendu": 42, "post_attendu": 167})]
     assert "ne partira pas" in etat
 
     (_, refus), _, _ = _jouer(geste, departs=[_depart("gele")], confirme=True, code=409)

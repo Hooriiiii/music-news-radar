@@ -93,7 +93,7 @@ def test_le_scenario_du_defaut_ne_repart_plus(client, db_session):
     creneau = _programmer(db_session, a)
     assert _election(db_session).verrouilles == 1
 
-    assert client.patch(f"/schedule/{creneau.id}", json={"sauter": True}).status_code == 200
+    assert client.patch(f"/schedule/{creneau.id}", json={"sauter": True, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id}).status_code == 200
 
     stats = _election(db_session)
     assert stats.reelus == 0 and stats.verrouilles == 1
@@ -107,7 +107,7 @@ def test_le_scenario_du_defaut_ne_repart_plus(client, db_session):
 def test_un_doublon_arrive_apres_le_retrait_ne_repart_pas_non_plus(client, db_session):
     a, b = _groupe(db_session)
     creneau = _programmer(db_session, a)
-    client.patch(f"/schedule/{creneau.id}", json={"sauter": True})
+    client.patch(f"/schedule/{creneau.id}", json={"sauter": True, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id})
 
     tardif = _article(db_session, _source(db_session, "Label", SourceCategorie.LABEL),
                       f"{DETAILLE} electro complet", heures=1.0, relevance=None)
@@ -152,7 +152,7 @@ def test_une_exclusion_machine_ne_verrouille_jamais_le_groupe(db_session, raison
 def test_remettre_dans_la_file_rouvre_tout_sans_verrou(client, db_session):
     a, b = _groupe(db_session)
     creneau = _programmer(db_session, a)
-    client.patch(f"/schedule/{creneau.id}", json={"sauter": True})
+    client.patch(f"/schedule/{creneau.id}", json={"sauter": True, "occupant_attendu": creneau.article_id, "post_attendu": creneau.post_id})
 
     reponse = client.post(f"/articles/{a.id}/reintegrer")
     assert reponse.status_code == 200 and reponse.json()["file_exclu_raison"] is None
@@ -188,7 +188,7 @@ def test_retirer_un_doublon_programme_retire_aussi_son_representant(db_session):
     doublon = _article(db_session, _source(db_session), rep=representant)
     creneau = _programmer(db_session, doublon)
 
-    ne_pas_publier(db_session, creneau)
+    ne_pas_publier(db_session, creneau, (creneau.article_id, creneau.post_id))
 
     db_session.refresh(representant)
     assert representant.file_exclu_raison == RAISON_NE_PAS_PUBLIER

@@ -864,6 +864,7 @@
   <div id="mode-explication" class="mode-explication"></div>
   <div id="offre-reels" class="mode-explication"></div>
   <div class="etat-geste ok" id="retrait-programmation"></div>
+  <div class="note" id="schedule-lue"></div>
   <div id="schedule-list"></div>
 </section>
 
@@ -1849,8 +1850,25 @@ document.querySelectorAll(".mode-choix").forEach((bouton) => {
   };
 });
 
+// Quand cette liste a ete lue, et si la derniere lecture a echoue. Le bandeau au-dessus est
+// frais a la minute : sans cette ligne, une liste de la veille passerait pour lui.
+let listeLueLe = null;
+let tourDeChargement = 0;
+
+function heureDeLecture(date) {
+  return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function dateDeLaListe(panne) {
+  const zone = document.getElementById("schedule-lue");
+  const lue = listeLueLe ? `liste lue à ${heureDeLecture(listeLueLe)}` : "liste jamais lue";
+  zone.textContent = panne ? `⚠ Relecture impossible (${panne}) : ${lue}, elle peut avoir changé.` : lue;
+  zone.classList.toggle("erreur", !!panne);
+}
+
 async function loadSchedulePanel() {
   const list = document.getElementById("schedule-list");
+  const tour = ++tourDeChargement;
   // Un re-rendu pendant un glissement detruirait la poignee qui tient le pointeur : il
   // attend le depot. Hors glissement, la liste affichee reste jusqu'a la nouvelle.
   if (glissement) { rechargementDiffere = true; return; }
@@ -1868,10 +1886,18 @@ async function loadSchedulePanel() {
     if (!reponse.ok) throw new Error(`HTTP ${reponse.status} ${(await reponse.text()).slice(0, 200)}`);
     creneaux = await reponse.json();
   } catch (erreur) {
+    if (tour !== tourDeChargement) return;
+    dateDeLaListe(erreur.message);
+    // Une liste deja affichee reste, datee : le serveur refuse un geste sur une ligne perimee.
+    if (list.querySelector(".post-row")) return;
     afficherErreur(list, "Échec du chargement de la file : " + erreur.message, loadSchedulePanel);
     document.getElementById("count").textContent = "";
     return;
   }
+  // Une lecture plus recente est partie entre-temps (geste, minuteur) : la sienne fait foi.
+  if (tour !== tourDeChargement) return;
+  listeLueLe = new Date();
+  dateDeLaListe(null);
   document.getElementById("count").textContent = `${creneaux.length} créneau${creneaux.length > 1 ? "x" : ""}`;
   if (!creneaux.length) {
     list.innerHTML = '<div id="empty">Aucun créneau : cliquez sur « Recalculer la file ».</div>';
@@ -1969,7 +1995,7 @@ async function loadSchedulePanel() {
         b.textContent = libelle;
         b.title = titre;
         b.setAttribute("aria-label", titre);
-        b.onclick = () => modifierCreneau(c.id, donnees);
+        b.onclick = () => modifierCreneau(c, donnees);
         actions.appendChild(b);
       };
       // `c.epingle` seul : un creneau mort (article purge) doit pouvoir se desepingler.
@@ -2017,6 +2043,7 @@ async function loadSchedulePanel() {
       boutonNePasPublier(actions, {
         creneauId: c.id,
         titre: c.article_title,
+        articleId: c.article_id,
         postId: c.post_id,
         publierA: c.publier_a,
         articleConnu: c.article_id != null,
@@ -2386,11 +2413,12 @@ function demanderConfirmation(ici, cible, creneauId, auRefus) {
 // Le seul retrait de la console (decision du 2026-10-30), sur les trois surfaces qui
 // montrent ce qui va partir. Un RETRAIT, jamais une condition : ne rien faire publie
 // a l'heure. A ne pas confondre avec `RAISON_RELECTURE`, l'etat d'un gel refait.
-async function envoyerRetrait(creneauId) {
+// Le serveur compare au creneau, dans son ecriture conditionnelle, ce que l'ecran montre.
+async function envoyerRetrait(creneauId, articleId, postId) {
   const reponse = await fetch(`/schedule/${creneauId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sauter: true }),
+    body: JSON.stringify({ sauter: true, occupant_attendu: articleId ?? null, post_attendu: postId ?? null }),
   });
   if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
   return "retrait";
@@ -2398,7 +2426,36 @@ async function envoyerRetrait(creneauId) {
 
 // `postId` nomme le post quand l'article a ete purge : plus de carte, donc plus de
 // retour possible, et la confirmation ne le promet pas.
-function boutonNePasPublier(parent, { creneauId, titre, postId, publierA, articleConnu, zoneResultat, apres }) {
+// Le 409 de `OCCUPANT_CHANGE`, reconnu a sa phrase : rien n'a ete ecrit.
+function occupantAChange(message) {
+  return message.includes("occupant de ce créneau a changé");
+}
+
+// Relue a l'instant : c'est ce que le refus doit nommer, et l'ecran est justement perime.
+async function ceQuiAChange(creneauId, nomVu, articleVu) {
+  let actuel;
+  try {
+    const reponse = await fetch("/schedule");
+    if (!reponse.ok) throw new Error(`HTTP ${reponse.status}`);
+    actuel = (await reponse.json()).find((c) => c.id === creneauId);
+  } catch (erreur) {
+    return `Rien n'a été changé : ce créneau ne porte plus ce que l'écran montrait (relecture impossible : ${erreur.message}).`;
+  }
+  if (!actuel) return `Rien n'a été changé : ce créneau n'existe plus.`;
+  if (actuel.article_id != null && actuel.article_id === articleVu) {
+    return `Rien n'a été changé : le post de « ${nomVu} » a été recomposé depuis l'affichage, relis-le.`;
+  }
+  const maintenant = actuel.article_title ? `il porte maintenant « ${actuel.article_title} »` : "il est maintenant libre";
+  return `Rien n'a été changé : « ${nomVu} » n'est plus sur ce créneau, ${maintenant}. Liste rechargée.`;
+}
+
+function direResultat(zone, texte, erreur) {
+  zone.textContent = texte;
+  zone.classList.toggle("erreur", !!erreur);
+  zone.classList.toggle("ok", !erreur);
+}
+
+function boutonNePasPublier(parent, { creneauId, titre, articleId, postId, publierA, articleConnu, zoneResultat, apres }) {
   const b = document.createElement("button");
   b.className = "ne-pas-publier";
   b.textContent = "🚫 Ne pas publier";
@@ -2417,30 +2474,44 @@ function boutonNePasPublier(parent, { creneauId, titre, postId, publierA, articl
       + `Le créneau se libère, le robot peut y mettre une autre actu. Le brouillon reste en base.\n${retour}`)) return;
     b.disabled = true;
     refus.textContent = "";
+    const zone = zoneResultat && document.getElementById(zoneResultat);
     try {
-      await envoyerRetrait(creneauId);
+      await envoyerRetrait(creneauId, articleId, postId);
     } catch (erreur) {
+      if (occupantAChange(erreur.message)) {
+        const texte = await ceQuiAChange(creneauId, nom, articleId);
+        if (zone) direResultat(zone, texte, true);
+        await apres(texte, true);
+        return;
+      }
       refus.textContent = "Retrait refusé : " + erreur.message;
       b.disabled = false;
       return;
     }
     const resultat = `✓ « ${nom} » ne partira pas à ${heure}.`;
-    const zone = zoneResultat && document.getElementById(zoneResultat);
-    if (zone) zone.textContent = resultat;
-    await apres(resultat);
+    if (zone) direResultat(zone, resultat, false);
+    await apres(resultat, false);
   };
   parent.append(b, refus);
 }
 
-async function modifierCreneau(id, donnees) {
-  const reponse = await fetch(`/schedule/${id}`, {
+async function modifierCreneau(c, donnees) {
+  const reponse = await fetch(`/schedule/${c.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(donnees),
+    body: JSON.stringify({ ...donnees, occupant_attendu: c.article_id ?? null, post_attendu: c.post_id ?? null }),
   });
   if (!reponse.ok) {
     const corps = await reponse.json().catch(() => ({}));
-    alert("Action refusée : " + (corps.detail || reponse.status));
+    if (occupantAChange(String(corps.detail))) {
+      direResultat(
+        document.getElementById("retrait-programmation"),
+        await ceQuiAChange(c.id, c.article_title || `post ${c.post_id}`, c.article_id),
+        true,
+      );
+    } else {
+      alert("Action refusée : " + (corps.detail || reponse.status));
+    }
   }
   loadSchedulePanel();
 }
@@ -2524,6 +2595,7 @@ async function loadRelectureList() {
       boutonNePasPublier(row.querySelector(".relecture-actions"), {
         creneauId: d.creneau_id,
         titre: d.article_title || d.accroche,
+        articleId: d.article_id,
         postId: d.post_id,
         publierA: d.publier_a,
         articleConnu: d.article_title != null,
@@ -3268,10 +3340,18 @@ function renderPostDetail(post, article, covers) {
       const reponse = await fetch(`/schedule/${depart.creneau_id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ epingle: false }),
+        body: JSON.stringify({ epingle: false, occupant_attendu: depart.article_id ?? null, post_attendu: depart.post_id }),
       });
       if (!reponse.ok) {
-        refusEpingle.textContent = "Refusé : " + await raisonDuRefus(reponse);
+        const raison = await raisonDuRefus(reponse);
+        if (occupantAChange(raison)) {
+          annoncerGeste(post.id, "erreur", await ceQuiAChange(depart.creneau_id, depart.article_title || depart.accroche, depart.article_id));
+          await chargerDeparts();
+          renderPostDetail(post, article, covers);
+          if (!schedulePanelEl.hidden) loadSchedulePanel();
+          return;
+        }
+        refusEpingle.textContent = "Refusé : " + raison;
         desepingler.disabled = false;
         return;
       }
@@ -3286,11 +3366,12 @@ function renderPostDetail(post, article, covers) {
     boutonNePasPublier(zoneDepart, {
       creneauId: depart.creneau_id,
       titre: depart.article_title || depart.accroche,
+      articleId: depart.article_id,
       postId: post.id,
       publierA: depart.publier_a,
       articleConnu: depart.article_title != null,
-      apres: async (resultat) => {
-        annoncerGeste(post.id, "ok", resultat);
+      apres: async (resultat, refuse) => {
+        annoncerGeste(post.id, refuse ? "erreur" : "ok", resultat);
         await chargerDeparts();
         renderPostDetail(post, article, covers);
         if (!postsPanelEl.hidden) loadPostsPanel();
@@ -4254,6 +4335,18 @@ chargerSupervision();
 // Le bandeau vit sa vie : il doit rester vrai meme quand l'utilisateur laisse
 // l'onglet ouvert toute la journee sur un panneau.
 setInterval(chargerSupervision, 60000);
+
+// La Programmation suit le bandeau : l'arbitrage reattribue un creneau non epingle a chaque
+// passage, et l'onglet reste ouvert toute la journee. Pas pendant un glissement, qui perdrait
+// sa poignee, ni un selecteur ouvert, qui perdrait son choix : la ligne « liste lue à » dit
+// alors son age, et le minuteur suivant reprend.
+function rafraichirProgrammation() {
+  if (schedulePanelEl.hidden || document.hidden) return;
+  if (document.querySelector("#schedule-list .prog-selecteur")) return;
+  loadSchedulePanel();
+}
+setInterval(rafraichirProgrammation, 60000);
+document.addEventListener("visibilitychange", rafraichirProgrammation);
 </script>
 </body>
 </html>

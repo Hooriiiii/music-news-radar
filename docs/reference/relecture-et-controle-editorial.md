@@ -431,6 +431,34 @@ l'accroche d'un post compose la veille fait lacher le post au gel, et la composi
 le refait, donc repaie Claude et ecrase la correction. Comportement deja vrai pour la legende,
 non change ici, DEDUIT DU CODE.
 
+### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
+
+`PATCH /schedule/{id}` avec `sauter` envoyait `{sauter: true}` et la liste ne se rechargeait
+jamais seule, alors que l'arbitrage reattribue un creneau non epingle a chaque passage.
+Reproduit sur le vrai code (bilan du 2026-10-31) : l'ecran montre A, le creneau porte B, le
+retrait rend 200, B est exclue, A reste candidate et l'arbitrage la remet a cette heure, et
+l'ecran dit « A ne partira pas ». Une confirmation fausse sur le geste le plus sensible.
+
+- `occupant_attendu` et `post_attendu` sont **obligatoires** sur `sauter` et sur `epingle`
+  (422 sinon ; `null` est une valeur, un creneau vu vide). Ils sont la CONDITION de l'UPDATE,
+  a la place de la lecture du moment : pas un `if` avant l'ecriture. Occupant change : 409
+  `OCCUPANT_CHANGE`, rien n'est ecrit, ni le creneau ni l'exclusion. Le post compte autant que
+  l'article : une recomposition est un texte que l'humain n'a pas lu.
+- Les etats restent juges avant : publication en vol ou incertaine, creneau termine.
+- Les trois surfaces de retrait et les deux epingles envoient ce que leur ligne affiche
+  (`DepartOut.article_id` est ajoute pour « A relire » et la fiche). Sur le 409, elles relisent
+  `/schedule` et nomment l'occupant actuel, ou « recompose » si l'actu est la meme.
+- La Programmation se recharge avec le bandeau (60 s) et au retour sur l'onglet, seulement
+  si elle est affichee. Un glissement reporte (`rechargementDiffere`) et un selecteur ouvert
+  suspend : le minuteur suivant reprend. `#schedule-lue` dit « liste lue a HH:MM » ; une lecture
+  en echec garde la liste, passe la ligne en erreur et dit qu'elle peut avoir change. Le
+  numero de tour (`tourDeChargement`) empeche une reponse ancienne d'ecraser une plus recente.
+
+**Prouve par test, jamais observe en production.**
+`tests/schedule/test_verification_humaine.py` (deux sessions, rejouable sur Postgres) et
+`tests/dashboard/test_dashboard_programmation_vivante.py` (Chromium reel, horloge de page
+controlee).
+
 ### Anti-doublon, demontre
 
 Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur
