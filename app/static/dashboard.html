@@ -239,7 +239,11 @@
   .mode-choix.mode-reel { color: var(--alerte); }
   .mode-choix.mode-reel.on { background: var(--hot); color: var(--sur-accent); }
   .mode-explication { color: var(--muted); font-size: 11.5px; margin: 8px 0 16px; }
-  .slot-actions { display: flex; gap: 4px; }
+  .slot-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* Le titre est l'information qu'on vient verifier : les boutons le tronquaient
+     (« Charlotte de Witte ann… ») a 1440 px. Il prend la ligne, le reste passe dessous. */
+  #schedule-list .post-row { flex-wrap: wrap; }
+  #schedule-list .post-row .grow { flex: 1 1 100%; }
   /* --- Une ligne de creneau HIERARCHISEE ---------------------------------
      Constat a l'ecran : « (creneau libre) » occupait la position de titre sur
      six lignes sur dix -- le texte le plus VISIBLE de la ligne etait une
@@ -257,8 +261,7 @@
     font-family: var(--police-titre);
     color: var(--text); white-space: nowrap; }
   .slot-titre { font-size: 14.5px; font-weight: 600; font-family: var(--police-titre);
-    overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
+    min-width: 0; overflow-wrap: anywhere; }
   .slot-titre.vide { font-weight: 400; font-style: italic; color: #6a6a78; }
   .slot-alerte { background: var(--alerte-fond); color: var(--alerte); border: 1px solid var(--alerte-bord);
     border-radius: 8px; padding: 5px 10px; font-size: 12.5px; margin-top: 6px; }
@@ -1070,12 +1073,12 @@ async function load() {
           ${a.status === "new" ? '<button data-status="reviewed">✓ Vu</button>' : ""}
           ${a.status === "reviewed" ? `<button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>` : ""}
           <div class="prog-hote"></div>
-          ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
+          ${a.file_exclu_raison || a.exclusion_a_verifier ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
           ${a.exclusion_a_verifier ? `<div class="verif-publication" hidden>
             <span>Le post est peut-être en ligne. Vérifie le compte</span>
             <button class="pas-parti">Vérifié, il n'est pas parti</button>
           </div>` : ""}
-          ${a.file_exclu_raison ? '<span class="etat-geste erreur refus-reintegrer"></span>' : ""}
+          ${a.file_exclu_raison || a.exclusion_a_verifier ? '<span class="etat-geste erreur refus-reintegrer"></span>' : ""}
           <span class="etat-geste erreur refus-statut"></span>
         </div>
       </div>`;
@@ -1663,7 +1666,9 @@ function peindreProgrammation(card, a) {
   hote.innerHTML = "";
   if (resultat) hote.appendChild(resultat);
   const c = a.creneau;
-  if (a.raison_non_programmable && !(c && c.etat === "gele")) {
+  // Un creneau a venir se montre toujours : gele il part a l'heure, modifiable il offre
+  // « Changer », dont les options disent elles-memes ce qui reste possible.
+  if (a.raison_non_programmable && !c) {
     // L'exclusion a deja son badge et son « Remettre dans la file ».
     if (!a.file_exclu_raison) {
       hote.prepend(nouvelElement("span", "prog-etat note-file", a.raison_non_programmable));
