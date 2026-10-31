@@ -13,6 +13,7 @@ from app.content.visuels import fond_de_cover
 from app.db import get_db
 from app.models import Article, Creneau, EtatCreneau, Post, PostStatus
 from app.schedule.publication_incertaine import erreur_incertaine
+from app.schedule.relecture import noter_edition, textes_du_post
 from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.publish.preparation import candidats_editables
@@ -21,6 +22,10 @@ from app.schedule.store import utc
 from app.schemas import CoversOut, PostOut, PostUpdate
 
 router = APIRouter(tags=["posts"])
+
+
+def _maintenant() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
 
 
 @router.get("/posts", response_model=list[PostOut])
@@ -139,6 +144,14 @@ def _aligner_variante_sur_la_cover(post: Post) -> None:
     post.variants = {**variants, "variantes": alignees}
 
 
+def _hors_textes(slides: list | None) -> list:
+    """Les slides sans leurs textes de cover ni les cles vides que `model_dump` ajoute."""
+    return [
+        {cle: valeur for cle, valeur in slide.items() if cle not in TEXTES_DE_COVER and valeur is not None}
+        for slide in slides or []
+    ]
+
+
 def _regel_automatique(db: Session, post: Post) -> None:
     """Invalide le gel des creneaux qui portent ce post, avant de l'editer.
 
@@ -185,6 +198,7 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         raise HTTPException(status_code=409, detail=STATUT_REFUSE)
 
     avant = _contenu(post)
+    textes_avant = textes_du_post(post)
     edite_le_contenu = any(
         valeur is not None
         for valeur in (
@@ -268,6 +282,15 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
 
     # « Enregistrer » sans rien changer n'est pas une correction.
     if _contenu(post) != avant:
+        carrousel = (post.variants or {}).get("carrousel") != (avant[4] or {}).get("carrousel")
+        noter_edition(
+            post, textes_avant, _maintenant(),
+            # Une variante choisie reste le texte du robot, a la date du robot.
+            textes=payload.variante_retenue is None,
+            corrige=post.hashtags != avant[1] or carrousel or (
+                payload.slides is not None and _hors_textes(post.slides) != _hors_textes(avant[2])
+            ),
+        )
         _proteger_la_correction(db, post)
     db.commit()
     return post

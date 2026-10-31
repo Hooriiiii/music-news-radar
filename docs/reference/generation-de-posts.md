@@ -838,3 +838,10 @@ est recopiee sur la variante retenue, pour que `/covers` et le gel disent le mem
 regles de `validate_headline` valent a la frontiere (422 sur un `**` non apparie ou aucun
 surlignage). Les controles de composition, eux, ne repassent pas sur un texte humain. Detail :
 `relecture-et-controle-editorial.md`, « Modifier l'accroche ».
+
+### Un repere temporel ecrit par un humain (2026-10-31)
+
+La regle « une date absolue, jamais « ce soir » » vise le modele. Un texte humain est date de sa
+derniere edition (`variants["edition_humaine"]`), pas de la composition. S'il reste perime au gel,
+il part avec un avertissement visible, sans appel Claude ni perte du texte. Detail :
+`relecture-et-controle-editorial.md`, « Le robot ne remplace jamais une correction humaine ».

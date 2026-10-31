@@ -66,6 +66,69 @@ logger = logging.getLogger(__name__)
 RAISON_RELECTURE = "rouvert pour relecture"
 
 
+# La derniere edition humaine, dans `posts.variants` : aucune migration, et ni `created_at`
+# (la composition) ni une date de ligne (le robot ecrit aussi le post) ne la disent. Chaque
+# texte garde son heure AVEC sa valeur : l'horodatage vaut pour ce texte-la, et un retour sur
+# une variante du robot rend son controle a ce texte. S'ecrit en FUSION, comme tout `variants`.
+CLE_EDITION = "edition_humaine"
+CHAMPS_DE_COVER = ("headline", "title", "subtitle")
+
+
+def textes_du_post(post) -> dict:
+    """Ce que le post va publier, par champ : la cover et la legende."""
+    cover = next((s for s in post.slides or [] if s.get("kind") == "cover"), {})
+    return {**{champ: cover.get(champ) for champ in CHAMPS_DE_COVER}, "caption": post.caption}
+
+
+def _edition(post) -> dict:
+    edition = (post.variants or {}).get(CLE_EDITION)
+    return edition if isinstance(edition, dict) else {}
+
+
+def noter_edition(post, textes_avant: dict, maintenant: dt.datetime, *, textes: bool, corrige: bool) -> None:
+    """Note une edition humaine deja appliquee au post.
+
+    `textes` : les textes changes sont de la main de l'humain (faux quand il choisit une
+    variante : le robot les a ecrits, a sa date). `corrige` : autre chose qu'un texte
+    (hashtags, liste, fond), que le robot perdrait aussi en recomposant.
+    """
+    edition = _edition(post)
+    notes = dict(edition.get("textes") or {})
+    if textes:
+        for champ, texte in textes_du_post(post).items():
+            if texte != textes_avant.get(champ):
+                notes[champ] = {"texte": texte, "le": maintenant.isoformat()}
+    nouvelle = {**edition, "textes": notes}
+    if corrige:
+        nouvelle["corrige_le"] = maintenant.isoformat()
+    post.variants = {**(post.variants or {}), CLE_EDITION: nouvelle}
+
+
+def _note_du_texte(post, champ: str, texte: str | None) -> dict | None:
+    note = (_edition(post).get("textes") or {}).get(champ)
+    return note if isinstance(note, dict) and texte is not None and note.get("texte") == texte else None
+
+
+def reference_du_texte(post, champ: str, texte: str | None) -> dt.datetime:
+    """Depuis quand ce texte dit ce qu'il dit : sa derniere edition humaine, sinon la
+    composition. Une date illisible retombe sur la composition : le doute ne fait perdre
+    aucun texte, `porte_une_correction` le protege quand meme."""
+    note = _note_du_texte(post, champ, texte)
+    if note is not None:
+        try:
+            return dt.datetime.fromisoformat(note["le"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("edition humaine illisible sur le post %s", post.id)
+    return post.created_at
+
+
+def porte_une_correction(post) -> bool:
+    """Vrai si recomposer ce post jetterait ce qu'un humain y a mis : le robot n'y touche plus."""
+    if _edition(post).get("corrige_le"):
+        return True
+    return any(_note_du_texte(post, champ, texte) for champ, texte in textes_du_post(post).items())
+
+
 def _fichier() -> Path:
     # A cote du jeton, comme tous les etats du projet : hors du depot, et dans le
     # dossier que l'agent planifie sait ecrire.

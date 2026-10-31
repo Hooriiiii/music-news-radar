@@ -87,7 +87,13 @@ from app.publish.preparation import PreparationDifferee, PreparationImpossible, 
 from app.publish.preparation_reel import ReelInadapte
 from app.schedule.publication_incertaine import PREFIXE_ECHEC_PUBLICATION, RAISON_RECLAMATION
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
-from app.schedule.relecture import RAISON_RELECTURE, deja_annonce, marquer_annonce
+from app.schedule.relecture import (
+    RAISON_RELECTURE,
+    deja_annonce,
+    marquer_annonce,
+    porte_une_correction,
+    reference_du_texte,
+)
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -358,6 +364,10 @@ def _sauter(
 RAISON_TEXTE_PERIME = "texte perime"
 
 
+# Sur un creneau GELE qui part quand meme : une correction humaine a un repere perime.
+AVERTISSEMENT_REPERE = "repere perime dans un post corrige a la main, il part tel quel"
+
+
 def _replier(db, creneau: Creneau, attendu: tuple, post_id: int, raison: str) -> bool:
     """Rend au creneau le brouillon PERIME qu'on venait de lui retirer pour le
     recomposer, quand la recomposition a echoue.
@@ -465,7 +475,9 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     jamais, et recomposer pour un « demain » qui dort dans une variante non
     retenue serait payer Sonnet pour rien.
 
-    La reference de temps est `post.created_at` contre `maintenant`, jamais contre
+    La reference de temps d'un texte est sa derniere edition humaine, a defaut
+    `post.created_at` (`relecture.reference_du_texte`) : un humain qui ecrit « ce soir »
+    ce matin dit vrai, quel que soit l'age du brouillon. Elle se compare a `maintenant`, jamais a
     `creneau.publier_a`, et c'est ce qui rend la regle SURE : un brouillon compose
     ce soir pour un creneau de demain matin serait sinon perime a la seconde ou on
     l'ecrit, donc recompose a chaque passage de l'agent (toutes les 10 minutes)
@@ -481,12 +493,12 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     textes = []
     for slide in post.slides or []:
         if slide.get("kind") == "cover":
-            textes += [(slide.get(cle), False) for cle in ("headline", "title", "subtitle")]
+            textes += [(cle, slide.get(cle), False) for cle in ("headline", "title", "subtitle")]
             break
-    textes.append((post.caption, True))
-    for texte, prose in textes:
+    textes.append(("caption", post.caption, True))
+    for champ, texte, prose in textes:
         repere = repere_relatif(texte, prose=prose)
-        if repere is not None and repere_perime(repere, post.created_at, maintenant):
+        if repere is not None and repere_perime(repere, reference_du_texte(post, champ, texte), maintenant):
             return repere
     return None
 
@@ -656,7 +668,11 @@ def _composer(
                 # media depuis : un nouveau brouillon est compose avec des
                 # visuels autorises. Aucun repli : il ne partirait pas.
                 post_id = None
-            elif brouillon is not None and _reperes_perimes(brouillon, maintenant) is not None:
+            elif (
+                brouillon is not None
+                and not porte_une_correction(brouillon)
+                and _reperes_perimes(brouillon, maintenant) is not None
+            ):
                 repli_id, post_id = post_id, None
                 _completer_credit(db, brouillon, article)
             else:
@@ -842,12 +858,21 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         # palette, les textes. Liberer ici, c'etait jeter un reel PRET pour une
         # information absente, et enterrer le creneau en MANQUE sans raison.
         deja_tente = (creneau.erreur or "").startswith(RAISON_TEXTE_PERIME)
+        # Le robot ne remplace jamais une correction humaine : ni relance possible sur un
+        # texte humain, ni appel paye. Le controle de FORME accepte donc, avec un
+        # avertissement visible (`generation-de-posts.md`, « relance, puis acceptation »).
+        corrige = porte_une_correction(post)
         repere = (
             _reperes_perimes(post, maintenant)
-            if article is not None and not deja_tente
+            if corrige or (article is not None and not deja_tente)
             else None
         )
-        if repere is not None:
+        avertissement = (
+            f"{AVERTISSEMENT_REPERE} : le texte dit « {repere.expression} »"
+            if corrige and repere is not None
+            else None
+        )
+        if repere is not None and not corrige:
             # Dernier moment ou l'on peut encore agir (T-2h). Le creneau lache le
             # post, la composition du passage suivant en refait un avec une date
             # absolue -- ni exclusion ni creneau perdu : l'article n'y est pour
@@ -957,9 +982,13 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             # jamais pouvoir se desynchroniser. `None` quand le preparateur ne le
             # rend pas (preparateur injecte) : inconnu, jamais une liste inventee.
             elements=figement.elements,
-            etat=EtatCreneau.GELE, gele_le=maintenant, erreur=None,
+            etat=EtatCreneau.GELE, gele_le=maintenant, erreur=avertissement,
         ):
             rapport.geles += 1
+            if avertissement:
+                message = f"{_heure_locale(creneau.publier_a)} : {avertissement}"
+                rapport.erreurs.append(message)
+                _prevenir(notifier, f"{message} — corrige-le depuis le dashboard, sinon il part ainsi")
     return exclusions
 
 

@@ -9,9 +9,16 @@ import datetime as dt
 
 import pytest
 
+import app.api.posts as posts_api
 import app.api.schedule as schedule_api
-from app.models import Article, Creneau, EtatCreneau
+import app.schedule.runner as runner
 from app.api.schedule import OCCUPANT_CHANGE
+from app.content.choix_visuels import ChoixVisuels
+from app.content.compose import CoverVariante, PostDraft
+from app.content.media import entree
+from app.content.visuels import actif
+from app.models import Article, Creneau, EtatCreneau, Post
+from app.schedule import relecture
 from app.schedule.store import appliquer_arbitrage
 from tests.schedule.test_course_arbitrage_gel import (  # noqa: F401 -- fixtures
     BASE,
@@ -130,3 +137,196 @@ def test_epingler_une_ligne_perimee_ne_touche_a_rien(client_web, fabrique, file_
     assert reponse.status_code == 409 and reponse.json()["detail"] == OCCUPANT_CHANGE
     with fabrique() as db:
         assert db.get(Creneau, file_["tot"]).epingle is False
+
+
+# --- 2. Une correction humaine n'est jamais remplacee par le robot -----------------------
+
+
+LUNDI = BASE - dt.timedelta(days=2)
+HIER = BASE - dt.timedelta(days=1)
+
+
+class Passages:
+    """Le vrai `tourner`, avec des outils factices : compte Sonnet, le rendu, les notifications."""
+
+    def __init__(self, fabrique):  # noqa: F811
+        self.fabrique = fabrique
+        self.composes, self.rendus, self.notes = [], [], []
+        self.preparer = lambda post, article, dossier: ["p_01.jpg"]
+
+    def _composer(self, article):
+        self.composes.append(article.id)
+        variante = CoverVariante(headline="**Robot** ecrit ca", title="**Robot**", subtitle="ecrit **ca**")
+        return PostDraft(variantes=[variante] * 4, caption="Legende du robot 🎧 ✨", hashtags=["#electro"])
+
+    def tourner(self, moment):
+        def preparer(post, article, dossier):
+            self.rendus.append(post.slides[0]["headline"])
+            return self.preparer(post, article, dossier)
+
+        choix = actif(entree("photo", "https://cdn.ig/x.jpg"), origine="article")
+        with self.fabrique() as db:
+            return runner.tourner(
+                db, moment, mode="apercu", composer=self._composer, preparer=preparer,
+                publier=lambda *_a, **_k: "ig42", notifier=lambda _t, m: self.notes.append(m),
+                horloge=lambda: moment, dormir=lambda _s: None,
+                choisir=lambda _db, _a, _f, _m: ChoixVisuels([choix], None),
+            )
+
+
+@pytest.fixture()
+def passages(fabrique):  # noqa: F811
+    return Passages(fabrique)
+
+
+@pytest.fixture()
+def horloge_des_posts(monkeypatch):
+    """L'heure de l'edition humaine, que l'API lit sur l'horloge du serveur."""
+    def regler(moment):
+        monkeypatch.setattr(posts_api, "_maintenant", lambda: moment, raising=False)
+    regler(BASE)
+    return regler
+
+
+def _poser(fabrique, post_id, **champs):  # noqa: F811
+    with fabrique() as db:
+        post = db.get(Post, post_id)
+        for cle, valeur in champs.items():
+            setattr(post, cle, valeur)
+        db.commit()
+
+
+def _post(fabrique, post_id):  # noqa: F811
+    with fabrique() as db:
+        return db.get(Post, post_id)
+
+
+def _creneau(fabrique, creneau_id):  # noqa: F811
+    with fabrique() as db:
+        return db.get(Creneau, creneau_id)
+
+
+def _cover(**textes):
+    return {"kind": "cover", "headline": "**A**", "title": "**T**", "subtitle": "**S**",
+            "image_url": "https://img/A.jpg", **textes}
+
+
+def _une_heure_avant(file_):  # noqa: F811
+    return file_["h0"] - dt.timedelta(hours=1)
+
+
+@pytest.mark.parametrize("corps", [
+    {"caption": "Correction : ca commence ce soir a Brest."},
+    {"slides": [_cover(headline="**Ce soir** a Brest")]},
+])
+def test_une_correction_du_jour_part_telle_quelle(client_web, fabrique, file_, passages, horloge_des_posts, corps):  # noqa: F811
+    """La reproduction de Jo et Tom : post compose la veille, phrase juste ecrite le jour
+    meme. Avant : le gel lachait le post, et la composition suivante repayait Sonnet."""
+    _poser(fabrique, file_["post_a"], created_at=HIER)
+    assert client_web.patch(f"/posts/{file_['post_a']}", json=corps).status_code == 200
+
+    passages.tourner(_une_heure_avant(file_))
+    passages.tourner(_une_heure_avant(file_) + dt.timedelta(minutes=10))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.post_id, creneau.erreur) == (EtatCreneau.GELE, file_["post_a"], None)
+    assert passages.composes == []
+
+
+def test_un_repere_humain_vraiment_perime_part_avec_un_avertissement(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """Ecrit lundi « ce soir », parti plus tard : le texte humain n'est pas perdu, rien
+    n'est repaye, et cela se dit, sur la ligne et par la notification."""
+    _poser(fabrique, file_["post_a"], created_at=LUNDI)
+    horloge_des_posts(LUNDI)
+    texte = "Correction de lundi : ca commence ce soir a Brest."
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": texte}).status_code == 200
+
+    passages.tourner(_une_heure_avant(file_))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.post_id) == (EtatCreneau.GELE, file_["post_a"])
+    assert "ce soir" in creneau.erreur
+    assert any("ce soir" in note for note in passages.notes)
+    assert _post(fabrique, file_["post_a"]).caption == texte
+    assert passages.composes == []
+
+
+def test_le_robot_perime_a_cote_d_une_correction_ne_la_remplace_pas(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    _poser(fabrique, file_["post_a"], created_at=HIER, slides=[_cover(headline="**Sort** ce soir")])
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": "Corrigee a la main"}).status_code == 200
+
+    passages.tourner(_une_heure_avant(file_))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.post_id) == (EtatCreneau.GELE, file_["post_a"])
+    assert "ce soir" in creneau.erreur
+    assert passages.composes == []
+
+
+def test_un_texte_du_robot_jamais_touche_reste_controle(fabrique, file_, passages):  # noqa: F811
+    """Le controle reste entier : le defaut du post 153 ne revient pas."""
+    _poser(fabrique, file_["post_a"], created_at=HIER, caption="Sort ce soir a minuit")
+    with fabrique() as db:
+        db.get(Creneau, file_["tot"]).epingle = True
+        db.commit()
+    passages.tourner(_une_heure_avant(file_))
+    creneau = _creneau(fabrique, file_["tot"])
+    assert creneau.post_id is None and "ce soir" in creneau.erreur.lower()
+
+    passages.tourner(_une_heure_avant(file_) + dt.timedelta(minutes=10))
+    assert passages.composes == [file_["a"]]
+
+
+def test_choisir_une_variante_du_robot_ne_vaut_pas_correction(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    variantes = [{"headline": "**A**", "title": "**T**", "subtitle": "**S**"},
+                 {"headline": "**Sort** ce soir", "title": "**T**", "subtitle": "**S**"}]
+    _poser(fabrique, file_["post_a"], created_at=HIER, variants={"variantes": variantes, "palette": "rose"})
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"variante_retenue": 1}).status_code == 200
+
+    passages.tourner(_une_heure_avant(file_))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert creneau.post_id is None and "ce soir" in creneau.erreur
+
+
+def test_retomber_sur_le_texte_du_robot_rend_le_controle(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """L'horodatage vaut pour le texte ecrit, pas pour le champ."""
+    variantes = [{"headline": "**A**", "title": "**T**", "subtitle": "**S**"},
+                 {"headline": "**Sort** ce soir", "title": "**T**", "subtitle": "**S**"}]
+    _poser(fabrique, file_["post_a"], created_at=HIER, variants={"variantes": variantes})
+    corrige = [_cover(headline="**Corrigee** ce soir")]
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"slides": corrige}).status_code == 200
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"variante_retenue": 1}).status_code == 200
+
+    with fabrique() as db:
+        post = db.get(Post, file_["post_a"])
+        assert runner._reperes_perimes(post, _une_heure_avant(file_)) is not None
+        assert relecture.porte_une_correction(post) is False
+
+
+def test_la_composition_reprend_un_brouillon_corrige_sans_repayer(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """L'autre lecteur du controle : `_composer`, quand le creneau a lache le post."""
+    _poser(fabrique, file_["post_a"], created_at=LUNDI)
+    horloge_des_posts(LUNDI)
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": "Lundi : ce soir a Brest"}).status_code == 200
+    with fabrique() as db:
+        creneau = db.get(Creneau, file_["tot"])
+        creneau.post_id, creneau.epingle = None, True
+        db.commit()
+
+    passages.tourner(_une_heure_avant(file_))
+
+    assert _creneau(fabrique, file_["tot"]).post_id == file_["post_a"]
+    assert passages.composes == []
+
+
+def test_noter_l_edition_fusionne_et_ne_note_que_ce_qui_change(client_web, fabrique, file_, horloge_des_posts):  # noqa: F811
+    """`variants` en FUSION, jamais en bloc ; « Enregistrer » sans rien changer ne note rien."""
+    _poser(fabrique, file_["post_a"], variants={"palette": "rose", "fond": {"origine": "article"}}, caption="Telle quelle")
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": "Telle quelle"}).status_code == 200
+    assert relecture.CLE_EDITION not in _post(fabrique, file_["post_a"]).variants
+
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": "Autre"}).status_code == 200
+    variants = _post(fabrique, file_["post_a"]).variants
+    assert (variants["palette"], variants["fond"]) == ("rose", {"origine": "article"})
+    assert variants[relecture.CLE_EDITION]["textes"]["caption"]["texte"] == "Autre"

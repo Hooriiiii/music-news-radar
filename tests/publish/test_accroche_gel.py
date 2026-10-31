@@ -118,7 +118,7 @@ def test_changer_le_fond_ou_la_liste_ne_touche_pas_aux_variantes(client, db_sess
     avant = post.variants
     client.patch(f"/posts/{post.id}", json=_corps(post, image_url="https://img/autre.jpg"))
     db_session.refresh(post)
-    assert post.variants == avant
+    assert post.variants["variantes"] == avant["variantes"] and post.variants["palette"] == avant["palette"]
 
 
 def test_sur_un_gel_l_edition_rouvre_le_creneau_et_garde_le_post(client, db_session):

@@ -426,10 +426,32 @@ l'identique, et « Enregistrer » legende ne doit jamais couter un gel, ni etre 
 garde a la fermeture comprise. Apres ecriture, `/covers` est relu : un debordement s'affiche
 sous le champ, avec la saisie, et un apercu en panne se dit sans annuler l'ecriture.
 
-**Limite connue.** `_reperes_perimes` relit aussi le texte humain : un « ce soir » tape dans
-l'accroche d'un post compose la veille fait lacher le post au gel, et la composition suivante
-le refait, donc repaie Claude et ecrase la correction. Comportement deja vrai pour la legende,
-non change ici, DEDUIT DU CODE.
+### Le robot ne remplace jamais une correction humaine (2026-10-31)
+
+`_reperes_perimes` comparait tout texte a `post.created_at` : un « ce soir » juste, ecrit a la
+main sur un post compose la veille, faisait lacher le post au gel, et la composition suivante
+repayait Sonnet et ecrasait la correction. Un texte que personne n'avait lu partait a la place.
+
+**La reference de temps d'un texte est sa derniere edition humaine.** Elle vit dans
+`posts.variants["edition_humaine"]`, **sans migration** : `created_at` date la composition, et
+aucun champ existant ne separe l'humain du robot. Ecrit en FUSION par `PATCH /posts/{id}`
+seulement si le contenu change (`relecture.noter_edition`). Chaque texte (`headline`, `title`,
+`subtitle`, `caption`) garde son heure AVEC sa valeur : revenir sur une variante du robot rend
+son controle a ce texte. Choisir une variante n'est donc pas une correction. `corrige_le` note
+ce qui n'est pas un texte (hashtags, liste, fond).
+
+`relecture.porte_une_correction` : ni `_geler` ni `_composer` ne relachent plus un tel post.
+**Si un repere reste perime** (ecrit lundi « ce soir », parti mercredi, ou un texte du robot a
+cote d'une correction), le post part tel quel, conformement a « relance, puis acceptation avec
+avertissement » : une relance serait un appel Claude sur un texte humain, donc exclue.
+L'avertissement est ecrit dans `creneaux.erreur` du GELE (ligne de Programmation) et notifie une
+fois, a ce gel. **Un texte du robot jamais touche garde le controle entier** : le post 153 ne
+revient pas.
+
+**Limites.** Une correction faite avant ce correctif n'est pas datee : elle reste vue comme du
+robot. `_brouillon_perime` (visuels interdits, fond absent) peut encore lacher un post corrige :
+ce sont des regles du projet, pas un controle de forme. Prouve par test
+(`tests/schedule/test_verification_humaine.py`), jamais observe en production.
 
 ### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
 
