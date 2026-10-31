@@ -940,6 +940,18 @@ def voyant_pauses(maintenant: dt.datetime) -> Voyant:
 SANS_RAISON = "sans raison enregistrée"
 
 
+def _mode_lu() -> str | None:
+    """Le mode applique par l'agent, None s'il ne se lit pas. Meme fichier que
+    `voyant_mode`, et pour la meme raison : `mode_effectif` cache une lecture ratee.
+    Un fichier absent, ou sans cle `mode` (il porte aussi `reels_actifs`), n'est pas
+    illisible : c'est le repli voulu sur `.env`."""
+    lecture = lire_json(settings.publication_mode_path)
+    if lecture.erreur:
+        return None
+    mode = (lecture.donnees or {}).get("mode", settings.publication_mode)
+    return mode if mode in MODES_LISIBLES else None
+
+
 def voyant_creneaux(db: Session, maintenant: dt.datetime) -> Voyant:
     """Le bilan du jour, plus ce que l'agent a laisse derriere lui.
 
@@ -969,13 +981,25 @@ def voyant_creneaux(db: Session, maintenant: dt.datetime) -> Voyant:
         return bilan
     fuseau = ZoneInfo(settings.publication_fuseau)
     nombre = len(orphelins)
+    mode = _mode_lu()
     constat = (
         f"{nombre} créneau(x) passé(s) de plus de {settings.publication_retard_max_minutes} min "
         "et jamais marqué(s) manqué(s)"
     )
     a_eu_le_temps = _agent_a_eu_le_temps(maintenant)
     seuil = seuil_agent_publication()
-    if a_eu_le_temps is None:
+    # `tourner` sort avant `_marquer_manques` en arret : accuser l'agent serait un voyant
+    # qui ment dans un mode legitime. ATTENTION et non OK : ces creneaux sont bel et bien rates.
+    if mode is None:
+        niveau = INCONNU
+        raison = f"{constat}, et le mode de publication est illisible : on ne sait pas si l'agent devait les traiter."
+    elif mode == "arret":
+        niveau = ATTENTION
+        raison = (
+            f"{constat} : mode Arrêt, l'agent ne traite pas la file. Ce n'est pas une panne : "
+            "ils seront marqués manqués au premier passage hors arrêt."
+        )
+    elif a_eu_le_temps is None:
         niveau = INCONNU
         raison = f"{constat}, et la date du dernier réveil est illisible : Mac endormi ou agent mort, on ne sait pas."
     elif a_eu_le_temps and any(maintenant - (_utc(c.publier_a) + retard_max) >= seuil for c in orphelins):

@@ -55,6 +55,13 @@ from app.supervision import etat_sources as lire_etat_sources
 MAINTENANT = dt.datetime(2026, 10, 2, 15, 0, tzinfo=dt.timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _agent_cense_tourner(monkeypatch):
+    # `arret` est le defaut du `.env` : le constat des creneaux depasses n'y accuse personne
+    # (tests/socle/test_supervision_arret.py). Ici, l'agent est cense passer.
+    monkeypatch.setattr(settings, "publication_mode", "reel")
+
+
 def _voyant(niveau):
     return Voyant("x", "X", niveau, "v")
 
