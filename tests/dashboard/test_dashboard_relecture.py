@@ -114,7 +114,7 @@ def _mesurer(html: str, departs=(DEPART,)) -> dict[int, dict]:
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof loadRelectureList === 'function'")
             page.click('[data-panneau="posts"]')
             # « attached » et non « visible » : dans la version mutee, Chromium
@@ -224,7 +224,7 @@ def test_une_liste_injoignable_ne_se_lit_pas_comme_rien_a_relire():
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
             page.route("**/relecture", lambda route: route.fulfill(status=500, body="{}"))
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof loadRelectureList === 'function'")
             page.click('[data-panneau="posts"]')
             page.wait_for_selector("#relecture-list .media-empty", state="attached")

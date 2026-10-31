@@ -830,3 +830,11 @@ C'est exactement le post 156 (« sort demain » pour une actu de la veille, déj
 sortie le jour même) : le modèle a **recopié** le repère de l'article faute de
 pouvoir le dater. Le nom du jour vient de `reperes.JOURS` et jamais de `%A`, qui
 suit la locale du processus.
+
+### L'accroche se corrige dans la fiche (2026-10-31)
+
+`variants.variantes` n'est plus strictement ce que Claude a ecrit : une correction humaine y
+est recopiee sur la variante retenue, pour que `/covers` et le gel disent le meme texte. Les
+regles de `validate_headline` valent a la frontiere (422 sur un `**` non apparie ou aucun
+surlignage). Les controles de composition, eux, ne repassent pas sur un texte humain. Detail :
+`relecture-et-controle-editorial.md`, « Modifier l'accroche ».

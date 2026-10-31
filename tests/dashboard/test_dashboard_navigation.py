@@ -222,7 +222,7 @@ def _mesurer(html: str, largeurs=(1440, 900, 390)) -> dict:
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             page.wait_for_selector("#grid .card", state="attached")
             for largeur in largeurs:
@@ -330,7 +330,7 @@ def test_les_filtres_reviennent_sur_la_grille():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_selector("#grid .card", state="attached")
             assert page.evaluate("!!document.getElementById('barre-filtres').offsetParent")
             page.click('[data-panneau="posts"]')
@@ -487,7 +487,7 @@ def test_une_grille_lente_qui_arrive_en_retard_n_ecrase_pas_le_panneau_affiche()
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             # La grille est en train de charger : on part sur la Programmation.
             page.click('[data-panneau="schedule"]')
@@ -519,7 +519,7 @@ def test_preuve_par_mutation_sans_le_jeton_la_grille_en_retard_ecrase_le_compteu
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             page.click('[data-panneau="schedule"]')
             page.wait_for_selector("#schedule-list .post-row", state="attached")

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ScoredBy, SourceType
+from app.pipeline import credits_anthropic
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.pipeline.election import tailles_clusters
 from app.pipeline.retrait_humain import RAISONS_HUMAINES
@@ -520,7 +521,11 @@ def score_pending(
                 article.scored_by = ScoredBy.LOCAL
                 stats.prefiltered += 1
             else:
-                apply_score(article, appliquer_garde_fous(article, scorer(article)))
+                reponse = scorer(article)
+                # Une reponse de Claude, et elle seule, prouve le solde : ni une note
+                # locale, ni un article quasi vide.
+                credits_anthropic.consigner_succes()
+                apply_score(article, appliquer_garde_fous(article, reponse))
                 article.scored_by = ScoredBy.CLAUDE
                 stats.scored += 1
                 if raison == RAISON_CLUSTER:
@@ -533,4 +538,6 @@ def score_pending(
             db.rollback()
             stats.errors += 1
             stats.derniere_erreur = str(exc)
+            if credits_anthropic.est_refus_de_credits(exc):
+                credits_anthropic.consigner_refus()
     return stats

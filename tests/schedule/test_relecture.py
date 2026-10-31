@@ -202,6 +202,8 @@ def test_un_post_qui_part_bientot_est_annonce_une_seule_fois(db_session, actu):
     rapport = outils.tourner(db_session, BASE)
     assert rapport.annonces_relecture == 1
     assert any("relecture" in m and "Astropolis" in m for m in outils.notifications)
+    # La console s'ouvre sur ce panneau depuis le 2026-10-31.
+    assert any("panneau Programmation" in m for m in outils.notifications)
     assert relecture.deja_annonce(creneau.id, BASE)
 
     # Dix minutes plus tard, le passage suivant : plus rien. Six annonces par post

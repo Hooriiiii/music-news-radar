@@ -56,6 +56,15 @@ MAINTENANT = dt.datetime(2026, 10, 2, 15, 0, tzinfo=dt.timezone.utc)
 
 
 @pytest.fixture(autouse=True)
+def _solde_connu():
+    """Depuis le 2026-10-31, un solde jamais consigne vaut INCONNU. Ces tests parlent
+    d'autre chose : le dernier appel a Claude a reussi."""
+    from app.pipeline.credits_anthropic import consigner_succes
+
+    consigner_succes(dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc))
+
+
+@pytest.fixture(autouse=True)
 def _agent_cense_tourner(monkeypatch):
     # `arret` est le defaut du `.env` : le constat des creneaux depasses n'y accuse personne
     # (tests/socle/test_supervision_arret.py). Ici, l'agent est cense passer.
@@ -142,6 +151,9 @@ def test_lire_json_distingue_absent_et_illisible():
 
 
 def test_les_credits_epuises_sont_nommes_et_en_panne(db_session):
+    # Sans fichier d'etat : la preuve en base suffit. La sortie au premier succes est
+    # dans test_supervision_credits.py.
+    (settings.meta_token_path.parent / "credits_anthropic.json").unlink()
     db_session.add(
         Creneau(
             publier_a=MAINTENANT - dt.timedelta(hours=2),

@@ -47,6 +47,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, Creneau, EtatCreneau, Post, Source
+from app.pipeline.credits_anthropic import chemin_etat as chemin_etat_credits
+from app.pipeline.credits_anthropic import lire_etat as lire_etat_credits
 from app.pipeline.health import SIGNATURE_CREDITS
 from app.schedule.passage import FICHIER_PASSAGE
 from app.sources.instagram_jeton import FICHIER_ALERTE, RENOUVELER
@@ -473,6 +475,11 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
     loup). Plus un quatrieme depuis le 2026-10-02 : les articles leur propre
     doublon, bloques pour de bon et que le filtre `duplicate_of_id IS NULL` du
     troisieme ne peut pas voir.
+
+    Depuis le 2026-10-31, le solde se lit d'abord dans `credits_anthropic.json`,
+    consigne a chaque reponse ou refus de Claude : `creneaux.erreur` ne dit rien tant
+    qu'aucune composition n'a ete tentee, et disait encore « épuisés » 36 h apres la
+    recharge. Fichier absent ou illisible : INCONNU, jamais vert.
     """
     dernier_post = _utc(db.scalar(select(func.max(Post.created_at))))
     creneau = db.scalars(
@@ -492,6 +499,23 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
     non_notes = articles_jamais_atteints_par_le_scoring(db, maintenant)
     reflexifs = articles_leur_propre_doublon(db)
 
+    lecture = lire_json(chemin_etat_credits())
+    etat_credits = None
+    credits_inconnus = None
+    if lecture.absent:
+        credits_inconnus = "aucun appel à Claude consigné pour l'instant"
+    elif lecture.erreur:
+        credits_inconnus = lecture.erreur
+    else:
+        try:
+            etat_credits = lire_etat_credits(lecture.donnees)
+        except ValueError:
+            credits_inconnus = "contenu inattendu"
+    # Le dernier evenement est un succes : une erreur de composition, meme recente,
+    # parle d'un solde qui a change depuis.
+    resolu = etat_credits is not None and not etat_credits.epuises
+    refus_en_base = recente and SIGNATURE_CREDITS in (erreur or "").lower()
+
     details = [f"Dernier post composé : {_ecoule(maintenant, dernier_post)}"]
     if erreur is not None:
         details.append(
@@ -509,14 +533,34 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             f"{reflexifs} article(s) sont leur propre doublon (lien de dédup corrompu)"
         )
 
-    if recente and SIGNATURE_CREDITS in (erreur or "").lower():
+    if etat_credits is not None:
+        if etat_credits.succes_le is not None:
+            details.append(f"Dernière réponse de Claude : {_ecoule(maintenant, etat_credits.succes_le)}")
+        if etat_credits.refus_le is not None:
+            details.append(f"Dernier refus pour crédits : {_ecoule(maintenant, etat_credits.refus_le)}")
+    else:
+        details.append(f"État des crédits inconnu : {credits_inconnus}")
+
+    if (etat_credits is not None and etat_credits.epuises) or (refus_en_base and not resolu):
+        # Le gel et la publication n'appellent pas Claude : ce qui est deja compose part
+        # encore. Le dire evite de croire perdu un creneau qui publiera.
         return Voyant(
             "composition",
             "Composition",
             PANNE,
             "crédits épuisés",
-            "crédits Anthropic épuisés : plus aucune composition ne part. "
-            "Recharger le solde sur console.anthropic.com.",
+            "crédits Anthropic épuisés : rien ne se note ni ne se compose, plus aucun post "
+            "ne partira, hormis ceux déjà composés. Recharger le solde sur console.anthropic.com.",
+            details,
+        )
+    if credits_inconnus is not None:
+        attente = f" {non_notes} article(s) attendent aussi une note." if non_notes else ""
+        return Voyant(
+            "composition",
+            "Composition",
+            INCONNU,
+            "crédits inconnus",
+            f"état des crédits Anthropic inconnu ({credits_inconnus}).{attente}",
             details,
         )
     if non_notes:
@@ -526,7 +570,8 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             ATTENTION,
             f"{non_notes} non notés",
             f"{non_notes} article(s) attendent une note depuis plus de 2 h alors que chaque "
-            "passage horaire note tout : scoring interrompu (crédits, clé API ou réseau).",
+            "passage horaire note tout : scoring interrompu (clé API ou réseau, le dernier "
+            "appel à Claude n'a pas été refusé pour crédits).",
             details,
         )
     if reflexifs:
@@ -540,7 +585,7 @@ def voyant_composition(db: Session, maintenant: dt.datetime) -> Voyant:
             "`uv run python -m scripts.reparations.reparer_doublons_reflexifs --apply`.",
             details,
         )
-    if recente:
+    if recente and not (refus_en_base and resolu):
         return Voyant(
             "composition",
             "Composition",
@@ -1090,7 +1135,7 @@ def voyant_relecture(db: Session, maintenant: dt.datetime) -> Voyant:
     qui criait au loup pendant que le scoring notait 57 articles.
 
     Il dit en revanche les deux choses que l'ecran ne disait pas : COMBIEN, et
-    POUR QUAND -- de quoi decider d'ouvrir le panneau Posts ou pas.
+    POUR QUAND -- de quoi decider d'ouvrir la Programmation ou pas.
 
     Il ne juge plus le debordement de la cover (decision du 2026-10-30). Il lisait
     `render_report`, que seul `POST /posts/{id}/render` ecrit et qu'aucun bouton

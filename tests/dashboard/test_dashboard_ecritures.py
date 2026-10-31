@@ -116,7 +116,7 @@ def _enregistrer_et_lire_le_retour(html: str, post: dict = POST, article: dict =
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof renderPostDetail === 'function'")
             page.evaluate("([p, a]) => renderPostDetail(p, a, null)", [post, article])
             page.fill("#edit-caption", "Un texte corrige a la main.")
@@ -179,7 +179,7 @@ def test_un_echec_reste_a_l_ecran_avec_sa_raison():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof renderPostDetail === 'function'")
             page.evaluate("([p, a]) => renderPostDetail(p, a, null)", [POST, ARTICLE])
             # Le serveur refuse : `enregistrerPost` leve.

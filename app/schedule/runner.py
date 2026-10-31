@@ -80,6 +80,7 @@ from app.content.visuels import (
     purger_cache,
 )
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post, PostStatus
+from app.pipeline import credits_anthropic
 from app.publish.hosting import HebergementIndisponible
 from app.publish.manifeste import normaliser as normaliser_figement
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
@@ -596,7 +597,7 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     _prevenir(
         notifier,
         f"relecture : « {accroche[:70] or f'post {post.id}'} » part a "
-        f"{_heure_locale(premier.publier_a)}{reste} — dashboard, panneau Posts",
+        f"{_heure_locale(premier.publier_a)}{reste} — dashboard, panneau Programmation",
     )
 
 
@@ -728,6 +729,7 @@ def _composer(
                 draft = appeler_compositeur(
                     composer, article, compte_du_visuel(visuels, creneau.format)
                 )
+                credits_anthropic.consigner_succes()
             except CompositionError as exc:
                 if repli_id is not None and _replier(db, creneau, attendu, repli_id, str(exc)):
                     continue
@@ -735,6 +737,8 @@ def _composer(
                 exclusions = True
                 continue
             except Exception as exc:  # noqa: BLE001 -- credits, reseau : panne systemique
+                if credits_anthropic.est_refus_de_credits(exc):
+                    credits_anthropic.consigner_refus()
                 erreur = f"composition interrompue : {exc}"[:1000]
                 rapport.erreurs.append(erreur)
                 _ecrire_si(db, creneau, attendu, erreur=erreur)

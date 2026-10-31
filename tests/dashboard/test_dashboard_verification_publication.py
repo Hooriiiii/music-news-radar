@@ -90,7 +90,7 @@ def _jouer(article: dict, geste, code_post: int = 200, html: str = PAGE):
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
             page.on("dialog", lambda d: (dialogues.append(d.message), d.dismiss()))
-            page.goto(f"http://127.0.0.1:{serveur.server_address[1]}/")
+            page.goto(f"http://127.0.0.1:{serveur.server_address[1]}/#flux")
             page.wait_for_selector(".reintegrer", state="attached")
             retour = geste(page)
             navigateur.close()

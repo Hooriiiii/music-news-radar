@@ -21,6 +21,8 @@ doivent pas disparaitre du meme geste.
 
 import datetime as dt
 
+import pytest
+
 from app.models import Article, Source, SourceType
 from app.supervision import (
     ATTENTION,
@@ -31,6 +33,15 @@ from app.supervision import (
 )
 
 UTC = dt.timezone.utc
+
+
+@pytest.fixture(autouse=True)
+def _solde_connu():
+    """Depuis le 2026-10-31, un solde jamais consigne vaut INCONNU. Ces tests parlent
+    d'autre chose : le dernier appel a Claude a reussi."""
+    from app.pipeline.credits_anthropic import consigner_succes
+
+    consigner_succes(dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc))
 
 
 def _maintenant():

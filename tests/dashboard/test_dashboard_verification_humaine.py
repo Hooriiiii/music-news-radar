@@ -112,7 +112,7 @@ def _jouer(geste, *, articles=(), creneaux=(), departs=(), code=200, generation=
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
             page.on("dialog", repondre)
-            page.goto(f"http://127.0.0.1:{serveur.server_address[1]}/")
+            page.goto(f"http://127.0.0.1:{serveur.server_address[1]}/#flux")
             page.wait_for_function("typeof loadSchedulePanel === 'function'")
             retour = geste(page)
             navigateur.close()

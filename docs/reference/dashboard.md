@@ -12,7 +12,7 @@ signale JAMAIS une panne.
 Un bandeau permanent en tete du dashboard, visible quel que soit le panneau, qui
 repond a une seule question : **« la machine tourne-t-elle, et qu'a-t-elle fait
 en mon nom ? »** Onze voyants : mode de publication, **agent de publication**
-(voir ci-dessous), composition/credits, creneaux du jour, **relecture** (voir
+(voir ci-dessous), composition/credits (etat du solde consigne depuis le 2026-10-31), creneaux du jour, **relecture** (voir
 « La fenetre de relecture », juste au-dessus), dernier passage, sante des
 sources, quota Graph, pauses (yt-dlp, visuels sautes), et les DEUX jetons Meta.
 
@@ -153,6 +153,33 @@ passage, « Dernier passage » lit l'ingestion, et MANQUE n'est ecrit que par lu
   ligne mutee (trop vieux devenu vert, absent devenu vert, garde du reveil retiree,
   constat des creneaux retire) et exige que le niveau change.
 
+**Le compte a l'arret faute de credits se lit en clair** (2026-10-31). Constat du jour :
+plus de credits, `pipeline.log` ecrit « crédits API épuisés — le scoring est arrêté » et
+1246 erreurs, pendant que Composition disait en ATTENTION « scoring interrompu (crédits, clé
+API ou réseau) ». La panne etait detectee par `health.diagnostiquer`, mais le constat ne
+vivait que dans le rapport du run ; la seule trace lue par le bandeau, `creneaux.erreur`,
+demande qu'une composition ait ete tentee, et disait encore « épuisés » 36 h apres une
+recharge.
+- *Ecriture.* `app/pipeline/credits_anthropic.py`, `credits_anthropic.json` a cote du jeton :
+  `score_pending` et `runner._composer` consignent le refus (signature `SIGNATURE_CREDITS`)
+  et le succes (une reponse de Claude, et elle seule : une note locale ne prouve rien). Une
+  coupure reseau ou une cle invalide ne touchent PAS au fichier. Trois agents ecrivent :
+  deux dates plutot qu'un booleen, relecture-fusion, chacun n'avance que la sienne, et le
+  plus recent des deux evenements tranche. Atomique, temporaire nomme par processus, ne
+  leve jamais, aucune ecriture en lecture.
+- *Voyant.* PANNE : « rien ne se note ni ne se compose, plus aucun post ne partira, hormis
+  ceux déjà composés » (le gel et la publication n'appellent pas Claude, DEDUIT DU CODE). Il
+  en sort seul au premier succes, et l'ancienne preuve en base ne compte plus des lors qu'un
+  succes est le dernier evenement. Absent ou illisible : INCONNU, donc un bandeau INCONNU
+  jusqu'au premier appel consigne apres le deploiement. Une preuve en base sans fichier reste
+  PANNE.
+- *Limites.* L'arbitrage de doublons et le juge visuel appellent aussi Claude et ne
+  consignent rien : le voyant dit l'etat du scoring et de la composition. La date n'est pas
+  vieillie : si aucun appel n'a lieu (rien a noter, tout ecarte par le pre-filtre), le
+  dernier evenement connu reste affiche, sa date dans les details. Une panne de credits ne
+  change rien a la file : `_composer` n'exclut toujours aucun article
+  (`tests/socle/test_supervision_credits.py`, mutations comprises).
+
 **Le voyant Relecture ne juge plus le debordement** (decision du 2026-10-30). Il
 lisait `render_report`, que seul `POST /posts/{id}/render` ecrit et qu'aucun bouton
 n'appelle : `deborde = bool(...)` rendait donc VERT une mesure qui n'existe pas,
@@ -246,7 +273,8 @@ reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et
 detruisaient le texte en cours de frappe -- le geste editorial normal (ecrire
 la legende, puis choisir la cover qui va avec) perdait la legende. Un tampon a
 UN seul point de capture (l'evenement `input`) et UN seul point de lecture
-(`textesAReinjecter`, pure), plus une garde a la fermeture.
+(`textesAReinjecter`, pure), plus une garde a la fermeture. L'accroche a le sien depuis le
+2026-10-31 (`accrocheAReinjecter`, voir `relecture-et-controle-editorial.md`).
 
 **Le lien vers Instagram est DEDUIT** du shortcode (base 64 de l'id media), pas
 verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le
@@ -444,6 +472,18 @@ Règles, calcul de purge et limites : `publication.md`, « Programmer ». Ici, l
 Validé au navigateur sur données de test à 1440 et 390 px : aucun débordement mesuré
 (`scrollWidth - clientWidth` = 0) sur la carte, la Programmation, les Artistes, les
 Événements et la fiche.
+
+### La console s'ouvre sur la Programmation (2026-10-31)
+
+L'utilisateur gere le planning, et le Flux d'actus ne lui sert plus qu'au tri : la
+Programmation est l'onglet de tete et le panneau par defaut. Le Flux reste a un clic, avec
+ses filtres ; la grille n'est chargee qu'a son ouverture. Une ancre par panneau (`#programmation`,
+`#flux`, `#posts`, `#evenements`, `#artistes`, `#sources`) : un clic l'ecrit par
+`replaceState` (pas d'entree d'historique par onglet), un rechargement y revient, et une
+ancre inconnue retombe sur la Programmation. La notification de relecture
+(`runner._annoncer_relecture`) nomme ce panneau ; la liste « À relire » reste, elle, en tete
+de Posts. Preuves, mutations comprises : `tests/dashboard/test_dashboard_ancres.py`. Les
+tests d'avant ouvrent `/#flux`, leur intention n'a pas bouge.
 
 ## La charte Kinda dans la console (2026-10-02)
 
