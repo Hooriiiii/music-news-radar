@@ -39,7 +39,7 @@ echoue si quelqu'un l'y branche.
 
 L'ANNONCE est une notification macOS -- le seul canal du projet (ni mail ni
 Discord : CLAUDE.md est explicite, « ne pas re-proposer SMTP », et les alertes
-Discord sont debranchees). Au plus UNE par creneau, l'etat dans
+Discord sont debranchees). Au plus UNE par post sur un creneau, l'etat dans
 `relecture.json` a cote du jeton, meme mecanique que `publication_panne.json` et
 `quota_graph.json` : ecriture atomique, temporaire nomme par processus, purge des
 entrees echues a chaque ecriture, AUCUNE ecriture en lecture.
@@ -156,7 +156,8 @@ def _fichier() -> Path:
 
 
 def _lire(chemin: Path) -> dict[str, str]:
-    """Les annonces deja faites, par id de creneau. Ne leve jamais : un fichier
+    """Les annonces deja faites, par `creneau:post` (ou `creneau` seul, ancien format, a
+    lire jusqu'a sa purge). Ne leve jamais : un fichier
     absent ou corrompu vaut « rien n'a ete annonce », et au pire on annonce une
     fois de trop -- l'inverse (taire une annonce) est ce qui coute."""
     try:
@@ -204,19 +205,27 @@ def _purgees(annonces: dict[str, str], maintenant: dt.datetime) -> dict[str, str
     return gardees
 
 
-def deja_annonce(creneau_id: int, maintenant: dt.datetime) -> bool:
-    return str(creneau_id) in _purgees(_lire(_fichier()), maintenant)
+def _cle(creneau_id: int, post_id: int) -> str:
+    return f"{creneau_id}:{post_id}"
 
 
-def marquer_annonce(creneau_id: int, maintenant: dt.datetime) -> None:
-    """Note qu'on a prevenu pour ce creneau. Relit le disque A L'INSTANT DE
+def deja_annonce(creneau_id: int, post_id: int, maintenant: dt.datetime) -> bool:
+    """Par (creneau, post) : le remplacant d'un post retire est un autre texte, et il partait
+    sans notification. Une entree de l'ancien format ne dit pas pour quel post elle valait :
+    elle vaut pour tous jusqu'a sa purge, sinon le deploiement annoncerait tout une seconde fois."""
+    annonces = _purgees(_lire(_fichier()), maintenant)
+    return _cle(creneau_id, post_id) in annonces or str(creneau_id) in annonces
+
+
+def marquer_annonce(creneau_id: int, post_id: int, maintenant: dt.datetime) -> None:
+    """Note qu'on a prevenu pour ce post sur ce creneau. Relit le disque A L'INSTANT DE
     L'ECRITURE et fusionne : c'est l'invariant des fichiers d'etat du projet
     (`pause_visuels._fusionner_et_ecrire`, `cluster_arbitrage.fusionner_et_ecrire`)
     -- une annonce posee par un autre processus entre notre lecture et notre
     ecriture ne doit pas se faire ecraser, sinon elle repartirait."""
     chemin = _fichier()
     annonces = _purgees(_lire(chemin), maintenant)
-    annonces[str(creneau_id)] = maintenant.isoformat()
+    annonces[_cle(creneau_id, post_id)] = maintenant.isoformat()
     _ecrire(chemin, annonces)
 
 

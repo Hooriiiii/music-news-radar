@@ -149,7 +149,7 @@ def test_la_relecture_n_est_jamais_une_condition_de_publication(db_session, actu
     post = _post(db_session, actu)
     assert post.status is PostStatus.DRAFT and post.render_report is None
     creneau = _creneau(db_session, actu, post, publier_a=BASE, fichiers=["p_01.jpg"])
-    assert not relecture.deja_annonce(creneau.id, BASE)
+    assert not relecture.deja_annonce(creneau.id, post.id, BASE)
 
     outils = Outils()
     rapport = outils.tourner(db_session, BASE + dt.timedelta(minutes=2))
@@ -204,7 +204,7 @@ def test_un_post_qui_part_bientot_est_annonce_une_seule_fois(db_session, actu):
     assert any("relecture" in m and "Astropolis" in m for m in outils.notifications)
     # La console s'ouvre sur ce panneau depuis le 2026-10-31.
     assert any("panneau Programmation" in m for m in outils.notifications)
-    assert relecture.deja_annonce(creneau.id, BASE)
+    assert relecture.deja_annonce(creneau.id, post.id, BASE)
 
     # Dix minutes plus tard, le passage suivant : plus rien. Six annonces par post
     # est la facon la plus sure d'apprendre a ignorer les notifications.
@@ -244,10 +244,10 @@ def test_un_etat_illisible_n_empeche_pas_d_annoncer(db_session, actu):
 def test_les_annonces_echues_sont_purgees_a_l_ecriture(db_session):
     """Sans cette purge, le fichier grossirait indefiniment -- meme defaut que
     les compteurs abandonnes de `pause_visuels`."""
-    relecture.marquer_annonce(1, BASE)
-    relecture.marquer_annonce(2, BASE + dt.timedelta(days=2))
-    assert not relecture.deja_annonce(1, BASE + dt.timedelta(days=2))
-    assert relecture.deja_annonce(2, BASE + dt.timedelta(days=2))
+    relecture.marquer_annonce(1, 10, BASE)
+    relecture.marquer_annonce(2, 20, BASE + dt.timedelta(days=2))
+    assert not relecture.deja_annonce(1, 10, BASE + dt.timedelta(days=2))
+    assert relecture.deja_annonce(2, 20, BASE + dt.timedelta(days=2))
 
 
 # --- GET /relecture : ce qui va PARTIR --------------------------------------

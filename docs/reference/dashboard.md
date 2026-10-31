@@ -587,3 +587,11 @@ idempotent, a relancer apres une refonte du logo) :
   pas, il se signe.
 
 Les PNG de `app/static/marque/` restent la source de verite.
+
+### La Programmation vit et se date (2026-10-31)
+
+Rechargee avec le bandeau et au retour sur l'onglet, sauf glissement ou selecteur ouvert ;
+`#schedule-lue` dit « liste lue a HH:MM », et une lecture en echec le dit en gardant la liste.
+Les gestes envoient l'occupant affiche. Le marqueur `rouvert pour relecture` seul n'allume pas
+l'alerte de ligne. Detail : `relecture-et-controle-editorial.md`, « Ce que l'humain a vu est ce
+qu'il frappe ». Prouve sur Chromium reel avec un faux serveur, jamais observe en production.

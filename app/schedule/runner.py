@@ -635,7 +635,7 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     accrochee au gel aurait donc donne zero minute de relecture a un creneau sur
     sept, exactement ceux dont la journee a derape.
 
-    AU PLUS UNE PAR CRENEAU (`relecture.json`). Six annonces par post, c'est la
+    AU PLUS UNE PAR POST SUR UN CRENEAU (`relecture.json`). Six annonces par post, c'est la
     facon la plus sure d'apprendre a ignorer les notifications -- le depot a deja
     paye cette lecon sur les alertes de quota.
 
@@ -645,12 +645,12 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     from app.api.relecture import creneaux_a_relire
 
     attendus = creneaux_a_relire(db, maintenant)
-    nouveaux = [(c, p) for c, p in attendus if not deja_annonce(c.id, maintenant)]
+    nouveaux = [(c, p) for c, p in attendus if not deja_annonce(c.id, p.id, maintenant)]
     if not nouveaux:
         return
-    for creneau, _post in nouveaux:
-        marquer_annonce(creneau.id, maintenant)
-    rapport.annonces_relecture = len(nouveaux)
+    for creneau, post in nouveaux:
+        marquer_annonce(creneau.id, post.id, maintenant)
+    rapport.annonces_relecture += len(nouveaux)
     premier, post = nouveaux[0]
     accroche = ((post.slides or [{}])[0] or {}).get("headline") or ""
     accroche = accroche.replace("**", "").strip()
@@ -1466,6 +1466,9 @@ def tourner(
         # Le creneau libere se remplit tout de suite ; sa composition viendra au
         # passage suivant.
         etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))
+    # Un creneau repris pres du depart se compose, se gele et part dans ce seul passage :
+    # l'annonce du debut ne voyait pas encore ce post, et il doit etre annonce des qu'il existe.
+    etape("relecture", lambda: _annoncer_relecture(db, maintenant, notifier, rapport))
     etape("publication", publication)
     en_retard = rapport.manques - rapport.manques_formats_coupes
     if en_retard:

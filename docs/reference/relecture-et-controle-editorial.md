@@ -51,7 +51,8 @@ autres, notifie (macOS — le seul canal du projet : ni mail ni Discord, CLAUDE.
 interdit de re-proposer SMTP) quand un post compose entre dans les
 `publication_relecture_avance_minutes` (**120**) qui precedent son depart.
 Declenchee par l'HORLOGE et jamais par le gel, precisement a cause de la mesure
-ci-dessus. **Au plus UNE annonce par creneau** (`relecture.json` a cote du jeton,
+ci-dessus. **Au plus UNE annonce par post sur un creneau** (depuis le 2026-10-31, voir « Le
+remplacant est annonce » ; `relecture.json` a cote du jeton,
 meme mecanique que `quota_graph.json` : ecriture atomique, temporaire nomme par
 processus, purge des entrees de plus d'un jour, aucune ecriture en LECTURE) —
 six notifications par post est la facon la plus sure d'apprendre a les ignorer.
@@ -378,8 +379,7 @@ post est au programme, ou si cette information n'a pas pu etre lue.
 
 **Limites connues, deduites du code.** Un article ecarte SANS post compose n'est plus
 « engage » (`election.articles_engages`) : l'election peut elire un autre membre de son
-groupe, et la meme actu revenir par un autre article. Et l'annonce de relecture vaut un
-par creneau : le post qui reprend un creneau deja annonce n'est pas annonce a nouveau.
+groupe, et la meme actu revenir par un autre article.
 
 **Preuves par mutation** (`tests/api/test_console_verification.py`, a la main) : retirer
 la condition d'etat de `_reclamer` rougit
@@ -499,6 +499,25 @@ ecrite. Au-dela de `publication_retard_max_minutes`, `_raison_manque` garde la r
 peut lire PROGRAMME juste avant ce gel et committer juste apres. La fenetre passe de la duree d'un
 rendu a celle de ces lectures ; elle n'est pas nulle. Une migration ou un verrou la fermerait,
 ce qui n'a pas ete fait ici. Prouve par test a deux sessions, jamais observe en production.
+
+### Le remplacant est annonce (2026-10-31)
+
+La cle de `relecture.json` etait le creneau : le post qui reprenait un creneau deja annonce partait
+sans notification, et c'etait le moins relu de la journee. La cle est `creneau:post`. Meme fichier,
+memes regles d'etat (temporaire par processus, relecture-fusion, aucune ecriture en lecture, purge
+a un jour).
+
+- **Deploiement** : une entree de l'ancien format ne dit pas pour quel post elle valait. Elle vaut
+  donc pour tous les posts de ce creneau jusqu'a sa purge : rien n'est annonce deux fois, et un
+  remplacant reste muet pendant ce jour-la au plus.
+- **Pres du depart** : `tourner` annonce aussi juste avant sa seconde publication. Composition, gel
+  et publication d'un creneau repris s'enchainent dans le meme passage, et l'annonce du debut ne
+  voyait pas encore ce post. Elle precede l'envoi de peu : c'est une information, pas une fenetre.
+- **Pas de rafale** : un meme post n'est annonce qu'une fois par creneau. Un post que l'on deplace
+  sur un autre creneau est annonce une fois pour sa nouvelle heure ; un creneau deja parti apres
+  l'heure ne l'est pas (`dans_la_fenetre`).
+
+Prouve par test (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
 
 ### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
 

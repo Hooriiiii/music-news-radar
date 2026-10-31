@@ -6,6 +6,7 @@ rejouable sur Postgres par `KINDA_TEST_POSTGRES_URL`, jamais sur Neon.
 """
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -597,3 +598,77 @@ def test_au_dela_de_la_limite_le_manque_dit_pourquoi(client_web, fabrique, file_
     creneau = _creneau(fabrique, file_["tot"])
     assert creneau.etat is EtatCreneau.MANQUE
     assert "pendant le rendu" in creneau.erreur
+
+
+# --- 5. Une annonce par post sur un creneau ----------------------------------------------
+
+
+def _fichier_annonces():
+    return settings.meta_token_path.parent / "relecture.json"
+
+
+def _annonces(passages):
+    return [note for note in passages.notes if note.startswith("relecture")]
+
+
+def test_le_remplacant_est_annonce_et_chacun_une_seule_fois(fabrique, file_, passages):  # noqa: F811
+    """La reproduction du bilan : un post retire, son remplacant partait sans notification."""
+    moment = _une_heure_avant(file_)
+    _epingler(fabrique, file_)
+    passages.tourner(moment)
+    passages.tourner(moment + dt.timedelta(minutes=10))
+    assert len(_annonces(passages)) == 1
+
+    with fabrique() as db:
+        creneau = db.get(Creneau, file_["tot"])
+        creneau.article_id, creneau.post_id = file_["b"], file_["post_b"]
+        creneau.etat, creneau.fichiers = EtatCreneau.PROGRAMME, None
+        tard = db.get(Creneau, file_["tard"])
+        tard.article_id, tard.post_id, tard.etat = None, None, EtatCreneau.LIBRE
+        db.commit()
+
+    passages.tourner(moment + dt.timedelta(minutes=20))
+    passages.tourner(moment + dt.timedelta(minutes=30))
+
+    assert len(_annonces(passages)) == 2
+
+
+def test_un_creneau_repris_pres_du_depart_est_annonce_avant_de_partir(fabrique, file_, passages):  # noqa: F811
+    """Composition, gel et publication s'enchainent dans le MEME passage a moins de 11 min :
+    l'annonce du debut du passage ne voyait pas encore ce post."""
+    with fabrique() as db:
+        creneau = db.get(Creneau, file_["tot"])
+        creneau.post_id, creneau.epingle = None, True
+        db.delete(db.get(Post, file_["post_a"]))
+        db.commit()
+    passages.tourner(file_["h0"] - dt.timedelta(minutes=5))
+    assert passages.composes == [file_["a"]]
+    annonces = _annonces(passages)
+    assert len(annonces) == 1 and "Robot" in annonces[0]
+
+
+def test_l_ancien_format_n_annonce_pas_deux_fois_au_deploiement():
+    _fichier_annonces().parent.mkdir(parents=True, exist_ok=True)
+    _fichier_annonces().write_text(json.dumps({"annonces": {"12": BASE.isoformat()}}))
+
+    assert relecture.deja_annonce(12, 99, BASE)
+    assert not relecture.deja_annonce(13, 99, BASE)
+
+    relecture.marquer_annonce(13, 99, BASE)
+    assert relecture.deja_annonce(12, 99, BASE), "la fusion garde l'ancienne entree"
+    assert relecture.deja_annonce(13, 99, BASE)
+    assert not relecture.deja_annonce(13, 100, BASE)
+    # Un jour apres : purgee comme les autres, le remplacant redevient annonce.
+    assert not relecture.deja_annonce(12, 99, BASE + dt.timedelta(days=2))
+
+
+def test_les_annonces_de_deux_processus_se_fusionnent():
+    relecture.marquer_annonce(1, 10, BASE)
+    relecture.marquer_annonce(1, 11, BASE)
+    relecture.marquer_annonce(2, 20, BASE)
+    assert all(relecture.deja_annonce(c, p, BASE) for c, p in [(1, 10), (1, 11), (2, 20)])
+
+
+def test_lire_les_annonces_n_ecrit_rien():
+    assert not relecture.deja_annonce(1, 10, BASE)
+    assert not _fichier_annonces().exists()
