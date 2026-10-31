@@ -52,6 +52,20 @@ class SourceUpdate(BaseModel):
     active: bool | None = None
 
 
+class CreneauDeLArticle(BaseModel):
+    """Ou en est l'article sur la file : ce que la carte du Flux affiche."""
+
+    creneau_id: int
+    publier_a: dt.datetime
+    format: FormatCreneau
+    etat: EtatCreneau
+    epingle: bool
+    post_id: int | None = None
+    composition_a: dt.datetime | None = None
+    composition_due: bool = False
+    composition_suspendue: bool = False
+
+
 class ArticleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -86,6 +100,10 @@ class ArticleOut(BaseModel):
     visuel: str | None = None
     raison_sans_visuel: str | None = None
     visuels_interdits: bool = False
+    # Calcules par l'API, en lecture groupee : le creneau a venir de l'article, et
+    # pourquoi il ne se programme pas (publie, doublon, exclu, deja engage).
+    creneau: CreneauDeLArticle | None = None
+    raison_non_programmable: str | None = None
 
 
 class ArtistOut(BaseModel):
@@ -309,6 +327,11 @@ class CreneauOut(BaseModel):
     post_id: int | None
     ig_media_id: str | None
     erreur: str | None
+    # Programme sans post : quand l'agent composera. `composition_due` : l'heure est
+    # passee, donc au prochain passage. `composition_suspendue` : mode `arret`.
+    composition_a: dt.datetime | None = None
+    composition_due: bool = False
+    composition_suspendue: bool = False
 
 
 class CreneauUpdate(BaseModel):
@@ -318,6 +341,87 @@ class CreneauUpdate(BaseModel):
     article_id: int | None = None
     sauter: bool = False
     decaler: bool = False
+    # Avec `article_id` : l'article que l'ecran a nomme comme sortant, `null` pour un
+    # creneau vu vide. Absent : aucun controle. Present et faux, 409 : la validation a
+    # nomme ce qui sort, l'arbitrage a pu changer d'occupant depuis.
+    occupant_attendu: int | None = None
+
+
+class OccupantOut(BaseModel):
+    """Ce qui sort si l'on prend ce creneau."""
+
+    article_id: int | None
+    titre: str | None
+    epingle: bool
+    compose: bool
+    post_id: int | None
+
+
+class OptionCreneauOut(BaseModel):
+    """Un creneau a venir, vu depuis un article."""
+
+    creneau_id: int
+    publier_a: dt.datetime
+    format: FormatCreneau
+    etat: EtatCreneau
+    occupant: OccupantOut | None
+    actuel: bool
+    possible: bool
+    raison: str | None
+    annonces: list[str]
+    brouillon: bool
+    composition_a: dt.datetime | None
+    composition_due: bool
+    composition_suspendue: bool
+
+
+class CreneauxPossiblesOut(BaseModel):
+    """`GET /articles/{id}/creneaux-possibles`. Aucun appel paye ni reseau."""
+
+    article_id: int
+    titre: str
+    pertinence: int | None
+    age_heures: int
+    notes: list[str]
+    raison_article: str | None
+    mode: str
+    annonce_mode: str | None
+    prochain_creneau_id: int | None
+    options: list[OptionCreneauOut]
+
+
+class ActuPossibleOut(BaseModel):
+    """Une actu, vue depuis un creneau."""
+
+    article_id: int
+    titre: str
+    pertinence: int | None
+    age_heures: int
+    notes: list[str]
+    actuel: bool
+    creneau_actuel: dt.datetime | None
+    possible: bool
+    raison: str | None
+    brouillon: bool
+    composition_a: dt.datetime | None
+    composition_due: bool
+    composition_suspendue: bool
+
+
+class ActusPossiblesOut(BaseModel):
+    """`GET /schedule/{id}/actus-possibles`. Aucun appel paye ni reseau."""
+
+    creneau_id: int
+    publier_a: dt.datetime
+    format: FormatCreneau
+    etat: EtatCreneau
+    occupant: OccupantOut | None
+    raison_creneau: str | None
+    annonces: list[str]
+    mode: str
+    annonce_mode: str | None
+    candidats: list[ActuPossibleOut]
+    non_affichees: int
 
 
 class OffreReelsOut(BaseModel):
@@ -363,6 +467,9 @@ class EventObservationOut(BaseModel):
     # `GET /events/{id}` en UNE requete groupee (jamais une par observation),
     # et `None` quand rien n'a ete compose -- ou quand l'article est purge.
     post_id: int | None = None
+    # L'article porte l'actu du groupe (`duplicate_of_id IS NULL`) : c'est lui qui se
+    # programme, un doublon serait refuse.
+    representant: bool = False
 
 
 class EventOut(BaseModel):
@@ -485,6 +592,7 @@ class DepartOut(BaseModel):
     publier_a: dt.datetime
     format: FormatCreneau
     etat: EtatCreneau
+    epingle: bool = False
     post_id: int
     accroche: str
     article_title: str | None = None

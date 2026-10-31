@@ -487,7 +487,7 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     return None
 
 
-def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
+def _brouillon_perime(db, post: Post | None, article: Article | None, *, sources=None) -> bool:
     """Un brouillon dont les visuels ne sont plus publiables : compose avant la
     regle du 2026-09-17 sur un compte media (`assets` NULL), compose SANS aucun
     visuel autorise (`assets == []`, un post fait a la main au dashboard),
@@ -532,7 +532,7 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
         # Aucun fond extractible : liste vide, ou des actifs qui ne portent
         # qu'une video sans vignette.
         return True
-    return bool(actifs_interdits(db, post))
+    return bool(actifs_interdits(db, post, sources))
 
 
 def _marquer_manques(

@@ -75,7 +75,7 @@ def test_un_article_sans_visuel_est_refuse_sur_un_creneau_carrousel(client, db_s
     db_session.commit()
     reponse = client.patch(f"/schedule/{creneau.id}", json={"article_id": article.id})
     assert reponse.status_code == 409
-    assert reponse.json()["detail"].startswith("Article sans visuel autorise :")
+    assert reponse.json()["detail"].startswith("Article sans visuel autorisé :")
     assert "recherche web coupee" in reponse.json()["detail"]
 
 

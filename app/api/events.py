@@ -254,9 +254,14 @@ def _vues_observations(db: Session, observations) -> list[EventObservationOut]:
             .order_by(Post.id)
         ):
             posts_par_article.setdefault(article_id, post_id)
+    representants = set(
+        db.scalars(
+            select(Article.id).where(Article.id.in_(article_ids), Article.duplicate_of_id.is_(None))
+        )
+    ) if article_ids else set()
     return [
         EventObservationOut.model_validate(o).model_copy(
-            update={"post_id": posts_par_article.get(o.article_id)}
+            update={"post_id": posts_par_article.get(o.article_id), "representant": o.article_id in representants}
         )
         for o in observations
     ]

@@ -4,7 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.content.visuels import origine_interdite
 from app.db import get_db
@@ -17,15 +17,20 @@ from app.schedule.publication_incertaine import (
     erreur_incertaine,
     publication_incertaine,
 )
+from app.schedule.programmation import vues_des_cartes
 from app.schedule.runner import RECLAMATION_EN_COURS
 from app.schedule.store import etiquette_visuel, raison_sans_visuel, utc
-from app.schemas import ArticleOut
+from app.schemas import ArticleOut, CreneauDeLArticle
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
 
-def _avec_visuel(article: Article, index: IndexComptes) -> ArticleOut:
+def _avec_visuel(article: Article, index: IndexComptes, cartes: dict | None = None) -> ArticleOut:
     sortie = ArticleOut.model_validate(article)
+    if cartes is None:
+        cartes = vues_des_cartes(object_session(article), [article], dt.datetime.now(dt.timezone.utc))
+    creneau, sortie.raison_non_programmable = cartes[article.id]
+    sortie.creneau = CreneauDeLArticle(**creneau) if creneau else None
     sortie.visuel = etiquette_visuel(article, index)
     sortie.raison_sans_visuel = raison_sans_visuel(article, index)
     sortie.visuels_interdits = origine_interdite(article.source)
@@ -89,7 +94,9 @@ def list_articles(
     articles = db.scalars(stmt.limit(limit).offset(offset)).all()
     # Un index pour toute la page : les comptes suivis ne changent pas d'un article a l'autre.
     index = construire_index(db)
-    return [_avec_visuel(article, index) for article in articles]
+    # Une lecture groupee aussi pour l'etat sur la file : jamais une requete par carte.
+    cartes = vues_des_cartes(db, articles, dt.datetime.now(dt.timezone.utc))
+    return [_avec_visuel(article, index, cartes) for article in articles]
 
 
 @router.get("/{article_id}", response_model=ArticleOut)

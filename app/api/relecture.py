@@ -98,6 +98,7 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
         publier_a=publier_a,
         format=creneau.format,
         etat=creneau.etat,
+        epingle=creneau.epingle,
         post_id=post.id,
         accroche=(cover.get("headline") or cover.get("title") or "").replace("**", ""),
         article_title=article.title if article else None,
