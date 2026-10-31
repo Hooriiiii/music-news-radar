@@ -138,6 +138,8 @@ def test_un_debordement_se_voit_sous_le_champ_sans_perdre_la_saisie():
     (valeur, alerte), _, _ = _jouer(geste, overflow=(False, True))
     assert valeur == NOUVEAU
     assert "déborde" in alerte
+    # La vraie consequence : ni un simple refus, ni une actu perdue.
+    assert "ne partira pas" in alerte and "se libère" in alerte and "reste dans la file" in alerte
 
 
 @chromium_absent

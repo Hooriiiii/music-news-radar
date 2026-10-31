@@ -110,35 +110,6 @@ def test_un_reel_gele_ne_se_modifie_plus(client, db_session):
     assert client.patch(f"/schedule/{reel.id}", json={"article_id": autre.id}).status_code == 409
 
 
-def test_decaler_un_reel_saute_les_carrousels(client, db_session):
-    a, b, c = _article(db_session, 1), _article(db_session, 2), _article(db_session, 3)
-    premier = _creneau(db_session, 5, FormatCreneau.REEL, a)
-    carrousel = _creneau(db_session, 8, FormatCreneau.CARROUSEL, b)
-    suivant = _creneau(db_session, 17, FormatCreneau.REEL, c)
-    vue = client.patch(f"/schedule/{premier.id}", json={"decaler": True}).json()
-    assert vue["article_id"] == c.id
-    db_session.refresh(suivant)
-    db_session.refresh(carrousel)
-    assert (suivant.article_id, carrousel.article_id) == (a.id, b.id)
-
-
-def test_decaler_un_carrousel_saute_les_reels(client, db_session):
-    a, b, c = _article(db_session, 1), _article(db_session, 2), _article(db_session, 3)
-    premier = _creneau(db_session, 5, FormatCreneau.CARROUSEL, a)
-    reel = _creneau(db_session, 8, FormatCreneau.REEL, b)
-    _creneau(db_session, 17, FormatCreneau.CARROUSEL, c)
-    assert client.patch(f"/schedule/{premier.id}", json={"decaler": True}).json()["article_id"] == c.id
-    db_session.refresh(reel)
-    assert reel.article_id == b.id
-
-
-def test_decaler_sans_suivant_du_meme_format_est_refuse(client, db_session):
-    a, b = _article(db_session, 1), _article(db_session, 2)
-    premier = _creneau(db_session, 5, FormatCreneau.REEL, a)
-    _creneau(db_session, 8, FormatCreneau.CARROUSEL, b)
-    assert client.patch(f"/schedule/{premier.id}", json={"decaler": True}).status_code == 409
-
-
 def test_remplacer_un_reel_par_un_reel_d_artiste_sans_media_url(client, db_session):
     """Meta ne donne pas la video : yt-dlp la recuperera au gel."""
     article = _article(db_session, 1, video=False)

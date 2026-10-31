@@ -63,6 +63,9 @@ PUBLICATION_A_VERIFIER = (
 )
 
 
+OCCUPANT_CHANGE = "L'occupant de ce créneau a changé depuis l'affichage : rien n'a été changé, recharge le choix."
+
+
 class ReouvertureRefusee(RuntimeError):
     """Le gel ne peut pas etre invalide, et la raison est AFFICHABLE.
 
@@ -85,7 +88,8 @@ def publication_en_vol(creneau: Creneau, maintenant: dt.datetime) -> bool:
 
 
 def _invalider_le_gel(
-    db: Session, creneau: Creneau, en_meme_temps: Callable[[], None] | None = None, **valeurs
+    db: Session, creneau: Creneau, en_meme_temps: Callable[[], None] | None = None,
+    attendu: tuple | None = None, **valeurs,
 ) -> bool:
     """L'ecriture conditionnelle sur (etat, article, post), en un seul endroit.
 
@@ -96,7 +100,7 @@ def _invalider_le_gel(
     qu'un « inconnu ».
     """
     etait_gele = creneau.etat == EtatCreneau.GELE
-    if not _reclamer(db, creneau, _attendu(creneau), fichiers=None, elements=None, **valeurs):
+    if not _reclamer(db, creneau, attendu or _attendu(creneau), fichiers=None, elements=None, **valeurs):
         return False
     if en_meme_temps is not None:
         en_meme_temps()
@@ -111,8 +115,15 @@ def _invalider_le_gel(
     return True
 
 
-def ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime | None = None) -> None:
+def ne_pas_publier(
+    db: Session, creneau: Creneau, vu: tuple[int | None, int | None], maintenant: dt.datetime | None = None
+) -> None:
     """Retire ce creneau du programme, ou leve `ReouvertureRefusee`.
+
+    `vu` : (article, post) que l'ecran montrait. LA CONDITION DE L'ECRITURE, pas une
+    comparaison avant elle. Une liste restee ouverte depuis le matin affichait A pendant
+    que l'arbitrage mettait B : le retrait excluait B et laissait partir A
+    (`relecture-et-controle-editorial.md`, « Ne pas publier »).
 
     Le creneau redevient LIBRE, desepingle, sans post ni erreur ; l'article sort de
     la file dans la MEME transaction (decision humaine, reversible par « Remettre
@@ -133,7 +144,7 @@ def ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime | None
         raise ReouvertureRefusee(PUBLICATION_A_VERIFIER)
     if creneau.etat not in (EtatCreneau.LIBRE, EtatCreneau.PROGRAMME, EtatCreneau.GELE):
         raise ReouvertureRefusee("Creneau termine : il n'y a plus rien a retirer")
-    article_id = creneau.article_id
+    article_id = vu[0]
 
     def ecarter_l_article() -> None:
         article = db.get(Article, article_id, populate_existing=True) if article_id else None
@@ -146,13 +157,15 @@ def ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime | None
                 reporter_sur_le_representant(representant, RAISON_NE_PAS_PUBLIER)
 
     ecrit = _invalider_le_gel(
-        db, creneau, ecarter_l_article,
+        db, creneau, ecarter_l_article, attendu=(creneau.etat, *vu),
         etat=EtatCreneau.LIBRE, article_id=None, post_id=None, epingle=False, erreur=None,
     )
     if not ecrit:
         # `_reclamer` a relu le creneau : on dit ce qui s'est reellement passe.
         if creneau.etat == EtatCreneau.ECHEC and creneau.erreur == RAISON_RECLAMATION:
             raise ReouvertureRefusee(PUBLICATION_EN_COURS)
+        if (creneau.article_id, creneau.post_id) != tuple(vu):
+            raise ReouvertureRefusee(OCCUPANT_CHANGE)
         raise ReouvertureRefusee("Creneau modifie entre-temps par l'agent : rien n'a ete retire")
 
 
@@ -185,5 +198,5 @@ def rouvrir(db: Session, creneau: Creneau, maintenant: dt.datetime) -> None:
 
 
 __all__ = [
-    "RAISON_NE_PAS_PUBLIER", "ReouvertureRefusee", "ne_pas_publier", "publication_en_vol", "rouvrir",
+    "OCCUPANT_CHANGE", "RAISON_NE_PAS_PUBLIER", "ReouvertureRefusee", "ne_pas_publier", "publication_en_vol", "rouvrir",
 ]

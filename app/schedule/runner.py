@@ -87,7 +87,16 @@ from app.publish.preparation import PreparationDifferee, PreparationImpossible, 
 from app.publish.preparation_reel import ReelInadapte
 from app.schedule.publication_incertaine import PREFIXE_ECHEC_PUBLICATION, RAISON_RECLAMATION
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
-from app.schedule.relecture import RAISON_RELECTURE, deja_annonce, marquer_annonce
+from app.schedule.relecture import (
+    RAISON_RELECTURE,
+    contenu_fige,
+    deja_annonce,
+    fige_par_un_humain,
+    marquer_annonce,
+    porte_une_correction,
+    reference_du_texte,
+    regel_possible,
+)
 from app.schedule.store import (
     TEMPLATES,
     actifs_interdits,
@@ -358,6 +367,56 @@ def _sauter(
 RAISON_TEXTE_PERIME = "texte perime"
 
 
+# Sur un creneau GELE qui part quand meme : une correction humaine a un repere perime.
+AVERTISSEMENT_REPERE = "repere perime dans un post corrige a la main, il part tel quel"
+
+
+def _garder_le_marqueur(erreur: str, marque: bool) -> str:
+    # En TETE, comme `_raison_manque` conserve la cause precedente : une panne qui
+    # l'effacerait laisserait le gel suivant exclure l'article que l'humain vient d'editer.
+    return f"{RAISON_RELECTURE} — {erreur}"[:1000] if marque else erreur[:1000]
+
+
+def _edite_pendant_le_gel(db, post: Post, rendu: tuple) -> bool:
+    """Le contenu fige en base differe-t-il de ce qui vient d'etre rendu ?
+
+    Le creneau reste PROGRAMME pendant le rendu : `PATCH /posts` repond 200 sans rien rouvrir,
+    et l'ecriture conditionnelle du gel ne regarde que (etat, article, post). Lu par colonnes :
+    le preparateur a pu reassigner `post.slides` en memoire (agrandissement du fond), ce qui
+    n'est pas une edition. Si c'en est une, cet objet est jete : son `commit` ecraserait la
+    correction avec l'ancien texte.
+    """
+    with db.no_autoflush:
+        en_base = db.execute(
+            select(Post.slides, Post.template, Post.variants).where(Post.id == post.id)
+        ).one_or_none()
+    if en_base is not None and contenu_fige(en_base) == rendu:
+        return False
+    db.expire(post)
+    return True
+
+
+def _reporter_le_gel(db, creneau: Creneau, attendu: tuple, maintenant: dt.datetime, notifier) -> None:
+    """Ne gele pas : le passage suivant refait avec le texte en base, sans exclure personne.
+
+    Pas de boucle : chaque passage compare a ce qu'il vient de rendre, donc seule une nouvelle
+    edition pendant le rendu reporte encore. Pres du depart, le passage suivant peut tomber
+    apres l'heure : cela se dit, une fois par raison ecrite. Au-dela de la limite,
+    `_marquer_manques` conserve cette raison.
+    """
+    erreur = _garder_le_marqueur("gel refait : le post a ete modifie pendant le rendu", True)
+    deja_dit = creneau.erreur == erreur
+    if not _ecrire_si(db, creneau, attendu, erreur=erreur):
+        return
+    if not deja_dit and not regel_possible(utc(creneau.publier_a), maintenant):
+        _prevenir(
+            notifier,
+            f"post de {_heure_locale(creneau.publier_a)} modifie pendant le rendu : refait au passage "
+            f"suivant, il peut partir en retard, et sera manque au-dela de "
+            f"{settings.publication_retard_max_minutes} min",
+        )
+
+
 def _replier(db, creneau: Creneau, attendu: tuple, post_id: int, raison: str) -> bool:
     """Rend au creneau le brouillon PERIME qu'on venait de lui retirer pour le
     recomposer, quand la recomposition a echoue.
@@ -465,7 +524,9 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     jamais, et recomposer pour un « demain » qui dort dans une variante non
     retenue serait payer Sonnet pour rien.
 
-    La reference de temps est `post.created_at` contre `maintenant`, jamais contre
+    La reference de temps d'un texte est sa derniere edition humaine, a defaut
+    `post.created_at` (`relecture.reference_du_texte`) : un humain qui ecrit « ce soir »
+    ce matin dit vrai, quel que soit l'age du brouillon. Elle se compare a `maintenant`, jamais a
     `creneau.publier_a`, et c'est ce qui rend la regle SURE : un brouillon compose
     ce soir pour un creneau de demain matin serait sinon perime a la seconde ou on
     l'ecrit, donc recompose a chaque passage de l'agent (toutes les 10 minutes)
@@ -481,12 +542,12 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     textes = []
     for slide in post.slides or []:
         if slide.get("kind") == "cover":
-            textes += [(slide.get(cle), False) for cle in ("headline", "title", "subtitle")]
+            textes += [(cle, slide.get(cle), False) for cle in ("headline", "title", "subtitle")]
             break
-    textes.append((post.caption, True))
-    for texte, prose in textes:
+    textes.append(("caption", post.caption, True))
+    for champ, texte, prose in textes:
         repere = repere_relatif(texte, prose=prose)
-        if repere is not None and repere_perime(repere, post.created_at, maintenant):
+        if repere is not None and repere_perime(repere, reference_du_texte(post, champ, texte), maintenant):
             return repere
     return None
 
@@ -574,7 +635,7 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     accrochee au gel aurait donc donne zero minute de relecture a un creneau sur
     sept, exactement ceux dont la journee a derape.
 
-    AU PLUS UNE PAR CRENEAU (`relecture.json`). Six annonces par post, c'est la
+    AU PLUS UNE PAR POST SUR UN CRENEAU (`relecture.json`). Six annonces par post, c'est la
     facon la plus sure d'apprendre a ignorer les notifications -- le depot a deja
     paye cette lecon sur les alertes de quota.
 
@@ -584,12 +645,12 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     from app.api.relecture import creneaux_a_relire
 
     attendus = creneaux_a_relire(db, maintenant)
-    nouveaux = [(c, p) for c, p in attendus if not deja_annonce(c.id, maintenant)]
+    nouveaux = [(c, p) for c, p in attendus if not deja_annonce(c.id, p.id, maintenant)]
     if not nouveaux:
         return
-    for creneau, _post in nouveaux:
-        marquer_annonce(creneau.id, maintenant)
-    rapport.annonces_relecture = len(nouveaux)
+    for creneau, post in nouveaux:
+        marquer_annonce(creneau.id, post.id, maintenant)
+    rapport.annonces_relecture += len(nouveaux)
     premier, post = nouveaux[0]
     accroche = ((post.slides or [{}])[0] or {}).get("headline") or ""
     accroche = accroche.replace("**", "").strip()
@@ -656,7 +717,11 @@ def _composer(
                 # media depuis : un nouveau brouillon est compose avec des
                 # visuels autorises. Aucun repli : il ne partirait pas.
                 post_id = None
-            elif brouillon is not None and _reperes_perimes(brouillon, maintenant) is not None:
+            elif (
+                brouillon is not None
+                and not porte_une_correction(brouillon)
+                and _reperes_perimes(brouillon, maintenant) is not None
+            ):
                 repli_id, post_id = post_id, None
                 _completer_credit(db, brouillon, article)
             else:
@@ -790,10 +855,10 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         # rallongee d'un caractere de trop (cover qui deborde) ne doit pas bruler
         # l'actu -- c'est l'utilisateur qui vient de l'editer, pas l'article qui
         # est en defaut.
-        rouvert = RAISON_RELECTURE in (creneau.erreur or "")
+        marque = RAISON_RELECTURE in (creneau.erreur or "")
         preparer = preparateurs.get(creneau.format)
         if preparer is None:
-            erreur = f"aucun preparateur pour le format {creneau.format.value}"
+            erreur = _garder_le_marqueur(f"aucun preparateur pour le format {creneau.format.value}", marque)
             if creneau.erreur != erreur:
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
@@ -803,7 +868,7 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             continue
         if post.article_id != creneau.article_id:
             # Pas d'exclusion : l'article n'y est pour rien, c'est la file qui a bouge.
-            erreur = "gel refuse : le post ne correspond pas a l'article du creneau"
+            erreur = _garder_le_marqueur("gel refuse : le post ne correspond pas a l'article du creneau", marque)
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
             if creneau.erreur != erreur:
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
@@ -841,13 +906,25 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         # et leur video (`posts.assets`), les copies locales des visuels, la
         # palette, les textes. Liberer ici, c'etait jeter un reel PRET pour une
         # information absente, et enterrer le creneau en MANQUE sans raison.
+        # Le marqueur, ou l'edition notee sur le post : l'arbitrage efface le premier quand
+        # il reprend ce post, et une actu liberee revient apres sa pause.
+        rouvert = marque or fige_par_un_humain(post)
         deja_tente = (creneau.erreur or "").startswith(RAISON_TEXTE_PERIME)
+        # Le robot ne remplace jamais une correction humaine : ni relance possible sur un
+        # texte humain, ni appel paye. Le controle de FORME accepte donc, avec un
+        # avertissement visible (`generation-de-posts.md`, « relance, puis acceptation »).
+        corrige = porte_une_correction(post)
         repere = (
             _reperes_perimes(post, maintenant)
-            if article is not None and not deja_tente
+            if corrige or (article is not None and not deja_tente)
             else None
         )
-        if repere is not None:
+        avertissement = (
+            f"{AVERTISSEMENT_REPERE} : le texte dit « {repere.expression} »"
+            if corrige and repere is not None
+            else None
+        )
+        if repere is not None and not corrige:
             # Dernier moment ou l'on peut encore agir (T-2h). Le creneau lache le
             # post, la composition du passage suivant en refait un avec une date
             # absolue -- ni exclusion ni creneau perdu : l'article n'y est pour
@@ -882,6 +959,7 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
             _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
             continue
+        rendu = contenu_fige(post)
         try:
             figement = normaliser_figement(preparer(post, article, _dossier(creneau)))
         except PreparationDifferee as exc:
@@ -893,9 +971,7 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             # conserve la cause precedente : sans ca, un premier gel differe
             # effacerait la protection et le second echec exclurait l'article que
             # l'utilisateur vient d'editer.
-            erreur = f"gel differe : {exc}"[:1000]
-            if rouvert:
-                erreur = f"{RAISON_RELECTURE} — {erreur}"[:1000]
+            erreur = _garder_le_marqueur(f"gel differe : {exc}", rouvert)
             if creneau.erreur != erreur:
                 _ecrire_si(db, creneau, attendu, erreur=erreur)
             continue
@@ -926,15 +1002,25 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
                 rapport.sautes += 1
             continue
         except PreparationImpossible as exc:
+            if _edite_pendant_le_gel(db, post, rendu):
+                # Le refus parle d'un texte qui n'existe plus.
+                _reporter_le_gel(db, creneau, attendu, maintenant, notifier)
+                continue
             if rouvert:
                 # « Ne perds pas le post » : le creneau se libere, l'article RESTE
                 # eligible, et le POST survit (les posts ne sont jamais purges) --
                 # l'utilisateur corrige son edition et le reprend. Une exclusion
                 # ici brulerait une actu pour une faute de frappe.
-                rapport.erreurs.append(
-                    f"{_heure_locale(creneau.publier_a)} : gel refuse apres relecture : {exc}"
-                )
-                _liberer(db, creneau, attendu, f"{RAISON_RELECTURE} — gel refuse : {exc}")
+                message = f"{_heure_locale(creneau.publier_a)} : gel refuse apres relecture : {exc}"
+                rapport.erreurs.append(message)
+                # Libere D'ABORD, a l'ecart ensuite (`_sauter`) : sans cette pause, l'actu
+                # reviendrait sur ce creneau a chaque passage, et le post corrige avec elle,
+                # jusqu'a MANQUE. Elle revient d'elle-meme, avec son post.
+                if _liberer(db, creneau, attendu, f"{RAISON_RELECTURE} — gel refuse : {exc}"):
+                    if article is not None:
+                        marquer_saute(article.id, maintenant)
+                    rapport.sautes += 1
+                    _prevenir(notifier, f"{message} — le creneau se libere, l'actu reste dans la file : corrige le post")
                 exclusions = True
                 continue
             _exclure(db, creneau, attendu, f"gel impossible : {exc}", rapport)
@@ -943,11 +1029,14 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
         except Exception as exc:  # noqa: BLE001 -- rendu, ffmpeg, disque, reseau : panne systemique
             # Le creneau reste PROGRAMME : retente au passage suivant, tant que le
             # delai de retard le permet. Seul son format est suspendu.
-            erreur = f"gel interrompu : {exc}"[:1000]
+            erreur = _garder_le_marqueur(f"gel interrompu : {exc}", rouvert)
             rapport.erreurs.append(erreur)
             _ecrire_si(db, creneau, attendu, erreur=erreur)
             _prevenir(notifier, erreur)
             formats_en_panne.add(creneau.format)
+            continue
+        if _edite_pendant_le_gel(db, post, rendu):
+            _reporter_le_gel(db, creneau, attendu, maintenant, notifier)
             continue
         if _ecrire_si(
             db, creneau, attendu,
@@ -957,9 +1046,13 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             # jamais pouvoir se desynchroniser. `None` quand le preparateur ne le
             # rend pas (preparateur injecte) : inconnu, jamais une liste inventee.
             elements=figement.elements,
-            etat=EtatCreneau.GELE, gele_le=maintenant, erreur=None,
+            etat=EtatCreneau.GELE, gele_le=maintenant, erreur=avertissement,
         ):
             rapport.geles += 1
+            if avertissement:
+                message = f"{_heure_locale(creneau.publier_a)} : {avertissement}"
+                rapport.erreurs.append(message)
+                _prevenir(notifier, f"{message} — corrige-le depuis le dashboard, sinon il part ainsi")
     return exclusions
 
 
@@ -1373,6 +1466,9 @@ def tourner(
         # Le creneau libere se remplit tout de suite ; sa composition viendra au
         # passage suivant.
         etape("arbitrage", lambda: appliquer_arbitrage(db, maintenant))
+    # Un creneau repris pres du depart se compose, se gele et part dans ce seul passage :
+    # l'annonce du debut ne voyait pas encore ce post, et il doit etre annonce des qu'il existe.
+    etape("relecture", lambda: _annoncer_relecture(db, maintenant, notifier, rapport))
     etape("publication", publication)
     en_retard = rapport.manques - rapport.manques_formats_coupes
     if en_retard:

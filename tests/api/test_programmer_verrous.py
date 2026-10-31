@@ -113,7 +113,7 @@ def test_retirer_un_vieil_echec_dit_la_raison_exacte(client, db_session):
     article = _article(db_session)
     vieux = _passe(db_session, article, EtatCreneau.ECHEC, RAISON_RECLAMATION)
 
-    reponse = client.patch(f"/schedule/{vieux.id}", json={"sauter": True})
+    reponse = client.patch(f"/schedule/{vieux.id}", json={"sauter": True, "occupant_attendu": vieux.article_id, "post_attendu": vieux.post_id})
 
     assert reponse.status_code == 409
     assert "Publication en cours" not in reponse.json()["detail"]

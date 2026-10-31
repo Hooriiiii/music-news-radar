@@ -39,7 +39,7 @@ echoue si quelqu'un l'y branche.
 
 L'ANNONCE est une notification macOS -- le seul canal du projet (ni mail ni
 Discord : CLAUDE.md est explicite, « ne pas re-proposer SMTP », et les alertes
-Discord sont debranchees). Au plus UNE par creneau, l'etat dans
+Discord sont debranchees). Au plus UNE par post sur un creneau, l'etat dans
 `relecture.json` a cote du jeton, meme mecanique que `publication_panne.json` et
 `quota_graph.json` : ecriture atomique, temporaire nomme par processus, purge des
 entrees echues a chaque ecriture, AUCUNE ecriture en lecture.
@@ -57,13 +57,96 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # Sentinelle posee dans `creneaux.erreur` quand l'utilisateur ROUVRE un creneau
-# gele pour le corriger. Meme procede que `runner.RAISON_RECLAMATION` : un marqueur
+# gele pour le corriger, ou edite un contenu fige sur un creneau PROGRAMME. Meme procede que `runner.RAISON_RECLAMATION` : un marqueur
 # lisible dans un champ libre, relu par un autre module pour decider d'un
 # comportement -- ici, qu'un gel qui echoue apres une edition MANUELLE libere le
 # creneau au lieu d'exclure l'article a vie. Sans elle, une accroche rallongee a
 # la main d'un caractere de trop (cover qui deborde -> PreparationImpossible)
 # brulerait l'actu : exactement ce que « ne perds pas le post » interdit.
 RAISON_RELECTURE = "rouvert pour relecture"
+
+
+# La derniere edition humaine, dans `posts.variants` : aucune migration, et ni `created_at`
+# (la composition) ni une date de ligne (le robot ecrit aussi le post) ne la disent. Chaque
+# texte garde son heure AVEC sa valeur : l'horodatage vaut pour ce texte-la, et un retour sur
+# une variante du robot rend son controle a ce texte. S'ecrit en FUSION, comme tout `variants`.
+CLE_EDITION = "edition_humaine"
+CHAMPS_DE_COVER = ("headline", "title", "subtitle")
+
+
+def textes_du_post(post) -> dict:
+    """Ce que le post va publier, par champ : la cover et la legende."""
+    cover = next((s for s in post.slides or [] if s.get("kind") == "cover"), {})
+    return {**{champ: cover.get(champ) for champ in CHAMPS_DE_COVER}, "caption": post.caption}
+
+
+def _edition(post) -> dict:
+    edition = (post.variants or {}).get(CLE_EDITION)
+    return edition if isinstance(edition, dict) else {}
+
+
+def contenu_fige(post) -> tuple:
+    """Ce dont les fichiers figes dependent. `variantes` et `retenue` n'y sont pas, leur
+    effet est dans `slides` ; l'edition non plus : une legende corrigee ne les change pas."""
+    utiles = {
+        cle: valeur for cle, valeur in (post.variants or {}).items()
+        if cle not in (CLE_EDITION, "variantes", "retenue")
+    }
+    return post.slides, post.template, utiles
+
+
+def fige_par_un_humain(post) -> bool:
+    """Un humain a touche ce que le gel rend : un gel impossible n'est pas la faute de
+    l'article. Vit sur le post, parce que l'arbitrage efface `creneaux.erreur` en le reprenant."""
+    return bool(_edition(post).get("fige_le"))
+
+
+def noter_edition(
+    post, textes_avant: dict, maintenant: dt.datetime, *, textes: bool, corrige: bool, fige: bool = False
+) -> None:
+    """Note une edition humaine deja appliquee au post.
+
+    `textes` : les textes changes sont de la main de l'humain (faux quand il choisit une
+    variante : le robot les a ecrits, a sa date). `corrige` : autre chose qu'un texte
+    (hashtags, liste, fond), que le robot perdrait aussi en recomposant.
+    """
+    edition = _edition(post)
+    notes = dict(edition.get("textes") or {})
+    if textes:
+        for champ, texte in textes_du_post(post).items():
+            if texte != textes_avant.get(champ):
+                notes[champ] = {"texte": texte, "le": maintenant.isoformat()}
+    nouvelle = {**edition, "textes": notes}
+    if corrige:
+        nouvelle["corrige_le"] = maintenant.isoformat()
+    if fige:
+        nouvelle["fige_le"] = maintenant.isoformat()
+    post.variants = {**(post.variants or {}), CLE_EDITION: nouvelle}
+
+
+def _note_du_texte(post, champ: str, texte: str | None) -> dict | None:
+    note = (_edition(post).get("textes") or {}).get(champ)
+    return note if isinstance(note, dict) and texte is not None and note.get("texte") == texte else None
+
+
+def reference_du_texte(post, champ: str, texte: str | None) -> dt.datetime:
+    """Depuis quand ce texte dit ce qu'il dit : sa derniere edition humaine, sinon la
+    composition. Une date illisible retombe sur la composition : le doute ne fait perdre
+    aucun texte, `porte_une_correction` le protege quand meme."""
+    note = _note_du_texte(post, champ, texte)
+    if note is not None:
+        try:
+            return dt.datetime.fromisoformat(note["le"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("edition humaine illisible sur le post %s", post.id)
+    return post.created_at
+
+
+def porte_une_correction(post) -> bool:
+    """Vrai si recomposer ce post jetterait ce qu'un humain y a mis : le robot n'y touche plus."""
+    if _edition(post).get("corrige_le"):
+        return True
+    return any(_note_du_texte(post, champ, texte) for champ, texte in textes_du_post(post).items())
 
 
 def _fichier() -> Path:
@@ -73,7 +156,8 @@ def _fichier() -> Path:
 
 
 def _lire(chemin: Path) -> dict[str, str]:
-    """Les annonces deja faites, par id de creneau. Ne leve jamais : un fichier
+    """Les annonces deja faites, par `creneau:post` (ou `creneau` seul, ancien format, a
+    lire jusqu'a sa purge). Ne leve jamais : un fichier
     absent ou corrompu vaut « rien n'a ete annonce », et au pire on annonce une
     fois de trop -- l'inverse (taire une annonce) est ce qui coute."""
     try:
@@ -121,19 +205,27 @@ def _purgees(annonces: dict[str, str], maintenant: dt.datetime) -> dict[str, str
     return gardees
 
 
-def deja_annonce(creneau_id: int, maintenant: dt.datetime) -> bool:
-    return str(creneau_id) in _purgees(_lire(_fichier()), maintenant)
+def _cle(creneau_id: int, post_id: int) -> str:
+    return f"{creneau_id}:{post_id}"
 
 
-def marquer_annonce(creneau_id: int, maintenant: dt.datetime) -> None:
-    """Note qu'on a prevenu pour ce creneau. Relit le disque A L'INSTANT DE
+def deja_annonce(creneau_id: int, post_id: int, maintenant: dt.datetime) -> bool:
+    """Par (creneau, post) : le remplacant d'un post retire est un autre texte, et il partait
+    sans notification. Une entree de l'ancien format ne dit pas pour quel post elle valait :
+    elle vaut pour tous jusqu'a sa purge, sinon le deploiement annoncerait tout une seconde fois."""
+    annonces = _purgees(_lire(_fichier()), maintenant)
+    return _cle(creneau_id, post_id) in annonces or str(creneau_id) in annonces
+
+
+def marquer_annonce(creneau_id: int, post_id: int, maintenant: dt.datetime) -> None:
+    """Note qu'on a prevenu pour ce post sur ce creneau. Relit le disque A L'INSTANT DE
     L'ECRITURE et fusionne : c'est l'invariant des fichiers d'etat du projet
     (`pause_visuels._fusionner_et_ecrire`, `cluster_arbitrage.fusionner_et_ecrire`)
     -- une annonce posee par un autre processus entre notre lecture et notre
     ecriture ne doit pas se faire ecraser, sinon elle repartirait."""
     chemin = _fichier()
     annonces = _purgees(_lire(chemin), maintenant)
-    annonces[str(creneau_id)] = maintenant.isoformat()
+    annonces[_cle(creneau_id, post_id)] = maintenant.isoformat()
     _ecrire(chemin, annonces)
 
 

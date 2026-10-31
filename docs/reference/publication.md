@@ -754,7 +754,7 @@ d'occupant depuis l'affichage. Présent et faux, le PATCH rend 409 sans rien éc
 
 **`creneaux.erreur` s'efface quand l'article change** (reproduit d'abord). Survivant, un
 marqueur `RAISON_TEXTE_PERIME` faisait sauter au nouveau post le contrôle de texte du gel
-(`deja_tente`). Sur « Décaler », l'erreur s'efface aussi, sauf `RAISON_RELECTURE`, qui suit
+(`deja_tente`). Sur un échange, l'erreur s'efface aussi, sauf `RAISON_RELECTURE`, qui suit
 son post : il protège d'une exclusion l'article qu'on vient de corriger.
 
 **Le créneau mort** (reproduit d'abord) : épinglé à la main, article purgé avant sa
@@ -787,7 +787,72 @@ ECHEC ne répond plus « Publication en cours » hors de la fenêtre de `publica
 
 **Limites connues, déduites du code.** La composition peut tomber jusqu'à un passage
 d'agent après l'heure calculée, et plus si le Mac dort ; une purge dans cet intervalle
-donne un créneau mort, que l'arbitrage répare. « Décaler » n'applique pas la limite de
-purge, même réparation. `PATCH /posts` accepte
+donne un créneau mort, que l'arbitrage répare. `PATCH /posts` accepte
 encore `template` sans plus aucun bouton. `GET /posts/{id}/export.zip` reste sans bouton.
 
+## Échanger (2026-10-31)
+
+Demande de l'utilisateur : glisser une ligne de la Programmation sur une autre, et elles
+permutent. Le geste remplace « Décaler », qui n'échangeait qu'avec le créneau suivant du même
+format et échappait à la limite de purge. L'action `decaler` a quitté le serveur : le PATCH
+la refuse en 422.
+
+`PATCH /schedule/{id}` avec `{"echanger_avec": <creneau>}` ; `GET
+/schedule/{id}/echanges-possibles` dit pour chaque ligne si c'est permis, et sinon pourquoi.
+**Une seule règle, `programmation.raison_echange`**, lue par les deux :
+`test_la_lecture_et_le_patch_ne_divergent_jamais` joue le PATCH sur toute une matrice et
+compare la raison au mot près. Lecture groupée, sans requête par ligne, sans écriture, sans
+réseau. Aucun appel à Meta ni à Claude, aucun chemin vers `media_publish` : la paire (actu,
+post) se déplace, et l'agent gèle à son passage.
+
+**Permuter deux lignes, dans une transaction.** Les deux, ou rien :
+- Les lignes sont reprises sous `SELECT … ORDER BY id FOR UPDATE`, puis jugées sur cette
+  lecture. Sans ordre stable, A↔B et B↔A croisés s'interbloquent : mutation vérifiée sur un
+  cluster Postgres jetable (`deadlock detected`), test
+  `test_sur_postgres_deux_echanges_croises_ne_se_bloquent_pas`.
+- L'écriture reste conditionnelle sur (état, article, post), des deux côtés et par id
+  croissant : SQLite n'a pas de `FOR UPDATE`, et c'est la même garantie que l'arbitrage (voir
+  « L'arbitrage écrivait sur une lecture périmée »). Une ligne touchée à zéro : tout est
+  annulé, 409. Sans la condition, un gel tombé entre les deux se faisait écraser : les fichiers
+  de l'un, la légende de l'autre (`test_l_echange_n_ecrit_rien_si_l_agent_gele…`).
+- `occupant_attendu` et `occupant_source_attendu` : la validation a nommé les deux actus,
+  l'arbitrage a pu en changer. Présent et faux, 409. C'est aussi ce qui empêche « Annuler »
+  d'échanger une actu que personne n'a vue.
+
+**Ce qui est refusé.** Seuls LIBRE et PROGRAMME à venir échangent (`raison_creneau`, dite en
+clair par `raison_fige` : gelé, publication en cours, publié, aperçu, manqué, passé). Deux
+créneaux libres n'ont rien à échanger. Une actu exclue, doublon ou verrouillée ailleurs ne se
+déplace pas : l'épingle la protégerait de l'arbitrage qui l'aurait retirée. **La limite de
+purge s'applique à l'arrivée, dans les deux sens**, avec la même exception que Programmer
+(brouillon valide). Une raison qui vient d'une actu la nomme : sur une ligne grisée,
+« inutilisable en reel » ne dit pas laquelle des deux.
+
+**Le format appartient au créneau, et le choix pour un post composé : REFUSER.** Ce qui se
+passerait sinon, lu dans le code : au gel, `post.template != TEMPLATES[creneau.format]` fait
+lâcher le post (« gel refuse : le post est au gabarit … »), la composition suivante en refait
+un, et Claude est repayé, en silence et loin du geste. Le détacher dès l'échange supprimerait
+le mauvais gabarit, pas la dépense ni la perte d'une correction humaine, et « Annuler » ne
+rendrait plus ce qu'on a vu. L'échange déplace donc une paire et ne compose rien : un post ne
+change jamais de gabarit, et le refus dit quoi faire (« Choisir une actu » sur ce créneau, qui
+nomme ce qui sort). Sans post, carrousel ↔ reel est permis si chaque actu est éligible au
+format d'arrivée (`_raison_format`). Le format n'est pas relu quand il ne change pas : la
+composition applique de toute façon sa règle. Un brouillon existant est repris au gabarit de
+l'arrivée, jamais à l'autre, comme pour Programmer.
+
+**Épingle** : les deux créneaux qui reçoivent un choix humain, y compris un post orphelin
+(`_reprogramme` ne regardait que l'article : il arrivait sur un créneau LIBRE). Un créneau
+devenu vide n'est pas épinglé : le robot peut le remplir.
+
+**Limites connues, déduites du code.** « Annuler » refait l'échange inverse : il ne rend ni une
+épingle absente avant le geste, ni une erreur effacée. La notification de relecture est
+mémorisée par créneau (`deja_annonce`) : un créneau rouvert puis échangé peut garder le mémo de
+son ancien occupant. La lecture est faite au début du glissement : le dépôt peut donc être
+refusé par le PATCH, et la raison s'affiche alors à côté de la ligne.
+
+### Ce que le gel fait d'une edition humaine (2026-10-31)
+
+Aucun chemin nouveau vers `media_publish`, `_reclamer` inchange. `_geler` ne fige pas un post edite
+pendant son rendu, ne relache plus un post corrige pour un repere perime (il part avec un
+avertissement), et libere sans exclure quand un contenu fige edite est refuse. Une panne machine
+n'exclut toujours rien. Detail, preuves et limites : `relecture-et-controle-editorial.md`, sections
+du 2026-10-31. Prouve par test, jamais observe en production.

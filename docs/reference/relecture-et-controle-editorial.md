@@ -51,7 +51,8 @@ autres, notifie (macOS — le seul canal du projet : ni mail ni Discord, CLAUDE.
 interdit de re-proposer SMTP) quand un post compose entre dans les
 `publication_relecture_avance_minutes` (**120**) qui precedent son depart.
 Declenchee par l'HORLOGE et jamais par le gel, precisement a cause de la mesure
-ci-dessus. **Au plus UNE annonce par creneau** (`relecture.json` a cote du jeton,
+ci-dessus. **Au plus UNE annonce par post sur un creneau** (depuis le 2026-10-31, voir « Le
+remplacant est annonce » ; `relecture.json` a cote du jeton,
 meme mecanique que `quota_graph.json` : ecriture atomique, temporaire nomme par
 processus, purge des entrees de plus d'un jour, aucune ecriture en LECTURE) —
 six notifications par post est la facon la plus sure d'apprendre a les ignorer.
@@ -135,10 +136,9 @@ est touchee et l'API rend 409. Apres l'appel le creneau est PROGRAMME, or
 l'appel a Meta) n'a pas ete touchee.
 
 **Limite connue, assumee.** Le marqueur de relecture vit dans `creneaux.erreur` :
-les chemins de `_geler` qui ecrivent une AUTRE erreur et lachent le post
-(gabarit qui ne correspond plus, post supprime) l'effacent. Ces cas font de toute
-facon perdre le post au creneau, donc la protection n'y a pas d'objet — mais
-c'est une propriete du marqueur, pas une garantie du schema.
+les chemins de `_geler` qui lachent le post (gabarit qui ne correspond plus, post
+supprime, visuels perimes) l'effacent. Depuis le 2026-10-31 il est aussi pose sur un
+PROGRAMME, et relaye par le post : voir « Une edition du fige ne brule pas l'actu ».
 ## Le controle editorial sur ce qui va partir (2026-10-04)
 
 Suite directe de la fenetre de relecture ci-dessus. Demande de l'utilisateur :
@@ -379,8 +379,7 @@ post est au programme, ou si cette information n'a pas pu etre lue.
 
 **Limites connues, deduites du code.** Un article ecarte SANS post compose n'est plus
 « engage » (`election.articles_engages`) : l'election peut elire un autre membre de son
-groupe, et la meme actu revenir par un autre article. Et l'annonce de relecture vaut un
-par creneau : le post qui reprend un creneau deja annonce n'est pas annonce a nouveau.
+groupe, et la meme actu revenir par un autre article.
 
 **Preuves par mutation** (`tests/api/test_console_verification.py`, a la main) : retirer
 la condition d'etat de `_reclamer` rougit
@@ -426,10 +425,127 @@ l'identique, et « Enregistrer » legende ne doit jamais couter un gel, ni etre 
 garde a la fermeture comprise. Apres ecriture, `/covers` est relu : un debordement s'affiche
 sous le champ, avec la saisie, et un apercu en panne se dit sans annuler l'ecriture.
 
-**Limite connue.** `_reperes_perimes` relit aussi le texte humain : un « ce soir » tape dans
-l'accroche d'un post compose la veille fait lacher le post au gel, et la composition suivante
-le refait, donc repaie Claude et ecrase la correction. Comportement deja vrai pour la legende,
-non change ici, DEDUIT DU CODE.
+### Le robot ne remplace jamais une correction humaine (2026-10-31)
+
+`_reperes_perimes` comparait tout texte a `post.created_at` : un « ce soir » juste, ecrit a la
+main sur un post compose la veille, faisait lacher le post au gel, et la composition suivante
+repayait Sonnet et ecrasait la correction. Un texte que personne n'avait lu partait a la place.
+
+**La reference de temps d'un texte est sa derniere edition humaine.** Elle vit dans
+`posts.variants["edition_humaine"]`, **sans migration** : `created_at` date la composition, et
+aucun champ existant ne separe l'humain du robot. Ecrit en FUSION par `PATCH /posts/{id}`
+seulement si le contenu change (`relecture.noter_edition`). Chaque texte (`headline`, `title`,
+`subtitle`, `caption`) garde son heure AVEC sa valeur : revenir sur une variante du robot rend
+son controle a ce texte. Choisir une variante n'est donc pas une correction. `corrige_le` note
+ce qui n'est pas un texte (hashtags, liste, fond).
+
+`relecture.porte_une_correction` : ni `_geler` ni `_composer` ne relachent plus un tel post.
+**Si un repere reste perime** (ecrit lundi « ce soir », parti mercredi, ou un texte du robot a
+cote d'une correction), le post part tel quel, conformement a « relance, puis acceptation avec
+avertissement » : une relance serait un appel Claude sur un texte humain, donc exclue.
+L'avertissement est ecrit dans `creneaux.erreur` du GELE (ligne de Programmation) et notifie une
+fois, a ce gel. **Un texte du robot jamais touche garde le controle entier** : le post 153 ne
+revient pas.
+
+**Limites.** Une correction faite avant ce correctif n'est pas datee : elle reste vue comme du
+robot. `_brouillon_perime` (visuels interdits, fond absent) peut encore lacher un post corrige :
+ce sont des regles du projet, pas un controle de forme. Prouve par test
+(`tests/schedule/test_verification_humaine.py`), jamais observe en production.
+
+### Une edition du fige ne brule pas l'actu (2026-10-31)
+
+`RAISON_RELECTURE` n'etait pose que par `rouvrir`, donc sur un GELE. Sur un PROGRAMME, une accroche
+rallongee a T-5 h repondait 200, puis le gel excluait l'article a vie. Reproduit sur le vrai code.
+
+- **`PATCH /posts/{id}` pose le marqueur** quand un contenu fige change sur un PROGRAMME
+  (accroche, slides, variante, fond, liste : `relecture.contenu_fige`), en SQL, A LA SUITE d'une
+  erreur existante (`supervision` lit `composition%`, `_geler` lit `texte perime` en tete). Une
+  legende ne le pose pas : le fige n'en depend pas.
+- **Il survit** a un gel differe, a une panne de rendu et a un format sans preparateur
+  (`_garder_le_marqueur`). **Il n'a pas a survivre a l'arbitrage**, qui l'efface en reprenant le
+  post (`store._ecart_a_l_arbitrage`) : `variants.edition_humaine.fige_le` prend le relais, et c'est
+  ce qui evitait l'exclusion au passage d'apres, chemin que `rouvrir` avait deja.
+- **Un post sain part** : le gel reussi efface le marqueur. Le marqueur seul n'allume pas l'alerte
+  de la ligne de Programmation : il peut y rester des heures, rien n'est en panne.
+- **Un gel impossible libere, notifie, et met l'actu a l'ecart** par `marquer_saute`
+  (`visuel_saute_pause_minutes`, reglage repris tel quel, jamais mesure pour ce cas) : sans cette
+  pause, elle revenait a chaque passage et le creneau finissait en MANQUE. Elle revient d'elle-meme
+  avec son post corrige, et un second refus refait le meme tour. Le voyant `pauses` le dit.
+- **Le message de la fiche dit la vraie consequence** : ce post ne part pas a cette heure, le creneau
+  se libere, l'actu reste dans la file.
+- **Fond vide : 422 lisible**, avant tout re-gel. Le dashboard envoie encore `null` sur un champ
+  vide ; c'est le serveur qui refuse. Un post qui n'avait deja plus de fond n'est pas concerne.
+
+Prouve par test (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
+
+### Une edition pendant le rendu (2026-10-31)
+
+Le creneau reste PROGRAMME pendant le rendu : `PATCH /posts` repondait 200 sans rien rouvrir, puis
+`_geler` ecrivait GELE avec l'ancienne cover, puisque ni l'etat, ni l'article, ni le post n'avaient
+bouge. Reproduit sur le vrai code. Pire, sur un fond agrandi : l'objet de l'agent, reassigne en
+memoire par `preparation`, reecrivait l'ancien texte en base a son `commit`.
+
+Apres `preparer`, `runner._edite_pendant_le_gel` relit `slides`, `template` et `variants` utiles par
+colonnes, et compare a `relecture.contenu_fige` pris avant le rendu. S'ils different : pas de gel,
+raison ecrite (« gel refait »), objet oublie, et le passage suivant refait. Meme chose si le rendu
+de l'ancien texte etait `PreparationImpossible` : ce refus parle d'un texte qui n'existe plus. Une
+legende ne reporte rien, un agrandissement non plus. `_reclamer` n'est pas touche.
+
+**Pas de boucle** : un passage sans nouvelle edition gele. **Pres du depart**
+(`publication_relecture_regel_minutes`, reutilise tel quel), notification une fois par raison
+ecrite. Au-dela de `publication_retard_max_minutes`, `_raison_manque` garde la raison.
+
+**Limite** : quelques millisecondes separent cette relecture de l'ecriture du gel, et un `PATCH`
+peut lire PROGRAMME juste avant ce gel et committer juste apres. La fenetre passe de la duree d'un
+rendu a celle de ces lectures ; elle n'est pas nulle. Une migration ou un verrou la fermerait,
+ce qui n'a pas ete fait ici. Prouve par test a deux sessions, jamais observe en production.
+
+### Le remplacant est annonce (2026-10-31)
+
+La cle de `relecture.json` etait le creneau : le post qui reprenait un creneau deja annonce partait
+sans notification, et c'etait le moins relu de la journee. La cle est `creneau:post`. Meme fichier,
+memes regles d'etat (temporaire par processus, relecture-fusion, aucune ecriture en lecture, purge
+a un jour).
+
+- **Deploiement** : une entree de l'ancien format ne dit pas pour quel post elle valait. Elle vaut
+  donc pour tous les posts de ce creneau jusqu'a sa purge : rien n'est annonce deux fois, et un
+  remplacant reste muet pendant ce jour-la au plus.
+- **Pres du depart** : `tourner` annonce aussi juste avant sa seconde publication. Composition, gel
+  et publication d'un creneau repris s'enchainent dans le meme passage, et l'annonce du debut ne
+  voyait pas encore ce post. Elle precede l'envoi de peu : c'est une information, pas une fenetre.
+- **Pas de rafale** : un meme post n'est annonce qu'une fois par creneau. Un post que l'on deplace
+  sur un autre creneau est annonce une fois pour sa nouvelle heure ; un creneau deja parti apres
+  l'heure ne l'est pas (`dans_la_fenetre`).
+
+Prouve par test (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
+
+### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
+
+`PATCH /schedule/{id}` avec `sauter` envoyait `{sauter: true}` et la liste ne se rechargeait
+jamais seule, alors que l'arbitrage reattribue un creneau non epingle a chaque passage.
+Reproduit sur le vrai code (bilan du 2026-10-31) : l'ecran montre A, le creneau porte B, le
+retrait rend 200, B est exclue, A reste candidate et l'arbitrage la remet a cette heure, et
+l'ecran dit « A ne partira pas ». Une confirmation fausse sur le geste le plus sensible.
+
+- `occupant_attendu` et `post_attendu` sont **obligatoires** sur `sauter` et sur `epingle`
+  (422 sinon ; `null` est une valeur, un creneau vu vide). Ils sont la CONDITION de l'UPDATE,
+  a la place de la lecture du moment : pas un `if` avant l'ecriture. Occupant change : 409
+  `OCCUPANT_CHANGE`, rien n'est ecrit, ni le creneau ni l'exclusion. Le post compte autant que
+  l'article : une recomposition est un texte que l'humain n'a pas lu.
+- Les etats restent juges avant : publication en vol ou incertaine, creneau termine.
+- Les trois surfaces de retrait et les deux epingles envoient ce que leur ligne affiche
+  (`DepartOut.article_id` est ajoute pour « A relire » et la fiche). Sur le 409, elles relisent
+  `/schedule` et nomment l'occupant actuel, ou « recompose » si l'actu est la meme.
+- La Programmation se recharge avec le bandeau (60 s) et au retour sur l'onglet, seulement
+  si elle est affichee. Un glissement reporte (`rechargementDiffere`) et un selecteur ouvert
+  suspend : le minuteur suivant reprend. `#schedule-lue` dit « liste lue a HH:MM » ; une lecture
+  en echec garde la liste, passe la ligne en erreur et dit qu'elle peut avoir change. Le
+  numero de tour (`tourDeChargement`) empeche une reponse ancienne d'ecraser une plus recente.
+
+**Prouve par test, jamais observe en production.**
+`tests/schedule/test_verification_humaine.py` (deux sessions, rejouable sur Postgres) et
+`tests/dashboard/test_dashboard_programmation_vivante.py` (Chromium reel, horloge de page
+controlee).
 
 ### Anti-doublon, demontre
 

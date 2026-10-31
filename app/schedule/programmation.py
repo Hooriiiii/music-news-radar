@@ -3,7 +3,8 @@
 POURQUOI UN MODULE A PART. `PATCH /schedule/{id}` refuse, et le selecteur du dashboard
 doit griser AVANT le clic, avec la meme raison. Deux copies divergeraient, et le
 navigateur n'en porte aucune. `raison_refus` est donc LA regle ; le PATCH et les deux
-lectures (`options_de_l_article`, `actus_du_creneau`) l'appellent.
+lectures (`options_de_l_article`, `actus_du_creneau`) l'appellent. Meme chose pour
+l'echange de deux creneaux : `raison_echange`, lue par le PATCH et `echanges_du_creneau`.
 
 LA LIMITE DE PURGE, et le calcul. L'agent ne compose un creneau qu'a
 `publier_a - publication_composition_heures`. La purge efface un article non publie a
@@ -44,6 +45,18 @@ from app.schedule.store import (
 
 REFUS_CRENEAU = "Créneau gelé ou passé : il ne se modifie plus"
 DEJA_ICI = "C'est déjà son créneau."
+RIEN_A_ECHANGER = "Rien à échanger : les deux créneaux sont libres."
+CRENEAU_PASSE = "Créneau passé : il ne se modifie plus"
+# Ce qu'un creneau fige dit de lui au glissement : la meme barriere que `raison_creneau`,
+# mais une ligne grisee doit dire laquelle, en clair, a cote d'elle.
+RAISONS_FIGE = {
+    EtatCreneau.GELE: "Créneau gelé : il part tel quel",
+    EtatCreneau.ECHEC: "Publication en cours ou à vérifier : ce créneau ne bouge plus",
+    EtatCreneau.PUBLIE: "Déjà publié",
+    EtatCreneau.APERCU: "Déjà passé en aperçu",
+    EtatCreneau.MANQUE: "Créneau manqué : il ne se modifie plus",
+}
+NOMS_DE_FORMAT = {FormatCreneau.CARROUSEL: "carrousel", FormatCreneau.REEL: "reel"}
 # Le selecteur est une liste a lire, pas une archive : au-dela, on dit combien restent.
 ACTUS_AFFICHEES = 100
 
@@ -208,6 +221,88 @@ def raison_refus(creneau: Creneau, article: Article, lecture: Lecture) -> str | 
     )
 
 
+@dataclass
+class VueEchange:
+    """Ce qu'il faut pour juger des echanges entre ces creneaux, lu une fois."""
+
+    lecture: Lecture
+    articles: dict[int, Article]
+    gabarits: dict[int, str]
+
+
+def lire_echange(db: Session, creneaux: list[Creneau], maintenant: dt.datetime) -> VueEchange:
+    ids = {c.article_id for c in creneaux if c.article_id}
+    articles = list(db.scalars(
+        select(Article).options(selectinload(Article.source)).where(Article.id.in_(ids))
+    )) if ids else []
+    ids_posts = {c.post_id for c in creneaux if c.post_id}
+    gabarits = {i: t for i, t in db.execute(select(Post.id, Post.template).where(Post.id.in_(ids_posts)))} if ids_posts else {}
+    return VueEchange(
+        lecture=lire(db, articles, maintenant, {c.format for c in creneaux}),
+        articles={a.id: a for a in articles},
+        gabarits=gabarits,
+    )
+
+
+def raison_fige(creneau: Creneau, maintenant: dt.datetime) -> str | None:
+    """`raison_creneau`, dite en clair. Une seule barriere : si elle dit oui, ceci aussi."""
+    if raison_creneau(creneau, maintenant) is None:
+        return None
+    return CRENEAU_PASSE if creneau.etat in MODIFIABLES else RAISONS_FIGE.get(creneau.etat, REFUS_CRENEAU)
+
+
+def _raison_arrivee(depart: Creneau, arrivee: Creneau, vue: VueEchange) -> str | None:
+    """Ce que porte `depart` peut-il arriver sur `arrivee` ?
+
+    Le post suit l'actu : une paire qui se deplace, jamais recomposee ni lachee. Son gabarit
+    doit donc etre celui de l'arrivee (`publication.md`, « Echanger », le choix sur le format).
+    Le format n'est relu que s'il change : une actu ne perd pas sa place pour une regle
+    qu'elle subit deja au meme format, et que la composition applique de toute facon.
+    """
+    if depart.post_id is not None and vue.gabarits.get(depart.post_id) != TEMPLATES[arrivee.format]:
+        return (
+            f"déjà composée en {NOMS_DE_FORMAT[depart.format]}, un échange ne change pas le format d'un post. "
+            f"Pour la passer en {NOMS_DE_FORMAT[arrivee.format]} : « Choisir une actu » sur ce créneau"
+        )
+    article = vue.articles.get(depart.article_id)
+    if article is None:
+        return None
+    lecture = vue.lecture
+    return (
+        raison_article(article)
+        or _raison_engage(article, arrivee.id, lecture.engages)
+        or (_raison_format(article, arrivee.format, lecture) if arrivee.format != depart.format else None)
+        or _raison_purge(article, arrivee, lecture)
+    )
+
+
+def _nomme(creneau: Creneau, raison: str | None, vue: VueEchange) -> str | None:
+    if raison is None:
+        return None
+    article = vue.articles.get(creneau.article_id)
+    return f"« {article.title} » : {raison}" if article is not None else raison
+
+
+def raison_echange(ici: Creneau, la: Creneau, vue: VueEchange) -> str | None:
+    """LA regle de l'echange : pourquoi ces deux creneaux ne peuvent pas permuter, ou None.
+
+    Les deux sens, avec le titre de l'actu en cause : sur une ligne grisee, « inutilisable en
+    reel » ne dit pas laquelle des deux.
+    """
+    if ici.id == la.id:
+        return DEJA_ICI
+    maintenant = vue.lecture.maintenant
+    raison = raison_fige(ici, maintenant) or raison_fige(la, maintenant)
+    if raison is not None:
+        return raison
+    if not (ici.article_id or ici.post_id or la.article_id or la.post_id):
+        return RIEN_A_ECHANGER
+    return (
+        _nomme(ici, _raison_arrivee(ici, la, vue), vue)
+        or _nomme(la, _raison_arrivee(la, ici, vue), vue)
+    )
+
+
 def notes_de_l_article(article: Article) -> list[str]:
     """Ce qui se dit sans interdire. Une note absente n'est ni « 0 » ni « sous le seuil »."""
     if article.relevance_score is None:
@@ -346,6 +441,50 @@ def actus_du_creneau(db: Session, creneau: Creneau, maintenant: dt.datetime) -> 
         **_mode(),
         "candidats": candidats[:ACTUS_AFFICHEES],
         "non_affichees": max(0, len(candidats) - ACTUS_AFFICHEES),
+    }
+
+
+def _annonces_de_l_echange(ici: Creneau, la: Creneau, maintenant: dt.datetime) -> list[str]:
+    """Un creneau vide n'annonce rien : personne n'y part."""
+    annonces: list[str] = []
+    for occupe, heure in ((ici, la.publier_a), (la, ici.publier_a)):
+        if occupe.article_id or occupe.post_id:
+            annonces += [a for a in annonces_du_depart(heure, maintenant) if a not in annonces]
+    return annonces
+
+
+def echanges_du_creneau(db: Session, creneau: Creneau, maintenant: dt.datetime) -> dict:
+    """Les cibles d'un echange, pour tout ce que la Programmation montre (les dernieres
+    24 h comprises : elles se grisent aussi, avec leur raison)."""
+    depuis = maintenant - dt.timedelta(hours=24)
+    creneaux = list(db.scalars(select(Creneau).where(Creneau.publier_a >= depuis).order_by(Creneau.publier_a)))
+    occupants = _occupants(db, creneaux + [creneau])
+    vue = lire_echange(db, creneaux + [creneau], maintenant)
+    cibles = []
+    for cible in creneaux:
+        if cible.id == creneau.id:
+            continue
+        raison = raison_echange(creneau, cible, vue)
+        cibles.append({
+            "creneau_id": cible.id,
+            "publier_a": utc(cible.publier_a),
+            "format": cible.format,
+            "etat": cible.etat,
+            "occupant": occupants.get(cible.id),
+            "a_venir": utc(cible.publier_a) > maintenant,
+            "possible": raison is None,
+            "raison": raison,
+            "annonces": _annonces_de_l_echange(creneau, cible, maintenant),
+        })
+    return {
+        "creneau_id": creneau.id,
+        "publier_a": utc(creneau.publier_a),
+        "format": creneau.format,
+        "etat": creneau.etat,
+        "occupant": occupants.get(creneau.id),
+        "raison_creneau": raison_fige(creneau, maintenant),
+        **_mode(),
+        "cibles": cibles,
     }
 
 

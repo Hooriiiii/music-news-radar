@@ -376,7 +376,7 @@ def test_la_fiche_dit_l_epinglage_et_propose_desepingler():
     texte, ecritures, _ = _jouer(geste, departs=[_depart("programme", epingle=True)])
 
     assert "Épinglé" in texte
-    assert ("PATCH", "/schedule/7", {"epingle": False}) in ecritures
+    assert ("PATCH", "/schedule/7", {"epingle": False, "occupant_attendu": 42, "post_attendu": 167}) in ecritures
 
 
 @chromium_absent
