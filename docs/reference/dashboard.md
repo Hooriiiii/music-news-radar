@@ -485,6 +485,37 @@ ancre inconnue retombe sur la Programmation. La notification de relecture
 de Posts. Preuves, mutations comprises : `tests/dashboard/test_dashboard_ancres.py`. Les
 tests d'avant ouvrent `/#flux`, leur intention n'a pas bouge.
 
+### Échanger deux créneaux au glissement (2026-10-31)
+
+Règles, format et course avec le gel : `publication.md`, « Échanger ». Ici, l'écran. Il remplace
+« ⏬ Décaler ». Le panneau reste une liste chronologique : l'heure ne bouge pas, ce qui part à
+cette heure change.
+
+- **Une poignée `⠿`** sur toute ligne LIBRE ou PROGRAMME à venir, jamais sur une gelée. Pointer
+  Events, pas le drag-and-drop HTML5, qui ne part pas au doigt. `touch-action: none` sur la seule
+  poignée : ailleurs, le doigt fait défiler la liste (les deux vérifiés par de vrais événements
+  tactiles, mutation comprise). Défilement automatique près des bords.
+- **Pendant le glissement**, les gestes des lignes s'effacent. Une cible permise a un cadre
+  pointillé, plein au survol ; une cible interdite est grisée et sa raison, en texte, reste
+  lisible. La ligne saisie reste sous le pointeur quand les hauteurs changent. Échap ou un
+  dépôt hors d'une ligne n'échange rien. Le navigateur ne porte aucune règle : tout vient de
+  `echanges-possibles`.
+- **Au dépôt.** Sans post composé ni épingle, l'échange part. Sinon, la validation de Programmer
+  (`ligneOption`, `afficherValidation`) nomme les deux actus, sans `confirm`.
+- **Le résultat est sur la ligne saisie**, pas en tête de panneau : sur une longue liste, le haut
+  est loin de là où l'on vient d'agir. « ✓ Échangés et épinglés : 17:30 ↔ 19:42 » et « Annuler »,
+  jour compris si les deux créneaux ne sont pas le même jour. Un refus s'affiche sur la même
+  ligne et la liste est relue.
+- **Sans glisser** : « ⇅ Échanger avec… » ouvre `ouvrirSelecteur` sur les cibles à venir, les
+  impossibles désactivées avec leur raison. La poignée est hors du parcours clavier : c'est ce
+  bouton, l'équivalent.
+- **Le re-rendu** attend la fin d'un glissement (il détruirait la poignée qui tient le pointeur).
+  La liste affichée reste jusqu'à la nouvelle, et le bouton qui a le focus le retrouve.
+
+Validé sur Chromium contre le vrai serveur et une vraie base SQLite, à 1440 et 390 px, captures
+vues à l'œil : `tests/dashboard/test_dashboard_echanger.py`, avec
+`KINDA_CAPTURES=<dossier>` pour les refaire.
+
 ## La charte Kinda dans la console (2026-10-02)
 
 Le compte Instagram etait a la charte ; la console qui le pilote portait un

@@ -240,6 +240,32 @@
   .mode-choix.mode-reel.on { background: var(--hot); color: var(--sur-accent); }
   .mode-explication { color: var(--muted); font-size: 11.5px; margin: 8px 0 16px; }
   .slot-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* --- Echanger deux creneaux : la poignee, et l'etat des lignes pendant le glissement.
+     `touch-action: none` sur la poignee SEULE : ailleurs, un doigt fait defiler la liste. */
+  .slot-poignee { flex: none; align-self: center; width: 28px; height: 28px; padding: 0; line-height: 1;
+    background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted);
+    font-size: 15px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .slot-poignee:hover { border-color: var(--accent); color: var(--text); }
+  body.glissement-actif { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+  body.glissement-actif .slot-poignee { cursor: grabbing; }
+  /* Les gestes laissent la place a ce qui importe : permis, ou pourquoi non. */
+  body.glissement-actif #schedule-list .slot-actions { display: none; }
+  #schedule-list .post-row.glisse-source { border-color: var(--accent); background: var(--accent-doux); }
+  #schedule-list .post-row.cible-permise { border-color: var(--accent); border-style: dashed; }
+  #schedule-list .post-row.cible-survolee { border-style: solid; background: var(--accent-doux);
+    box-shadow: 0 0 0 2px var(--accent); }
+  #schedule-list .post-row.cible-interdite { background: #15151b; cursor: not-allowed; }
+  #schedule-list .post-row.cible-interdite > :not(.raison-glisse) { opacity: .4; }
+  .raison-glisse { flex-basis: 100%; color: #ffb38a; font-size: 11.5px; overflow-wrap: anywhere; }
+  .fantome-glisse { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; max-width: min(70vw, 420px);
+    padding: 6px 10px; background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 16px #0008; }
+  .refus-ligne { flex-basis: 100%; overflow-wrap: anywhere; }
+  @media (max-width: 560px) { .slot-poignee { width: 40px; height: 40px; font-size: 18px; } }
+  .echange-resultat { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .echange-resultat button { background: none; border: 1px solid var(--accent); border-radius: 6px; color: var(--text);
+    padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  .echange-resultat .prog-annonce { flex-basis: 100%; }
   /* Le titre est l'information qu'on vient verifier : les boutons le tronquaient
      (« Charlotte de Witte ann… ») a 1440 px. Il prend la ligne, le reste passe dessous. */
   #schedule-list .post-row { flex-wrap: wrap; }
@@ -1506,7 +1532,7 @@ function afficherValidation(ligne, option, apres) {
   ligne.querySelector(".prog-option").classList.add("choisie");
   const bloc = nouvelElement("div", "prog-validation");
   ligne.appendChild(bloc);
-  const etapes = etapesDeValidation(option.occupant);
+  const etapes = option.etapes || etapesDeValidation(option.occupant);
   const montrer = (rang) => {
     bloc.innerHTML = "";
     const etape = etapes[rang];
@@ -1516,13 +1542,18 @@ function afficherValidation(ligne, option, apres) {
     const confirmer = nouvelElement("button", "confirmer", etape.bouton);
     const annuler = nouvelElement("button", null, "Annuler");
     const refus = nouvelElement("span", "etat-geste erreur prog-refus");
-    annuler.onclick = () => { bloc.remove(); ligne.querySelector(".prog-option").classList.remove("choisie"); };
+    annuler.onclick = () => {
+      bloc.remove();
+      ligne.querySelector(".prog-option").classList.remove("choisie");
+      if (option.fermer) option.fermer();
+    };
     confirmer.onclick = async () => {
       if (rang + 1 < etapes.length) { montrer(rang + 1); return; }
       confirmer.disabled = true;
       refus.textContent = "";
       try {
-        const creneau = await envoyerProgrammation(option.creneauId, option.articleId, option.occupant);
+        const creneau = option.envoyer ? await option.envoyer()
+          : await envoyerProgrammation(option.creneauId, option.articleId, option.occupant);
         await apres(creneau, option);
       } catch (erreur) {
         refus.textContent = "Refusé : " + erreur.message;
@@ -1820,7 +1851,10 @@ document.querySelectorAll(".mode-choix").forEach((bouton) => {
 
 async function loadSchedulePanel() {
   const list = document.getElementById("schedule-list");
-  list.innerHTML = "Chargement…";
+  // Un re-rendu pendant un glissement detruirait la poignee qui tient le pointeur : il
+  // attend le depot. Hors glissement, la liste affichee reste jusqu'a la nouvelle.
+  if (glissement) { rechargementDiffere = true; return; }
+  if (!list.querySelector(".post-row")) list.innerHTML = "Chargement…";
   chargerMode();
   chargerOffreReels();
   chargerReels();
@@ -1843,10 +1877,13 @@ async function loadSchedulePanel() {
     list.innerHTML = '<div id="empty">Aucun créneau : cliquez sur « Recalculer la file ».</div>';
     return;
   }
-  list.innerHTML = "";
+  if (glissement) { rechargementDiffere = true; return; }
+  const focus = focusDeLaListe(list);
+  const lignes = document.createDocumentFragment();
   for (const c of creneaux) {
     const row = document.createElement("div");
     row.className = "post-row";
+    row.dataset.creneau = c.id;
     row.innerHTML = `
       <div class="grow">
         <div class="slot-tete">
@@ -1910,7 +1947,7 @@ async function loadSchedulePanel() {
       row.style.cursor = "pointer";
       row.title = "Voir et modifier ce qui va partir";
       row.onclick = (evenement) => {
-        // Les boutons d'action de la ligne (épingler, choisir, décaler, ne pas publier)
+        // Les boutons d'action de la ligne (épingler, choisir, échanger, ne pas publier)
         // et les liens ne doivent pas ouvrir la fiche par-dessus leur effet.
         if (evenement.target.closest("button, a")) return;
         ouvrirPost(c.post_id);
@@ -1961,8 +1998,19 @@ async function loadSchedulePanel() {
         },
       });
       actions.appendChild(choisir);
-      if (c.article_id) {
-        bouton("⏬ Décaler", "Décaler au créneau suivant", { decaler: true });
+      // Un creneau passe garde ses autres boutons, que le serveur refuse avec leur raison ;
+      // celui-ci n'aurait aucune cible a offrir.
+      if (new Date(c.publier_a).getTime() > Date.now()) {
+        const echanger = nouvelElement("button", "echanger-avec", "⇅ Échanger avec…");
+        echanger.title = "Permuter ce créneau avec un autre, sans glisser";
+        echanger.setAttribute("aria-label", echanger.title);
+        echanger.onclick = () => ouvrirSelecteur(zoneChoix, {
+          url: `/schedule/${c.id}/echanges-possibles`,
+          lire: lireEchanges(c),
+          apres: async () => {},
+        });
+        actions.appendChild(echanger);
+        row.querySelector(".slot-tete").prepend(poigneeDeGlissement(row, c));
       }
     }
     if (RETIRABLES.has(c.etat) && (c.article_id || c.post_id)) {
@@ -1976,8 +2024,361 @@ async function loadSchedulePanel() {
         apres: loadSchedulePanel,
       });
     }
-    list.appendChild(row);
+    if (refusDeLigne && refusDeLigne.creneauId === c.id) {
+      row.appendChild(nouvelElement("div", "etat-geste erreur refus-ligne", refusDeLigne.texte));
+      refusDeLigne = null;
+    }
+    if (resultatDEchange && resultatDEchange.creneauId === c.id) row.appendChild(resultatDEchange.bloc);
+    lignes.appendChild(row);
   }
+  list.replaceChildren(lignes);
+  rendreLeFocus(list, focus);
+}
+
+// --- Echanger deux creneaux ---------------------------------------------------
+//
+// Ce geste remplace « Decaler » (decision du 2026-10-31) : on glisse une ligne sur une
+// autre, ou « Echanger avec… » sans glisser. Le navigateur ne porte AUCUNE regle : ce qui
+// est permis, et pourquoi non, vient de `GET /schedule/{id}/echanges-possibles`, et le PATCH
+// rejuge tout (`programmation.raison_echange`).
+//
+// Pointer Events et non le drag-and-drop HTML5, qui ne part pas au doigt. Le glissement ne
+// nait que sur la poignee : ailleurs, un doigt fait defiler la liste.
+let glissement = null;
+let rechargementDiffere = false;
+let refusDeLigne = null;
+let resultatDEchange = null;
+const SEUIL_GLISSEMENT_PX = 4;
+const BORD_DEFILEMENT_PX = 70;
+const PAS_DEFILEMENT_PX = 12;
+
+function focusDeLaListe(list) {
+  const actif = document.activeElement;
+  const ligne = actif && actif.tagName === "BUTTON" && list.contains(actif) ? actif.closest("[data-creneau]") : null;
+  return ligne ? { creneau: ligne.dataset.creneau, texte: actif.textContent } : null;
+}
+
+function rendreLeFocus(list, focus) {
+  if (!focus) return;
+  const boutons = list.querySelectorAll(`[data-creneau="${focus.creneau}"] button`);
+  const meme = [...boutons].find((b) => b.textContent === focus.texte && b.tabIndex !== -1);
+  (meme || [...boutons].find((b) => b.tabIndex !== -1))?.focus({ preventScroll: true });
+}
+
+function heureDeLEchange(iso, autreIso) {
+  const memeJour = new Date(iso).toDateString() === new Date(autreIso).toDateString();
+  const heure = new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  return memeJour ? heure : fmtCreneau(iso);
+}
+
+const nomOccupant = (o) => o ? (o.titre || `post ${o.post_id}`) : null;
+const articleOccupant = (o) => o ? o.article_id : null;
+
+async function envoyerEchange(idIci, idLa, attenduIci, attenduLa) {
+  const reponse = await fetch(`/schedule/${idIci}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ echanger_avec: idLa, occupant_source_attendu: attenduIci, occupant_attendu: attenduLa }),
+  });
+  if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
+  return reponse.json();
+}
+
+// Sur la ligne saisie et non en tete de panneau : sur une longue liste, le haut est loin de
+// la ou l'oeil et le doigt viennent d'agir. Elle survit au re-rendu, jusqu'au geste suivant.
+function afficherResultatEchange(ici, la, annonces) {
+  const texte = `${heureDeLEchange(ici.publier_a, la.publier_a)} ↔ ${heureDeLEchange(la.publier_a, ici.publier_a)}`;
+  const bloc = nouvelElement("div", "echange-resultat etat-geste ok");
+  bloc.appendChild(nouvelElement("span", null, `✓ Échangés et épinglés : ${texte}`));
+  const annuler = nouvelElement("button", "annuler-echange", "Annuler");
+  annuler.onclick = async () => {
+    annuler.disabled = true;
+    try {
+      // L'inverse, et seulement si chacun porte encore ce qu'on vient d'y mettre : l'arbitrage
+      // a pu remplir le creneau libere, et Annuler n'echange pas une actu que personne n'a vue.
+      await envoyerEchange(ici.id, la.id, articleOccupant(la.occupant), articleOccupant(ici.occupant));
+      bloc.replaceChildren(nouvelElement("span", null, `✓ Échange annulé : ${texte}`));
+    } catch (erreur) {
+      bloc.classList.replace("ok", "erreur");
+      bloc.replaceChildren(nouvelElement("span", null, "Annulation refusée : " + erreur.message));
+    }
+    await loadSchedulePanel();
+  };
+  bloc.appendChild(annuler);
+  for (const annonce of annonces || []) bloc.appendChild(nouvelElement("span", "prog-annonce", `⚠ ${annonce}`));
+  resultatDEchange = { creneauId: ici.id, bloc };
+}
+
+// `ici` et `la` : {id, publier_a, occupant}. Ne leve jamais : un refus s'affiche a cote de
+// la ligne, et la liste revient de toute facon a l'etat reel.
+async function executerEchange(ici, la, annonces) {
+  resultatDEchange = null;
+  try {
+    await envoyerEchange(ici.id, la.id, articleOccupant(ici.occupant), articleOccupant(la.occupant));
+    afficherResultatEchange(ici, la, annonces);
+  } catch (erreur) {
+    refusDeLigne = { creneauId: ici.id, texte: "Refusé : " + erreur.message };
+  }
+  await loadSchedulePanel();
+}
+
+// Nomme les deux actus : c'est tout ce que `etapesDeValidation` fait pour Programmer.
+function etapesDeLEchange(ici, la) {
+  const qualite = (o) => [o.epingle ? "épinglée" : null, o.compose ? "déjà composée" : null].filter(Boolean).join(" et ");
+  const phrase = (o, heure) => {
+    const q = qualite(o);
+    return `« ${nomOccupant(o)} »${q ? ` (${q})` : ""} part ${heure}.`;
+  };
+  const morceaux = [
+    ici.occupant ? phrase(ici.occupant, fmtCreneau(la.publier_a)) : null,
+    la.occupant ? phrase(la.occupant, fmtCreneau(ici.publier_a)) : null,
+    !ici.occupant || !la.occupant ? "L'autre créneau redevient libre." : null,
+  ].filter(Boolean);
+  return [{ texte: morceaux.join(" "), bouton: "Échanger" }];
+}
+
+function optionDEchange(ici, cible) {
+  const la = { id: cible.creneau_id, publier_a: cible.publier_a, occupant: cible.occupant };
+  return {
+    creneauId: la.id,
+    titre: `${fmtCreneau(la.publier_a)} · ${FORMATS_CRENEAU[cible.format] || cible.format}`,
+    details: [
+      la.occupant ? `occupé : ${nomOccupant(la.occupant)}`
+        + (la.occupant.epingle ? " · 📌 épinglée" : "") + (la.occupant.compose ? " · déjà composée" : "") : "libre",
+    ],
+    possible: cible.possible,
+    raison: cible.raison,
+    annonces: cible.annonces,
+    etapes: etapesDeLEchange(ici, la),
+    envoyer: () => executerEchange(ici, la, cible.annonces),
+  };
+}
+
+function creneauDeLaLecture(d) {
+  return { id: d.creneau_id, publier_a: d.publier_a, occupant: d.occupant };
+}
+
+function lireEchanges(c) {
+  return (d) => {
+    const ici = creneauDeLaLecture(d);
+    const options = d.cibles.filter((x) => x.a_venir).map((x) => optionDEchange(ici, x));
+    const possibles = options.filter((o) => o.possible);
+    const impossibles = options.filter((o) => !o.possible);
+    return {
+      entete: [`Échanger ${fmtCreneau(c.publier_a)} · ${nomOccupant(d.occupant) || "libre"}`],
+      refus: d.raison_creneau,
+      groupes: d.raison_creneau ? [] : [
+        possibles.length ? { titre: "Créneaux possibles", options: possibles } : null,
+        impossibles.length ? { titre: "Impossibles", options: impossibles } : null,
+      ].filter(Boolean),
+      vide: d.raison_creneau ? null : "Aucun autre créneau à venir.",
+    };
+  };
+}
+
+function ligneDeLaListe(id) {
+  return document.querySelector(`#schedule-list [data-creneau="${id}"]`);
+}
+
+function poigneeDeGlissement(row, c) {
+  const poignee = nouvelElement("button", "slot-poignee", "⠿");
+  poignee.type = "button";
+  // Hors du parcours clavier : son equivalent est le bouton « Echanger avec… » de la ligne.
+  poignee.tabIndex = -1;
+  poignee.setAttribute("aria-hidden", "true");
+  poignee.title = "Glisser sur un autre créneau pour échanger";
+  poignee.onpointerdown = (evenement) => {
+    if (evenement.button !== 0 || glissement) return;
+    evenement.preventDefault();
+    poignee.setPointerCapture(evenement.pointerId);
+    glissement = {
+      c, row, poignee, pointeur: evenement.pointerId, x0: evenement.clientX, y0: evenement.clientY,
+      x: evenement.clientX, y: evenement.clientY, demarre: false, lecture: null, donnees: null, survol: null,
+      fantome: null, boucle: null,
+    };
+  };
+  poignee.onpointermove = (evenement) => {
+    if (!glissement || evenement.pointerId !== glissement.pointeur) return;
+    glissement.x = evenement.clientX;
+    glissement.y = evenement.clientY;
+    if (!glissement.demarre) {
+      const distance = Math.hypot(glissement.x - glissement.x0, glissement.y - glissement.y0);
+      if (distance < SEUIL_GLISSEMENT_PX) return;
+      demarrerGlissement();
+    }
+    suivrePointeur();
+  };
+  poignee.onpointerup = (evenement) => {
+    if (glissement && evenement.pointerId === glissement.pointeur) deposer();
+  };
+  // Le systeme a repris la main (un geste du telephone) : rien n'est echange.
+  poignee.onpointercancel = () => { if (glissement) terminerGlissement(); };
+  return poignee;
+}
+
+function demarrerGlissement() {
+  const g = glissement;
+  g.demarre = true;
+  document.body.classList.add("glissement-actif");
+  document.addEventListener("keydown", echapPendantGlissement);
+  g.row.classList.add("glisse-source");
+  g.fantome = nouvelElement("div", "fantome-glisse",
+    `${fmtCreneau(g.c.publier_a)} · ${g.c.article_title || "créneau libre"}`);
+  document.body.appendChild(g.fantome);
+  garderSousLePointeur(g, () => {});
+  g.lecture = fetch(`/schedule/${g.c.id}/echanges-possibles`)
+    .then(async (reponse) => {
+      if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
+      return reponse.json();
+    })
+    .then((donnees) => {
+      if (glissement !== g) return donnees;
+      g.donnees = donnees;
+      if (donnees.raison_creneau) {
+        refuserLeGlissement(donnees.raison_creneau);
+        return donnees;
+      }
+      garderSousLePointeur(g, () => peindreCibles(donnees));
+      suivrePointeur();
+      return donnees;
+    })
+    .catch((erreur) => {
+      g.panne = "Cibles indisponibles : " + erreur.message;
+      if (glissement === g) refuserLeGlissement(g.panne);
+      return null;
+    });
+  defilerPresDesBords(g);
+}
+
+// La liste change de hauteur (les gestes partent, les raisons arrivent) : la ligne saisie
+// reste sous le doigt, sinon la cible visee s'enfuit au moment ou on la vise.
+function garderSousLePointeur(g, changement) {
+  const avant = g.row.getBoundingClientRect().top;
+  changement();
+  window.scrollBy(0, g.row.getBoundingClientRect().top - avant);
+}
+
+function peindreCibles(donnees) {
+  const parId = new Map(donnees.cibles.map((x) => [String(x.creneau_id), x]));
+  for (const ligne of document.querySelectorAll("#schedule-list [data-creneau]")) {
+    if (ligne === glissement.row) continue;
+    const cible = parId.get(ligne.dataset.creneau);
+    if (cible && cible.possible) {
+      ligne.classList.add("cible-permise");
+    } else {
+      ligne.classList.add("cible-interdite");
+      // La raison A COTE, jamais dans une infobulle : un doigt n'en a pas.
+      ligne.appendChild(nouvelElement("div", "raison-glisse", cible ? cible.raison : "Créneau inconnu du serveur"));
+    }
+  }
+}
+
+function suivrePointeur() {
+  const g = glissement;
+  if (!g || !g.demarre) return;
+  g.fantome.style.transform = `translate(${g.x + 12}px, ${g.y + 12}px)`;
+  const sous = document.elementFromPoint(g.x, g.y);
+  const ligne = sous ? sous.closest("#schedule-list [data-creneau]") : null;
+  const survol = ligne && ligne !== g.row && ligne.classList.contains("cible-permise") ? ligne : null;
+  if (survol !== g.survol) {
+    g.survol?.classList.remove("cible-survolee");
+    survol?.classList.add("cible-survolee");
+    g.survol = survol;
+  }
+  g.visee = ligne && ligne !== g.row ? ligne.dataset.creneau : null;
+}
+
+function defilerPresDesBords(g) {
+  const pas = () => {
+    if (glissement !== g) return;
+    const entete = document.querySelector("header");
+    const haut = (entete ? Math.max(0, entete.getBoundingClientRect().bottom) : 0) + BORD_DEFILEMENT_PX;
+    let delta = 0;
+    if (g.y < haut) delta = -PAS_DEFILEMENT_PX;
+    else if (g.y > window.innerHeight - BORD_DEFILEMENT_PX) delta = PAS_DEFILEMENT_PX;
+    if (delta) {
+      window.scrollBy(0, delta);
+      suivrePointeur();
+    }
+    g.boucle = requestAnimationFrame(pas);
+  };
+  g.boucle = requestAnimationFrame(pas);
+}
+
+function echapPendantGlissement(evenement) {
+  if (evenement.key === "Escape" && glissement) terminerGlissement();
+}
+
+function nettoyerGlissement(g) {
+  cancelAnimationFrame(g.boucle);
+  document.removeEventListener("keydown", echapPendantGlissement);
+  document.body.classList.remove("glissement-actif");
+  g.fantome?.remove();
+  document.querySelectorAll("#schedule-list .raison-glisse").forEach((el) => el.remove());
+  document.querySelectorAll("#schedule-list [data-creneau]").forEach((el) => el.classList.remove(
+    "glisse-source", "cible-permise", "cible-interdite", "cible-survolee"));
+  if (g.poignee.hasPointerCapture?.(g.pointeur)) g.poignee.releasePointerCapture(g.pointeur);
+}
+
+function terminerGlissement() {
+  const g = glissement;
+  glissement = null;
+  garderSousLePointeur(g, () => nettoyerGlissement(g));
+  if (rechargementDiffere) {
+    rechargementDiffere = false;
+    loadSchedulePanel();
+  }
+}
+
+function refuserLeGlissement(raison) {
+  const c = glissement.c;
+  refusDeLigne = { creneauId: c.id, texte: raison };
+  rechargementDiffere = true;
+  terminerGlissement();
+}
+
+async function deposer() {
+  const g = glissement;
+  if (!g.demarre) { glissement = null; return; }
+  const visee = g.visee;
+  // Une cible visee avant la reponse : on l'attend, sans retenir le pointeur. Le rechargement
+  // en attente passe APRES le geste : il effacerait la confirmation qui s'ouvre.
+  const differe = rechargementDiffere;
+  rechargementDiffere = false;
+  terminerGlissement();
+  const refuser = async (texte) => {
+    refusDeLigne = { creneauId: g.c.id, texte };
+    await loadSchedulePanel();
+  };
+  const fin = () => (differe ? loadSchedulePanel() : null);
+  if (!visee) return fin();
+  const donnees = await g.lecture;
+  if (!donnees) return refuser(g.panne);
+  if (donnees.raison_creneau) return refuser(donnees.raison_creneau);
+  const cible = donnees.cibles.find((x) => String(x.creneau_id) === visee);
+  if (!cible || !cible.possible) return refuser(cible ? cible.raison : "Créneau inconnu du serveur");
+  const ici = creneauDeLaLecture(donnees);
+  const deplaceUnChoix = (o) => o && (o.compose || o.epingle);
+  if (deplaceUnChoix(ici.occupant) || deplaceUnChoix(cible.occupant)) {
+    demanderConfirmation(ici, cible, g.c.id, fin);
+    return null;
+  }
+  return executerEchange(ici, { id: cible.creneau_id, publier_a: cible.publier_a, occupant: cible.occupant }, cible.annonces);
+}
+
+// Le composant de Programmer : `ligneOption` et `afficherValidation`, dans la zone de la ligne.
+function demanderConfirmation(ici, cible, creneauId, auRefus) {
+  const zone = ligneDeLaListe(creneauId)?.querySelector(":scope > .prog-zone");
+  if (!zone) return;
+  zone.innerHTML = "";
+  const selecteur = nouvelElement("div", "prog-selecteur");
+  const option = { ...optionDEchange(ici, cible), fermer: () => { zone.innerHTML = ""; auRefus(); } };
+  const ligne = ligneOption(option, async () => {});
+  selecteur.appendChild(ligne);
+  zone.appendChild(selecteur);
+  afficherValidation(ligne, option, async () => {});
+  zone.scrollIntoView({ block: "nearest" });
+  selecteur.querySelector(".confirmer")?.focus({ preventScroll: true });
 }
 
 // --- Ne pas publier ---------------------------------------------------------
