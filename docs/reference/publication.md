@@ -301,6 +301,33 @@ chaque étape est isolée : une panne amont ne bloque jamais un post prêt. L'he
 est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié), et
 le dossier figé est supprimé une fois le créneau terminé.
 
+**L'arbitrage ecrivait sur une lecture perimee** (2026-10-31, **reproduit par test,
+jamais observé en production**). « Recalculer la file » et le `PATCH /schedule/{id}`
+tournent dans le processus web, en parallèle de l'agent et sans verrou. L'arbitrage lit
+H0 PROGRAMME avec l'article A ; l'agent le gèle et committe ; l'arbitrage affecte B.
+`creneau.etat = PROGRAMME` n'émet rien (inchangé aux yeux de SQLAlchemy), le SQL est
+`UPDATE creneaux SET article_id=?, post_id=? WHERE id=?`. Le créneau reste GELE avec
+l'article et le post de B et les fichiers de A ; le post de B porte bien l'article du
+créneau, donc le contrôle de `_publier` passe. Le vrai `_publier`, publieur factice, a
+reçu `(['a_01.jpg', 'a_02.jpg'], 'Legende de B')` : les visuels d'une actu sous la
+légende d'une autre, sur SQLite et sur un Postgres jetable en Read Committed. Il faut
+que le gel tombe entre lecture et écriture, et que B ait déjà un brouillon — le cas
+ordinaire d'une grosse actu qui décale la précédente. La fréquence n'a pas été mesurée.
+
+`store.ecrire_si_inchange` conditionne donc ces écritures sur (état, article, post),
+sans toucher à ce que choisit l'arbitrage. Zéro ligne : **tout le lot du format** est
+annulé, sans exception, avec un warning, et le passage suivant reprend — pas ce seul
+créneau : l'arbitrage voulait A en H1 parce qu'il le croyait sorti de H0, écrire H1
+poserait A sur deux créneaux (mutation « saut seul » : test rouge). Le PATCH rend 409,
+rien d'écrit. Preuves : `tests/schedule/test_course_arbitrage_gel.py`, où retirer
+chacune des trois conditions rougit au moins un test. L'ordre inverse (le web a écrit
+sans committer, l'agent attend le verrou puis touche zéro ligne) n'a été vérifié que
+par un essai SQL ponctuel sur Postgres, pas par un test gardé. **Déduit, non prouvé** :
+la largeur réelle de la fenêtre sur Neon. **Non traité** : le `db.delete` de
+`synchroniser_creneaux` reste inconditionnel (un créneau sorti de la grille et gelé
+entre-temps serait supprimé : un post perdu, pas un faux post), et un épinglage seul
+n'étant pas dans la condition, il peut être perdu face à un arbitrage simultané.
+
 **Publication à l'heure affichée** (2026-09-17). L'agent passe toutes les 600 s :
 sans rien de plus, un post partait jusqu'à ~10 min après l'heure du dashboard.
 Un créneau GELE dont `publier_a` tombe dans les `publication_avance_s` (660 s,

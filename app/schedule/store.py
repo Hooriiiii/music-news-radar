@@ -11,8 +11,9 @@ et les carrousels piochent dans le reste.
 """
 
 import datetime as dt
+import logging
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.config import settings
@@ -37,6 +38,8 @@ from app.schedule.pause_visuels import articles_en_pause
 from app.schedule.publication_incertaine import erreur_incertaine
 from app.schedule.queue import Candidat, Place, arbitrer
 from app.schedule.slots import FenetresInvalides, prochains_horaires
+
+logger = logging.getLogger(__name__)
 
 # Un creneau dans l'un de ces etats ne bouge plus.
 VERROUILLES = frozenset({
@@ -464,6 +467,58 @@ def _tenus_ailleurs(db: Session, maintenant: dt.datetime, format_: FormatCreneau
     )
 
 
+def lecture(creneau: Creneau) -> tuple:
+    """Ce qu'on a lu : (etat, article, post), a repasser a `ecrire_si_inchange`."""
+    return creneau.etat, creneau.article_id, creneau.post_id
+
+
+def ecrire_si_inchange(db: Session, creneau: Creneau, lu: tuple, **valeurs) -> bool:
+    """UPDATE conditionnel sur (etat, article, post), NON committe. Faux si le creneau
+    a change depuis la lecture : rien n'est ecrit, a l'appelant d'abandonner son lot.
+
+    Le pendant de `runner._reclamer`, pour le processus web, et pour la meme raison :
+    affecter `creneau.article_id` sur une lecture perimee ecraserait un gel committe
+    par l'agent. Pourquoi : `publication.md`, « L'arbitrage ecrivait sur une lecture
+    perimee ». Une copie et non un import : `runner` importe ce module, et
+    `_reclamer` annule TOUTE la transaction sur un echec, or celle-ci porte un lot.
+    """
+    etat, article_id, post_id = lu
+    resultat = db.execute(
+        update(Creneau)
+        .where(
+            Creneau.id == creneau.id,
+            Creneau.etat == etat,
+            Creneau.article_id.is_(None) if article_id is None else Creneau.article_id == article_id,
+            Creneau.post_id.is_(None) if post_id is None else Creneau.post_id == post_id,
+        )
+        .values(**valeurs)
+        .execution_options(synchronize_session=False)
+    )
+    if resultat.rowcount != 1:
+        return False
+    db.refresh(creneau)
+    return True
+
+
+def _ecart_a_l_arbitrage(db: Session, creneau: Creneau, article_id: int | None, format_: FormatCreneau) -> dict:
+    """Ce qu'il faut ecrire pour que le creneau porte ce que l'arbitrage a choisi."""
+    valeurs: dict = {}
+    if article_id != creneau.article_id:
+        valeurs["article_id"] = article_id
+        valeurs["post_id"] = post_a_reprendre(db, article_id, TEMPLATES[format_]) if article_id else None
+        if article_id is not None:
+            # Un NOUVEL article prend le creneau -- l'ancienne erreur
+            # (« visuel introuvable : ... », posee sur l'article
+            # precedent) ne le concerne plus et resterait trompeuse au
+            # dashboard tant qu'aucune composition n'a encore eu lieu
+            # pour celui-ci.
+            valeurs["erreur"] = None
+    etat = EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE
+    if etat != creneau.etat:
+        valeurs["etat"] = etat
+    return valeurs
+
+
 def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
     tous: list[Creneau] = []
     places_ce_passage: set[int] = set()
@@ -488,6 +543,7 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
             for c in creneaux
         ]
         affectation = arbitrer(places, candidats, maintenant)
+        lot_abandonne = False
         for creneau in creneaux:
             if porte_un_post_orphelin(creneau):
                 # Le post survit a son article : le creneau le garde jusqu'au
@@ -496,24 +552,29 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
                 # invisible du gel, qui ne regarde que des creneaux PROGRAMME.
                 # Les etats VERROUILLES (GELE, PUBLIE, ...) ne sont jamais
                 # touches : ils passent par ce `continue` sans etre reecrits.
-                if creneau.etat == EtatCreneau.LIBRE:
-                    creneau.etat = EtatCreneau.PROGRAMME
+                if creneau.etat != EtatCreneau.LIBRE:
+                    continue
+                valeurs = {"etat": EtatCreneau.PROGRAMME}
+            elif creneau.epingle or creneau.etat in VERROUILLES:
                 continue
-            if creneau.epingle or creneau.etat in VERROUILLES:
-                continue
-            article_id = affectation.get(utc(creneau.publier_a))
-            if article_id != creneau.article_id:
-                creneau.article_id = article_id
-                creneau.post_id = post_a_reprendre(db, article_id, TEMPLATES[format_]) if article_id else None
-                if article_id is not None:
-                    # Un NOUVEL article prend le creneau -- l'ancienne erreur
-                    # (« visuel introuvable : ... », posee sur l'article
-                    # precedent) ne le concerne plus et resterait trompeuse au
-                    # dashboard tant qu'aucune composition n'a encore eu lieu
-                    # pour celui-ci.
-                    creneau.erreur = None
-            creneau.etat = EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE
-        db.commit()
+            else:
+                valeurs = _ecart_a_l_arbitrage(db, creneau, affectation.get(utc(creneau.publier_a)), format_)
+            if valeurs and not ecrire_si_inchange(db, creneau, lecture(creneau), **valeurs):
+                lot_abandonne = True
+                logger.warning(
+                    "arbitrage %s abandonne : le creneau %s a change depuis la lecture, le passage suivant reprend",
+                    format_.value, creneau.id,
+                )
+                break
+        if lot_abandonne:
+            # TOUT le lot du format, pas ce seul creneau : l'affectation supposait
+            # l'article de ce creneau disponible, et en ecrire le reste le poserait
+            # sur deux creneaux. Relu, car le rollback a tout expire et un creneau
+            # a pu disparaitre.
+            db.rollback()
+            creneaux = list(db.scalars(_futurs(format_, maintenant).order_by(Creneau.publier_a)))
+        else:
+            db.commit()
         places_ce_passage |= {c.article_id for c in creneaux if c.article_id is not None}
         tous += creneaux
     if fenetres_fautives is not None:

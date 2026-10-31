@@ -30,6 +30,8 @@ from app.schedule.store import (
     TEMPLATES,
     VERROUILLES,
     appliquer_arbitrage,
+    ecrire_si_inchange,
+    lecture,
     offre_reels,
     post_a_reprendre,
     raison_ineligible_reel,
@@ -46,6 +48,7 @@ router = APIRouter(tags=["schedule"])
 # facon irreversible : on exige que l'utilisateur tape ce mot en confirmation,
 # pas une simple case a cocher qu'un clic malheureux activerait.
 CONFIRMATION_REEL = "PUBLIER"
+MODIFIE_ENTRE_TEMPS = "Creneau modifie entre-temps (l'agent vient peut-etre de le geler) : rien n'a ete change"
 
 
 def _maintenant() -> dt.datetime:
@@ -76,9 +79,20 @@ def _liste(db: Session, maintenant: dt.datetime) -> list[CreneauOut]:
     return [_vue(db, creneau) for creneau in creneaux]
 
 
-def _reprogrammer(creneau: Creneau) -> None:
-    creneau.etat = EtatCreneau.PROGRAMME if creneau.article_id else EtatCreneau.LIBRE
-    creneau.epingle = creneau.article_id is not None
+def _reprogramme(article_id: int | None) -> dict:
+    return {
+        "etat": EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE,
+        "epingle": article_id is not None,
+    }
+
+
+def _ecrire(db: Session, creneau: Creneau, lu: tuple, **valeurs) -> None:
+    """Ecriture conditionnelle, ou 409 : `lu` a pu etre gele par l'agent depuis la
+    lecture, et ecrire dessus publierait les fichiers de l'un avec la legende de
+    l'autre (`publication.md`, « L'arbitrage ecrivait sur une lecture perimee »)."""
+    if not ecrire_si_inchange(db, creneau, lu, **valeurs):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=MODIFIE_ENTRE_TEMPS)
 
 
 @router.get("/schedule", response_model=list[CreneauOut])
@@ -148,11 +162,12 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         return _ne_pas_publier(db, creneau, maintenant)
     if creneau.etat not in MODIFIABLES or utc(creneau.publier_a) <= maintenant:
         raise HTTPException(status_code=409, detail="Creneau gele ou passe : il ne se modifie plus")
+    lu = lecture(creneau)
 
     if payload.epingle is not None:
         if payload.epingle and creneau.article_id is None:
             raise HTTPException(status_code=409, detail="rien a epingler")
-        creneau.epingle = payload.epingle
+        _ecrire(db, creneau, lu, epingle=payload.epingle)
     elif payload.article_id is not None:
         article = db.get(Article, payload.article_id)
         if article is None:
@@ -192,14 +207,15 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
                 Creneau.etat.in_(MODIFIABLES),
             )
         ):
-            autre.article_id = None
-            autre.post_id = None
-            _reprogrammer(autre)
-        creneau.article_id = article.id
-        # Le brouillon repris doit etre du gabarit du creneau : jamais un
-        # carrousel accroche a un reel, ni l'inverse.
-        creneau.post_id = post_a_reprendre(db, article.id, TEMPLATES[creneau.format])
-        _reprogrammer(creneau)
+            _ecrire(db, autre, lecture(autre), article_id=None, post_id=None, **_reprogramme(None))
+        _ecrire(
+            db, creneau, lu,
+            article_id=article.id,
+            # Le brouillon repris doit etre du gabarit du creneau : jamais un
+            # carrousel accroche a un reel, ni l'inverse.
+            post_id=post_a_reprendre(db, article.id, TEMPLATES[creneau.format]),
+            **_reprogramme(article.id),
+        )
     else:
         suivant = db.scalar(
             select(Creneau)
@@ -215,10 +231,11 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         )
         if suivant is None:
             raise HTTPException(status_code=409, detail="Aucun creneau modifiable apres celui-ci")
-        creneau.article_id, suivant.article_id = suivant.article_id, creneau.article_id
-        creneau.post_id, suivant.post_id = suivant.post_id, creneau.post_id
-        _reprogrammer(creneau)
-        _reprogrammer(suivant)
+        lu_suivant = lecture(suivant)
+        _, article_ici, post_ici = lu
+        _, article_apres, post_apres = lu_suivant
+        _ecrire(db, creneau, lu, article_id=article_apres, post_id=post_apres, **_reprogramme(article_apres))
+        _ecrire(db, suivant, lu_suivant, article_id=article_ici, post_id=post_ici, **_reprogramme(article_ici))
 
     db.commit()
     return _vue(db, creneau)
