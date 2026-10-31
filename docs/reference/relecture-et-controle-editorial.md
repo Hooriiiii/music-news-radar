@@ -478,6 +478,28 @@ rallongee a T-5 h repondait 200, puis le gel excluait l'article a vie. Reproduit
 
 Prouve par test (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
 
+### Une edition pendant le rendu (2026-10-31)
+
+Le creneau reste PROGRAMME pendant le rendu : `PATCH /posts` repondait 200 sans rien rouvrir, puis
+`_geler` ecrivait GELE avec l'ancienne cover, puisque ni l'etat, ni l'article, ni le post n'avaient
+bouge. Reproduit sur le vrai code. Pire, sur un fond agrandi : l'objet de l'agent, reassigne en
+memoire par `preparation`, reecrivait l'ancien texte en base a son `commit`.
+
+Apres `preparer`, `runner._edite_pendant_le_gel` relit `slides`, `template` et `variants` utiles par
+colonnes, et compare a `relecture.contenu_fige` pris avant le rendu. S'ils different : pas de gel,
+raison ecrite (« gel refait »), objet oublie, et le passage suivant refait. Meme chose si le rendu
+de l'ancien texte etait `PreparationImpossible` : ce refus parle d'un texte qui n'existe plus. Une
+legende ne reporte rien, un agrandissement non plus. `_reclamer` n'est pas touche.
+
+**Pas de boucle** : un passage sans nouvelle edition gele. **Pres du depart**
+(`publication_relecture_regel_minutes`, reutilise tel quel), notification une fois par raison
+ecrite. Au-dela de `publication_retard_max_minutes`, `_raison_manque` garde la raison.
+
+**Limite** : quelques millisecondes separent cette relecture de l'ecriture du gel, et un `PATCH`
+peut lire PROGRAMME juste avant ce gel et committer juste apres. La fenetre passe de la duree d'un
+rendu a celle de ces lectures ; elle n'est pas nulle. Une migration ou un verrou la fermerait,
+ce qui n'a pas ete fait ici. Prouve par test a deux sessions, jamais observe en production.
+
 ### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
 
 `PATCH /schedule/{id}` avec `sauter` envoyait `{sauter: true}` et la liste ne se rechargeait

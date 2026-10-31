@@ -461,3 +461,139 @@ def test_le_fond_vide_est_refuse_avant_de_rien_toucher(client_web, fabrique, fil
     assert "fond" in reponse.json()["detail"]
     assert _post(fabrique, file_["post_a"]).slides[0]["image_url"] == "https://img/A.jpg"
     assert _creneau(fabrique, file_["tot"]).etat is EtatCreneau.GELE
+
+
+# --- 4. Une edition pendant le rendu n'est pas figee avec l'ancienne cover ---------------
+
+
+NOUVELLE = [_cover(headline="**Corrigee** pendant le gel")]
+
+
+def _epingler(fabrique, file_):  # noqa: F811
+    """Sinon l'arbitrage du passage met B a la place de A avant le rendu."""
+    with fabrique() as db:
+        db.get(Creneau, file_["tot"]).epingle = True
+        db.commit()
+
+
+def _pendant_le_rendu(client_web, file_, corps):  # noqa: F811
+    """Le PATCH tombe au milieu du rendu, sur l'autre session, creneau encore PROGRAMME."""
+    deja = []
+
+    def preparer(post, article, dossier):
+        if not deja:
+            deja.append(client_web.patch(f"/posts/{file_['post_a']}", json=corps).status_code)
+        return ["p_01.jpg"]
+
+    return preparer, deja
+
+
+def test_une_accroche_enregistree_pendant_le_gel_n_est_pas_perdue(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """La reproduction de Karim. Avant : PATCH 200, puis GELE avec l'ancienne cover."""
+    _epingler(fabrique, file_)
+    passages.preparer, statuts = _pendant_le_rendu(client_web, file_, {"slides": NOUVELLE})
+
+    passages.tourner(_une_heure_avant(file_))
+
+    assert statuts == [200]
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.fichiers) == (EtatCreneau.PROGRAMME, None)
+    assert "pendant le rendu" in creneau.erreur
+    assert _raison(fabrique, file_["a"]) is None
+
+    # Le passage suivant refait, et ne recommence pas : aucune boucle sans nouvelle edition.
+    passages.tourner(_une_heure_avant(file_) + dt.timedelta(minutes=10))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.fichiers, creneau.erreur) == (EtatCreneau.GELE, ["p_01.jpg"], None)
+    assert passages.rendus == ["**A**", "**Corrigee** pendant le gel"]
+    assert passages.composes == []
+
+
+def test_une_legende_pendant_le_gel_ne_coute_pas_un_gel(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """Elle est relue a la publication : les fichiers figes n'en dependent pas."""
+    _epingler(fabrique, file_)
+    passages.preparer, _ = _pendant_le_rendu(client_web, file_, {"caption": "Corrigee pendant le gel"})
+    passages.tourner(_une_heure_avant(file_))
+    assert _creneau(fabrique, file_["tot"]).etat is EtatCreneau.GELE
+    assert _post(fabrique, file_["post_a"]).caption == "Corrigee pendant le gel"
+
+
+def test_l_agrandissement_du_fond_ne_passe_pas_pour_une_edition(fabrique, file_, passages):  # noqa: F811
+    """`preparation` reassigne `post.slides` en memoire : ce n'est pas un humain."""
+    _epingler(fabrique, file_)
+
+    def agrandit(post, article, dossier):
+        post.slides = [{**post.slides[0], "image_url": "file:///cache/agrandi.jpg"}]
+        return ["p_01.jpg"]
+
+    passages.preparer = agrandit
+    passages.tourner(_une_heure_avant(file_))
+    assert _creneau(fabrique, file_["tot"]).etat is EtatCreneau.GELE
+
+
+def test_l_agrandissement_n_ecrase_pas_l_edition_en_base(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """L'objet en memoire de l'agent porte l'ancien texte : son `commit` l'aurait reecrit."""
+    _epingler(fabrique, file_)
+    def agrandit(post, article, dossier):
+        post.slides = [{**post.slides[0], "image_url": "file:///cache/agrandi.jpg"}]
+        client_web.patch(f"/posts/{file_['post_a']}", json={"slides": NOUVELLE})
+        return ["p_01.jpg"]
+
+    passages.preparer = agrandit
+    passages.tourner(_une_heure_avant(file_))
+    assert _post(fabrique, file_["post_a"]).slides[0]["headline"] == "**Corrigee** pendant le gel"
+
+
+def test_un_gel_impossible_sur_l_ancien_texte_n_exclut_pas(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """Le refus parle d'un texte qui n'existe plus : le passage suivant juge le nouveau."""
+    _epingler(fabrique, file_)
+    def impossible(post, article, dossier):
+        client_web.patch(f"/posts/{file_['post_a']}", json={"slides": NOUVELLE})
+        raise PreparationImpossible("la cover deborde")
+
+    passages.preparer = impossible
+    passages.tourner(_une_heure_avant(file_))
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.post_id) == (EtatCreneau.PROGRAMME, file_["post_a"])
+    assert _raison(fabrique, file_["a"]) is None
+
+
+def test_pres_du_depart_cela_se_dit_une_fois(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """A T-10 min, le passage suivant tombe apres l'heure : l'humain doit le savoir."""
+    _epingler(fabrique, file_)
+    moment = file_["h0"] - dt.timedelta(minutes=15)
+    numero = []
+
+    def edite_a_chaque_fois(post, article, dossier):
+        numero.append(1)
+        corps = {"slides": [_cover(headline=f"**Version** {len(numero)}")]}
+        client_web.patch(f"/posts/{file_['post_a']}", json=corps)
+        return ["p_01.jpg"]
+
+    passages.preparer = edite_a_chaque_fois
+    passages.tourner(moment)
+    passages.tourner(moment + dt.timedelta(minutes=1))
+    assert len(numero) == 2
+    annonces = [note for note in passages.notes if "pendant le rendu" in note]
+    assert len(annonces) == 1
+    assert str(settings.publication_retard_max_minutes) in annonces[0]
+
+
+def test_loin_du_depart_cela_ne_notifie_pas(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    _epingler(fabrique, file_)
+    passages.preparer, _ = _pendant_le_rendu(client_web, file_, {"slides": NOUVELLE})
+    passages.tourner(_une_heure_avant(file_))
+    assert not [note for note in passages.notes if "pendant le rendu" in note]
+
+
+def test_au_dela_de_la_limite_le_manque_dit_pourquoi(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    _epingler(fabrique, file_)
+    passages.preparer, _ = _pendant_le_rendu(client_web, file_, {"slides": NOUVELLE})
+    passages.tourner(_une_heure_avant(file_))
+
+    passages.tourner(file_["h0"] + dt.timedelta(minutes=settings.publication_retard_max_minutes + 1))
+
+    creneau = _creneau(fabrique, file_["tot"])
+    assert creneau.etat is EtatCreneau.MANQUE
+    assert "pendant le rendu" in creneau.erreur

@@ -848,3 +848,11 @@ devenu vide n'est pas épinglé : le robot peut le remplir.
 mémorisée par créneau (`deja_annonce`) : un créneau rouvert puis échangé peut garder le mémo de
 son ancien occupant. La lecture est faite au début du glissement : le dépôt peut donc être
 refusé par le PATCH, et la raison s'affiche alors à côté de la ligne.
+
+### Ce que le gel fait d'une edition humaine (2026-10-31)
+
+Aucun chemin nouveau vers `media_publish`, `_reclamer` inchange. `_geler` ne fige pas un post edite
+pendant son rendu, ne relache plus un post corrige pour un repere perime (il part avec un
+avertissement), et libere sans exclure quand un contenu fige edite est refuse. Une panne machine
+n'exclut toujours rien. Detail, preuves et limites : `relecture-et-controle-editorial.md`, sections
+du 2026-10-31. Prouve par test, jamais observe en production.

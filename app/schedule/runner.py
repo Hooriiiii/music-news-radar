@@ -89,11 +89,13 @@ from app.schedule.publication_incertaine import PREFIXE_ECHEC_PUBLICATION, RAISO
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.relecture import (
     RAISON_RELECTURE,
+    contenu_fige,
     deja_annonce,
     fige_par_un_humain,
     marquer_annonce,
     porte_une_correction,
     reference_du_texte,
+    regel_possible,
 )
 from app.schedule.store import (
     TEMPLATES,
@@ -373,6 +375,46 @@ def _garder_le_marqueur(erreur: str, marque: bool) -> str:
     # En TETE, comme `_raison_manque` conserve la cause precedente : une panne qui
     # l'effacerait laisserait le gel suivant exclure l'article que l'humain vient d'editer.
     return f"{RAISON_RELECTURE} — {erreur}"[:1000] if marque else erreur[:1000]
+
+
+def _edite_pendant_le_gel(db, post: Post, rendu: tuple) -> bool:
+    """Le contenu fige en base differe-t-il de ce qui vient d'etre rendu ?
+
+    Le creneau reste PROGRAMME pendant le rendu : `PATCH /posts` repond 200 sans rien rouvrir,
+    et l'ecriture conditionnelle du gel ne regarde que (etat, article, post). Lu par colonnes :
+    le preparateur a pu reassigner `post.slides` en memoire (agrandissement du fond), ce qui
+    n'est pas une edition. Si c'en est une, cet objet est jete : son `commit` ecraserait la
+    correction avec l'ancien texte.
+    """
+    with db.no_autoflush:
+        en_base = db.execute(
+            select(Post.slides, Post.template, Post.variants).where(Post.id == post.id)
+        ).one_or_none()
+    if en_base is not None and contenu_fige(en_base) == rendu:
+        return False
+    db.expire(post)
+    return True
+
+
+def _reporter_le_gel(db, creneau: Creneau, attendu: tuple, maintenant: dt.datetime, notifier) -> None:
+    """Ne gele pas : le passage suivant refait avec le texte en base, sans exclure personne.
+
+    Pas de boucle : chaque passage compare a ce qu'il vient de rendre, donc seule une nouvelle
+    edition pendant le rendu reporte encore. Pres du depart, le passage suivant peut tomber
+    apres l'heure : cela se dit, une fois par raison ecrite. Au-dela de la limite,
+    `_marquer_manques` conserve cette raison.
+    """
+    erreur = _garder_le_marqueur("gel refait : le post a ete modifie pendant le rendu", True)
+    deja_dit = creneau.erreur == erreur
+    if not _ecrire_si(db, creneau, attendu, erreur=erreur):
+        return
+    if not deja_dit and not regel_possible(utc(creneau.publier_a), maintenant):
+        _prevenir(
+            notifier,
+            f"post de {_heure_locale(creneau.publier_a)} modifie pendant le rendu : refait au passage "
+            f"suivant, il peut partir en retard, et sera manque au-dela de "
+            f"{settings.publication_retard_max_minutes} min",
+        )
 
 
 def _replier(db, creneau: Creneau, attendu: tuple, post_id: int, raison: str) -> bool:
@@ -917,6 +959,7 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             rapport.erreurs.append(f"{_heure_locale(creneau.publier_a)} : {erreur}")
             _ecrire_si(db, creneau, attendu, post_id=None, erreur=erreur)
             continue
+        rendu = contenu_fige(post)
         try:
             figement = normaliser_figement(preparer(post, article, _dossier(creneau)))
         except PreparationDifferee as exc:
@@ -959,6 +1002,10 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
                 rapport.sautes += 1
             continue
         except PreparationImpossible as exc:
+            if _edite_pendant_le_gel(db, post, rendu):
+                # Le refus parle d'un texte qui n'existe plus.
+                _reporter_le_gel(db, creneau, attendu, maintenant, notifier)
+                continue
             if rouvert:
                 # « Ne perds pas le post » : le creneau se libere, l'article RESTE
                 # eligible, et le POST survit (les posts ne sont jamais purges) --
@@ -987,6 +1034,9 @@ def _geler(db, maintenant: dt.datetime, preparateurs: dict, notifier, rapport: R
             _ecrire_si(db, creneau, attendu, erreur=erreur)
             _prevenir(notifier, erreur)
             formats_en_panne.add(creneau.format)
+            continue
+        if _edite_pendant_le_gel(db, post, rendu):
+            _reporter_le_gel(db, creneau, attendu, maintenant, notifier)
             continue
         if _ecrire_si(
             db, creneau, attendu,
