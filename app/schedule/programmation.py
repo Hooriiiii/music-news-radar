@@ -27,11 +27,11 @@ from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau, Post
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.publish.mode import mode_effectif
+from app.schedule.publication_incertaine import publication_incertaine
 from app.schedule.runner import _brouillon_perime
 from app.schedule.store import (
     MODIFIABLES,
     TEMPLATES,
-    VERROUILLES,
     comptes_cites,
     posts_a_reprendre,
     posts_en_base,
@@ -51,7 +51,17 @@ ANNONCES_MODE = {
     "arret": "Mode arrêt : rien ne sera composé ni publié tant que le mode ne change pas.",
     "apercu": "Mode aperçu : composé et préparé chez Meta, mais rien n'est publié.",
 }
-PLACES = VERROUILLES | MODIFIABLES
+# Ce qui peut empecher la main, dans l'ordre ou on le dit. PAS `store.VERROUILLES`, qui
+# dit qu'un CRENEAU ne bouge plus, pas qu'un ARTICLE ne peut pas repartir. Un MANQUE n'y
+# est pas : rien n'est parti (`_marquer_manques` ne lit jamais un creneau reclame, et
+# le MANQUE d'apres reclamation exige qu'`encore_publier` ait refuse), et le robot le reprend.
+RAISONS_DU_VERROU = {
+    EtatCreneau.PUBLIE: "Article déjà publié",
+    EtatCreneau.APERCU: "Article déjà passé en aperçu",
+    EtatCreneau.ECHEC: "Publication peut-être en ligne : vérifie le compte, puis confirme qu'elle n'est pas partie",
+    EtatCreneau.GELE: "Article déjà gelé sur un autre créneau",
+}
+PLACES = frozenset(RAISONS_DU_VERROU) | MODIFIABLES
 
 
 @dataclass
@@ -61,11 +71,20 @@ class Lecture:
     db: Session
     maintenant: dt.datetime
     index: IndexComptes
-    engages: dict[int, set[int]]
+    engages: dict[int, dict[int, EtatCreneau]]
     places: dict[int, Creneau]
     brouillons: dict[tuple[int, str], Post]
     sources: tuple
     posts_reel: list | None
+
+
+def verrouille(creneau: Creneau) -> bool:
+    """Ce creneau empeche-t-il de programmer son article a la main ? Un ECHEC seulement
+    s'il porte une trace de doute : meme regle que la ceinture du robot
+    (`store._articles_publiables`), et la confirmation humaine l'efface."""
+    if creneau.etat == EtatCreneau.ECHEC:
+        return publication_incertaine(creneau.erreur)
+    return creneau.etat in RAISONS_DU_VERROU
 
 
 def _creneaux_des_articles(db: Session, ids: list[int]) -> list[Creneau]:
@@ -76,12 +95,12 @@ def _creneaux_des_articles(db: Session, ids: list[int]) -> list[Creneau]:
 
 def lire(db: Session, articles: list[Article], maintenant: dt.datetime, formats: set[FormatCreneau]) -> Lecture:
     ids = [a.id for a in articles]
-    engages: dict[int, set[int]] = {}
+    engages: dict[int, dict[int, EtatCreneau]] = {}
     places: dict[int, Creneau] = {}
     for creneau in _creneaux_des_articles(db, ids):
-        if creneau.etat in VERROUILLES:
-            engages.setdefault(creneau.article_id, set()).add(creneau.id)
-        else:
+        if verrouille(creneau):
+            engages.setdefault(creneau.article_id, {})[creneau.id] = creneau.etat
+        elif creneau.etat in MODIFIABLES:
             places[creneau.article_id] = creneau
     brouillons = posts_a_reprendre(db, ids)
     index = construire_index(db)
@@ -118,10 +137,11 @@ def raison_article(article: Article) -> str | None:
     return None
 
 
-def _raison_engage(article: Article, creneau_id: int | None, engages: dict[int, set[int]]) -> str | None:
-    if engages.get(article.id, set()) - {creneau_id}:
-        return "Article déjà engagé sur un autre créneau"
-    return None
+def _raison_engage(
+    article: Article, creneau_id: int | None, engages: dict[int, dict[int, EtatCreneau]]
+) -> str | None:
+    etats = {etat for identifiant, etat in engages.get(article.id, {}).items() if identifiant != creneau_id}
+    return next((raison for etat, raison in RAISONS_DU_VERROU.items() if etat in etats), None)
 
 
 def _raison_format(article: Article, format_: FormatCreneau, lecture: Lecture) -> str | None:
@@ -338,15 +358,15 @@ def vue_composition(creneau: Creneau, maintenant: dt.datetime, mode: str) -> dic
 
 
 def vues_des_cartes(db: Session, articles: list[Article], maintenant: dt.datetime) -> dict[int, tuple]:
-    """Pour chaque article : (son creneau a venir, ce qui l'empeche de se programmer).
-    Une seule lecture de `creneaux`, et le mode lu une fois."""
+    """Pour chaque article : (son creneau a venir, ce qui l'empeche de se programmer, une
+    publication a verifier). Une seule lecture de `creneaux`, et le mode lu une fois."""
     creneaux = _creneaux_des_articles(db, [a.id for a in articles])
     mode = mode_effectif()
-    engages: dict[int, set[int]] = {}
+    engages: dict[int, dict[int, EtatCreneau]] = {}
     courant: dict[int, Creneau] = {}
     for creneau in creneaux:
-        if creneau.etat in VERROUILLES:
-            engages.setdefault(creneau.article_id, set()).add(creneau.id)
+        if verrouille(creneau):
+            engages.setdefault(creneau.article_id, {})[creneau.id] = creneau.etat
         # Le gel se montre aussi : c'est ce qui va partir.
         if creneau.etat in (EtatCreneau.PROGRAMME, EtatCreneau.GELE) and utc(creneau.publier_a) > maintenant:
             courant[creneau.article_id] = creneau
@@ -364,5 +384,6 @@ def vues_des_cartes(db: Session, articles: list[Article], maintenant: dt.datetim
                 "post_id": creneau.post_id,
                 **vue_composition(creneau, maintenant, mode),
             }
-        vues[article.id] = (vue, raison_article(article) or _raison_engage(article, None, engages))
+        a_verifier = EtatCreneau.ECHEC in engages.get(article.id, {}).values()
+        vues[article.id] = (vue, raison_article(article) or _raison_engage(article, None, engages), a_verifier)
     return vues

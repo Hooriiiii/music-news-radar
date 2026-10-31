@@ -764,10 +764,30 @@ conditionnelle. Un post orphelin n'est pas mort (`porte_un_post_orphelin`).
 
 **Une correction humaine épingle** : voir `relecture-et-controle-editorial.md`.
 
+**Ce qui verrouille la main** (`programmation.RAISONS_DU_VERROU`, une seule source pour le
+PATCH, les options et la carte) : un créneau PUBLIE, APERCU, GELE, ou un ECHEC qui porte une
+trace de doute (`publication_incertaine`, la règle exacte de la ceinture du robot).
+`store.VERROUILLES`, lui, dit qu'un CRENEAU ne bouge plus et reste tel quel.
+
+- **MANQUE ne verrouille pas** (reproduit d'abord : 409 « déjà engagé » alors que le robot
+  reprenait l'article). Vérifié dans le code : `_marquer_manques` ne lit que
+  LIBRE/PROGRAMME/GELE, et le seul MANQUE après une réclamation (`manquer`, dans `_publier`)
+  exige que `encore_publier` ait refusé, donc que `media_publish` n'ait pas été appelé.
+- **Un ECHEC vérifié ne verrouille plus** : « Vérifié, il n'est pas parti » réécrit l'erreur,
+  qui ne porte plus de trace de doute. Un ECHEC sans doute (« post supprime apres le gel »)
+  non plus : le robot le reprenait déjà.
+- **Limite héritée** : un échec d'avant le préfixe (`str(faute)` nu) n'a pas de trace, donc ne
+  verrouille ni le robot ni la main. Seule son exclusion le couvre, comme ci-dessus.
+
+**La carte d'un article retenu par la ceinture sans exclusion** (remis en file avant la
+fusion) offrait « déjà engagé » sans issue : `exclusion_a_verifier` est vrai quand un créneau
+porte le doute, et « Remettre dans la file » ouvre la même vérification. `reintegrer` lit le
+`rowcount` : si le robot a enregistré entre-temps, 409 et rien n'est levé. Retirer un tel
+ECHEC ne répond plus « Publication en cours » hors de la fenêtre de `publication_en_vol`.
+
 **Limites connues, déduites du code.** La composition peut tomber jusqu'à un passage
 d'agent après l'heure calculée, et plus si le Mac dort ; une purge dans cet intervalle
 donne un créneau mort, que l'arbitrage répare. « Décaler » n'applique pas la limite de
-purge, même réparation. Un article passé par un créneau MANQUE ou ECHEC reste « engagé » et
-refusé à la main, règle antérieure, désormais visible sur la carte. `PATCH /posts` accepte
+purge, même réparation. `PATCH /posts` accepte
 encore `template` sans plus aucun bouton. `GET /posts/{id}/export.zip` reste sans bouton.
 

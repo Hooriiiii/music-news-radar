@@ -419,7 +419,7 @@ def test_un_article_engage_ailleurs_est_refuse(client, db_session):
     _creneau(db_session, article, etat=EtatCreneau.GELE, heures=1)
     libre = _creneau(db_session, heures=5)
 
-    assert "engagé" in _option(_options(client, article), libre)["raison"]
+    assert "gelé" in _option(_options(client, article), libre)["raison"]
 
 
 def test_le_creneau_actuel_est_nomme_et_n_est_pas_un_choix(client, db_session):
@@ -931,7 +931,7 @@ def test_une_carte_gelee_montre_le_gel_et_n_est_pas_programmable(client, db_sess
     vue = client.get(f"/articles/{article.id}").json()
 
     assert vue["creneau"]["etat"] == "gele"
-    assert "engagé" in vue["raison_non_programmable"]
+    assert "gelé" in vue["raison_non_programmable"]
 
 
 # --- 6. Les retraits --------------------------------------------------------------

@@ -30,12 +30,14 @@ def _avec_visuel(article: Article, index: IndexComptes, cartes: dict | None = No
     sortie = ArticleOut.model_validate(article)
     if cartes is None:
         cartes = vues_des_cartes(object_session(article), [article], dt.datetime.now(dt.timezone.utc))
-    creneau, sortie.raison_non_programmable = cartes[article.id]
+    creneau, sortie.raison_non_programmable, a_verifier = cartes[article.id]
     sortie.creneau = CreneauDeLArticle(**creneau) if creneau else None
     sortie.visuel = etiquette_visuel(article, index)
     sortie.raison_sans_visuel = raison_sans_visuel(article, index)
     sortie.visuels_interdits = origine_interdite(article.source)
-    sortie.exclusion_a_verifier = publication_incertaine(article.file_exclu_raison)
+    # Le creneau aussi : un article remis en file avant la seconde ceinture n'a plus de
+    # raison, et elle le retient quand meme. Sans ca, sa carte n'offre aucune issue.
+    sortie.exclusion_a_verifier = publication_incertaine(article.file_exclu_raison) or a_verifier
     return sortie
 
 
@@ -193,8 +195,9 @@ def reintegrer_article(
                 ),
             )
         for creneau in douteux:
-            # UPDATE conditionnel : si l'etat a bouge depuis la lecture, on n'ecrit rien.
-            db.execute(
+            # UPDATE conditionnel : le robot a pu enregistrer depuis la lecture. Zero ligne,
+            # et l'exclusion ne se leve pas : ce qu'a confirme l'humain ne vaut plus.
+            ecrit = db.execute(
                 update(Creneau)
                 .where(
                     Creneau.id == creneau.id,
@@ -202,7 +205,13 @@ def reintegrer_article(
                     Creneau.erreur == creneau.erreur,
                 )
                 .values(erreur=f"verifie a la main, pas parti — {creneau.erreur}"[:1000])
-            )
+            ).rowcount
+            if ecrit != 1:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Ce créneau vient de changer : rien n'a été remis en file, regarde son nouvel état.",
+                )
     # Le retrait vaut pour l'actu : son retour aussi. Aucun verrou a part, c'est la colonne.
     lever_les_retraits_du_groupe(groupe)
     article.file_exclu_raison = None

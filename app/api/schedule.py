@@ -278,7 +278,7 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
 
 def _ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime) -> CreneauOut:
     try:
-        ne_pas_publier(db, creneau)
+        ne_pas_publier(db, creneau, maintenant)
     except ReouvertureRefusee as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     vue = _vue(db, creneau)

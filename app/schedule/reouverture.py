@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Article, Creneau, EtatCreneau
 from app.pipeline.retrait_humain import RAISON_NE_PAS_PUBLIER, reporter_sur_le_representant
+from app.schedule.publication_incertaine import publication_incertaine
 from app.schedule.relecture import RAISON_RELECTURE, regel_possible
 from app.schedule.runner import (
     RAISON_RECLAMATION,
@@ -56,6 +57,10 @@ from app.schedule.store import utc
 
 
 PUBLICATION_EN_COURS = "Publication en cours : le conteneur est cree chez Meta, plus rien ne se modifie"
+PUBLICATION_A_VERIFIER = (
+    "Publication réclamée sans confirmation, peut-être partie : il n'y a plus rien à retirer. "
+    "Vérifie le compte, puis confirme depuis la carte de l'article qu'elle n'est pas partie."
+)
 
 
 class ReouvertureRefusee(RuntimeError):
@@ -106,7 +111,7 @@ def _invalider_le_gel(
     return True
 
 
-def ne_pas_publier(db: Session, creneau: Creneau) -> None:
+def ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime | None = None) -> None:
     """Retire ce creneau du programme, ou leve `ReouvertureRefusee`.
 
     Le creneau redevient LIBRE, desepingle, sans post ni erreur ; l'article sort de
@@ -122,8 +127,10 @@ def ne_pas_publier(db: Session, creneau: Creneau) -> None:
     premiers, `_publier` ne selectionne que `etat == GELE`, et son propre UPDATE
     conditionnel echoue s'il avait lu le creneau juste avant.
     """
-    if creneau.etat == EtatCreneau.ECHEC and creneau.erreur == RAISON_RECLAMATION:
+    if publication_en_vol(creneau, maintenant or dt.datetime.now(dt.timezone.utc)):
         raise ReouvertureRefusee(PUBLICATION_EN_COURS)
+    if creneau.etat == EtatCreneau.ECHEC and publication_incertaine(creneau.erreur):
+        raise ReouvertureRefusee(PUBLICATION_A_VERIFIER)
     if creneau.etat not in (EtatCreneau.LIBRE, EtatCreneau.PROGRAMME, EtatCreneau.GELE):
         raise ReouvertureRefusee("Creneau termine : il n'y a plus rien a retirer")
     article_id = creneau.article_id
