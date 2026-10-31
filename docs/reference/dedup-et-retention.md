@@ -427,6 +427,43 @@ purge des evenements.
    abandonnée pour de bon (sans jamais poser de lien) ; et un verdict manuel
    vaut aussi entre deux articles FRAIS (hors archive), pas seulement contre
    l'archive.
+
+   **Le retrait humain vaut pour l'actu** (2026-10-31, `app/pipeline/retrait_humain.py`,
+   reproduit par test et sur un Postgres jetable, **jamais observé en production**). A
+   programmé sans post, doublon B mieux classé (`cle_information`). « Ne pas publier »
+   libère le créneau et exclut A ; A n'étant plus engagé, `elire_representants`
+   promouvait B : la même actu, candidate, programmée. La solution tient en un invariant,
+   **le représentant porte le retrait d'un de ses membres**, écrit dans
+   `file_exclu_raison` : ni table, ni migration, ni verrou à défaire.
+   `_articles_publiables` écarte déjà un exclu et tout doublon, et la carte du
+   représentant offre « Remettre dans la file ».
+   - **Liste fermée** (`RAISONS_HUMAINES`) : « Ne pas publier » et l'ancien « saute depuis
+     le dashboard ». Une exclusion machine ne verrouille jamais un groupe, testé sur les
+     cinq formes.
+   - `elire_representants` traite un groupe retiré comme un représentant engagé : ni
+     réélection, ni remise à noter, donc **aucun appel Claude de plus, plutôt moins**
+     (une réélection promouvrait un doublon jamais noté). Il répare aussi une ligne
+     ancienne où seul un doublon porte le retrait.
+   - `lier` reporte le retrait quand un article retiré passe sous un autre (un article
+     plus ancien ingéré après coup, un lien arbitré une heure plus tard) ; un doublon
+     arrivé après le retrait se lie à A comme d'habitude et reste doublon.
+   - `ne_pas_publier` le reporte aussi quand l'article du créneau est lui-même devenu
+     doublon.
+   - `purge_old_articles` le transmet aux doublons de A : `ON DELETE SET NULL` en aurait
+     fait des représentants libres. **`score_pending` saute un article retiré**, sinon cet
+     héritier jamais noté aurait été payé pour rien.
+   - **« Remettre dans la file »** efface les retraits de tout le groupe, seuls : « gel
+     impossible » reste sur son article. L'élection reprend au passage suivant.
+
+   Le report ne recouvre aucune raison déjà posée et ne touche pas un représentant `USED`.
+
+   **Limites, déduites du code.** Un représentant GELE ou épinglé qui reçoit le retrait par
+   un lien tardif garde son créneau : la dédup ne retire rien de ce qui va partir, c'est
+   l'humain qui le voit sur la ligne (un créneau PROGRAMME non épinglé est repris par
+   l'arbitrage). Une fois TOUT le groupe purgé, plus rien ne se souvient du retrait : une
+   reprise ingérée ensuite repart de zéro. Un verdict manuel « différent » défait le lien
+   mais pas un retrait déjà reporté : « Remettre dans la file » sur la carte le lève.
+
 ## Rétention
 
 **Exception `USED`** : un article marqué posté n'est JAMAIS purgé — c'est l'archive

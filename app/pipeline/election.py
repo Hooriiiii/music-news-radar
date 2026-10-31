@@ -30,6 +30,7 @@ from app.pipeline.cluster import (
     significant_tokens,
 )
 from app.pipeline.comptes_artistes import IndexComptes
+from app.pipeline.retrait_humain import reporter_sur_le_representant, retrait_humain
 from app.sources.instagram import TITRE_PAR_DEFAUT
 
 CATEGORIES_PRIMAIRES = frozenset(
@@ -186,7 +187,14 @@ def elire_representants(
         ).all()
         membres = [actuel, *doublons]
         meilleur = max(membres, key=lambda a: cle_information(a, index))
-        engage = representant_engage(db, actuel)
+        # Retiree a la main, l'actu ne change pas de tete : promouvoir un doublon la
+        # republierait, et le ferait noter pour rien. Meme traitement qu'un representant
+        # engage : ni reelection, ni remise a noter, donc aucun appel Claude. Le verrou
+        # n'existe que par la colonne : « Remettre dans la file » le leve en l'effacant.
+        retraits = [membre.file_exclu_raison for membre in membres if retrait_humain(membre.file_exclu_raison)]
+        if retraits and appliquer:
+            reporter_sur_le_representant(actuel, retraits[0])
+        engage = bool(retraits) or representant_engage(db, actuel)
         if meilleur.id != actuel.id:
             if engage:
                 stats.verrouilles += 1

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Article, ArticleStatus
 from app.pipeline import events
+from app.pipeline.retrait_humain import reporter_sur_le_representant
 from app.pipeline.cluster_arbitrage import (
     EntreeArbitrage,
     cle_paire,
@@ -969,6 +970,10 @@ def link_duplicates(
         )
         for pointeur in repointes:
             pointeur.duplicate_of_id = representant.id
+        # Un article retire a la main qui passe sous un autre : l'actu reste retiree, et
+        # sa carte est desormais masquee, c'est celle du representant qui offre le retour.
+        for membre in (article, *repointes):
+            reporter_sur_le_representant(representant, membre.file_exclu_raison)
         events.attacher(db, article, representant)
         return repointes
 

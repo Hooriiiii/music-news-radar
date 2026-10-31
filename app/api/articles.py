@@ -12,6 +12,7 @@ from app.config import settings
 from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
 from app.pipeline.cluster import raison_de_doublon
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
+from app.pipeline.retrait_humain import lever_les_retraits_du_groupe, membres_du_groupe, retrait_humain
 from app.schedule.publication_incertaine import (
     RAISON_RECLAMATION,
     erreur_incertaine,
@@ -149,7 +150,9 @@ def reintegrer_article(
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     confirme = corps is not None and corps.confirmation == CONFIRMATION_PAS_PARTI
-    if article.file_exclu_raison is None and not confirme:
+    groupe = membres_du_groupe(db, article)
+    retire = any(retrait_humain(membre.file_exclu_raison) for membre in groupe)
+    if article.file_exclu_raison is None and not confirme and not retire:
         # Idempotent : reclamer deux fois la meme remise en file n'est pas une
         # erreur, et l'UI peut avoir une grille d'une seconde en retard.
         return _avec_visuel(article, construire_index(db))
@@ -200,6 +203,8 @@ def reintegrer_article(
                 )
                 .values(erreur=f"verifie a la main, pas parti — {creneau.erreur}"[:1000])
             )
+    # Le retrait vaut pour l'actu : son retour aussi. Aucun verrou a part, c'est la colonne.
+    lever_les_retraits_du_groupe(groupe)
     article.file_exclu_raison = None
     db.commit()
     db.refresh(article)

@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, Creneau, EtatCreneau
+from app.pipeline.retrait_humain import RAISON_NE_PAS_PUBLIER, reporter_sur_le_representant
 from app.schedule.relecture import RAISON_RELECTURE, regel_possible
 from app.schedule.runner import (
     RAISON_RECLAMATION,
@@ -54,8 +55,6 @@ from app.schedule.runner import (
 from app.schedule.store import utc
 
 
-# Affichee sur la carte (« ⛔ hors file : ... ») : le mot du bouton qui l'a posee.
-RAISON_NE_PAS_PUBLIER = "« Ne pas publier » depuis le dashboard"
 PUBLICATION_EN_COURS = "Publication en cours : le conteneur est cree chez Meta, plus rien ne se modifie"
 
 
@@ -134,6 +133,10 @@ def ne_pas_publier(db: Session, creneau: Creneau) -> None:
         # Une raison deja posee (dedup d'archive) dit ce que `reintegrer` doit refuser.
         if article is not None and article.file_exclu_raison is None:
             article.file_exclu_raison = RAISON_NE_PAS_PUBLIER
+            # Programme puis rattache a un autre : le geste vise l'actu, pas la ligne.
+            representant = db.get(Article, article.duplicate_of_id) if article.duplicate_of_id else None
+            if representant is not None:
+                reporter_sur_le_representant(representant, RAISON_NE_PAS_PUBLIER)
 
     ecrit = _invalider_le_gel(
         db, creneau, ecarter_l_article,
