@@ -142,7 +142,9 @@ def test_le_marqueur_de_texte_perime_ne_saute_plus_le_controle_sur_un_autre_arti
     outils = Outils()
     outils.tourner(db_session, maintenant)
     db_session.refresh(creneau)
-    assert outils.geles == []  # le texte perime n'est PAS gele
+    # Le texte perime n'est PAS gele. Pas `geles == []` : l'ancien article prend un creneau
+    # de la grille, gele lui aussi quand une fenetre tombe a moins de 2 h (rouge l'apres-midi).
+    assert perime.id not in outils.geles
     assert creneau.post_id is None and creneau.etat is EtatCreneau.PROGRAMME
 
 
