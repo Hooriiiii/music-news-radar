@@ -74,6 +74,14 @@ Le reste des commandes du projet est dans `CLAUDE.md`.
   aussi : `afficher_rotation()` compare désormais le CONTENU du fichier `/etc`
   et non sa seule existence, sinon une conf périmée passerait pour valide.
 
+  **Après une fusion, relancer l'agent `dashboard`.** uvicorn tourne sans `--reload`, alors
+  que `dashboard.html` est relu à chaque requête : sans relance, le nouveau JS parle à
+  l'ancienne API. Les agents planifiés relancent un processus neuf à chaque passage, pas lui :
+
+  ```
+  launchctl kickstart -k gui/$(id -u)/com.musicnewsradar.dashboard
+  ```
+
   **Conflit de port :** l'agent tient le 8000. Avant un `uvicorn --reload` manuel,
   décharger l'agent (`launchctl bootout gui/$(id -u)/com.musicnewsradar.dashboard`)
   ou `--uninstall`.

@@ -10,6 +10,7 @@ import datetime as dt
 import itertools
 
 import pytest
+from sqlalchemy import text
 
 from app.config import settings
 from app.models import (
@@ -234,7 +235,7 @@ def test_la_purge_du_representant_transmet_le_retrait_a_ses_doublons(client, db_
     aid = a.id
     b = _article(db_session, _source(db_session), DETAILLE, rep=a, heures=2.0, relevance=None)
     # SQLite de test : `ON DELETE SET NULL` n'y joue que si la cle etrangere est active.
-    db_session.execute(__import__("sqlalchemy").text("PRAGMA foreign_keys=ON"))
+    db_session.execute(text("PRAGMA foreign_keys=ON"))
 
     purge_old_articles(db_session, 2)
 

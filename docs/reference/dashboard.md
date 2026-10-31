@@ -114,8 +114,10 @@ passage, « Dernier passage » lit l'ingestion, et MANQUE n'est ecrit que par lu
   Cette ecriture ne leve jamais. Un seul ecrivain et un fichier qui decrit UN
   passage : pas de relecture-fusion ; atomique, temporaire nomme par processus.
   Le champ `panne` porte les pannes d'etape que `tourner` avale (sinon un agent dont
-  tout echoue se lirait sain), et jamais le message d'une exception, qui peut
-  porter une URL avec son jeton.
+  tout echoue se lirait sain), nom d'etape et type d'exception (`rapport.pannes`), et
+  jamais le message d'une exception, qui peut porter une URL avec son jeton. Une faute
+  d'article n'y entre pas : ce n'est pas une panne de l'agent, et le voyant de
+  composition, les creneaux et la notification la disent deja.
 - *Un voyant de plus* (`agent_publication`) plutot que dans « Publication » : le
   mode est une DECISION, ceci est un FAIT. Dans la meme pastille, `Aperçu` (ATTENTION
   voulue) masquerait un agent mort. Le voyant vaut en mode `arret` aussi : il faut
@@ -144,7 +146,9 @@ passage, « Dernier passage » lit l'ingestion, et MANQUE n'est ecrit que par lu
   depuis le depassement ET depuis le reveil : un agent sain repasse toutes les
   10 min, et un Mac rouvert a midi trouve toute sa matinee dans cet etat. Tous jours
   confondus, pour ne pas redevenir vert a minuit. LIBRE n'est pas compte : hors du
-  perimetre decide, l'agent mort y est vu par son propre voyant.
+  perimetre decide, l'agent mort y est vu par son propre voyant. En mode `arret`,
+  `tourner` sort avant `_marquer_manques` : le constat reste ATTENTION et le dit, sans
+  accuser l'agent ; mode illisible (`_mode_lu`) : INCONNU.
 - *Preuve negative* : `tests/socle/test_supervision.py` recompile ce module avec UNE
   ligne mutee (trop vieux devenu vert, absent devenu vert, garde du reveil retiree,
   constat des creneaux retire) et exige que le niveau change.
