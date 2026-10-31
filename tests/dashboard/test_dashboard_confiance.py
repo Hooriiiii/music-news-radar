@@ -105,7 +105,7 @@ def _legende_apres_un_re_rendu(html: str) -> str:
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof renderPostDetail === 'function'")
             page.evaluate(
                 "([post, article]) => renderPostDetail(post, article, null)", [POST, ARTICLE]
@@ -155,7 +155,7 @@ def test_la_grille_en_echec_affiche_sa_raison_et_une_relance_qui_marche():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_selector("#grid .zone-erreur .relance")
             assert "500" in page.text_content("#grid .zone-erreur .pourquoi")
             # La relance recharge vraiment : le serveur guerit, un clic suffit.
@@ -185,7 +185,7 @@ def test_un_sources_en_echec_n_empeche_plus_la_grille_de_se_charger():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_selector("#grid #empty")
             assert "Rien ici" in page.text_content("#grid #empty")
             assert "illisibles" in page.text_content("#source")
@@ -228,7 +228,7 @@ def test_un_post_avec_des_visuels_retenus_s_ouvre_vraiment():
             page = navigateur.new_page()
             fautes: list[str] = []
             page.on("pageerror", lambda e: fautes.append(str(e)))
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof renderPostDetail === 'function'")
             page.evaluate("([p, a]) => renderPostDetail(p, a, null)", [post, article])
             assert not fautes, fautes

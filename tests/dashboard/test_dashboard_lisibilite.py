@@ -122,7 +122,7 @@ def _mesurer_le_titre(html: str) -> dict[int, dict]:
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof loadEventsPanel === 'function'")
             page.click('[data-panneau="events"]')
             # `state="attached"` et non « visible » : dans la version fautive,

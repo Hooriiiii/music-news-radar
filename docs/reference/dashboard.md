@@ -472,6 +472,18 @@ Validé au navigateur sur données de test à 1440 et 390 px : aucun débordemen
 (`scrollWidth - clientWidth` = 0) sur la carte, la Programmation, les Artistes, les
 Événements et la fiche.
 
+### La console s'ouvre sur la Programmation (2026-10-31)
+
+L'utilisateur gere le planning, et le Flux d'actus ne lui sert plus qu'au tri : la
+Programmation est l'onglet de tete et le panneau par defaut. Le Flux reste a un clic, avec
+ses filtres ; la grille n'est chargee qu'a son ouverture. Une ancre par panneau (`#programmation`,
+`#flux`, `#posts`, `#evenements`, `#artistes`, `#sources`) : un clic l'ecrit par
+`replaceState` (pas d'entree d'historique par onglet), un rechargement y revient, et une
+ancre inconnue retombe sur la Programmation. La notification de relecture
+(`runner._annoncer_relecture`) nomme ce panneau ; la liste « À relire » reste, elle, en tete
+de Posts. Preuves, mutations comprises : `tests/dashboard/test_dashboard_ancres.py`. Les
+tests d'avant ouvrent `/#flux`, leur intention n'a pas bouge.
+
 ## La charte Kinda dans la console (2026-10-02)
 
 Le compte Instagram etait a la charte ; la console qui le pilote portait un

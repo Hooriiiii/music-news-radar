@@ -597,7 +597,7 @@ def _annoncer_relecture(db, maintenant: dt.datetime, notifier, rapport: RapportP
     _prevenir(
         notifier,
         f"relecture : « {accroche[:70] or f'post {post.id}'} » part a "
-        f"{_heure_locale(premier.publier_a)}{reste} — dashboard, panneau Posts",
+        f"{_heure_locale(premier.publier_a)}{reste} — dashboard, panneau Programmation",
     )
 
 

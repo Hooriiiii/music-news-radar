@@ -1135,7 +1135,7 @@ def voyant_relecture(db: Session, maintenant: dt.datetime) -> Voyant:
     qui criait au loup pendant que le scoring notait 57 articles.
 
     Il dit en revanche les deux choses que l'ecran ne disait pas : COMBIEN, et
-    POUR QUAND -- de quoi decider d'ouvrir le panneau Posts ou pas.
+    POUR QUAND -- de quoi decider d'ouvrir la Programmation ou pas.
 
     Il ne juge plus le debordement de la cover (decision du 2026-10-30). Il lisait
     `render_report`, que seul `POST /posts/{id}/render` ecrit et qu'aucun bouton

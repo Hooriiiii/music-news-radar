@@ -293,7 +293,7 @@ def _mesurer(html: str, largeurs=(1440, 900, 390)) -> dict:
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             for largeur in largeurs:
                 page.set_viewport_size({"width": largeur, "height": 950})
@@ -456,7 +456,7 @@ def test_un_controle_desactive_imprime_sa_raison():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             page.click('[data-panneau="artistes"]')
             page.wait_for_selector("#artistes-list .artiste-row", state="attached")
@@ -537,7 +537,7 @@ def test_un_echec_de_chargement_est_terminal_et_relancable():
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof afficherPanneau === 'function'")
             page.click('[data-panneau="artistes"]')
             page.wait_for_selector("#artistes-list .zone-erreur", state="attached")

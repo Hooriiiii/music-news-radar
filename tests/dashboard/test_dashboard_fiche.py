@@ -38,7 +38,7 @@ def _fiche(post: dict, article: dict, lire):
         with sync_playwright() as playwright:
             navigateur = playwright.chromium.launch()
             page = navigateur.new_page()
-            page.goto(f"http://127.0.0.1:{port}/")
+            page.goto(f"http://127.0.0.1:{port}/#flux")
             page.wait_for_function("typeof renderPostDetail === 'function'")
             page.evaluate("([p, a]) => renderPostDetail(p, a, null)", [post, article])
             resultat = lire(page)
