@@ -4,13 +4,14 @@ from enum import Enum
 
 import anthropic
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ScoredBy, SourceType
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.pipeline.election import tailles_clusters
+from app.pipeline.retrait_humain import RAISONS_HUMAINES
 from app.sources.instagram import (
     TITRE_PAR_DEFAUT,
     caption_depuis_summary,
@@ -471,6 +472,9 @@ def score_pending(
         select(Article)
         .where(Article.relevance_score.is_(None))
         .where(Article.duplicate_of_id.is_(None))
+        # Retire a la main : aucun creneau ne l'attend. « Remettre dans la file » le rend
+        # au scoring. Le doublon qui herite du retrait a la purge n'a jamais ete note.
+        .where(or_(Article.file_exclu_raison.is_(None), Article.file_exclu_raison.not_in(RAISONS_HUMAINES)))
         .order_by(Article.fetched_at)
     )
     if limit is not None:

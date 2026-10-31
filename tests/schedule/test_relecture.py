@@ -273,17 +273,16 @@ def test_la_liste_montre_le_texte_publie_et_non_la_legende_en_base(client, db_se
     assert depart["legende_maximum"] == 2150
 
 
-def test_un_debordement_non_mesure_s_affiche_inconnu_jamais_faux(client, db_session, actu):
-    """Regle 1 du bandeau de supervision, appliquee ici : un `false` par defaut
-    serait un faux feu vert sur le seul signal qui doit empecher une publication
-    en defaut."""
+def test_la_relecture_ne_rend_plus_le_signal_mort_de_debordement(client, db_session, actu):
+    """Decision du 2026-10-30 : `render_report` n'est ecrit par aucun bouton, donc
+    ce champ valait « inconnu » presque toujours, a cote de la mesure vivante de
+    `/covers`. Son intention tient toujours : aucune affirmation sur une cover que
+    cet endpoint n'a pas mesuree -- ni « inconnu », ni « elle tient »."""
     post = _post(db_session, actu)
-    _creneau(db_session, actu, post, publier_a=BASE + dt.timedelta(hours=3), etat=EtatCreneau.PROGRAMME)
-    assert client.get("/relecture").json()[0]["deborde"] is None
-
     post.render_report = {"slides": [{"overflow": True, "scale": 0.6, "lines": 3}]}
     db_session.commit()
-    assert client.get("/relecture").json()[0]["deborde"] is True
+    _creneau(db_session, actu, post, publier_a=BASE + dt.timedelta(hours=3), etat=EtatCreneau.PROGRAMME)
+    assert "deborde" not in client.get("/relecture").json()[0]
 
 
 def test_une_publication_en_vol_est_visible_et_dit_pourquoi_rien_ne_bouge(client, db_session, actu):
@@ -510,7 +509,7 @@ def test_le_voyant_de_relecture_ne_crie_pas_au_loup(db_session, actu):
     """Un post qui attend une relecture n'est PAS une alerte : il part quand meme.
     Le bandeau a deja paye cette lecon le 2026-10-02 avec un voyant de
     composition qui criait au loup."""
-    from app.supervision import ATTENTION, OK, voyant_relecture
+    from app.supervision import OK, voyant_relecture
 
     post = _post(db_session, actu)
     _creneau(
@@ -521,10 +520,14 @@ def test_le_voyant_de_relecture_ne_crie_pas_au_loup(db_session, actu):
     assert voyant.niveau == OK
     assert "1 à relire" in voyant.valeur
 
-    # Une cover qui deborde, en revanche, personne d'autre ne la rattrapera.
+    # Decision du 2026-10-30 : `render_report` ne fait plus bouger ce voyant. Le
+    # gel refuse de toute facon une cover qui deborde (`preparation.py`), donc
+    # « partiront ainsi » etait faux ; la vraie mesure est `/covers`, dans la fiche.
     post.render_report = {"slides": [{"overflow": True}]}
     db_session.commit()
-    assert voyant_relecture(db_session, BASE).niveau == ATTENTION
+    voyant = voyant_relecture(db_session, BASE)
+    assert voyant.niveau == OK
+    assert not any("deborde" in ligne for ligne in voyant.details)
 
 
 def test_le_voyant_dit_rien_en_attente_quand_la_fenetre_est_vide(db_session):

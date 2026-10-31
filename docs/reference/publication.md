@@ -226,6 +226,48 @@ systémique (crédits Anthropic, réseau, Chromium) n'exclut rien, pas plus qu'u
 post qui ne porte plus l'article de son créneau (gel ou publication refusés,
 erreur posée).
 
+**« Ne pas publier » n'ajoute aucun chemin vers `media_publish`** (2026-10-30) : c'est
+un retrait humain, seule exclusion qui ne soit la faute ni de l'article ni de la
+machine, écrit dans la même transaction que la libération du créneau et sous la même
+condition (état, article, post) que la réclamation. Détail et course :
+`relecture-et-controle-editorial.md`, « Ne pas publier ».
+
+**Les statuts de publication n'appartiennent qu'au robot** (2026-10-30, décision de
+l'utilisateur : la console publie seule avec vérification humaine). `_publier` écrit
+`PUBLISHED` et `USED` sans passer par l'API ; `PATCH /posts/{id}` refuse tout `status`
+et `PATCH /articles/{id}` refuse de poser `used` ou d'en sortir (409, UPDATE conditionnel
+contre une publication simultanée). `USED` est ce qui protège l'article de la purge et
+d'une republication. `PostStatus.APPROVED` n'est lu par aucun code : l'enum et les
+lignes existantes restent, sans migration, mais plus rien ne le pose.
+
+**Le retour en arrière ne doit pas rouvrir le doublon** (2026-10-30, déduit du
+code, **jamais observé en production**). La machine coupe juste après
+`media_publish` : le post est en ligne, la base dit ECHEC de réclamation, article
+exclu et non USED. `POST /articles/{id}/reintegrer` effaçait cette exclusion en un
+clic ; `_articles_publiables` ne filtrant pas ECHEC, l'article redevenait candidat
+et le brouillon se raccrochait. Reproduit par test : **deux** `media_publish`
+(`test_la_seconde_ceinture_tient_si_l_exclusion_a_disparu`, `2 == 1` avant
+correctif). Même chemin après « echec de publication : … », un délai dépassé
+pouvant cacher une publication réussie. Deux ceintures, sur les mêmes traces
+(`app/schedule/publication_incertaine.py`) :
+
+- `reintegrer` répond 409 sans `confirmation: "PAS_PARTI"` : seul un humain qui a
+  regardé le compte sait. Une exclusion « Ne pas publier » reste en un clic (les
+  lignes anciennes disent « saute depuis le dashboard », même traitement).
+- `_articles_publiables` écarte l'article d'un créneau ECHEC portant ces traces,
+  même si l'exclusion a disparu. La confirmation réécrit l'erreur du créneau
+  (« verifie a la main, pas parti — … », l'état reste ECHEC), seul moyen de lever
+  cette ceinture : l'article repart (`test_apres_confirmation_humaine_l_article_repart`).
+
+La confirmation est **refusée tant que le robot peut encore publier**
+(`publication_retard_max_minutes` + `RECLAMATION_EN_COURS` après l'heure) : pendant
+l'attente dans le tunnel, l'utilisateur ne voit rien sur le compte, son « pas parti »
+est vrai, et le post part quand même ensuite. L'erreur du créneau porte le préfixe
+depuis ce correctif : les échecs plus anciens (`str(faute)` nu) ne sont couverts que
+par leur exclusion, pas par la seconde ceinture. Une panne d'hébergement n'est pas
+concernée : rien n'a pu partir, `rendre()` repasse GELE sans exclusion
+(`test_une_panne_de_tunnel_reste_retentee_et_n_est_pas_ecartee`).
+
 **Une VIDÉO inadaptée n'est pas une faute de l'ARTICLE** (2026-09-21,
 `preparation_reel.ReelInadapte`). L'article 18951 (Billboard, « The Weeknd
 Debuts New Song Sampling "Neon Genesis Evangelion" Theme ») a été exclu à vie
@@ -258,6 +300,33 @@ contenu (409). Les créneaux déjà gelés sont publiés AVANT composition et ge
 chaque étape est isolée : une panne amont ne bloque jamais un post prêt. L'heure
 est relue juste avant chaque publication (retard > 90 min → MANQUE, notifié), et
 le dossier figé est supprimé une fois le créneau terminé.
+
+**L'arbitrage ecrivait sur une lecture perimee** (2026-10-31, **reproduit par test,
+jamais observé en production**). « Recalculer la file » et le `PATCH /schedule/{id}`
+tournent dans le processus web, en parallèle de l'agent et sans verrou. L'arbitrage lit
+H0 PROGRAMME avec l'article A ; l'agent le gèle et committe ; l'arbitrage affecte B.
+`creneau.etat = PROGRAMME` n'émet rien (inchangé aux yeux de SQLAlchemy), le SQL est
+`UPDATE creneaux SET article_id=?, post_id=? WHERE id=?`. Le créneau reste GELE avec
+l'article et le post de B et les fichiers de A ; le post de B porte bien l'article du
+créneau, donc le contrôle de `_publier` passe. Le vrai `_publier`, publieur factice, a
+reçu `(['a_01.jpg', 'a_02.jpg'], 'Legende de B')` : les visuels d'une actu sous la
+légende d'une autre, sur SQLite et sur un Postgres jetable en Read Committed. Il faut
+que le gel tombe entre lecture et écriture, et que B ait déjà un brouillon — le cas
+ordinaire d'une grosse actu qui décale la précédente. La fréquence n'a pas été mesurée.
+
+`store.ecrire_si_inchange` conditionne donc ces écritures sur (état, article, post),
+sans toucher à ce que choisit l'arbitrage. Zéro ligne : **tout le lot du format** est
+annulé, sans exception, avec un warning, et le passage suivant reprend — pas ce seul
+créneau : l'arbitrage voulait A en H1 parce qu'il le croyait sorti de H0, écrire H1
+poserait A sur deux créneaux (mutation « saut seul » : test rouge). Le PATCH rend 409,
+rien d'écrit. Preuves : `tests/schedule/test_course_arbitrage_gel.py`, où retirer
+chacune des trois conditions rougit au moins un test. L'ordre inverse (le web a écrit
+sans committer, l'agent attend le verrou puis touche zéro ligne) n'a été vérifié que
+par un essai SQL ponctuel sur Postgres, pas par un test gardé. **Déduit, non prouvé** :
+la largeur réelle de la fenêtre sur Neon. **Non traité** : le `db.delete` de
+`synchroniser_creneaux` reste inconditionnel (un créneau sorti de la grille et gelé
+entre-temps serait supprimé : un post perdu, pas un faux post), et un épinglage seul
+n'étant pas dans la condition, il peut être perdu face à un arbitrage simultané.
 
 **Publication à l'heure affichée** (2026-09-17). L'agent passe toutes les 600 s :
 sans rien de plus, un post partait jusqu'à ~10 min après l'heure du dashboard.
@@ -646,3 +715,79 @@ republication, limitation de l'IP résidentielle — démarrer en `apercu`.
 `posts.credit`) : décocher « Reels auto », attendre que plus aucun créneau reel ne
 soit « Gelé » (publié, aperçu ou manqué), puis descendre. Sinon un reel gelé
 perdrait en cours de route son format et son crédit obligatoire.
+
+## Programmer (2026-10-31)
+
+Décision de l'utilisateur : la console publie seule avec vérification humaine ; il gère
+le planning et ce qui va sortir, il ne génère JAMAIS à la main. `POST /articles/{id}/posts`
+a disparu ; `create_post` reste, le robot s'en sert. Aucun appel à Meta ni à Claude au
+clic, aucun nouveau chemin vers `media_publish` : le geste écrit un créneau PROGRAMME, et
+l'agent compose puis gèle à son passage.
+
+**Une seule règle, `app/schedule/programmation.py::raison_refus`.** `PATCH /schedule/{id}`
+l'applique, `GET /articles/{id}/creneaux-possibles` et `GET /schedule/{id}/actus-possibles`
+l'annoncent, le navigateur n'en recopie aucune.
+`test_les_lectures_et_le_patch_ne_divergent_jamais` joue le PATCH sur toute une matrice et
+compare la raison au mot près. Lectures groupées : ni requête par ligne (y compris sur un
+créneau reel, où l'arbitrage garde son coût connu), ni écriture, ni réseau.
+
+**La limite de purge, et son calcul.** La composition s'ouvre à
+`publier_a - publication_composition_heures`. La purge vise un article non publié à
+`published_at + retention_days` (`fetched_at` sans date ; sursis si aucune machine ne l'a
+jugé, `moment_de_purge` relit `_predicat_purgeable` et un test les confronte). Si
+`max(composition, maintenant) >= purge`, le créneau serait vidé par `ON DELETE SET NULL`
+avant d'avoir un post : l'option est refusée avec sa raison, au PATCH aussi. Avec les
+valeurs actuelles (2 j, 24 h), un article ne se programme donc pas à plus de 72 h de sa
+date de publication. **Sauf brouillon valide** : `post_a_reprendre` l'accroche dès le geste,
+et un post survit à son article. Valide = non `_brouillon_perime` : sans fond, le gel le
+lâcherait, et le créneau mourrait quand même. La rétention n'a pas bougé.
+
+**Non bloquants** : le seuil de pertinence et la fraîcheur. L'humain prime : on affiche
+« sous le seuil de N, choix manuel » et l'âge. Une note absente n'est ni « 0 » ni sous le
+seuil : « pas encore notée ». **Permis mais annoncé** : sous
+`publication_relecture_avance_minutes`, « partira sans fenêtre de relecture » ; sous
+`publication_relecture_regel_minutes`, une fois gelé la cover et les éléments ne se
+corrigent plus.
+
+**`occupant_attendu`** : la validation nomme ce qui sort, et l'arbitrage a pu changer
+d'occupant depuis l'affichage. Présent et faux, le PATCH rend 409 sans rien écrire.
+
+**`creneaux.erreur` s'efface quand l'article change** (reproduit d'abord). Survivant, un
+marqueur `RAISON_TEXTE_PERIME` faisait sauter au nouveau post le contrôle de texte du gel
+(`deja_tente`). Sur « Décaler », l'erreur s'efface aussi, sauf `RAISON_RELECTURE`, qui suit
+son post : il protège d'une exclusion l'article qu'on vient de corriger.
+
+**Le créneau mort** (reproduit d'abord) : épinglé à la main, article purgé avant sa
+composition, ni article ni post. Ni la composition ni l'arbitrage ne le voyaient, jusqu'à
+MANQUE. `store.creneau_mort` : l'arbitrage le désépingle et le rend à la file, par écriture
+conditionnelle. Un post orphelin n'est pas mort (`porte_un_post_orphelin`).
+
+**Une correction humaine épingle** : voir `relecture-et-controle-editorial.md`.
+
+**Ce qui verrouille la main** (`programmation.RAISONS_DU_VERROU`, une seule source pour le
+PATCH, les options et la carte) : un créneau PUBLIE, APERCU, GELE, ou un ECHEC qui porte une
+trace de doute (`publication_incertaine`, la règle exacte de la ceinture du robot).
+`store.VERROUILLES`, lui, dit qu'un CRENEAU ne bouge plus et reste tel quel.
+
+- **MANQUE ne verrouille pas** (reproduit d'abord : 409 « déjà engagé » alors que le robot
+  reprenait l'article). Vérifié dans le code : `_marquer_manques` ne lit que
+  LIBRE/PROGRAMME/GELE, et le seul MANQUE après une réclamation (`manquer`, dans `_publier`)
+  exige que `encore_publier` ait refusé, donc que `media_publish` n'ait pas été appelé.
+- **Un ECHEC vérifié ne verrouille plus** : « Vérifié, il n'est pas parti » réécrit l'erreur,
+  qui ne porte plus de trace de doute. Un ECHEC sans doute (« post supprime apres le gel »)
+  non plus : le robot le reprenait déjà.
+- **Limite héritée** : un échec d'avant le préfixe (`str(faute)` nu) n'a pas de trace, donc ne
+  verrouille ni le robot ni la main. Seule son exclusion le couvre, comme ci-dessus.
+
+**La carte d'un article retenu par la ceinture sans exclusion** (remis en file avant la
+fusion) offrait « déjà engagé » sans issue : `exclusion_a_verifier` est vrai quand un créneau
+porte le doute, et « Remettre dans la file » ouvre la même vérification. `reintegrer` lit le
+`rowcount` : si le robot a enregistré entre-temps, 409 et rien n'est levé. Retirer un tel
+ECHEC ne répond plus « Publication en cours » hors de la fenêtre de `publication_en_vol`.
+
+**Limites connues, déduites du code.** La composition peut tomber jusqu'à un passage
+d'agent après l'heure calculée, et plus si le Mac dort ; une purge dans cet intervalle
+donne un créneau mort, que l'arbitrage répare. « Décaler » n'applique pas la limite de
+purge, même réparation. `PATCH /posts` accepte
+encore `template` sans plus aucun bouton. `GET /posts/{id}/export.zip` reste sans bouton.
+

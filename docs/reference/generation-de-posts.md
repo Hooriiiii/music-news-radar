@@ -42,8 +42,7 @@ variantes de cover + légende, via Claude), `render.py` (slides `kind: "cover"`
 → PNG, via Chromium headless ; `render_covers()` rend les 4 variantes sur un
 fond commun avec un seul Chromium et une seule récupération d'image),
 `export.py` (zip : covers rendues + médias `kind: "media"` téléchargés tels
-quels), `api/posts.py` (file éditoriale : `POST /articles/{id}/posts`,
-`POST /posts/{id}/covers`, `PATCH /posts/{id}` — `template`,
+quels), `api/posts.py` (`POST /posts/{id}/covers`, `PATCH /posts/{id}` — `template`,
 `variante_retenue`, `slides`, `status` —, `DELETE /posts/{id}`,
 `POST /posts/{id}/render`, `GET /posts/{id}/export.zip`).
 
@@ -54,8 +53,8 @@ simple `list[str]` d'avant. L'API X v2 rend `url` pour une photo mais une
 le fichier ; sans stocker `type`, un tweet vidéo était indistinguable d'un
 tweet photo, et le format REELS était donc INDÉCIDABLE — impossible de savoir,
 au moment d'afficher le switch, si l'actu avait de quoi remplir un reel.
-`media.py::raison_pas_de_reel()` est la fonction que le dashboard interroge
-pour griser ce switch avec un motif lisible plutôt qu'un bouton muet.
+`media.py::raison_pas_de_reel()` donnait le motif de ce switch ; depuis le 2026-10-31
+le créneau impose le format (`publication.md`, « Programmer ») et plus aucun écran ne la lit.
 
 `layout.py` porte TOUTES les valeurs de mise en page, `render.py` n'en déclare
 aucune : Chromium MESURE (lignes rendues, largeur de chacune), Python DÉCIDE

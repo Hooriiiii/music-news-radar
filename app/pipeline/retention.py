@@ -2,13 +2,14 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, and_, delete, func, not_, or_, select
+from sqlalchemy import ColumnElement, and_, delete, func, not_, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ArticleStatus, Event, EventObservation
 from app.pipeline import events
 from app.pipeline.election import articles_engages
+from app.pipeline.retrait_humain import RAISONS_HUMAINES
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,19 @@ def purge_old_articles(
     dans `_predicat_purgeable`, partage avec
     `purger_evenements_sans_valeur`.
     """
-    result = db.execute(
-        delete(Article).where(_predicat_purgeable(retention_days, _sursis(sursis_days)))
-    )
+    predicat = _predicat_purgeable(retention_days, _sursis(sursis_days))
+    # `duplicate_of_id` est `ON DELETE SET NULL` : un doublon survivant redeviendrait un
+    # representant libre, et une actu retiree a la main repartirait. Une requete a vide.
+    for article_id, raison in db.execute(
+        select(Article.id, Article.file_exclu_raison).where(predicat, Article.file_exclu_raison.in_(RAISONS_HUMAINES))
+    ).all():
+        db.execute(
+            update(Article)
+            .where(Article.duplicate_of_id == article_id, Article.file_exclu_raison.is_(None))
+            .values(file_exclu_raison=raison)
+            .execution_options(synchronize_session=False)
+        )
+    result = db.execute(delete(Article).where(predicat))
     db.commit()
     return result.rowcount
 

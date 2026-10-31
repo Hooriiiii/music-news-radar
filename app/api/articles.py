@@ -3,25 +3,41 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.content.visuels import origine_interdite
 from app.db import get_db
-from app.models import Article, ArticleStatus, Source, SourceType
+from app.config import settings
+from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Source, SourceType
 from app.pipeline.cluster import raison_de_doublon
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
-from app.schedule.store import etiquette_visuel, raison_sans_visuel
-from app.schemas import ArticleOut
+from app.pipeline.retrait_humain import lever_les_retraits_du_groupe, membres_du_groupe, retrait_humain
+from app.schedule.publication_incertaine import (
+    RAISON_RECLAMATION,
+    erreur_incertaine,
+    publication_incertaine,
+)
+from app.schedule.programmation import vues_des_cartes
+from app.schedule.runner import RECLAMATION_EN_COURS
+from app.schedule.store import etiquette_visuel, raison_sans_visuel, utc
+from app.schemas import ArticleOut, CreneauDeLArticle
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
 
-def _avec_visuel(article: Article, index: IndexComptes) -> ArticleOut:
+def _avec_visuel(article: Article, index: IndexComptes, cartes: dict | None = None) -> ArticleOut:
     sortie = ArticleOut.model_validate(article)
+    if cartes is None:
+        cartes = vues_des_cartes(object_session(article), [article], dt.datetime.now(dt.timezone.utc))
+    creneau, sortie.raison_non_programmable, a_verifier = cartes[article.id]
+    sortie.creneau = CreneauDeLArticle(**creneau) if creneau else None
     sortie.visuel = etiquette_visuel(article, index)
     sortie.raison_sans_visuel = raison_sans_visuel(article, index)
     sortie.visuels_interdits = origine_interdite(article.source)
+    # Le creneau aussi : un article remis en file avant la seconde ceinture n'a plus de
+    # raison, et elle le retient quand meme. Sans ca, sa carte n'offre aucune issue.
+    sortie.exclusion_a_verifier = publication_incertaine(article.file_exclu_raison) or a_verifier
     return sortie
 
 
@@ -81,7 +97,9 @@ def list_articles(
     articles = db.scalars(stmt.limit(limit).offset(offset)).all()
     # Un index pour toute la page : les comptes suivis ne changent pas d'un article a l'autre.
     index = construire_index(db)
-    return [_avec_visuel(article, index) for article in articles]
+    # Une lecture groupee aussi pour l'etat sur la file : jamais une requete par carte.
+    cartes = vues_des_cartes(db, articles, dt.datetime.now(dt.timezone.utc))
+    return [_avec_visuel(article, index, cartes) for article in articles]
 
 
 @router.get("/{article_id}", response_model=ArticleOut)
@@ -92,12 +110,31 @@ def get_article(article_id: int, db: Session = Depends(get_db)):
     return _avec_visuel(article, construire_index(db))
 
 
+CONFIRMATION_PAS_PARTI = "PAS_PARTI"
+
+
+class ReintegrationIn(BaseModel):
+    confirmation: str | None = None
+
+
+def _robot_peut_encore_publier(creneau: Creneau, maintenant: dt.datetime) -> bool:
+    """Une reclamation peut etre prise jusqu'a `publication_retard_max_minutes`
+    apres l'heure, puis attendre Meta : avant cette limite, ne rien voir sur le
+    compte ne prouve pas que rien ne partira. Plus large que `RECLAMATION_EN_COURS`
+    seule, qui ne couvre que l'affichage d'un creneau pris a l'heure.
+    """
+    limite = dt.timedelta(minutes=settings.publication_retard_max_minutes) + RECLAMATION_EN_COURS
+    return creneau.erreur == RAISON_RECLAMATION and utc(creneau.publier_a) > maintenant - limite
+
+
 @router.post("/{article_id}/reintegrer", response_model=ArticleOut)
-def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
+def reintegrer_article(
+    article_id: int, corps: ReintegrationIn | None = None, db: Session = Depends(get_db)
+):
     """Leve `file_exclu_raison` : l'article redevient candidat a la file.
 
-    C'etait le seul champ sans retour en arriere de tout le dashboard. « Sauter »
-    l'ecrit en un clic, le gel et la composition l'ecrivent tout seuls sur un
+    C'etait le seul champ sans retour en arriere de tout le dashboard. « Ne pas
+    publier » l'ecrit en un clic, le gel et la composition l'ecrivent tout seuls sur un
     echec -- et AUCUN endpoint ne le remettait a NULL : le seul recours etait un
     UPDATE a la main en base.
 
@@ -105,11 +142,19 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
     scrupule : `link_duplicates` relie l'article au passage suivant, donc
     effacer la raison seule ne tient pas (docs/reference/dedup-et-retention.md, « Reparer un faux positif
     exige un verdict MANUEL »). On nomme donc l'outil qui, lui, tient.
+
+    Une exclusion qui laisse le post peut-etre EN LIGNE exige `confirmation ==
+    "PAS_PARTI"` : seul un humain qui a regarde le compte sait. La confirmation
+    reecrit aussi l'erreur du creneau, sinon `_articles_publiables` continuerait
+    d'ecarter l'article (docs/reference/publication.md, « Exclusion »).
     """
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    if article.file_exclu_raison is None:
+    confirme = corps is not None and corps.confirmation == CONFIRMATION_PAS_PARTI
+    groupe = membres_du_groupe(db, article)
+    retire = any(retrait_humain(membre.file_exclu_raison) for membre in groupe)
+    if article.file_exclu_raison is None and not confirme and not retire:
         # Idempotent : reclamer deux fois la meme remise en file n'est pas une
         # erreur, et l'UI peut avoir une grille d'une seconde en retard.
         return _avec_visuel(article, construire_index(db))
@@ -123,6 +168,52 @@ def reintegrer_article(article_id: int, db: Session = Depends(get_db)):
                 "--article-b ID --different --raison \"...\"`."
             ),
         )
+    douteux = db.scalars(
+        select(Creneau).where(
+            Creneau.article_id == article.id,
+            Creneau.etat == EtatCreneau.ECHEC,
+            erreur_incertaine(Creneau.erreur),
+        )
+    ).all()
+    if publication_incertaine(article.file_exclu_raison) or douteux:
+        if not confirme:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Le post est peut-être en ligne : la publication s'est interrompue sans "
+                    "confirmation. Vérifie d'abord le compte Instagram, puis confirme qu'il "
+                    "n'est pas parti."
+                ),
+            )
+        maintenant = dt.datetime.now(dt.timezone.utc)
+        if any(_robot_peut_encore_publier(creneau, maintenant) for creneau in douteux):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Publication peut-être encore en cours : ne rien voir sur le compte ne "
+                    "prouve pas encore qu'il n'est pas parti. Réessaie dans quelques minutes."
+                ),
+            )
+        for creneau in douteux:
+            # UPDATE conditionnel : le robot a pu enregistrer depuis la lecture. Zero ligne,
+            # et l'exclusion ne se leve pas : ce qu'a confirme l'humain ne vaut plus.
+            ecrit = db.execute(
+                update(Creneau)
+                .where(
+                    Creneau.id == creneau.id,
+                    Creneau.etat == EtatCreneau.ECHEC,
+                    Creneau.erreur == creneau.erreur,
+                )
+                .values(erreur=f"verifie a la main, pas parti — {creneau.erreur}"[:1000])
+            ).rowcount
+            if ecrit != 1:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Ce créneau vient de changer : rien n'a été remis en file, regarde son nouvel état.",
+                )
+    # Le retrait vaut pour l'actu : son retour aussi. Aucun verrou a part, c'est la colonne.
+    lever_les_retraits_du_groupe(groupe)
     article.file_exclu_raison = None
     db.commit()
     db.refresh(article)
@@ -137,10 +228,37 @@ class ArticleStatusUpdate(BaseModel):
 def update_article_status(
     article_id: int, payload: ArticleStatusUpdate, db: Session = Depends(get_db)
 ):
+    """Le tri manuel : « new » <-> « reviewed », rien d'autre.
+
+    USED n'appartient qu'au robot, qui le pose a la publication
+    (`runner._publier`, sans passer par ici). A la main dans un sens, un article
+    jamais publie sortait de la file pour de bon ; dans l'autre, il perdait ce qui le
+    protege de la purge et d'une republication.
+    """
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    article.status = payload.status
+    if payload.status == ArticleStatus.USED and article.status != ArticleStatus.USED:
+        raise HTTPException(
+            status_code=409,
+            detail="Le statut « utilisé » est posé par le robot quand le post part : il ne se pose pas à la main.",
+        )
+    # UPDATE conditionnel : le robot peut publier entre la lecture et l'ecriture.
+    ecrit = db.execute(
+        update(Article)
+        .where(Article.id == article.id, Article.status != ArticleStatus.USED)
+        .values(status=payload.status)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if ecrit != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cet article a été publié : il garde son statut, c'est ce qui le protège "
+                "de la purge et d'une republication."
+            ),
+        )
     db.commit()
     db.refresh(article)
     return article

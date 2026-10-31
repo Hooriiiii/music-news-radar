@@ -1,4 +1,6 @@
 import datetime as dt
+import json
+import os
 
 import pytest
 
@@ -6,6 +8,7 @@ import scripts.run_publication as script
 from app.config import settings
 from app.publish.jeton import EtatJeton, charger, enregistrer
 from app.publish.mode import enregistrer_mode, enregistrer_reels
+from app.schedule.passage import FICHIER_PASSAGE, consigner_passage
 
 MAINTENANT = dt.datetime(2026, 11, 10, 9, 0, tzinfo=dt.timezone.utc)
 
@@ -237,3 +240,186 @@ def test_l_agent_relit_le_mode_avant_chaque_publication(tmp_path, monkeypatch):
     recus = _passages(tmp_path, monkeypatch)
     script.main()
     assert recus[0]["lire_mode"] is script.mode_effectif
+
+
+# --- Le passage consigne (2026-10-30) ------------------------------------------
+#
+# Aucun voyant ne mesurait l'agent de publication : il pouvait mourir sous un
+# bandeau vert. L'heure de fin s'ecrit donc A CHAQUE sortie du script, et cette
+# ecriture ne doit jamais couter une publication.
+
+
+class _FausseSession:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _etat_passage():
+    return json.loads((settings.meta_token_path.parent / FICHIER_PASSAGE).read_text())
+
+
+def _base_ok(monkeypatch):
+    monkeypatch.setattr(settings, "publication_mode", "apercu")
+    monkeypatch.setattr(script, "attendre_base", lambda: None)
+    monkeypatch.setattr(script, "SessionLocal", _FausseSession)
+    monkeypatch.setattr(script, "surveiller_jeton", lambda *a, **k: None)
+    monkeypatch.setattr(script, "signaler_panne", lambda *a, **k: None)
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+
+
+def test_le_passage_est_consigne_meme_en_mode_arret(monkeypatch):
+    """L'agent passe, meme sans rien a faire : sinon, repasser en reel depuis
+    l'arret se ferait sans savoir qu'il est mort depuis un mois."""
+    monkeypatch.setattr(settings, "publication_mode", "arret")
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+    script.main()
+    etat = _etat_passage()
+    assert etat["fin_le"] == MAINTENANT.isoformat()
+    assert etat["mode"] == "arret"
+    assert etat["panne"] is None
+
+
+def test_un_passage_normal_est_consigne_sans_panne(monkeypatch):
+    _base_ok(monkeypatch)
+    monkeypatch.setattr(script, "tourner", lambda *a, **k: script.RapportPublication())
+    script.main()
+    assert _etat_passage()["panne"] is None
+    assert _etat_passage()["mode"] == "apercu"
+
+
+def test_la_consignation_vient_APRES_la_publication(monkeypatch):
+    """Point d'ecriture : la FIN. Rien n'est ecrit avant ou pendant `tourner`, donc
+    cette ecriture ne peut ni retarder ni empecher une publication."""
+    _base_ok(monkeypatch)
+    vu = []
+
+    def tourner(*a, **k):
+        vu.append((settings.meta_token_path.parent / FICHIER_PASSAGE).exists())
+        return script.RapportPublication()
+
+    monkeypatch.setattr(script, "tourner", tourner)
+    script.main()
+    assert vu == [False]
+    assert _etat_passage()["fin_le"]
+
+
+def test_une_base_injoignable_consigne_le_passage_et_sa_panne(monkeypatch):
+    monkeypatch.setattr(settings, "publication_mode", "apercu")
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+
+    def injoignable():
+        raise script.BaseInjoignable("DNS")
+
+    monkeypatch.setattr(script, "attendre_base", injoignable)
+    with pytest.raises(SystemExit):
+        script.main()
+    assert "base injoignable" in _etat_passage()["panne"]
+
+
+def test_un_tourner_qui_leve_consigne_le_passage_et_sa_panne(monkeypatch):
+    _base_ok(monkeypatch)
+
+    def casse(*a, **k):
+        raise RuntimeError("access_token=SECRET")
+
+    monkeypatch.setattr(script, "tourner", casse)
+    with pytest.raises(SystemExit):
+        script.main()
+    panne = _etat_passage()["panne"]
+    assert "RuntimeError" in panne
+    # Le message d'une exception peut porter une URL avec son jeton, et ce champ
+    # s'affiche : seul le TYPE y entre.
+    assert "SECRET" not in panne
+
+
+def test_un_jeton_qui_leve_consigne_la_panne_sans_empecher_le_passage(monkeypatch):
+    _base_ok(monkeypatch)
+    passes = []
+
+    def casse(*a, **k):
+        raise ValueError("jeton")
+
+    monkeypatch.setattr(script, "surveiller_jeton", casse)
+    monkeypatch.setattr(script, "tourner", lambda *a, **k: passes.append(1) or script.RapportPublication())
+    with pytest.raises(SystemExit):
+        script.main()
+    assert passes == [1]
+    assert "ValueError" in _etat_passage()["panne"]
+
+
+def test_une_etape_en_panne_ne_se_lit_pas_comme_un_passage_sain(monkeypatch):
+    """`tourner` avale les pannes d'etape : sans ce report, un agent dont TOUTES
+    les etapes echouent afficherait « il y a 2 min » en vert."""
+    _base_ok(monkeypatch)
+    rapport = script.RapportPublication()
+    rapport.erreurs.append("etape publication en panne : access_token=SECRET")
+    rapport.pannes.append("etape publication en panne (RuntimeError)")
+    monkeypatch.setattr(script, "tourner", lambda *a, **k: rapport)
+    script.main()
+    panne = _etat_passage()["panne"]
+    assert "etape publication en panne" in panne
+    assert "SECRET" not in panne
+
+
+def test_une_erreur_imprevue_avant_tout_consigne_quand_meme(monkeypatch):
+    monkeypatch.setattr(script, "_maintenant", lambda: MAINTENANT)
+
+    def casse():
+        raise RuntimeError("mode illisible")
+
+    monkeypatch.setattr(script, "mode_effectif", casse)
+    with pytest.raises(RuntimeError):
+        script.main()
+    assert "RuntimeError" in _etat_passage()["panne"]
+
+
+@pytest.mark.parametrize("erreur", [OSError("disque plein"), PermissionError("refus"), ValueError("bizarre")])
+def test_une_panne_de_l_ecriture_ne_fait_jamais_echouer_le_passage(monkeypatch, erreur):
+    _base_ok(monkeypatch)
+    publies = []
+    monkeypatch.setattr(
+        script, "tourner", lambda *a, **k: publies.append(1) or script.RapportPublication()
+    )
+
+    def replace(*a, **k):
+        raise erreur
+
+    monkeypatch.setattr("app.schedule.passage.os.replace", replace)
+    script.main()  # ne leve pas : le passage a publie, il sort en 0
+    assert publies == [1]
+    assert not list(settings.meta_token_path.parent.glob("*.tmp")), "temporaire abandonne"
+
+
+def test_une_ecriture_ratee_ne_masque_pas_la_sortie_en_panne(monkeypatch):
+    """Dans l'autre sens : le code 1 que launchd enregistre doit survivre."""
+    _base_ok(monkeypatch)
+
+    def casse(*a, **k):
+        raise RuntimeError("x")
+
+    def replace(*a, **k):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(script, "tourner", casse)
+    monkeypatch.setattr("app.schedule.passage.os.replace", replace)
+    with pytest.raises(SystemExit) as sortie:
+        script.main()
+    assert sortie.value.code == 1
+
+
+def test_le_temporaire_est_nomme_par_processus(monkeypatch):
+    """Meme regle que tous les fichiers d'etat a cote du jeton : un `.tmp` fixe
+    serait ecrit a deux si un passage manuel croise l'agent."""
+    vus = []
+    vrai = os.replace
+
+    def replace(source, cible):
+        vus.append(str(source))
+        vrai(source, cible)
+
+    monkeypatch.setattr("app.schedule.passage.os.replace", replace)
+    assert consigner_passage(MAINTENANT, "reel") is True
+    assert str(os.getpid()) in vus[0]

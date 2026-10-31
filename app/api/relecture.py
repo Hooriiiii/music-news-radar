@@ -2,7 +2,7 @@
 
 UN ENDPOINT DEDIE et non `PostOut` elargi, pour la raison exacte qui a donne
 `GET /supervision` : la question est TRANSVERSALE. « Qu'est-ce qui part, quand, et
-est-ce que ca tient ? » croise `creneaux` (l'heure, l'etat, les fichiers figes),
+sous quelle forme ? » croise `creneaux` (l'heure, l'etat, les fichiers figes),
 `posts` (les textes, le credit, le fond) et le pipeline de legende
 (`app/content/legende.py`), dont le resultat n'est stocke nulle part -- il est
 CALCULE a l'instant de publier. Le mettre dans `PostOut` obligerait chaque
@@ -88,23 +88,17 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
     else:
         raison_reouverture = None
 
-    # `render_report` est la seule mesure du debordement, et elle est effacee des
-    # qu'un texte, un gabarit ou une slide change (`api/posts.py`) : absente, on
-    # dit INCONNU, jamais « ca tient ».
-    rapport = post.render_report or {}
-    slides_rendues = rapport.get("slides") if isinstance(rapport, dict) else None
-    deborde = None
-    if isinstance(slides_rendues, list) and slides_rendues:
-        premiere = slides_rendues[0]
-        if isinstance(premiere, dict) and isinstance(premiere.get("overflow"), bool):
-            deborde = premiere["overflow"]
-
-    cover = (post.slides or [{}])[0] or {}
+    # Pas de champ de debordement (decision du 2026-10-30) : `render_report` n'est
+    # ecrit par aucun bouton, donc il valait « inconnu » presque toujours, a cote de
+    # la mesure vivante que la fiche demande a `/covers` en s'ouvrant. Et le gel
+    # refuse de toute facon une cover qui deborde (`preparation.py`).
+    cover =(post.slides or [{}])[0] or {}
     return DepartOut(
         creneau_id=creneau.id,
         publier_a=publier_a,
         format=creneau.format,
         etat=creneau.etat,
+        epingle=creneau.epingle,
         post_id=post.id,
         accroche=(cover.get("headline") or cover.get("title") or "").replace("**", ""),
         article_title=article.title if article else None,
@@ -125,7 +119,6 @@ def vue_depart(db: Session, creneau: Creneau, post: Post, maintenant: dt.datetim
         elements=creneau.elements,
         candidats=candidats_editables(post, article),
         liste_arretee=liste_explicite(post),
-        deborde=deborde,
         editable=raison_edition is None,
         raison_non_editable=raison_edition,
         reouvrable=raison_reouverture is None,

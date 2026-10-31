@@ -313,52 +313,6 @@ def test_un_lecteur_neuf_par_passage(monkeypatch):
     assert len(crees) == 2
 
 
-def test_le_dashboard_compose_un_post_sans_visuel_autorise(client, db_session, guettapen, monkeypatch):
-    article = _article(db_session, guettapen, "Actu sans artiste",
-                       media=[entree("photo", "https://cdn.ig/g.jpg")])
-    monkeypatch.setattr("app.api.posts.make_claude_composer", lambda: lambda a: _draft())
-    reponse = client.post(f"/articles/{article.id}/posts")
-    assert reponse.status_code == 201
-    corps = reponse.json()
-    assert (corps["assets"], corps["credit"], corps["slides"][0]["image_url"]) == ([], None, None)
-
-
-def test_le_dashboard_signale_des_visuels_differes(client, db_session, fred, monkeypatch):
-    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
-
-    def differer(*args, **kwargs):
-        raise VisuelsDifferes("quota Graph atteint")
-
-    monkeypatch.setattr("app.api.posts.choisir_visuels", differer)
-    monkeypatch.setattr("app.api.posts.make_claude_composer", lambda: lambda a: _draft())
-    reponse = client.post(f"/articles/{article.id}/posts")
-    assert reponse.status_code == 503
-    assert "quota" in reponse.json()["detail"]
-
-
-def test_2_5_le_dashboard_signale_aussi_les_visuels_differes_du_fond(
-    client, db_session, fred, monkeypatch
-):
-    """Tour de correction 2/5, point 2 : `resoudre_fond` peut lever la MEME
-    exception que `choisir_visuels` (I-1, une reserve n'a pas pu etre
-    consultee), mais `app/api/posts.py` ne rattrapait que `VisuelIntrouvable`
-    -- casse neuve introduite par le tour precedent, l'exception remontait en
-    500 non gere au lieu du 503 deja rendu pour le meme cas cote
-    `choisir_visuels`."""
-    article = _article(db_session, fred, media=[entree("photo", "https://cdn.ig/f.jpg")])
-    choisi = actif(entree("photo", "https://cdn.ig/f.jpg"), origine="article", compte="@fred")
-
-    def differer(*args, **kwargs):
-        raise VisuelsDifferes("quota Graph atteint")
-
-    monkeypatch.setattr("app.api.posts.choisir_visuels", lambda *a, **k: ChoixVisuels([choisi], "@fred"))
-    monkeypatch.setattr("app.api.posts.resoudre_fond", differer)
-    monkeypatch.setattr("app.api.posts.make_claude_composer", lambda: lambda a: _draft())
-    reponse = client.post(f"/articles/{article.id}/posts")
-    assert reponse.status_code == 503
-    assert "quota" in reponse.json()["detail"]
-
-
 def test_un_brouillon_sans_aucun_visuel_n_est_pas_gele(db_session, guettapen):
     """Compose a la main au dashboard sans visuel autorise (`assets == []`) :
     la file ne doit pas le publier avec le fond de secours."""

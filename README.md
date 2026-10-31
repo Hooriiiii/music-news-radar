@@ -28,30 +28,28 @@ page), tu vois tout ce que le cloud a récolté, y compris pendant que ton Mac d
 ### Ce que tu peux y faire
 
 - **Vues préréglées** : 🔎 À traiter · 📰 Pertinents (≥60) · 🔥 Hot (≥80) ·
-  🖼 Avec média · ✓ Vus · 📸 Postés
+  🖼 Avec média · ✓ Vus · 📸 Postés (posés par le robot quand il publie)
 - **Filtres** : par catégorie, par source, tri par pertinence ou par date
-- **Workflow éditorial** : les boutons **✓ Vu** / **📸 Posté** sur chaque carte — un
-  article posté ne réapparaît plus dans « À traiter »
+- **Tri** : **✓ Vu** / **↩ À traiter** sur chaque carte. Un article publié garde son
+  statut : seul le robot le pose, et il ne se défait pas
+- **Programme** : **🚫 Ne pas publier** retire un post de ce qui va sortir ; sans geste,
+  il part à son heure
 - Les **vignettes** des photos/vidéos et les résumés français générés par Claude
 
 > Pour arrêter le serveur : `Ctrl+C` dans le terminal.
 
 ---
 
-## Générer un post Instagram depuis un article
+## Programmer une actu
 
-Le dashboard ne sert plus qu'à consulter le flux : il permet aussi de préparer un
-**carrousel Instagram** à partir de n'importe quel article scoré.
+La console publie seule, avec vérification humaine : on gère le planning et ce qui va
+sortir, on ne génère jamais à la main.
 
-1. Ouvre le dashboard et clique **« Générer le post »** sur l'article choisi.
-2. Claude propose des accroches et une légende ; relis-les et corrige-les si besoin.
-   Le surlignage rose se pilote directement dans le texte : entoure un passage de
-   `**deux astérisques**` pour le mettre en évidence sur le rendu final.
-3. Remplace l'image d'une slide si besoin (par URL — pas d'upload de fichier).
-4. Valide le post, puis télécharge le zip des visuels générés (PNG 1080×1350, un
-   par slide).
-5. Publie le zip à la main sur Instagram (aucune publication automatique n'est
-   prévue pour l'instant).
+1. Sur une carte du Flux, **« Programmer »** ouvre les créneaux à venir ; depuis la
+   Programmation, **« Choisir une actu »** fait le chemin inverse.
+2. L'agent de publication compose 24 h avant le créneau et gèle 2 h avant.
+3. Le post se relit et se corrige dans sa fiche. Sans relecture, il part quand même à
+   l'heure.
 
 Prérequis local pour le rendu (une seule fois) :
 
@@ -60,7 +58,7 @@ uv run playwright install chromium
 ```
 
 Le pipeline cron (GitHub Actions) ne génère **aucun** post tout seul : la
-génération est toujours déclenchée à la main, depuis le dashboard.
+composition revient à l'agent de publication, 24 h avant le créneau.
 
 ---
 

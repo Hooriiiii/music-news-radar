@@ -84,6 +84,7 @@ from app.publish.hosting import HebergementIndisponible
 from app.publish.manifeste import normaliser as normaliser_figement
 from app.publish.preparation import PreparationDifferee, PreparationImpossible, PreparationSautee
 from app.publish.preparation_reel import ReelInadapte
+from app.schedule.publication_incertaine import PREFIXE_ECHEC_PUBLICATION, RAISON_RECLAMATION
 from app.schedule.pause_visuels import marquer_saute, reinitialiser_report, signaler_report
 from app.schedule.relecture import RAISON_RELECTURE, deja_annonce, marquer_annonce
 from app.schedule.store import (
@@ -98,15 +99,16 @@ from app.schedule.store import (
 logger = logging.getLogger(__name__)
 
 MODES = ("arret", "apercu", "reel")
-# Erreur posee a la reclamation. Recente, elle signifie « publication en cours »
-# (conteneur, attente de l'heure) : le dashboard l'affiche ainsi et refuse les
-# editions de contenu (voir api/posts.py).
-RAISON_RECLAMATION = "publication interrompue avant confirmation"
+# Duree pendant laquelle `RAISON_RECLAMATION` (publication_incertaine.py) se lit
+# « publication en cours » au dashboard et dans api/posts.py.
 RECLAMATION_EN_COURS = dt.timedelta(minutes=20)
 
 
 @dataclass
 class RapportPublication:
+    # Les etapes tombees, nom et type d'exception seuls : leur message peut porter un
+    # jeton, et ce champ finit dans un fichier d'etat lu par le bandeau.
+    pannes: list[str] = field(default_factory=list)
     composes: int = 0
     geles: int = 0
     publies: int = 0
@@ -268,7 +270,8 @@ def _memoriser_duree(db, exc: ReelInadapte) -> bool:
 
 
 def _deja_publie(article: Article | None, post: Post | None) -> bool:
-    # Publie a la main depuis le dashboard pendant que l'article attendait son creneau.
+    # Deja parti par un autre creneau, ou ligne ecrite du temps ou le dashboard
+    # posait ces statuts a la main (les routes le refusent depuis le 2026-10-30).
     return (article is not None and article.status == ArticleStatus.USED) or (
         post is not None and post.status == PostStatus.PUBLISHED
     )
@@ -487,7 +490,7 @@ def _reperes_perimes(post: Post, maintenant: dt.datetime) -> Repere | None:
     return None
 
 
-def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
+def _brouillon_perime(db, post: Post | None, article: Article | None, *, sources=None) -> bool:
     """Un brouillon dont les visuels ne sont plus publiables : compose avant la
     regle du 2026-09-17 sur un compte media (`assets` NULL), compose SANS aucun
     visuel autorise (`assets == []`, un post fait a la main au dashboard),
@@ -532,7 +535,7 @@ def _brouillon_perime(db, post: Post | None, article: Article | None) -> bool:
         # Aucun fond extractible : liste vide, ou des actifs qui ne portent
         # qu'une video sans vignette.
         return True
-    return bool(actifs_interdits(db, post))
+    return bool(actifs_interdits(db, post, sources))
 
 
 def _marquer_manques(
@@ -1207,10 +1210,12 @@ def _publier(
 
             def echec():
                 creneau.etat = EtatCreneau.ECHEC
-                creneau.erreur = str(faute)[:1000]
+                # Le prefixe est la trace du doute : `store._articles_publiables`
+                # le lit si l'exclusion ci-dessous venait a disparaitre.
+                creneau.erreur = f"{PREFIXE_ECHEC_PUBLICATION}{faute}"[:1000]
                 if article is not None:
                     # Un article refuse par Meta ne revient pas dans la file.
-                    article.file_exclu_raison = f"echec de publication : {faute}"[:500]
+                    article.file_exclu_raison = f"{PREFIXE_ECHEC_PUBLICATION}{faute}"[:500]
                 db.commit()
 
             _ecrire_apres_publication(db, echec)
@@ -1333,6 +1338,7 @@ def tourner(
                 logger.exception("rollback impossible apres l'etape %s", nom)
             message = f"etape {nom} en panne : {exc}"[:1000]
             rapport.erreurs.append(message)
+            rapport.pannes.append(f"etape {nom} en panne ({type(exc).__name__})")
             _prevenir(notifier, message)
             return None
 

@@ -63,7 +63,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Installer / synchroniser les deps : `uv sync` (groupe dev inclus par défaut)
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
-  vu/posté = workflow éditorial via PATCH /articles/{id})
+  vu / à traiter = tri via PATCH /articles/{id} ; statut « utilisé » posé par le robot seul)
 - Ajouter une source : `uv run python -m scripts.add_source --name "..." --type rss|reddit_rss --url ... [--genre ...]`
 - Socle de sources FR : `uv run python -m scripts.seed_fr_sources [--apply]`
   (sans `--apply` : affiche le plan ; idempotent par URL)
@@ -76,7 +76,8 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Alertes Discord : `uv run python -m scripts.send_hot_alerts`
 - Rendu des posts : nécessite Chromium Playwright en local
   (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
-  la génération est déclenchée à la main depuis le dashboard.
+  c'est l'agent de publication qui compose, à T-24 h ; au dashboard, on programme
+  (« Programmer »), on ne génère jamais à la main.
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - **Scheduler : UN SEUL ordonnanceur, launchd, TOUT EN LOCAL sur le Mac**
   (2026-08-15). Plus rien n'est planifié dans le cloud.
@@ -243,8 +244,7 @@ variantes de cover + légende, via Codex), `render.py` (slides `kind: "cover"`
 → PNG, via Chromium headless ; `render_covers()` rend les 4 variantes sur un
 fond commun avec un seul Chromium et une seule récupération d'image),
 `export.py` (zip : covers rendues + médias `kind: "media"` téléchargés tels
-quels), `api/posts.py` (file éditoriale : `POST /articles/{id}/posts`,
-`POST /posts/{id}/covers`, `PATCH /posts/{id}` — `template`,
+quels), `api/posts.py` (`POST /posts/{id}/covers`, `PATCH /posts/{id}` — `template`,
 `variante_retenue`, `slides`, `status` —, `DELETE /posts/{id}`,
 `POST /posts/{id}/render`, `GET /posts/{id}/export.zip`).
 

@@ -43,7 +43,6 @@ DEPART = {
     "fond": "https://img.test/fond.jpg",
     "fond_origine": "article",
     "elements_figes": 2,
-    "deborde": None,
     "editable": False,
     "raison_non_editable": "gelé : légende et hashtags modifiables, la cover demande de rouvrir",
     "reouvrable": True,
@@ -191,16 +190,25 @@ def test_la_mesure_rougit_si_le_titre_cesse_d_etre_tronque():
 
 
 @chromium_absent
-def test_un_debordement_inconnu_n_est_jamais_peint_en_vert():
-    """Regle 1 du bandeau de supervision : une valeur qu'on n'a pas pu lire
-    s'affiche INCONNUE. Ici elle ne s'affiche pas du tout dans la LISTE (la
-    mention « cover qui deborde » n'apparait que quand elle est vraie) -- ce qui
-    doit rester vrai est qu'un `deborde: null` ne fabrique AUCUNE affirmation."""
-    inconnu = _mesurer(PAGE, [DEPART])[1440]
-    assert "déborde" not in inconnu["sous_titre"]
-    assert "tient" not in inconnu["sous_titre"], "ne jamais affirmer que ca tient sans l'avoir mesure"
-    certain = _mesurer(PAGE, [{**DEPART, "deborde": True}])[1440]
-    assert "déborde" in certain["sous_titre"]
+def test_la_liste_n_affirme_rien_sur_une_cover_qu_elle_n_a_pas_mesuree():
+    """L'intention d'origine tient : ne jamais affirmer que ca tient sans l'avoir
+    mesure. Depuis le 2026-10-30 la liste ne parle plus du tout de debordement :
+    `render_report` n'est ecrit par aucun bouton, et le gel refuse une cover qui
+    deborde. La mesure vivante est `/covers`, a l'ouverture de la fiche."""
+    ligne = _mesurer(PAGE, [DEPART])[1440]
+    assert "déborde" not in ligne["sous_titre"]
+    assert "tient" not in ligne["sous_titre"], "ne jamais affirmer que ca tient sans l'avoir mesure"
+
+
+def test_la_fiche_ne_montre_plus_le_signal_mort_et_garde_la_mesure_vivante():
+    """Les deux ecrans se contredisaient : « inconnu » dans la fiche, vert au
+    bandeau, sur une mesure que personne ne produit."""
+    assert "débordement de la cover inconnu" not in PAGE
+    assert "partira ainsi" not in PAGE
+    assert "depart.deborde" not in PAGE
+    # L'avertissement qui reste : il lit `/covers`, rendu a l'ouverture de la fiche.
+    assert "covers.overflow[indexActif]" in PAGE
+    assert "Texte trop long même à la taille de police minimale" in PAGE
 
 
 @chromium_absent

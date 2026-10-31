@@ -286,16 +286,16 @@ def test_la_categorie_d_une_source_n_est_plus_une_ecriture_muette():
     assert "Catégorie non enregistrée" in bloc
 
 
-def test_sauter_demande_une_confirmation_qui_nomme_l_article():
-    # Le libelle du bouton porte desormais un mot (« 🚫 Sauter ») : le decoupage
-    # suit l'emoji seul, pour ne pas rougir au prochain ajustement de libelle.
-    bloc = PAGE.split('"🚫', 1)[1].split("}\n", 1)[0]
+def test_ne_pas_publier_demande_une_confirmation_qui_nomme_l_article():
+    # Le comportement reel, sur Chromium : tests/dashboard/test_dashboard_verification_humaine.py.
+    bloc = PAGE.split("function boutonNePasPublier", 1)[1].split("\nasync function ", 1)[0]
     assert "confirm(" in bloc
-    assert "c.article_title" in bloc
+    assert "${nom}" in bloc and "${heure}" in bloc
     assert "Remettre dans la file" in bloc
 
 
 def test_la_grille_montre_l_exclusion_et_propose_de_la_lever():
     assert "a.file_exclu_raison" in PAGE
     assert "⛔ hors file" in PAGE
-    assert "/reintegrer`, { method: \"POST\" }" in PAGE
+    assert "/reintegrer`, options)" in PAGE
+    assert "envoyer(btnReintegrer, { method: \"POST\" })" in PAGE

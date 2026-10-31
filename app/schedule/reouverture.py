@@ -30,19 +30,37 @@ EPINGLER est necessaire, pas decoratif : un creneau PROGRAMME non epingle est
 repris par `appliquer_arbitrage` au passage suivant (10 min), et le post qu'on
 vient d'ouvrir pour le corriger serait remplace par le meilleur candidat du
 moment.
+
+« NE PAS PUBLIER » (2026-10-30) vit ici pour la meme raison : c'est la meme ecriture
+contre la meme reclamation, seule la destination change (LIBRE au lieu de PROGRAMME).
+Voir `ne_pas_publier`.
 """
 
 import datetime as dt
-import shutil
+from collections.abc import Callable
 
-from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Creneau, EtatCreneau
+from app.models import Article, Creneau, EtatCreneau
+from app.pipeline.retrait_humain import RAISON_NE_PAS_PUBLIER, reporter_sur_le_representant
+from app.schedule.publication_incertaine import publication_incertaine
 from app.schedule.relecture import RAISON_RELECTURE, regel_possible
-from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
+from app.schedule.runner import (
+    RAISON_RECLAMATION,
+    RECLAMATION_EN_COURS,
+    _attendu,
+    _effacer_dossier,
+    _reclamer,
+)
 from app.schedule.store import utc
+
+
+PUBLICATION_EN_COURS = "Publication en cours : le conteneur est cree chez Meta, plus rien ne se modifie"
+PUBLICATION_A_VERIFIER = (
+    "Publication réclamée sans confirmation, peut-être partie : il n'y a plus rien à retirer. "
+    "Vérifie le compte, puis confirme depuis la carte de l'article qu'elle n'est pas partie."
+)
 
 
 class ReouvertureRefusee(RuntimeError):
@@ -66,6 +84,78 @@ def publication_en_vol(creneau: Creneau, maintenant: dt.datetime) -> bool:
     )
 
 
+def _invalider_le_gel(
+    db: Session, creneau: Creneau, en_meme_temps: Callable[[], None] | None = None, **valeurs
+) -> bool:
+    """L'ecriture conditionnelle sur (etat, article, post), en un seul endroit.
+
+    Faux si l'agent est passe : zero ligne touchee, rien n'est ecrit, ni ici ni par
+    `en_meme_temps`, qui part dans la MEME transaction. Les fichiers figes ne
+    decrivent plus ce qui partira : les oublier EST l'invalidation. Le manifeste part
+    avec eux -- le garder annoncerait une liste qui n'existe plus sur le disque, pire
+    qu'un « inconnu ».
+    """
+    etait_gele = creneau.etat == EtatCreneau.GELE
+    if not _reclamer(db, creneau, _attendu(creneau), fichiers=None, elements=None, **valeurs):
+        return False
+    if en_meme_temps is not None:
+        en_meme_temps()
+    db.commit()
+    db.refresh(creneau)
+    # Le dossier fige est efface : des fichiers orphelins seraient republies tels
+    # quels si quelqu'un remettait l'etat a GELE a la main, et `_menage` ne les
+    # ramasse qu'une fois le creneau termine. Seulement apres un GELE : un PROGRAMME
+    # n'a de dossier que pendant un gel en cours, qui perdra sa propre ecriture.
+    if etait_gele:
+        _effacer_dossier(creneau)
+    return True
+
+
+def ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime | None = None) -> None:
+    """Retire ce creneau du programme, ou leve `ReouvertureRefusee`.
+
+    Le creneau redevient LIBRE, desepingle, sans post ni erreur ; l'article sort de
+    la file dans la MEME transaction (decision humaine, reversible par « Remettre
+    dans la file »). Le brouillon reste en base.
+
+    PAS DE PLANCHER DE 20 MINUTES, contrairement a `rouvrir` : il protege un re-gel,
+    et ici rien n'est refait. A T-2 minutes, ou apres l'heure tant que le robot peut
+    encore partir, c'est justement la que ce geste compte.
+
+    AUCUN CHEMIN VERS `media_publish`. Si l'agent a reclame (GELE -> ECHEC, committe
+    avant l'appel a Meta), zero ligne est touchee et on refuse. Si nous passons les
+    premiers, `_publier` ne selectionne que `etat == GELE`, et son propre UPDATE
+    conditionnel echoue s'il avait lu le creneau juste avant.
+    """
+    if publication_en_vol(creneau, maintenant or dt.datetime.now(dt.timezone.utc)):
+        raise ReouvertureRefusee(PUBLICATION_EN_COURS)
+    if creneau.etat == EtatCreneau.ECHEC and publication_incertaine(creneau.erreur):
+        raise ReouvertureRefusee(PUBLICATION_A_VERIFIER)
+    if creneau.etat not in (EtatCreneau.LIBRE, EtatCreneau.PROGRAMME, EtatCreneau.GELE):
+        raise ReouvertureRefusee("Creneau termine : il n'y a plus rien a retirer")
+    article_id = creneau.article_id
+
+    def ecarter_l_article() -> None:
+        article = db.get(Article, article_id, populate_existing=True) if article_id else None
+        # Une raison deja posee (dedup d'archive) dit ce que `reintegrer` doit refuser.
+        if article is not None and article.file_exclu_raison is None:
+            article.file_exclu_raison = RAISON_NE_PAS_PUBLIER
+            # Programme puis rattache a un autre : le geste vise l'actu, pas la ligne.
+            representant = db.get(Article, article.duplicate_of_id) if article.duplicate_of_id else None
+            if representant is not None:
+                reporter_sur_le_representant(representant, RAISON_NE_PAS_PUBLIER)
+
+    ecrit = _invalider_le_gel(
+        db, creneau, ecarter_l_article,
+        etat=EtatCreneau.LIBRE, article_id=None, post_id=None, epingle=False, erreur=None,
+    )
+    if not ecrit:
+        # `_reclamer` a relu le creneau : on dit ce qui s'est reellement passe.
+        if creneau.etat == EtatCreneau.ECHEC and creneau.erreur == RAISON_RECLAMATION:
+            raise ReouvertureRefusee(PUBLICATION_EN_COURS)
+        raise ReouvertureRefusee("Creneau modifie entre-temps par l'agent : rien n'a ete retire")
+
+
 def rouvrir(db: Session, creneau: Creneau, maintenant: dt.datetime) -> None:
     """Invalide le gel de ce creneau, ou leve `ReouvertureRefusee`.
 
@@ -75,9 +165,7 @@ def rouvrir(db: Session, creneau: Creneau, maintenant: dt.datetime) -> None:
     ce chantier supprime (on verrait une chose, Meta en recevrait une autre).
     """
     if publication_en_vol(creneau, maintenant):
-        raise ReouvertureRefusee(
-            "Publication en cours : le conteneur est cree chez Meta, plus rien ne se modifie"
-        )
+        raise ReouvertureRefusee(PUBLICATION_EN_COURS)
     if creneau.etat != EtatCreneau.GELE:
         raise ReouvertureRefusee("Creneau non gele : il se modifie deja sans rien rouvrir")
     if creneau.post_id is None:
@@ -87,37 +175,15 @@ def rouvrir(db: Session, creneau: Creneau, maintenant: dt.datetime) -> None:
             f"Trop pres du depart : il faut au moins "
             f"{settings.publication_relecture_regel_minutes} min pour refaire les fichiers figes"
         )
-    touchees = db.execute(
-        update(Creneau)
-        .where(
-            Creneau.id == creneau.id,
-            Creneau.etat == EtatCreneau.GELE,
-            Creneau.post_id == creneau.post_id,
-        )
-        .values(
-            etat=EtatCreneau.PROGRAMME,
-            # Les fichiers figes ne decrivent plus ce qui partira : les oublier
-            # EST l'invalidation. Le manifeste part avec eux -- le garder
-            # annoncerait une liste qui n'existe plus sur le disque, pire qu'un
-            # « inconnu ». Le gel suivant reecrit les deux d'un seul tenant.
-            fichiers=None,
-            elements=None,
-            epingle=True,
-            erreur=RAISON_RELECTURE,
-        )
-        .execution_options(synchronize_session=False)
-    ).rowcount
-    if touchees != 1:
-        db.rollback()
+    # Le gel suivant reecrit fichiers et manifeste d'un seul tenant.
+    if not _invalider_le_gel(
+        db, creneau, etat=EtatCreneau.PROGRAMME, epingle=True, erreur=RAISON_RELECTURE
+    ):
         raise ReouvertureRefusee(
             "Creneau modifie entre-temps par l'agent : rien n'a ete rouvert"
         )
-    db.commit()
-    db.refresh(creneau)
-    # Le dossier fige est efface : des fichiers orphelins seraient republies tels
-    # quels si quelqu'un remettait l'etat a GELE a la main, et `_menage` ne les
-    # ramasse qu'une fois le creneau termine.
-    shutil.rmtree(settings.publication_dir / str(creneau.id), ignore_errors=True)
 
 
-__all__ = ["ReouvertureRefusee", "publication_en_vol", "rouvrir"]
+__all__ = [
+    "RAISON_NE_PAS_PUBLIER", "ReouvertureRefusee", "ne_pas_publier", "publication_en_vol", "rouvrir",
+]

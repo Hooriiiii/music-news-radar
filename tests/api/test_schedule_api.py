@@ -82,7 +82,7 @@ def test_sauter_exclut_l_article_de_la_file(client, db_session):
     vue = client.patch(f"/schedule/{creneau.id}", json={"sauter": True}).json()
     assert vue["article_id"] is None
     db_session.refresh(article)
-    assert article.file_exclu_raison == "saute depuis le dashboard"
+    assert article.file_exclu_raison == "« Ne pas publier » depuis le dashboard"
 
 
 def test_decaler_echange_avec_le_creneau_suivant_et_epingle(client, db_session):

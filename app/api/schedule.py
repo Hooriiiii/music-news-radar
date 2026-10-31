@@ -5,12 +5,16 @@ gele a deja ses fichiers prets, et changer son article a T-2h publierait autre
 chose que ce qui a ete fige. Toute action manuelle EPINGLE le creneau, sinon
 l'arbitrage suivant la defait dans les 10 minutes.
 
+Une seule exception, « Ne pas publier » (`sauter`) : RETIRER ne publie rien d'autre,
+donc ce geste vaut aussi sur un GELE, et apres l'heure tant que le robot peut partir.
+
 Un creneau reel n'accepte qu'un article eligible en reel, et decaler n'echange
 qu'avec un creneau du meme format. `/publication/reels` coupe ou rallume les reels
 automatiques ; yt-dlp seul se coupe dans `.env`.
 """
 
 import datetime as dt
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -18,21 +22,34 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.config import settings
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, FormatCreneau
+from app.models import Article, Creneau, EtatCreneau
 from app.publish.mode import enregistrer_mode, enregistrer_reels, mode_effectif, reels_actifs, source_du_mode
-from app.schedule.reouverture import ReouvertureRefusee, rouvrir
+from app.schedule import programmation
+from app.schedule.relecture import RAISON_RELECTURE
+from app.schedule.reouverture import ReouvertureRefusee, ne_pas_publier, rouvrir
 from app.schedule.store import (
     MODIFIABLES,
     TEMPLATES,
-    VERROUILLES,
     appliquer_arbitrage,
+    ecrire_si_inchange,
+    lecture,
     offre_reels,
     post_a_reprendre,
-    raison_ineligible_reel,
-    raison_sans_visuel,
     utc,
 )
-from app.schemas import CreneauOut, CreneauUpdate, ModeOut, ModeUpdate, OffreReelsOut, ReelsOut, ReelsUpdate
+from app.schemas import (
+    ActusPossiblesOut,
+    CreneauOut,
+    CreneauUpdate,
+    CreneauxPossiblesOut,
+    ModeOut,
+    ModeUpdate,
+    OffreReelsOut,
+    ReelsOut,
+    ReelsUpdate,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["schedule"])
 
@@ -40,15 +57,21 @@ router = APIRouter(tags=["schedule"])
 # facon irreversible : on exige que l'utilisateur tape ce mot en confirmation,
 # pas une simple case a cocher qu'un clic malheureux activerait.
 CONFIRMATION_REEL = "PUBLIER"
+OCCUPANT_CHANGE = "L'occupant de ce créneau a changé depuis l'affichage : rien n'a été changé, recharge le choix."
+MODIFIE_ENTRE_TEMPS = "Creneau modifie entre-temps (l'agent vient peut-etre de le geler) : rien n'a ete change"
 
 
 def _maintenant() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def _vue(db: Session, creneau: Creneau) -> CreneauOut:
-    article = db.get(Article, creneau.article_id) if creneau.article_id else None
+def _vue(db: Session, creneau: Creneau, mode: str | None = None, articles: dict | None = None) -> CreneauOut:
+    if articles is not None:
+        article = articles.get(creneau.article_id)
+    else:
+        article = db.get(Article, creneau.article_id) if creneau.article_id else None
     return CreneauOut(
+        **programmation.vue_composition(creneau, _maintenant(), mode or programmation.mode_effectif()),
         id=creneau.id,
         publier_a=utc(creneau.publier_a),
         format=creneau.format,
@@ -66,13 +89,34 @@ def _vue(db: Session, creneau: Creneau) -> CreneauOut:
 
 def _liste(db: Session, maintenant: dt.datetime) -> list[CreneauOut]:
     depuis = maintenant - dt.timedelta(hours=24)
-    creneaux = db.scalars(select(Creneau).where(Creneau.publier_a >= depuis).order_by(Creneau.publier_a))
-    return [_vue(db, creneau) for creneau in creneaux]
+    creneaux = list(db.scalars(select(Creneau).where(Creneau.publier_a >= depuis).order_by(Creneau.publier_a)))
+    ids = {c.article_id for c in creneaux if c.article_id}
+    articles = {a.id: a for a in db.scalars(select(Article).where(Article.id.in_(ids)))} if ids else {}
+    mode = programmation.mode_effectif()
+    return [_vue(db, creneau, mode, articles) for creneau in creneaux]
 
 
-def _reprogrammer(creneau: Creneau) -> None:
-    creneau.etat = EtatCreneau.PROGRAMME if creneau.article_id else EtatCreneau.LIBRE
-    creneau.epingle = creneau.article_id is not None
+def _reprogramme(article_id: int | None) -> dict:
+    return {
+        "etat": EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE,
+        "epingle": article_id is not None,
+    }
+
+
+def _marqueur_du_post(creneau: Creneau) -> str | None:
+    """Ce qui suit un post qu'on deplace, de `creneaux.erreur` : seul le marqueur de
+    reouverture parle du POST corrige, et il protege son article d'une exclusion au gel.
+    Le reste parle du creneau qu'on quitte."""
+    return RAISON_RELECTURE if RAISON_RELECTURE in (creneau.erreur or "") else None
+
+
+def _ecrire(db: Session, creneau: Creneau, lu: tuple, **valeurs) -> None:
+    """Ecriture conditionnelle, ou 409 : `lu` a pu etre gele par l'agent depuis la
+    lecture, et ecrire dessus publierait les fichiers de l'un avec la legende de
+    l'autre (`publication.md`, « L'arbitrage ecrivait sur une lecture perimee »)."""
+    if not ecrire_si_inchange(db, creneau, lu, **valeurs):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=MODIFIE_ENTRE_TEMPS)
 
 
 @router.get("/schedule", response_model=list[CreneauOut])
@@ -83,6 +127,25 @@ def lister_file(db: Session = Depends(get_db)):
 @router.get("/schedule/offre-reels", response_model=OffreReelsOut)
 def lire_offre_reels(db: Session = Depends(get_db)):
     return OffreReelsOut(**offre_reels(db, _maintenant()))
+
+
+@router.get("/articles/{article_id}/creneaux-possibles", response_model=CreneauxPossiblesOut)
+def creneaux_possibles(article_id: int, db: Session = Depends(get_db)):
+    """Pour un article, les creneaux a venir et ce qu'il adviendrait sur chacun. Lit la
+    base seule, n'ecrit rien : les memes regles que le PATCH, a un seul endroit."""
+    article = db.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article introuvable")
+    return programmation.options_de_l_article(db, article, _maintenant())
+
+
+@router.get("/schedule/{creneau_id}/actus-possibles", response_model=ActusPossiblesOut)
+def actus_possibles(creneau_id: int, db: Session = Depends(get_db)):
+    """Le sens inverse : pour un creneau, ses actus possibles. Memes regles."""
+    creneau = db.get(Creneau, creneau_id)
+    if creneau is None:
+        raise HTTPException(status_code=404, detail="Creneau introuvable")
+    return programmation.actus_du_creneau(db, creneau, _maintenant())
 
 
 @router.get("/publication/mode", response_model=ModeOut)
@@ -135,46 +198,33 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     if creneau is None:
         raise HTTPException(status_code=404, detail="Creneau introuvable")
     maintenant = _maintenant()
-    if creneau.etat not in MODIFIABLES or utc(creneau.publier_a) <= maintenant:
-        raise HTTPException(status_code=409, detail="Creneau gele ou passe : il ne se modifie plus")
     actions = [payload.epingle is not None, payload.article_id is not None, payload.sauter, payload.decaler]
     if sum(actions) != 1:
         raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou decaler")
+    if payload.sauter:
+        return _ne_pas_publier(db, creneau, maintenant)
+    raison = programmation.raison_creneau(creneau, maintenant)
+    if raison is not None:
+        raise HTTPException(status_code=409, detail=raison)
+    lu = lecture(creneau)
 
     if payload.epingle is not None:
         if payload.epingle and creneau.article_id is None:
             raise HTTPException(status_code=409, detail="rien a epingler")
-        creneau.epingle = payload.epingle
+        _ecrire(db, creneau, lu, epingle=payload.epingle)
     elif payload.article_id is not None:
         article = db.get(Article, payload.article_id)
         if article is None:
             raise HTTPException(status_code=404, detail="Article introuvable")
-        if article.status == ArticleStatus.USED:
-            raise HTTPException(status_code=409, detail="Article deja publie")
-        if article.duplicate_of_id is not None:
-            raise HTTPException(status_code=409, detail="Article duplique")
-        if article.file_exclu_raison is not None:
-            # Choisi a la main, un article exclu reste refuse : la securite
-            # prime, l'exclusion se leve separement si besoin.
-            raise HTTPException(status_code=409, detail="Article exclu de la file")
-        if creneau.format == FormatCreneau.REEL:
-            # Meme regle que l'arbitrage : la securite prime sur le choix manuel
-            # (credit obligatoire, jamais un compte media).
-            raison = raison_ineligible_reel(article)
-            if raison is not None:
-                raise HTTPException(status_code=409, detail=f"Article inutilisable en reel : {raison}")
-        else:
-            raison = raison_sans_visuel(article)
-            if raison is not None:
-                raise HTTPException(status_code=409, detail=f"Article sans visuel autorise : {raison}")
-        if db.scalar(
-            select(Creneau.id).where(
-                Creneau.article_id == article.id,
-                Creneau.id != creneau.id,
-                Creneau.etat.in_(VERROUILLES),
-            )
-        ):
-            raise HTTPException(status_code=409, detail="Article deja engage sur un autre creneau")
+        if "occupant_attendu" in payload.model_fields_set and payload.occupant_attendu != creneau.article_id:
+            raise HTTPException(status_code=409, detail=OCCUPANT_CHANGE)
+        # La securite prime sur le choix manuel : les regles sont celles que les
+        # lectures d'options annoncent, a un seul endroit (`app/schedule/programmation.py`).
+        raison = programmation.raison_refus(
+            creneau, article, programmation.lire(db, [article], maintenant, {creneau.format})
+        )
+        if raison is not None:
+            raise HTTPException(status_code=409, detail=raison)
         # Un article n'occupe qu'un creneau a la fois : les autres creneaux
         # modifiables qui le portaient sont liberes, passes ou futurs.
         for autre in db.scalars(
@@ -184,22 +234,20 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
                 Creneau.etat.in_(MODIFIABLES),
             )
         ):
-            autre.article_id = None
-            autre.post_id = None
-            _reprogrammer(autre)
-        creneau.article_id = article.id
-        # Le brouillon repris doit etre du gabarit du creneau : jamais un
-        # carrousel accroche a un reel, ni l'inverse.
-        creneau.post_id = post_a_reprendre(db, article.id, TEMPLATES[creneau.format])
-        _reprogrammer(creneau)
-    elif payload.sauter:
-        article = db.get(Article, creneau.article_id) if creneau.article_id else None
-        if article is not None:
-            article.file_exclu_raison = "saute depuis le dashboard"
-        creneau.article_id = None
-        creneau.post_id = None
-        creneau.etat = EtatCreneau.LIBRE
-        creneau.epingle = False
+            _ecrire(db, autre, lecture(autre), article_id=None, post_id=None, erreur=None, **_reprogramme(None))
+        # L'erreur parlait de l'article precedent. Survivante, elle mentirait au
+        # dashboard, et `runner._geler` la relit : un marqueur de texte perime ferait
+        # sauter au nouveau post son controle de texte (`deja_tente`).
+        erreur = {} if article.id == creneau.article_id else {"erreur": None}
+        _ecrire(
+            db, creneau, lu,
+            article_id=article.id,
+            **erreur,
+            # Le brouillon repris doit etre du gabarit du creneau : jamais un
+            # carrousel accroche a un reel, ni l'inverse.
+            post_id=post_a_reprendre(db, article.id, TEMPLATES[creneau.format]),
+            **_reprogramme(article.id),
+        )
     else:
         suivant = db.scalar(
             select(Creneau)
@@ -215,16 +263,33 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         )
         if suivant is None:
             raise HTTPException(status_code=409, detail="Aucun creneau modifiable apres celui-ci")
-        creneau.article_id, suivant.article_id = suivant.article_id, creneau.article_id
-        creneau.post_id, suivant.post_id = suivant.post_id, creneau.post_id
-        _reprogrammer(creneau)
-        _reprogrammer(suivant)
+        lu_suivant = lecture(suivant)
+        _, article_ici, post_ici = lu
+        _, article_apres, post_apres = lu_suivant
+        erreur_ici, erreur_apres = _marqueur_du_post(creneau), _marqueur_du_post(suivant)
+        _ecrire(db, creneau, lu, article_id=article_apres, post_id=post_apres, erreur=erreur_apres,
+                **_reprogramme(article_apres))
+        _ecrire(db, suivant, lu_suivant, article_id=article_ici, post_id=post_ici, erreur=erreur_ici,
+                **_reprogramme(article_ici))
 
     db.commit()
+    return _vue(db, creneau)
+
+
+def _ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime) -> CreneauOut:
+    try:
+        ne_pas_publier(db, creneau, maintenant)
+    except ReouvertureRefusee as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     vue = _vue(db, creneau)
-    if payload.sauter:
-        # Le creneau libere se remplit tout de suite avec le candidat suivant.
+    # Le creneau libere se remplit tout de suite avec le candidat suivant ; a defaut
+    # l'agent le fera au passage suivant. Le retrait est committe : un 500 ici dirait
+    # a l'utilisateur qu'il a echoue.
+    try:
         appliquer_arbitrage(db, maintenant)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("arbitrage impossible apres « Ne pas publier » du creneau %s", vue.id)
     return vue
 
 

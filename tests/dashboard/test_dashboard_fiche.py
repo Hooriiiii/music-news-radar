@@ -10,13 +10,8 @@ composition. Decision de l'utilisateur : il n'en reste qu'une, la liste finale.
 Ce fichier verrouille ce que les deux sections supprimees portaient d'utile et qui
 devait se retrouver dans la liste unique.
 
-**Le selecteur de format MENTAIT.** Post 176 : `template = "kinda_reel"` en base,
-et l'ecran montrait POST actif, REELS grise « pas d'URL directe vers la vidéo ».
-Deux causes : aucun des deux boutons ne portait `on` (donc l'oeil lisait le
-non-grise comme l'actif), et `raisonPasDeReel` ne mirrorait que
-`media.videos_exploitables` en ignorant `media.video_recuperable` -- la question
-que le serveur, lui, pose (`store.source_video_reel` rend "ytdlp" pour cet
-article, et `raison_ineligible_reel` rend None).
+**Le selecteur de format MENTAIT** (post 176) ; depuis le 2026-10-31 il n'existe plus :
+le creneau impose le format, la fiche le lit.
 """
 
 from pathlib import Path
@@ -53,66 +48,26 @@ def _fiche(post: dict, article: dict, lire):
         serveur.shutdown()
 
 
-# --- Le selecteur de format ------------------------------------------------
+# --- Le format, lu et jamais choisi (2026-10-31) -----------------------------
 
 
 @chromium_absent
-def test_un_post_reel_affiche_REELS_comme_le_format_ACTIF():
-    """Et jamais POST : l'etat affiche est celui de la base, ou il n'est pas."""
+def test_un_post_reel_affiche_son_format_sans_rien_a_basculer():
+    """L'intention du selecteur qui ne mentait plus : l'etat affiche est celui de la
+    base, ici sans geste pour le changer (le creneau l'impose)."""
     post = dict(POST, template="kinda_reel")
     etat = _fiche(post, ARTICLE_REEL, lambda page: {
-        "reel_actif": "on" in (page.get_attribute("#tpl-reel", "class") or "").split(),
-        "post_actif": "on" in (page.get_attribute("#tpl-post", "class") or "").split(),
-        "reel_grise": page.get_attribute("#tpl-reel", "disabled") is not None,
+        "texte": page.text_content("#format-lu"),
+        "boutons": page.locator("#tpl-post, #tpl-reel").count(),
     })
-    assert etat["reel_actif"], etat
-    assert not etat["post_actif"], etat
-    assert not etat["reel_grise"], etat
+    assert "Reel" in etat["texte"], etat
+    assert etat["boutons"] == 0, etat
 
 
 @chromium_absent
-def test_une_video_sans_URL_directe_mais_recuperable_par_ytdlp_laisse_REELS_ouvert():
-    """LE cas du post 176, et la moitie du mensonge. Meta omet `media_url` des
-    reels a musique protegee : la video n'a pas d'URL, le permalien est un
-    `/reel/`, et yt-dlp ira la chercher AU GEL -- le serveur juge l'article
-    eligible. Griser REELS la-dessus annonce impossible ce que le pipeline fait
-    tous les jours."""
-    post = dict(POST, template="kinda_post")
-    etat = _fiche(post, ARTICLE_REEL, lambda page: {
-        "grise": page.get_attribute("#tpl-reel", "disabled") is not None,
-        "raison": page.query_selector("#reel-reason") is not None,
-    })
-    assert not etat["grise"], etat
-    assert not etat["raison"], etat
-
-
-@chromium_absent
-def test_sans_aucune_video_REELS_reste_grise_AVEC_sa_raison():
-    """La regle « un controle desactive imprime toujours sa raison » ne bouge
-    pas : c'est le faux positif qu'on a retire, pas le garde-fou."""
-    etat = _fiche(POST, ARTICLE, lambda page: {
-        "grise": page.get_attribute("#tpl-reel", "disabled") is not None,
-        "raison": page.text_content("#reel-reason") or "",
-    })
-    assert etat["grise"], etat
-    assert "aucune vidéo dans cette actu" in etat["raison"], etat
-
-
-@chromium_absent
-def test_un_reel_dont_l_actu_a_perdu_sa_video_le_DIT_sans_se_contredire():
-    """Troisieme cas, et celui qu'on ne peut pas resoudre en grisant : le post EST
-    un reel et l'actu n'offre plus de video. Griser le format courant mentirait
-    sur la base ; se taire cacherait un vrai probleme. On dit ce qui va se passer
-    -- le gel LIBERE le creneau, il n'exclut pas l'article."""
-    post = dict(POST, template="kinda_reel")
-    etat = _fiche(post, ARTICLE, lambda page: {
-        "grise": page.get_attribute("#tpl-reel", "disabled") is not None,
-        "actif": "on" in (page.get_attribute("#tpl-reel", "class") or "").split(),
-        "raison": page.text_content("#reel-reason") or "",
-    })
-    assert not etat["grise"], etat
-    assert etat["actif"], etat
-    assert "Le gel libérera le créneau" in etat["raison"], etat
+def test_un_post_carrousel_affiche_carrousel():
+    etat = _fiche(POST, ARTICLE, lambda page: page.text_content("#format-lu"))
+    assert "Carrousel" in etat, etat
 
 
 # --- UNE seule liste --------------------------------------------------------
@@ -213,7 +168,7 @@ def test_les_compteurs_restent_visibles_et_l_apercu_est_replie():
         "legende_publiee": "Le texte exact qui part.", "legende_longueur": 24,
         "legende_maximum": 2150, "hashtags_publies": ["#a"], "hashtags_maximum": 30,
         "credit": "@x", "fond": None, "fond_origine": "article", "elements_figes": None,
-        "elements": None, "candidats": [], "liste_arretee": False, "deborde": None,
+        "elements": None, "candidats": [], "liste_arretee": False,
         "editable": True, "raison_non_editable": None, "reouvrable": True,
         "raison_non_reouvrable": None, "minutes_restantes": 180,
     }

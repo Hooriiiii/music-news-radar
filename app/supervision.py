@@ -36,7 +36,9 @@ TROIS REGLES, et la premiere gouverne les deux autres.
 import datetime as dt
 import json
 import logging
-from dataclasses import dataclass, field
+import re
+import subprocess
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -46,6 +48,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Article, Creneau, EtatCreneau, Post, Source
 from app.pipeline.health import SIGNATURE_CREDITS
+from app.schedule.passage import FICHIER_PASSAGE
 from app.sources.instagram_jeton import FICHIER_ALERTE, RENOUVELER
 
 logger = logging.getLogger(__name__)
@@ -238,6 +241,152 @@ def voyant_mode(maintenant: dt.datetime) -> Voyant:
         niveau,
         f"{MODES_LISIBLES.get(mode, mode)} ({source})",
         raison,
+        details,
+    )
+
+
+# --- L'agent de publication : passe-t-il ? ----------------------------------
+
+# Le demarrage de CE processus (le dashboard) sert de borne : voir `reprise_machine`.
+DEMARRAGE_PROCESSUS = dt.datetime.now(dt.timezone.utc)
+
+
+def seuil_agent_publication() -> dt.timedelta:
+    """Au-dela, l'agent aurait du finir un passage. DERIVE des reglages, jamais ecrit.
+
+    L'heure consignee est celle de la FIN, et launchd ne relance rien tant qu'un
+    passage tourne : un agent sain peut donc rester muet un intervalle, plus la
+    duree d'un passage long. Celle-ci n'a pas de borne generale, mais ses deux
+    attentes connues en ont une : l'attente de l'heure affichee
+    (`publication_avance_s`) et la patience du tunnel
+    (`publication_tunnel_budget_s`). Le second intervalle est la marge pour ce qui
+    n'est pas borne (yt-dlp, ffmpeg, composition) et il evite de conclure sur un
+    seul passage rate.
+
+    35 min 30 aux reglages actuels, DEDUIT DU CODE : aucune duree de passage n'est
+    journalisee, donc aucune n'a ete mesuree. Si ce voyant crie sur un passage
+    legitime, c'est une mesure qu'il faut faire, pas ce nombre qu'il faut pousser.
+    """
+    return dt.timedelta(
+        seconds=2 * settings.publication_intervalle_s
+        + settings.publication_avance_s
+        + settings.publication_tunnel_budget_s
+    )
+
+
+def reprise_machine() -> dt.datetime | None:
+    """Depuis quand les agents PEUVENT-ils tourner ? `None` si on ne sait pas.
+
+    LE MAC DORT, ET C'EST NORMAL. Au reveil le dashboard (`KeepAlive`) repond tout
+    de suite, alors que l'agent n'a pas encore fini le passage que launchd rattrape
+    et que son fichier a la duree de la nuit : sans cette date, le bandeau crierait
+    a la panne a CHAQUE ouverture de l'ecran, ce qui est la faute la plus grave
+    qu'il puisse commettre (voir le voyant de composition, 2026-10-02). Et le bandeau
+    tourne lui aussi depuis le reveil : il ne peut rien se rappeler de sa nuit, donc
+    il demande au noyau au lieu de deviner.
+
+    `sysctl` est local et ne coute rien. Observe le 2026-10-30 sur la machine :
+    `kern.waketime` valait exactement la derniere ligne `Wake` de `pmset -g log`.
+    `sec = 0` n'a pas ete observe, mais une machine sans date de reveil retombe sur
+    `kern.boottime`. `DEMARRAGE_PROCESSUS` couvre l'ecran de connexion : un Mac
+    demarre la nuit et ouvert le matin a un `boottime` ancien, or les agents launchd
+    ne tournent qu'apres l'ouverture de session -- comme ce dashboard.
+
+    Limite, non verifiee : `pmset -g log` compte aussi des `DarkWake to FullWake`
+    (6 lignes, contre 893 lignes `Wake` ou `DarkWake`, dans le journal lu le
+    2026-10-30). Si `kern.waketime` n'est pas mis a jour a cette transition, un
+    reveil precede d'une longue veille sombre serait date trop tot.
+    """
+    try:
+        sortie = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.waketime", "kern.boottime"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    secondes = [int(valeur) for valeur in re.findall(r"\bsec = (\d+)", sortie)]
+    if not any(secondes):
+        return None
+    return max(dt.datetime.fromtimestamp(max(secondes), dt.timezone.utc), DEMARRAGE_PROCESSUS)
+
+
+def _agent_a_eu_le_temps(maintenant: dt.datetime) -> bool | None:
+    """La machine est-elle eveillee depuis assez longtemps pour conclure ?
+
+    `None` : on ne peut pas separer un agent mort d'un Mac qui dormait. Une reprise
+    dans le futur (horloge, ou un `maintenant` de test) se range ici, et jamais dans
+    « elle vient de se reveiller ».
+    """
+    reprise = reprise_machine()
+    if reprise is None or reprise > maintenant:
+        return None
+    return maintenant - reprise >= seuil_agent_publication()
+
+
+def voyant_agent_publication(maintenant: dt.datetime) -> Voyant:
+    """L'agent de publication passe-t-il ? Un voyant A PART, pas dans « Publication ».
+
+    `voyant_mode` repond « publie-t-on vraiment ? », une DECISION, et sa valeur est
+    le mode. Celui-ci repond « la machine tourne-t-elle ? », un FAIT. Les fondre
+    donnerait une seule pastille a deux questions : `Aperçu` (ATTENTION voulue) y
+    masquerait un agent mort, et il perdrait sa valeur, l'age du passage.
+
+    Il vaut pour tous les modes, `arret` compris : on doit savoir que l'agent est
+    mort AVANT de repasser en reel. Trop vieux sur une machine reveillee depuis
+    assez longtemps : PANNE. Trop vieux juste apres un reveil : INCONNU, ni vert (on
+    n'a aucune mesure fraiche) ni rouge (rien n'accuse l'agent). Faux negatif assume :
+    un Mac qui se rendort avant `seuil_agent_publication` ne conclut jamais.
+    """
+    cle, libelle = "agent_publication", "Agent de publication"
+    chemin = settings.meta_token_path.parent / FICHIER_PASSAGE
+    lecture = lire_json(chemin)
+    if lecture.erreur:
+        return Voyant(cle, libelle, INCONNU, "inconnu", f"{chemin.name} : {lecture.erreur}")
+    if lecture.absent:
+        return Voyant(cle, libelle, INCONNU, "inconnu", "aucun passage consigné : l'agent n'a jamais écrit sa fin.")
+    donnees = lecture.donnees or {}
+    fin = _date_heure(donnees.get("fin_le"))
+    if fin is None:
+        return Voyant(cle, libelle, INCONNU, "inconnu", f"{chemin.name} ne porte pas d'heure de fin exploitable.")
+    if fin > maintenant:
+        return Voyant(cle, libelle, INCONNU, "inconnu", f"{chemin.name} est daté du futur : horloge à vérifier.")
+    age = maintenant - fin
+    seuil = seuil_agent_publication()
+    valeur = _ecoule(maintenant, fin)
+    details = [f"Mode au dernier passage : {MODES_LISIBLES.get(donnees.get('mode'), 'inconnu')}"]
+    panne = donnees.get("panne")
+    if age < seuil:
+        if panne:
+            return Voyant(
+                cle, libelle, ATTENTION, valeur,
+                f"le dernier passage n'a pas abouti : {_ligne(panne, 300)}.", details,
+            )
+        return Voyant(cle, libelle, OK, valeur, None, details)
+    minutes = int(seuil.total_seconds() // 60)
+    a_eu_le_temps = _agent_a_eu_le_temps(maintenant)
+    if a_eu_le_temps is None:
+        return Voyant(
+            cle, libelle, INCONNU, valeur,
+            f"dernier passage {valeur}, et la date du dernier réveil est illisible : "
+            "impossible de dire si le Mac dormait ou si l'agent est mort.",
+            details,
+        )
+    if not a_eu_le_temps:
+        return Voyant(
+            cle, libelle, INCONNU, valeur,
+            f"le Mac vient de se réveiller et le dernier passage date de {valeur.removeprefix('il y a ')} : "
+            f"l'agent a {minutes} min pour repasser avant qu'on conclue.",
+            details,
+        )
+    return Voyant(
+        cle, libelle, PANNE, valeur,
+        f"aucun passage fini depuis {valeur.removeprefix('il y a ')} sur un Mac éveillé, alors que l'agent "
+        f"passe toutes les {settings.publication_intervalle_s // 60} min : agent déchargé de launchd, "
+        "tué ou bloqué. Plus rien ne publie et aucun créneau n'est marqué manqué. "
+        "Vérifier avec `uv run python -m scripts.install_agents --status`.",
         details,
     )
 
@@ -791,7 +940,87 @@ def voyant_pauses(maintenant: dt.datetime) -> Voyant:
 SANS_RAISON = "sans raison enregistrée"
 
 
+def _mode_lu() -> str | None:
+    """Le mode applique par l'agent, None s'il ne se lit pas. Meme fichier que
+    `voyant_mode`, et pour la meme raison : `mode_effectif` cache une lecture ratee.
+    Un fichier absent, ou sans cle `mode` (il porte aussi `reels_actifs`), n'est pas
+    illisible : c'est le repli voulu sur `.env`."""
+    lecture = lire_json(settings.publication_mode_path)
+    if lecture.erreur:
+        return None
+    mode = (lecture.donnees or {}).get("mode", settings.publication_mode)
+    return mode if mode in MODES_LISIBLES else None
+
+
 def voyant_creneaux(db: Session, maintenant: dt.datetime) -> Voyant:
+    """Le bilan du jour, plus ce que l'agent a laisse derriere lui.
+
+    MANQUE n'est ecrit QUE par l'agent (`runner._marquer_manques`). Un agent mort
+    laissait donc les creneaux passes en PROGRAMME ou GELE, hors de tous les
+    compteurs : « 0/6 publiés » en vert. On les constate ici, tous jours confondus,
+    pour que le voyant ne redevienne pas vert a minuit.
+
+    Au-dela de `publication_retard_max_minutes`, le creneau n'est plus publiable,
+    donc plus jamais vert. Il n'accuse l'agent (PANNE) qu'une fois que celui-ci a eu
+    `seuil_agent_publication` pour l'ecrire, depuis le depassement ET depuis le
+    reveil : un agent sain ne repasse que toutes les 10 minutes, et un Mac rouvert a
+    midi trouve la matinee entiere dans cet etat sans que rien soit casse. Entre les
+    deux : ATTENTION, car le creneau est bel et bien rate.
+    """
+    bilan = _bilan_du_jour(db, maintenant)
+    retard_max = dt.timedelta(minutes=settings.publication_retard_max_minutes)
+    orphelins = list(
+        db.scalars(
+            select(Creneau)
+            .where(Creneau.publier_a < maintenant - retard_max)
+            .where(Creneau.etat.in_([EtatCreneau.PROGRAMME, EtatCreneau.GELE]))
+            .order_by(Creneau.publier_a)
+        )
+    )
+    if not orphelins:
+        return bilan
+    fuseau = ZoneInfo(settings.publication_fuseau)
+    nombre = len(orphelins)
+    mode = _mode_lu()
+    constat = (
+        f"{nombre} créneau(x) passé(s) de plus de {settings.publication_retard_max_minutes} min "
+        "et jamais marqué(s) manqué(s)"
+    )
+    a_eu_le_temps = _agent_a_eu_le_temps(maintenant)
+    seuil = seuil_agent_publication()
+    # `tourner` sort avant `_marquer_manques` en arret : accuser l'agent serait un voyant
+    # qui ment dans un mode legitime. ATTENTION et non OK : ces creneaux sont bel et bien rates.
+    if mode is None:
+        niveau = INCONNU
+        raison = f"{constat}, et le mode de publication est illisible : on ne sait pas si l'agent devait les traiter."
+    elif mode == "arret":
+        niveau = ATTENTION
+        raison = (
+            f"{constat} : mode Arrêt, l'agent ne traite pas la file. Ce n'est pas une panne : "
+            "ils seront marqués manqués au premier passage hors arrêt."
+        )
+    elif a_eu_le_temps is None:
+        niveau = INCONNU
+        raison = f"{constat}, et la date du dernier réveil est illisible : Mac endormi ou agent mort, on ne sait pas."
+    elif a_eu_le_temps and any(maintenant - (_utc(c.publier_a) + retard_max) >= seuil for c in orphelins):
+        niveau = PANNE
+        raison = f"{constat} : l'agent de publication ne les traite plus."
+    elif a_eu_le_temps:
+        niveau = ATTENTION
+        raison = f"{constat} : le prochain passage de l'agent doit les écrire."
+    else:
+        niveau = ATTENTION
+        raison = f"{constat} : le Mac vient de se réveiller, le prochain passage de l'agent doit les écrire."
+    lignes = [
+        f"⚠ {_utc(c.publier_a).astimezone(fuseau):%d/%m %H:%M} — encore {c.etat.value}, jamais traité"
+        for c in orphelins[:5]
+    ]
+    if GRAVITE[bilan.niveau] > GRAVITE[niveau]:
+        return replace(bilan, details=bilan.details + lignes)
+    return Voyant("creneaux", "Créneaux du jour", niveau, bilan.valeur, raison, bilan.details + lignes)
+
+
+def _bilan_du_jour(db: Session, maintenant: dt.datetime) -> Voyant:
     """La journee de publication, agregee -- aujourd'hui noyee dans une liste.
 
     Le jour est celui de Paris, comme les fenetres de publication : un creneau
@@ -861,10 +1090,14 @@ def voyant_relecture(db: Session, maintenant: dt.datetime) -> Voyant:
     qui criait au loup pendant que le scoring notait 57 articles.
 
     Il dit en revanche les deux choses que l'ecran ne disait pas : COMBIEN, et
-    POUR QUAND -- de quoi decider d'ouvrir le panneau Posts ou pas. Une
-    information de PANNE ne devient jamais moins visible (regle 2 de la refonte) :
-    un post dont la cover DEBORDE est signale en ATTENTION, parce que celui-la,
-    personne d'autre ne le rattrapera.
+    POUR QUAND -- de quoi decider d'ouvrir le panneau Posts ou pas.
+
+    Il ne juge plus le debordement de la cover (decision du 2026-10-30). Il lisait
+    `render_report`, que seul `POST /posts/{id}/render` ecrit et qu'aucun bouton
+    n'appelle : absent, il valait « ne deborde pas », donc vert sur une mesure qui
+    n'existe pas, pendant que la fiche disait « inconnu ». Et son message
+    « partiront ainsi » etait faux : le gel refuse une cover qui deborde
+    (`preparation.py`). La vraie mesure est `/covers`, a l'ouverture de la fiche.
     """
     from app.api.relecture import creneaux_a_relire
 
@@ -878,31 +1111,14 @@ def voyant_relecture(db: Session, maintenant: dt.datetime) -> Voyant:
              f"{settings.publication_relecture_avance_minutes} prochaines minutes."],
         )
     details = []
-    debordent = []
     for creneau, post in attendus:
         quand = _utc(creneau.publier_a).astimezone(fuseau)
         accroche = _ligne(((post.slides or [{}])[0] or {}).get("headline") or f"post {post.id}", 120)
-        rapport = post.render_report if isinstance(post.render_report, dict) else {}
-        slides = rapport.get("slides")
-        deborde = bool(
-            isinstance(slides, list) and slides and isinstance(slides[0], dict) and slides[0].get("overflow")
-        )
-        if deborde:
-            debordent.append(post.id)
-        marque = " ⚠ cover qui deborde" if deborde else ""
         details.append(
-            f"{quand:%H:%M} — {creneau.format.value} — post {post.id} — "
-            f"{accroche.replace('**', '')}{marque}"
+            f"{quand:%H:%M} — {creneau.format.value} — post {post.id} — {accroche.replace('**', '')}"
         )
     prochain = _utc(attendus[0][0].publier_a).astimezone(fuseau)
     valeur = f"{len(attendus)} à relire, prochain {prochain:%H:%M}"
-    if debordent:
-        return Voyant(
-            "relecture", "Relecture", ATTENTION, valeur,
-            f"{len(debordent)} cover(s) debordent et partiront ainsi : post(s) "
-            + ", ".join(str(i) for i in debordent) + ".",
-            details,
-        )
     return Voyant("relecture", "Relecture", OK, valeur, None, details)
 
 
@@ -923,7 +1139,7 @@ def superviser(db: Session, maintenant: dt.datetime | None = None) -> Supervisio
     corrompu d'une facon non anticipee) devient un voyant « inconnu » qui porte
     le type de l'exception. Elle ne doit ni faire disparaitre le voyant -- une
     case vide se lit « rien a signaler » -- ni rendre une 500 qui priverait
-    l'utilisateur des huit autres.
+    l'utilisateur de tous les autres.
     """
     maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
     sources = None
@@ -934,6 +1150,7 @@ def superviser(db: Session, maintenant: dt.datetime | None = None) -> Supervisio
 
     taches: list[tuple[str, str, object]] = [
         ("mode", "Publication", lambda: voyant_mode(maintenant)),
+        ("agent_publication", "Agent de publication", lambda: voyant_agent_publication(maintenant)),
         ("composition", "Composition", lambda: voyant_composition(db, maintenant)),
         ("creneaux", "Créneaux du jour", lambda: voyant_creneaux(db, maintenant)),
         ("relecture", "Relecture", lambda: voyant_relecture(db, maintenant)),

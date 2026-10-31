@@ -11,9 +11,14 @@ dashboard lui-meme.
 
 import datetime as dt
 import json
+import subprocess
+import sys
+import types
+from pathlib import Path
 
 import pytest
 
+from app import supervision
 from app.config import settings
 from app.models import (
     Article,
@@ -33,7 +38,9 @@ from app.supervision import (
     Voyant,
     lire_json,
     niveau_global,
+    seuil_agent_publication,
     superviser,
+    voyant_agent_publication,
     voyant_composition,
     voyant_creneaux,
     voyant_jeton_publication,
@@ -46,6 +53,13 @@ from app.supervision import (
 from app.supervision import etat_sources as lire_etat_sources
 
 MAINTENANT = dt.datetime(2026, 10, 2, 15, 0, tzinfo=dt.timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _agent_cense_tourner(monkeypatch):
+    # `arret` est le defaut du `.env` : le constat des creneaux depasses n'y accuse personne
+    # (tests/socle/test_supervision_arret.py). Ici, l'agent est cense passer.
+    monkeypatch.setattr(settings, "publication_mode", "reel")
 
 
 def _voyant(niveau):
@@ -290,6 +304,317 @@ def test_un_creneau_manque_sans_raison_est_dit_tel_quel(db_session):
     assert any("sans raison enregistrée" in ligne for ligne in voyant.details)
 
 
+# --- L'agent de publication : passe-t-il ? (2026-10-30) ---------------------
+
+LONGTEMPS = dt.timedelta(days=2)
+
+
+def _passage(age, **champs):
+    _ecrire(
+        "publication_passage.json",
+        {"fin_le": (MAINTENANT - age).isoformat(), "mode": "reel", "panne": None, **champs},
+    )
+
+
+def _reveil(monkeypatch, il_y_a):
+    """`None` : la date de reprise de la machine est illisible."""
+    valeur = None if il_y_a is None else MAINTENANT - il_y_a
+    monkeypatch.setattr(supervision, "reprise_machine", lambda: valeur)
+
+
+def test_le_seuil_de_l_agent_derive_des_reglages(monkeypatch):
+    """Deux intervalles, plus ce qu'un passage peut legitimement attendre."""
+    assert seuil_agent_publication() == dt.timedelta(seconds=2 * 600 + 660 + 270)
+    monkeypatch.setattr(settings, "publication_intervalle_s", 60)
+    assert seuil_agent_publication() == dt.timedelta(seconds=2 * 60 + 660 + 270)
+
+
+def test_aucun_passage_consigne_vaut_inconnu_jamais_vert(monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+
+
+@pytest.mark.parametrize(
+    "contenu",
+    ["{pas du json", "[]", {"mode": "reel"}, {"fin_le": "hier soir"}, {"fin_le": 12}],
+)
+def test_un_passage_illisible_vaut_inconnu(monkeypatch, contenu):
+    _reveil(monkeypatch, LONGTEMPS)
+    _ecrire("publication_passage.json", contenu)
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+
+
+def test_un_passage_date_du_futur_vaut_inconnu(monkeypatch):
+    """Une horloge qui a bouge ne doit pas donner un vert pour des annees."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _passage(-dt.timedelta(hours=3))
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+
+
+def test_un_passage_recent_est_vert_y_compris_en_mode_arret(monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    _passage(dt.timedelta(minutes=8), mode="arret")
+    voyant = voyant_agent_publication(MAINTENANT)
+    assert voyant.niveau == OK
+    assert voyant.valeur == "il y a 8 min"
+
+
+def test_un_passage_recent_mais_en_panne_n_est_pas_vert(monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    _passage(dt.timedelta(minutes=8), panne="base injoignable")
+    voyant = voyant_agent_publication(MAINTENANT)
+    assert voyant.niveau == ATTENTION
+    assert "base injoignable" in voyant.raison
+
+
+def test_un_passage_trop_vieux_sur_une_machine_eveillee_est_une_panne(monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    _passage(seuil_agent_publication() + dt.timedelta(minutes=1))
+    voyant = voyant_agent_publication(MAINTENANT)
+    assert voyant.niveau == PANNE
+    assert "launchd" in voyant.raison
+
+
+def test_un_passage_long_ne_crie_pas(monkeypatch):
+    """Juste sous le seuil : intervalle, attente de l'heure, tunnel."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _passage(seuil_agent_publication() - dt.timedelta(seconds=1))
+    assert voyant_agent_publication(MAINTENANT).niveau == OK
+
+
+def test_au_reveil_le_bandeau_ne_crie_JAMAIS_au_loup(monkeypatch):
+    """LE cas : Mac ferme une nuit, ecran rouvert. Le dashboard (KeepAlive) repond
+    aussitot, l'agent n'a pas encore fini son premier passage, et le fichier a
+    huit heures. Ce n'est ni une panne, ni un vert : on ne sait pas encore."""
+    _reveil(monkeypatch, dt.timedelta(minutes=2))
+    _passage(dt.timedelta(hours=8))
+    voyant = voyant_agent_publication(MAINTENANT)
+    assert voyant.niveau == INCONNU
+    assert "réveil" in voyant.raison
+
+
+def test_apres_le_delai_de_grace_du_reveil_c_est_une_panne(monkeypatch):
+    """Le reveil n'excuse pas indefiniment : un agent mort se dit, une fois qu'il a
+    eu le temps de passer depuis le reveil."""
+    _reveil(monkeypatch, seuil_agent_publication() + dt.timedelta(seconds=1))
+    _passage(dt.timedelta(hours=8))
+    assert voyant_agent_publication(MAINTENANT).niveau == PANNE
+
+
+def test_un_passage_vieux_sans_date_de_reveil_vaut_inconnu(monkeypatch):
+    """On ne peut separer ni le sommeil de la mort : ni vert, ni loup."""
+    _reveil(monkeypatch, None)
+    _passage(dt.timedelta(hours=8))
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+
+
+def _sysctl(monkeypatch, sortie=None, erreur=None):
+    def run(*a, **k):
+        if erreur:
+            raise erreur
+        return types.SimpleNamespace(stdout=sortie)
+
+    monkeypatch.setattr(supervision.subprocess, "run", run)
+    monkeypatch.setattr(supervision, "DEMARRAGE_PROCESSUS", dt.datetime(2000, 1, 1, tzinfo=dt.timezone.utc))
+
+
+def test_la_reprise_est_le_plus_recent_du_reveil_et_du_demarrage(monkeypatch):
+    # Format reel de `sysctl -n` (observe sur la machine, 2026-10-30). `usec` ne
+    # doit pas etre pris pour `sec`.
+    _sysctl(
+        monkeypatch,
+        "{ sec = 1793390420, usec = 782724 } Fri Oct 30 21:00:20 2026\n"
+        "{ sec = 1793372898, usec = 196348 } Fri Oct 30 16:08:18 2026\n",
+    )
+    assert supervision.reprise_machine().timestamp() == 1793390420
+
+
+def test_une_machine_jamais_endormie_reprend_a_son_demarrage(monkeypatch):
+    _sysctl(monkeypatch, "{ sec = 0, usec = 0 }\n{ sec = 1793372898, usec = 196348 }\n")
+    assert supervision.reprise_machine().timestamp() == 1793372898
+
+
+def test_l_ouverture_de_session_compte_comme_une_reprise(monkeypatch):
+    """Demarre puis reste a l'ecran de connexion : les agents launchd ne tournent
+    qu'apres l'ouverture de session, donc `kern.boottime` serait trop ancien."""
+    _sysctl(monkeypatch, "{ sec = 1000, usec = 0 }\n{ sec = 900, usec = 0 }\n")
+    connexion = dt.datetime(2026, 10, 2, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(supervision, "DEMARRAGE_PROCESSUS", connexion)
+    assert supervision.reprise_machine() == connexion
+
+
+@pytest.mark.parametrize(
+    "erreur", [FileNotFoundError("sysctl"), subprocess.TimeoutExpired("sysctl", 2), PermissionError("non")]
+)
+def test_un_sysctl_en_panne_rend_inconnu(monkeypatch, erreur):
+    _sysctl(monkeypatch, erreur=erreur)
+    assert supervision.reprise_machine() is None
+
+
+def test_une_sortie_de_sysctl_incomprise_rend_inconnu(monkeypatch):
+    _sysctl(monkeypatch, "kern.waketime: format inattendu\n")
+    assert supervision.reprise_machine() is None
+
+
+def test_une_reprise_dans_le_futur_vaut_inconnu(monkeypatch):
+    """Elle ne doit pas se lire comme « la machine vient de se reveiller »."""
+    monkeypatch.setattr(supervision, "reprise_machine", lambda: MAINTENANT + LONGTEMPS)
+    _passage(dt.timedelta(hours=8))
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+
+
+def test_le_bandeau_n_ecrit_rien_en_lisant(monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    dossier = _dossier()
+    avant = sorted(p.name for p in dossier.iterdir())
+    voyant_agent_publication(MAINTENANT)
+    assert sorted(p.name for p in dossier.iterdir()) == avant
+
+
+# --- Un creneau passe et jamais traite ---------------------------------------
+
+
+def _creneau(db, retard, etat, **champs):
+    creneau = Creneau(
+        publier_a=MAINTENANT - retard, format=FormatCreneau.CARROUSEL, etat=etat, **champs
+    )
+    db.add(creneau)
+    db.commit()
+    return creneau
+
+
+def _au_dela(marge=dt.timedelta(minutes=1)):
+    """Depasse le retard tolere ET le temps laisse a l'agent pour le constater."""
+    return dt.timedelta(minutes=settings.publication_retard_max_minutes) + seuil_agent_publication() + marge
+
+
+@pytest.mark.parametrize("etat", [EtatCreneau.PROGRAMME, EtatCreneau.GELE])
+def test_un_creneau_passe_jamais_traite_est_une_panne(db_session, monkeypatch, etat):
+    """Le « 0/6 publiés » vert : MANQUE n'est ecrit que par l'agent, donc un agent
+    mort laissait ces creneaux hors de tous les compteurs."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _creneau(db_session, _au_dela(), etat)
+    voyant = voyant_creneaux(db_session, MAINTENANT)
+    assert voyant.niveau == PANNE
+    assert "agent" in voyant.raison
+
+
+def test_un_creneau_dans_le_retard_tolere_reste_vert(db_session, monkeypatch):
+    _reveil(monkeypatch, LONGTEMPS)
+    _creneau(
+        db_session,
+        dt.timedelta(minutes=settings.publication_retard_max_minutes - 5),
+        EtatCreneau.GELE,
+    )
+    assert voyant_creneaux(db_session, MAINTENANT).niveau == OK
+
+
+def test_un_creneau_tout_juste_depasse_n_est_pas_encore_une_panne(db_session, monkeypatch):
+    """L'agent sain ne passe que toutes les 10 min : pendant ce laps, le creneau
+    depasse n'accuse personne. Il n'est pas vert pour autant."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _creneau(
+        db_session,
+        dt.timedelta(minutes=settings.publication_retard_max_minutes + 1),
+        EtatCreneau.PROGRAMME,
+    )
+    assert voyant_creneaux(db_session, MAINTENANT).niveau == ATTENTION
+
+
+def test_au_reveil_un_creneau_depasse_n_accuse_pas_l_agent(db_session, monkeypatch):
+    """Mac ferme toute la matinee : le creneau a bien ete rate (ATTENTION, c'est
+    vrai), mais l'agent n'a pas encore pu l'ecrire -- pas de panne."""
+    _reveil(monkeypatch, dt.timedelta(minutes=2))
+    _creneau(db_session, _au_dela(), EtatCreneau.GELE)
+    voyant = voyant_creneaux(db_session, MAINTENANT)
+    assert voyant.niveau == ATTENTION
+    assert "réveil" in voyant.raison
+
+
+def test_sans_date_de_reveil_un_creneau_depasse_vaut_inconnu(db_session, monkeypatch):
+    _reveil(monkeypatch, None)
+    _creneau(db_session, _au_dela(), EtatCreneau.GELE)
+    assert voyant_creneaux(db_session, MAINTENANT).niveau == INCONNU
+
+
+def test_un_creneau_de_la_veille_jamais_traite_se_voit_aussi(db_session, monkeypatch):
+    """Le voyant s'appelle « du jour », mais un agent mort depuis hier soir ne doit
+    pas redevenir vert a minuit."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _creneau(db_session, dt.timedelta(hours=30), EtatCreneau.PROGRAMME)
+    assert voyant_creneaux(db_session, MAINTENANT).niveau == PANNE
+
+
+def test_le_depasse_ne_masque_pas_une_journee_manquee_plus_grave(db_session, monkeypatch):
+    """Le pire des deux, jamais le dernier ecrit."""
+    _reveil(monkeypatch, dt.timedelta(minutes=2))
+    _creneau(db_session, dt.timedelta(hours=9), EtatCreneau.MANQUE, erreur="retard")
+    _creneau(db_session, _au_dela(), EtatCreneau.GELE)
+    voyant = voyant_creneaux(db_session, MAINTENANT)
+    assert voyant.niveau == PANNE  # un sur deux manque : la regle d'avant, intacte
+    assert "manqué" in voyant.raison
+
+
+# --- Preuve negative, par mutation -------------------------------------------
+
+
+def _module_mute(monkeypatch, avant, apres):
+    """`app/supervision.py` recompile avec UNE ligne changee."""
+    source = Path(supervision.__file__).read_text(encoding="utf-8")
+    assert avant in source, "la mutation ne trouve plus sa cible : le code a change de forme"
+    module = types.ModuleType("supervision_mutee")
+    monkeypatch.setitem(sys.modules, "supervision_mutee", module)
+    exec(compile(source.replace(avant, apres), "supervision_mutee", "exec"), module.__dict__)
+    module.reprise_machine = lambda: MAINTENANT - LONGTEMPS
+    return module
+
+
+@pytest.mark.parametrize(
+    ("avant", "apres", "age", "attendu"),
+    [
+        # Sans ce test, « trop vieux » pourrait redevenir vert sans rien faire rougir.
+        ("    if age < seuil:\n", "    if True:\n", dt.timedelta(days=3), PANNE),
+        # Un fichier absent peint en vert : l'`or OK` bien intentionne.
+        (
+            "    if lecture.absent:\n        return Voyant(cle, libelle, INCONNU,",
+            "    if lecture.absent:\n        return Voyant(cle, libelle, OK,",
+            None,
+            INCONNU,
+        ),
+    ],
+)
+def test_le_voyant_de_l_agent_rougit_sous_mutation(monkeypatch, avant, apres, age, attendu):
+    _reveil(monkeypatch, LONGTEMPS)
+    if age is not None:
+        _passage(age)
+    assert voyant_agent_publication(MAINTENANT).niveau == attendu
+    mute = _module_mute(monkeypatch, avant, apres)
+    assert mute.voyant_agent_publication(MAINTENANT).niveau == OK
+
+
+def test_le_reveil_sans_garde_crierait_au_loup_preuve_par_mutation(monkeypatch):
+    """Retirer la garde du reveil : le meme fichier passe en PANNE."""
+    _reveil(monkeypatch, dt.timedelta(minutes=2))
+    _passage(dt.timedelta(hours=8))
+    assert voyant_agent_publication(MAINTENANT).niveau == INCONNU
+    mute = _module_mute(
+        monkeypatch,
+        "    return maintenant - reprise >= seuil_agent_publication()\n",
+        "    return True\n",
+    )
+    mute.reprise_machine = lambda: MAINTENANT - dt.timedelta(minutes=2)
+    assert mute.voyant_agent_publication(MAINTENANT).niveau == PANNE
+
+
+def test_le_creneau_jamais_traite_rougit_sous_mutation(db_session, monkeypatch):
+    """Retirer le constat : retour exact au « 0/6 publiés » vert."""
+    _reveil(monkeypatch, LONGTEMPS)
+    _creneau(db_session, _au_dela(), EtatCreneau.GELE)
+    assert voyant_creneaux(db_session, MAINTENANT).niveau == PANNE
+    mute = _module_mute(monkeypatch, "    if not orphelins:\n", "    if True:\n")
+    assert mute.voyant_creneaux(db_session, MAINTENANT).niveau == OK
+
+
 # --- L'endpoint -------------------------------------------------------------
 
 
@@ -300,6 +625,7 @@ def test_l_endpoint_rend_tous_les_voyants_et_le_niveau(client):
     cles = {v["cle"] for v in corps["voyants"]}
     assert {
         "mode",
+        "agent_publication",
         "composition",
         "creneaux",
         "passage",

@@ -54,6 +54,10 @@ Le reste des commandes du projet est dans `CLAUDE.md`.
     une seconde instance tant que la première tourne (`StartInterval` ne
     chevauche pas), le passage suivant part simplement en retard. D'où la
     relecture du mode avant chaque réclamation (voir « Publication automatique »).
+    Chaque sortie, mode `arret` compris, consigne sa fin dans
+    `publication_passage.json` à côté du jeton : c'est ce que relit le voyant
+    `agent_publication` (voir « Bandeau de supervision », `dashboard.md`).
+    L'intervalle vit dans `settings.publication_intervalle_s`.
   - `com.musicnewsradar.veille` — `run_veille` toutes les **5 minutes** : la
     veille rapide, c'est-à-dire les seuls comptes de `VEILLE_COMPTES` (voir
     « Veille rapide »). Silencieux quand il n'y a rien ; une exception est
@@ -69,6 +73,14 @@ Le reste des commandes du projet est dans `CLAUDE.md`.
   aussi. Les noms de logs suivent (`pipeline.log`), donc la conf `newsyslog`
   aussi : `afficher_rotation()` compare désormais le CONTENU du fichier `/etc`
   et non sa seule existence, sinon une conf périmée passerait pour valide.
+
+  **Après une fusion, relancer l'agent `dashboard`.** uvicorn tourne sans `--reload`, alors
+  que `dashboard.html` est relu à chaque requête : sans relance, le nouveau JS parle à
+  l'ancienne API. Les agents planifiés relancent un processus neuf à chaque passage, pas lui :
+
+  ```
+  launchctl kickstart -k gui/$(id -u)/com.musicnewsradar.dashboard
+  ```
 
   **Conflit de port :** l'agent tient le 8000. Avant un `uvicorn --reload` manuel,
   décharger l'agent (`launchctl bootout gui/$(id -u)/com.musicnewsradar.dashboard`)

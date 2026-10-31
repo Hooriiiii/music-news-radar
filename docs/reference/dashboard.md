@@ -11,10 +11,10 @@ signale JAMAIS une panne.
 
 Un bandeau permanent en tete du dashboard, visible quel que soit le panneau, qui
 repond a une seule question : **« la machine tourne-t-elle, et qu'a-t-elle fait
-en mon nom ? »** Dix voyants : mode de publication, composition/credits,
-creneaux du jour, **relecture** (voir « La fenetre de relecture », juste
-au-dessus), dernier passage, sante des sources, quota Graph, pauses
-(yt-dlp, visuels sautes), et les DEUX jetons Meta.
+en mon nom ? »** Onze voyants : mode de publication, **agent de publication**
+(voir ci-dessous), composition/credits, creneaux du jour, **relecture** (voir
+« La fenetre de relecture », juste au-dessus), dernier passage, sante des
+sources, quota Graph, pauses (yt-dlp, visuels sautes), et les DEUX jetons Meta.
 
 **Pourquoi.** Semaine du 2026-09-26 au 2026-10-02 : credits Anthropic epuises
 deux fois (plus une seule composition pendant deux jours), 46 % des creneaux
@@ -104,6 +104,65 @@ une corruption ne doit pas etre masquee par une panne passagere.
   mais la phrase, elle, est fausse. `last_error_at` est deja ecrit par
   `app/pipeline/health.py` et n'est lu par personne.
 
+**L'agent de publication pouvait mourir sous un bandeau vert** (2026-10-30,
+DEDUIT DU CODE : la panne n'a pas ete observee). Aucun voyant ne mesurait son
+passage, « Dernier passage » lit l'ingestion, et MANQUE n'est ecrit que par lui.
+- *Ecriture.* `scripts/run_publication.py::main` consigne la fin dans
+  `publication_passage.json` (`app/schedule/passage.py`), dans un `finally` : retour
+  du mode `arret`, `SystemExit` et exception imprevue y passent tous. Point choisi :
+  la FIN, donc rien n'est ecrit pendant la publication et rien ne peut la retarder.
+  Cette ecriture ne leve jamais. Un seul ecrivain et un fichier qui decrit UN
+  passage : pas de relecture-fusion ; atomique, temporaire nomme par processus.
+  Le champ `panne` porte les pannes d'etape que `tourner` avale (sinon un agent dont
+  tout echoue se lirait sain), nom d'etape et type d'exception (`rapport.pannes`), et
+  jamais le message d'une exception, qui peut porter une URL avec son jeton. Une faute
+  d'article n'y entre pas : ce n'est pas une panne de l'agent, et le voyant de
+  composition, les creneaux et la notification la disent deja.
+- *Un voyant de plus* (`agent_publication`) plutot que dans « Publication » : le
+  mode est une DECISION, ceci est un FAIT. Dans la meme pastille, `Aperçu` (ATTENTION
+  voulue) masquerait un agent mort. Le voyant vaut en mode `arret` aussi : il faut
+  savoir que l'agent est mort AVANT de repasser en reel.
+- *Le seuil derive des reglages* : 2 x `publication_intervalle_s` +
+  `publication_avance_s` + `publication_tunnel_budget_s`, soit 35 min 30. Un agent
+  sain peut se taire un intervalle plus un passage long, dont ces deux attentes sont
+  les seules bornees ; le second intervalle couvre yt-dlp, ffmpeg et la composition.
+  DEDUIT DU CODE : aucune duree de passage n'est journalisee, donc aucune n'a ete
+  mesuree. `publication_intervalle_s` est le reglage que lit desormais
+  `install_agents` (meme valeur, 600 s), comme `pipeline_intervalle_s`.
+- *Le reveil, le cas qui gouverne.* Le Mac dort, c'est normal, et le bandeau tourne
+  lui aussi depuis le reveil : il ne se rappelle rien de sa nuit. Sans garde, il
+  crierait a la panne a chaque ouverture d'ecran, avant que l'agent ait fini le
+  passage rattrape par launchd. Il demande donc au noyau (`reprise_machine` :
+  `sysctl kern.waketime kern.boottime`, local, gratuit) et ne conclut qu'apres un
+  seuil complet d'eveil. Avant : INCONNU, ni vert (aucune mesure fraiche) ni rouge
+  (rien n'accuse l'agent). Date illisible : INCONNU aussi. Observe le 2026-10-30 :
+  `kern.waketime` valait la derniere ligne `Wake` de `pmset -g log`. Non verifie :
+  son comportement sur un `DarkWake to FullWake` (6 lignes, contre 893 lignes
+  `Wake` ou `DarkWake`, dans le journal lu ce jour-la). Faux negatif assume : un Mac qui se rendort sans cesse avant le seuil
+  ne conclut jamais.
+- *`voyant_creneaux`.* Un creneau encore PROGRAMME ou GELE au-dela de
+  `publication_retard_max_minutes` n'est plus jamais vert (le « 0/6 publiés » vert).
+  ATTENTION d'abord, et PANNE quand l'agent a eu un seuil complet pour l'ecrire,
+  depuis le depassement ET depuis le reveil : un agent sain repasse toutes les
+  10 min, et un Mac rouvert a midi trouve toute sa matinee dans cet etat. Tous jours
+  confondus, pour ne pas redevenir vert a minuit. LIBRE n'est pas compte : hors du
+  perimetre decide, l'agent mort y est vu par son propre voyant. En mode `arret`,
+  `tourner` sort avant `_marquer_manques` : le constat reste ATTENTION et le dit, sans
+  accuser l'agent ; mode illisible (`_mode_lu`) : INCONNU.
+- *Preuve negative* : `tests/socle/test_supervision.py` recompile ce module avec UNE
+  ligne mutee (trop vieux devenu vert, absent devenu vert, garde du reveil retiree,
+  constat des creneaux retire) et exige que le niveau change.
+
+**Le voyant Relecture ne juge plus le debordement** (decision du 2026-10-30). Il
+lisait `render_report`, que seul `POST /posts/{id}/render` ecrit et qu'aucun bouton
+n'appelle : `deborde = bool(...)` rendait donc VERT une mesure qui n'existe pas,
+pendant que la fiche disait « inconnu ». Son message « partiront ainsi » etait faux :
+le gel refuse une cover qui deborde (`app/publish/preparation.py`). Il reste un
+voyant « ce qui attend », toujours `ok`. La mesure vivante est `/covers`, a
+l'ouverture de la fiche, dont l'avertissement demeure. `DepartOut.deborde` et les
+mentions de la liste et de la fiche sont retires. `POST /posts/{id}/render` reste :
+ses seuls appelants sont ses tests, et il n'est pas supprime ici.
+
 **Un endpoint dedie** plutot que cinq schemas elargis : la question est
 transversale, le niveau global doit se calculer a UN endroit (une regle negative
 repartie sur cinq vues n'est verrouillable nulle part), et le bandeau se
@@ -158,6 +217,19 @@ comme actif). Les deux premiers sont desormais **derives de la config** via
 `GET /reglages` -- un nombre recopie dans une chaine d'interface derive au
 premier changement de reglage.
 
+**La console publie seule avec verification humaine (decision de l'utilisateur,
+2026-10-30)** : il ne publie jamais a la main, il gere le programme. Sont donc retires
+« Valider le statut » (`approved`, lu par aucun code), « Marquer comme publié » et
+« 📸 Posté » (ils mentaient sur le compte, et USED ecartait l'article de la file), plus
+l'option « Validé » du filtre : une ligne ancienne s'affiche encore « Validé », on ne
+reecrit pas l'historique. La vue « 📸 Postés » reste, en lecture. Sur la carte, « ✓ Vu »
+n'apparait que sur un article `new` et « ↩ À traiter » que sur un `reviewed` : un geste
+sans effet ou que le serveur refuserait n'est pas offert, et sur un USED il n'y en a
+aucun. Les gestes de carte lisent la reponse et disent un refus a cote du bouton
+(`.refus-statut`), plus d'`alert`. « 🚫 Ne pas publier » remplace « Sauter » partout :
+`relecture-et-controle-editorial.md`, « Ne pas publier ». Preuves sur Chromium, mutations
+comprises : `tests/dashboard/test_dashboard_verification_humaine.py`.
+
 **Remettre un article dans la file** : `POST /articles/{id}/reintegrer`
 (bouton « ↩ Remettre dans la file » sur la carte, pastille « ⛔ hors file »
 depuis `ArticleOut.file_exclu_raison`). Il **refuse (409) une exclusion posee
@@ -165,7 +237,9 @@ par la dedup d'archive** et renvoie vers `scripts.reparations.marquer_doublon_ma
 effacer la raison seule ne tient pas, `link_duplicates` relierait l'article au
 passage suivant (voir « Dedup a deux etages »). Une exclusion de gel sur un
 article par ailleurs doublon se leve, elle : c'est la RAISON qui decide, pas le
-statut de doublon.
+statut de doublon. Si le post est peut-etre en ligne, le bouton ouvre une
+verification sur la carte et n'envoie la confirmation qu'apres « Vérifié, il
+n'est pas parti » (`publication.md`, « Exclusion »).
 
 **Une legende tapee survit desormais a un re-rendu de la fiche.** Six gestes
 reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et
@@ -296,8 +370,8 @@ Rien d'utile n'est parti avec elles, et c'est ce que
 
 **La legende etait affichee DEUX FOIS** : la zone editable, puis « Ce qui va
 partir » en entier. Une zone d'edition, plus un apercu **repliable**. Les
-COMPTEURS, eux, restent toujours visibles (505/2150, 8/30 hashtags, credit,
-debordement) : ils signalent un depassement avant qu'il coute un post, les cacher
+COMPTEURS, eux, restent toujours visibles (505/2150, 8/30 hashtags, credit ; le
+debordement en a ete retire le 2026-10-30, voir « Bandeau de supervision ») : ils signalent un depassement avant qu'il coute un post, les cacher
 dans le repli les rendrait inutiles.
 
 **Le selecteur de format MENTAIT**, et c'est le defaut le plus couteux des trois.
@@ -342,6 +416,34 @@ Enfin « Supprimer » etait le voisin de meme poids d'« Enregistrer » : il par
 l'autre bout de la barre (`margin-left: auto`), qui devient `sticky` -- sauf sous
 700 px, ou les boutons passent pleine largeur et une barre collante mangerait la
 moitie de l'ecran.
+
+### « Programmer » remplace « Générer le post » (2026-10-31)
+
+Règles, calcul de purge et limites : `publication.md`, « Programmer ». Ici, l'écran.
+
+- **Un seul sélecteur, deux sens** (`ouvrirSelecteur`) : « Programmer » / « Changer » sur la
+  carte, « Choisir une actu » sur la ligne de créneau (avec titres, pertinence et âge, sans
+  identifiant à recopier : le `prompt` numérique et « ✏️ Remplacer » sont partis), et le
+  même bouton sur une citation vivante et l'actu représentante d'un événement
+  (`EventObservationOut.representant`), sans code dupliqué. Pas de `prompt`, `alert` ni
+  `confirm`.
+- Le prochain créneau compatible en premier, puis par jour. Une option impossible est
+  désactivée, sa raison à côté, jamais dans une infobulle. Le mode est LU (`annonce_mode`) :
+  en `arret`, le sélecteur dit que rien ne sera composé ni publié.
+- La validation nomme ce qui sort, avec une étape de plus si l'occupant est épinglé ou
+  composé. Un refus s'affiche à côté du bouton, avec la raison du serveur.
+- La carte montre l'état réel (`ArticleOut.creneau`, lecture groupée) : « 🗓 jeu. 18:00 » et
+  « Changer » ; gelée, l'heure sans bouton ; publiée ou exclue, pas de Programmer. Après le
+  geste, seules les cartes touchées se repeignent : un `load()` perdrait le résultat.
+- Une ligne programmée sans post dit « composé vers … », ou « au prochain passage », ou
+  « composition suspendue » en mode `arret`. « Désépingler » reste sur un créneau mort.
+- **Retraits.** Le sélecteur POST / REELS devient `#format-lu`, en lecture seule, et
+  `raisonPasDeReel` part avec ses miroirs navigateur. « ⬇ Télécharger » quitte la fiche,
+  l'endpoint reste. Un post hors créneau reste consultable et éditable.
+
+Validé au navigateur sur données de test à 1440 et 390 px : aucun débordement mesuré
+(`scrollWidth - clientWidth` = 0) sur la carte, la Programmation, les Artistes, les
+Événements et la fiche.
 
 ## La charte Kinda dans la console (2026-10-02)
 

@@ -212,9 +212,9 @@ def test_les_gestes_d_un_creneau_portent_un_libelle_visible():
     l'icone distinguait, et un `title` ne se lit ni d'un coup d'oeil ni au
     lecteur d'ecran."""
     assert '"📍 Désépingler" : "📌 Épingler"' in PAGE
-    assert '"✏️ Remplacer"' in PAGE
+    assert '"Choisir une actu"' in PAGE
     assert '"⏬ Décaler"' in PAGE
-    assert '"🚫 Sauter"' in PAGE
+    assert '"🚫 Ne pas publier"' in PAGE
     assert 'b.setAttribute("aria-label", titre);' in PAGE
     # Et sur les cartes d'article, « ↩ » seul ne disait pas ou l'on revient.
     assert "↩ À traiter</button>" in PAGE

@@ -178,10 +178,15 @@ def posts_en_base(
     comptes: list[CompteArtiste],
     maintenant: dt.datetime,
     fenetre_jours: int | None = None,
+    *,
+    sans_limite: bool = False,
 ) -> list[PostArtiste]:
     """Les posts des comptes en base. `fenetre_jours` accompagne celui de
     `classer` : elargir l'un sans l'autre ne servirait a rien, la requete ne
-    remonterait pas les posts que le classement accepterait."""
+    remonterait pas les posts que le classement accepterait.
+
+    `sans_limite` : pour une lecture groupee sur l'union de plusieurs comptes, qui
+    applique ensuite la borne compte par compte (`store.raison_ineligible_reel`)."""
     if not comptes:
         return []
     par_source = {compte.source_id: compte for compte in comptes}
@@ -195,7 +200,7 @@ def posts_en_base(
         # volume, mais l'arbitrage appelle cette requete par article candidat --
         # un compte tres actif ne doit pas faire remonter des centaines de posts.
         .order_by(vu.desc(), Article.id.desc())
-        .limit(LIMITE_POSTS)
+        .limit(None if sans_limite else LIMITE_POSTS)
     ).all()
     return [
         PostArtiste(

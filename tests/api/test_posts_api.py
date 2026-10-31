@@ -3,10 +3,9 @@ import datetime as dt
 import pytest
 from sqlalchemy import select
 
-from app.content.compose import CoverVariante, PostDraft
 from app.schedule.relecture import RAISON_RELECTURE
 from app.content.render import RenduSlide
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
+from app.models import Article, Creneau, EtatCreneau, Post, PostStatus, Source, SourceType
 from app.schemas import PostOut
 
 
@@ -59,67 +58,6 @@ def _quatre_variantes():
         ],
         "retenue": None,
     }
-
-
-def test_creer_un_post_depuis_un_article(client, db_session, monkeypatch):
-    """La composition est mockee : on teste le cablage, pas le modele."""
-    article = _article(db_session)
-
-    def faux_composeur():
-        def composer(_article):
-            return PostDraft(
-                variantes=[
-                    CoverVariante(
-                        headline=f"**Vieilles Charrues** : le line-up {i}",
-                        title=f"**Titre** {i}",
-                        subtitle=f"**Sous-titre** {i}",
-                    )
-                    for i in range(4)
-                ],
-                caption="Le line-up est tombe 🎧 ✨",
-                hashtags=["#vieillescharrues"],
-            )
-
-        return composer
-
-    monkeypatch.setattr("app.api.posts.make_claude_composer", faux_composeur)
-
-    response = client.post(f"/articles/{article.id}/posts")
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["status"] == "draft"
-    # Une seule slide a la creation : la cover (variante 1) ; les trois autres
-    # variantes vivent dans `variants`, pas dans `slides`.
-    assert len(body["slides"]) == 1
-    assert len(body["variants"]["variantes"]) == 4
-    assert body["variants"]["retenue"] is None
-    assert body["article_title"] == article.title
-
-
-def test_creer_un_post_sur_un_article_inexistant(client):
-    assert client.post("/articles/9999/posts").status_code == 404
-
-
-def test_creer_un_post_composition_echouee_rend_une_erreur_lisible(client, db_session, monkeypatch):
-    """Une composition qui echoue systematiquement doit rendre un 502 exploitable,
-    pas un 500 avec stacktrace brute."""
-    article = _article(db_session)
-
-    def faux_composeur():
-        def composer(_article):
-            from app.content.compose import CompositionError
-
-            raise CompositionError("composition impossible pour l'article")
-
-        return composer
-
-    monkeypatch.setattr("app.api.posts.make_claude_composer", faux_composeur)
-
-    response = client.post(f"/articles/{article.id}/posts")
-
-    assert response.status_code == 502
-    assert "detail" in response.json()
 
 
 def test_lister_les_posts_par_statut(client, db_session):
@@ -250,19 +188,6 @@ def test_editer_une_slide_au_kind_inconnu_est_refuse(client, db_session):
     )
 
     assert response.status_code == 422
-
-
-def test_publier_un_post_marque_l_article_comme_poste(client, db_session):
-    """C'est ce qui protege l'article de la purge : USED n'est jamais purge."""
-    article = _article(db_session)
-    post = _post(db_session, article)
-
-    response = client.patch(f"/posts/{post.id}", json={"status": "published"})
-
-    assert response.status_code == 200
-    assert response.json()["published_at"] is not None
-    db_session.refresh(article)
-    assert article.status == ArticleStatus.USED
 
 
 def test_editer_un_post_inexistant(client):

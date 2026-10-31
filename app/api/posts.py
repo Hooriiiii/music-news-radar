@@ -2,32 +2,17 @@ import base64
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.content.choix_visuels import (
-    AucunVisuel,
-    ChoixVisuels,
-    VisuelIntrouvable,
-    VisuelsDifferes,
-    choisir_visuels,
-    compte_du_visuel,
-)
-from app.content.compose import (
-    CompositionError,
-    appeler_compositeur,
-    create_post,
-    make_claude_composer,
-    resoudre_fond,
-)
 from app.content.export import construire_zip
-from app.content.lecture_artistes import LecteurComptes
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.content.teinte import palette_du_post
 from app.content.visuels import fond_de_cover
 from app.db import get_db
-from app.models import Article, ArticleStatus, Creneau, EtatCreneau, Post, PostStatus
+from app.models import Article, Creneau, EtatCreneau, Post, PostStatus
+from app.schedule.publication_incertaine import erreur_incertaine
 from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.publish.preparation import candidats_editables
@@ -36,56 +21,6 @@ from app.schedule.store import utc
 from app.schemas import CoversOut, PostOut, PostUpdate
 
 router = APIRouter(tags=["posts"])
-
-
-@router.post("/articles/{article_id}/posts", response_model=PostOut, status_code=201)
-def creer_post(article_id: int, db: Session = Depends(get_db)):
-    """Genere un brouillon de carrousel. Un appel Claude, declenche a la main :
-    le pipeline planifie ne cree jamais de post."""
-    article = db.get(Article, article_id)
-    if article is None:
-        raise HTTPException(status_code=404, detail="Article not found")
-    # Les visuels d'abord, avec le meme budget de lecture que l'agent. Sans visuel
-    # autorise, le post est quand meme compose (la regle vise la file) : fond vide,
-    # a completer a la main.
-    try:
-        visuels = choisir_visuels(
-            db, article, maintenant=dt.datetime.now(dt.timezone.utc), lecteur=LecteurComptes()
-        )
-    except (AucunVisuel, VisuelIntrouvable):
-        # `VisuelIntrouvable` depuis le 2026-10-05 : les chemins « rien trouve,
-        # web compris » de `choisir_visuels` la levent au lieu d'`AucunVisuel`.
-        # Les DEUX gardent ici l'echappatoire MANUELLE d'avant (brouillon compose
-        # a fond vide, a completer a la main) : c'est la FILE que la regle vise,
-        # pas le geste de l'utilisateur.
-        visuels = ChoixVisuels()
-    except VisuelsDifferes as exc:
-        raise HTTPException(
-            status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
-        ) from exc
-    # Le fond AVANT l'appel paye (Sonnet), comme le planificateur (Tache 5,
-    # 2026-09-21) : `resoudre_fond` leve `VisuelIntrouvable` quand toute
-    # l'echelle (actu, compte, artiste, web) n'a rien donne d'assez net --
-    # l'aplat Kinda n'est plus une issue publiable. Son resultat est repasse a
-    # `create_post` pour ne jamais rouvrir une reserve reseau deux fois.
-    try:
-        fond_precalcule = resoudre_fond(visuels, "kinda_post")
-    except VisuelsDifferes as exc:
-        # `resoudre_fond` peut lever la MEME exception que `choisir_visuels`
-        # (une reserve n'a pas pu etre consultee) : meme 503 que celui rendu
-        # quelques lignes plus haut pour ce cas.
-        raise HTTPException(
-            status_code=503, detail=f"visuels d'artistes momentanement indisponibles : {exc}"
-        ) from exc
-    except VisuelIntrouvable as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    composer = make_claude_composer()
-    try:
-        draft = appeler_compositeur(composer, article, compte_du_visuel(visuels))
-    except CompositionError as exc:
-        # Erreur amont (Claude) : une reponse HTTP lisible, pas un 500 avec trace.
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return create_post(db, article, draft, visuels=visuels, fond_precalcule=fond_precalcule)
 
 
 @router.get("/posts", response_model=list[PostOut])
@@ -155,6 +90,27 @@ def _creneaux_geles(db: Session, post: Post) -> list[Creneau]:
 CHAMPS_FIGES = ("slides", "variante_retenue", "template", "carrousel_explicite")
 
 
+def _proteger_la_correction(db: Session, post: Post) -> None:
+    """Epingle le creneau PROGRAMME qui porte ce post, sans committer.
+
+    Sans ca, `appliquer_arbitrage` reprend le creneau dans les 10 minutes et le post
+    qu'on vient de corriger part a la trappe, comme apres une reouverture (`rouvrir`).
+    Dans la meme transaction que l'edition, et conditionnel sur (etat, post) : un
+    creneau gele ou reclame entre-temps n'est pas touche, et n'a pas besoin de l'etre,
+    l'arbitrage ne le reprendra pas.
+    """
+    db.execute(
+        update(Creneau)
+        .where(Creneau.post_id == post.id, Creneau.etat == EtatCreneau.PROGRAMME, Creneau.epingle.is_(False))
+        .values(epingle=True)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _contenu(post: Post) -> tuple:
+    return post.caption, post.hashtags, post.slides, post.template, post.variants
+
+
 def _regel_automatique(db: Session, post: Post) -> None:
     """Invalide le gel des creneaux qui portent ce post, avant de l'editer.
 
@@ -184,12 +140,23 @@ def _regel_automatique(db: Session, post: Post) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+# Le statut d'un post n'appartient qu'au robot (`runner._publier`, sans passer par
+# ici). « Valider » n'etait lu par personne, et « publie » a la main mentait sur le
+# compte et bloquait la publication reelle ; revenir a « brouillon » rendait un post
+# publie supprimable, donc l'archive editoriale.
+STATUT_REFUSE = "Le statut d'un post est posé par le robot quand il publie : il ne se change pas à la main."
+
+
 @router.patch("/posts/{post_id}", response_model=PostOut)
 def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_db)):
     post = db.get(Post, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
+    if payload.status is not None:
+        # AVANT tout le reste : un refus n'applique rien et ne rouvre aucun gel.
+        raise HTTPException(status_code=409, detail=STATUT_REFUSE)
 
+    avant = _contenu(post)
     edite_le_contenu = any(
         valeur is not None
         for valeur in (
@@ -234,15 +201,6 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # dire -- et un ancien "clean" perime serait un faux feu vert sur le
         # signal qui doit justement empecher une publication en defaut.
         post.render_report = None
-    if payload.status is not None:
-        post.status = payload.status
-        if payload.status is PostStatus.PUBLISHED:
-            post.published_at = dt.datetime.now(dt.timezone.utc)
-            # L'article passe en USED : c'est ce qui le protege de la purge et
-            # evite qu'il soit repropose plus tard
-            article = db.get(Article, post.article_id) if post.article_id else None
-            if article is not None:
-                article.status = ArticleStatus.USED
     if payload.template is not None:
         # `layout.GABARITS` deja verifie par le schema : ici on ne fait que
         # persister. La cover (slides[0]) porte deja les trois textes -- la
@@ -278,6 +236,9 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # `template` ci-dessus.
         post.render_report = None
 
+    # « Enregistrer » sans rien changer n'est pas une correction.
+    if _contenu(post) != avant:
+        _proteger_la_correction(db, post)
     db.commit()
     return post
 
@@ -378,10 +339,47 @@ def supprimer_post(post_id: int, db: Session = Depends(get_db)):
     choix d'une variante. Un brouillon dont l'utilisateur a retenu une
     variante puis change d'avis doit rester supprimable ; seuls APPROVED et
     PUBLISHED repondent 409.
+
+    Un post encore porte par un creneau non plus (2026-10-30) : la suppression
+    vidait `post_id` (ON DELETE SET NULL), et le creneau repayait Claude pour le
+    recomposer. Son retrait, c'est « Ne pas publier ». Un post peut-etre en ligne
+    (ECHEC de reclamation, meme ancienne) non plus : un retard jusqu'a la limite peut
+    encore etre en vol apres `_publication_en_vol`, et ce brouillon est la seule trace
+    de ce qui est parti.
     """
     post = _post_ou_404(db, post_id)
+    if _publication_en_vol(db, post):
+        raise HTTPException(
+            status_code=409,
+            detail="Publication en cours : le conteneur est cree chez Meta, le post ne se modifie plus",
+        )
     if post.status is not PostStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Seul un brouillon peut etre supprime")
+    if db.scalar(
+        select(Creneau.id)
+        .where(
+            Creneau.post_id == post.id,
+            Creneau.etat.in_([EtatCreneau.LIBRE, EtatCreneau.PROGRAMME, EtatCreneau.GELE]),
+        )
+        .limit(1)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ce post est au programme : utilise « Ne pas publier » pour le retirer, le brouillon pourra se supprimer ensuite.",
+        )
+    if db.scalar(
+        select(Creneau.id)
+        .where(
+            Creneau.post_id == post.id,
+            Creneau.etat == EtatCreneau.ECHEC,
+            erreur_incertaine(Creneau.erreur),
+        )
+        .limit(1)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ce post est peut-être en ligne : sa publication s'est interrompue sans confirmation. Vérifie le compte depuis la carte de l'article.",
+        )
     db.delete(post)
     db.commit()
     return Response(status_code=204)
@@ -391,12 +389,9 @@ def supprimer_post(post_id: int, db: Session = Depends(get_db)):
 def rendre_covers(post_id: int, db: Session = Depends(get_db)):
     """Rend les 4 variantes sur le MEME fond, en data URIs.
 
-    Deux endpoints et non un seul : `POST /articles/{id}/posts` paie un appel
-    Claude (la generation des 4 variantes), celui-ci paie un lancement
-    Chromium (le rendu). Les separer permet a un rechargement de page, ou un
-    changement de l'URL de fond (PATCH sur `slides`), de re-rendre SANS
-    repayer Claude -- c'est le genre de decoupage qu'on est tente de
-    "simplifier" en un seul appel plus tard ; ne pas le faire.
+    L'agent de publication paie Claude a la composition (les 4 variantes), celui-ci
+    paie un lancement Chromium (le rendu). Un rechargement de page, ou un changement
+    de l'URL de fond (PATCH sur `slides`), re-rend donc SANS repayer Claude.
 
     Reponse en data URIs et pas en fichiers sur disque : quatre PNG en base64
     pesent ~800 Ko de JSON, instantane sur localhost et sans etat cote

@@ -11,12 +11,13 @@ et les carrousels piochent dans le reste.
 """
 
 import datetime as dt
+import logging
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.config import settings
-from app.content.actifs_artistes import classer, duree_min_reel_ms, posts_en_base
+from app.content.actifs_artistes import LIMITE_POSTS, PostArtiste, classer, duree_min_reel_ms, posts_en_base
 from app.content.credit import credit_video
 from app.content.media import video_recuperable, videos_exploitables
 from app.content.recherche_web import raison_sans_recherche
@@ -34,8 +35,11 @@ from app.pipeline.comptes_artistes import CompteArtiste, IndexComptes, construir
 from app.sources.instagram import compte_depuis_url
 from app.publish.mode import reels_actifs
 from app.schedule.pause_visuels import articles_en_pause
+from app.schedule.publication_incertaine import erreur_incertaine
 from app.schedule.queue import Candidat, Place, arbitrer
 from app.schedule.slots import FenetresInvalides, prochains_horaires
+
+logger = logging.getLogger(__name__)
 
 # Un creneau dans l'un de ces etats ne bouge plus.
 VERROUILLES = frozenset({
@@ -171,32 +175,15 @@ def etiquette_visuel(article: Article, index: IndexComptes) -> str | None:
     return None
 
 
-def actifs_interdits(db: Session, post: Post) -> list[dict]:
-    """Les actifs d'un post que la policy refuse MAINTENANT.
-
-    La source d'un actif d'artiste est RELUE (par l'`article_id` du post
-    d'origine, sinon par son handle) : un compte passe en categorie `media`
-    APRES la composition ne doit pas voir son visuel publie. `preparation.py`
-    tient la meme ceinture pour les medias du representant, mais il n'a pas de
-    session pour remonter au compte d'un actif venu d'ailleurs.
-
-    Les actifs d'origine `article` sont relus EUX AUSSI, par membre (revue du
-    2026-09-21) : depuis que les visuels d'un carrousel viennent de tout le
-    groupe de doublons, un actif `article` porte l'`article_id` du MEMBRE dont
-    il vient, pas forcement celui du representant. La ceinture ne relisait que
-    les actifs d'artistes, et `preparation.py` que la source du representant :
-    un doublon reclasse `media` entre la composition (J-1) et le gel (T-2h)
-    passait donc au travers -- exactement le scenario que cette ceinture existe
-    pour couvrir. Le handle sert de repli quand le membre a ete purge entre-temps
-    (retention de 2 jours) ; une photo de presse RSS n'en a pas, et n'en a pas
-    besoin : `origine_interdite` ne vise que les comptes Instagram.
-    """
+def _actifs_relus(post: Post) -> list[dict]:
     actifs = getattr(post, "assets", None) or []
-    artistes = [
-        a for a in actifs if a.get("origine") in (ORIGINE_ARTISTE, ORIGINE_ARTICLE)
-    ]
-    if not artistes:
-        return []
+    return [a for a in actifs if a.get("origine") in (ORIGINE_ARTISTE, ORIGINE_ARTICLE)]
+
+
+def sources_des_actifs(db: Session, posts: list[Post]) -> tuple[dict[int, Source], dict[str, Source]]:
+    """Les sources a relire pour ces posts, en deux requetes quel que soit leur nombre :
+    (par article, par handle). A repasser a `actifs_interdits` pour une liste."""
+    artistes = [a for post in posts for a in _actifs_relus(post)]
     ids = {a["article_id"] for a in artistes if a.get("article_id")}
     handles = {a["compte"].lstrip("@").lower() for a in artistes if a.get("compte")}
     par_article: dict[int, Source] = {}
@@ -221,6 +208,35 @@ def actifs_interdits(db: Session, post: Post) -> list[dict]:
             )
             if compte_depuis_url(source.url).lower() in handles
         }
+    return par_article, par_handle
+
+
+def actifs_interdits(
+    db: Session, post: Post, sources: tuple[dict[int, Source], dict[str, Source]] | None = None
+) -> list[dict]:
+    """Les actifs d'un post que la policy refuse MAINTENANT.
+
+    La source d'un actif d'artiste est RELUE (par l'`article_id` du post
+    d'origine, sinon par son handle) : un compte passe en categorie `media`
+    APRES la composition ne doit pas voir son visuel publie. `preparation.py`
+    tient la meme ceinture pour les medias du representant, mais il n'a pas de
+    session pour remonter au compte d'un actif venu d'ailleurs.
+
+    Les actifs d'origine `article` sont relus EUX AUSSI, par membre (revue du
+    2026-09-21) : depuis que les visuels d'un carrousel viennent de tout le
+    groupe de doublons, un actif `article` porte l'`article_id` du MEMBRE dont
+    il vient, pas forcement celui du representant. La ceinture ne relisait que
+    les actifs d'artistes, et `preparation.py` que la source du representant :
+    un doublon reclasse `media` entre la composition (J-1) et le gel (T-2h)
+    passait donc au travers -- exactement le scenario que cette ceinture existe
+    pour couvrir. Le handle sert de repli quand le membre a ete purge entre-temps
+    (retention de 2 jours) ; une photo de presse RSS n'en a pas, et n'en a pas
+    besoin : `origine_interdite` ne vise que les comptes Instagram.
+    """
+    artistes = _actifs_relus(post)
+    if not artistes:
+        return []
+    par_article, par_handle = sources if sources is not None else sources_des_actifs(db, [post])
     interdits = []
     for actif_ in artistes:
         source = par_article.get(actif_.get("article_id"))
@@ -277,12 +293,19 @@ def raison_reel_propre(article: Article) -> str | None:
 
 
 def raison_ineligible_reel(
-    article: Article, *, index: IndexComptes | None = None, maintenant: dt.datetime | None = None
+    article: Article,
+    *,
+    index: IndexComptes | None = None,
+    maintenant: dt.datetime | None = None,
+    posts: list[PostArtiste] | None = None,
 ) -> str | None:
     """None si l'article peut partir en reel, sinon la raison, affichable.
 
     Le chemin propre d'abord (sa video, son compte). A defaut, la video d'un
     artiste suivi cite, EN BASE seulement : l'arbitrage ne lit jamais le reseau.
+
+    `posts` : une lecture groupee deja faite (`posts_en_base(..., sans_limite=True)` sur
+    l'union des comptes), pour ne pas ouvrir une requete par article d'une liste.
     """
     raison = raison_reel_propre(article)
     if raison is None:
@@ -295,9 +318,14 @@ def raison_ineligible_reel(
     if not comptes:
         return raison
     maintenant = maintenant or dt.datetime.now(dt.timezone.utc)
-    if classer(
-        article, posts_en_base(db, comptes, maintenant), format_=FormatCreneau.REEL, maintenant=maintenant
-    ):
+    if posts is None:
+        retenus = posts_en_base(db, comptes, maintenant)
+    else:
+        # Meme tri, meme borne que la requete par article : le resultat ne depend pas
+        # du chemin de lecture.
+        ids = {compte.source_id for compte in comptes}
+        retenus = [p for p in posts if p.compte.source_id in ids][:LIMITE_POSTS]
+    if classer(article, retenus, format_=FormatCreneau.REEL, maintenant=maintenant):
         return None
     return raison
 
@@ -333,6 +361,19 @@ def _articles_publiables(db: Session, maintenant: dt.datetime, limite: int) -> l
                 select(Creneau.article_id).where(
                     Creneau.etat.in_([EtatCreneau.APERCU, EtatCreneau.PUBLIE]),
                     Creneau.article_id.is_not(None),
+                )
+            )
+        )
+        # Seconde ceinture : ce post est peut-etre en ligne. `file_exclu_raison`
+        # le dit deja, mais un champ s'efface (reparation, election, UPDATE a la
+        # main) et le prix d'un oubli est un doublon public. Seule la confirmation
+        # humaine (`POST /articles/{id}/reintegrer`) reecrit cette erreur.
+        .where(
+            ~Article.id.in_(
+                select(Creneau.article_id).where(
+                    Creneau.etat == EtatCreneau.ECHEC,
+                    Creneau.article_id.is_not(None),
+                    erreur_incertaine(Creneau.erreur),
                 )
             )
         )
@@ -426,6 +467,20 @@ def post_a_reprendre(db: Session, article_id: int, template: str = "kinda_post")
     )
 
 
+def posts_a_reprendre(db: Session, article_ids: list[int]) -> dict[tuple[int, str], Post]:
+    """`post_a_reprendre` pour une liste, en une requete : (article, gabarit) -> post."""
+    if not article_ids:
+        return {}
+    retenus: dict[tuple[int, str], Post] = {}
+    for post in db.scalars(
+        select(Post)
+        .where(Post.article_id.in_(article_ids), Post.status != PostStatus.PUBLISHED)
+        .order_by(Post.created_at.desc(), Post.id.desc())
+    ):
+        retenus.setdefault((post.article_id, post.template), post)
+    return retenus
+
+
 def _tenus_ailleurs(db: Session, maintenant: dt.datetime, format_: FormatCreneau) -> set[int]:
     return set(
         db.scalars(
@@ -450,6 +505,75 @@ def _tenus_ailleurs(db: Session, maintenant: dt.datetime, format_: FormatCreneau
     )
 
 
+def lecture(creneau: Creneau) -> tuple:
+    """Ce qu'on a lu : (etat, article, post), a repasser a `ecrire_si_inchange`."""
+    return creneau.etat, creneau.article_id, creneau.post_id
+
+
+def ecrire_si_inchange(db: Session, creneau: Creneau, lu: tuple, **valeurs) -> bool:
+    """UPDATE conditionnel sur (etat, article, post), NON committe. Faux si le creneau
+    a change depuis la lecture : rien n'est ecrit, a l'appelant d'abandonner son lot.
+
+    Le pendant de `runner._reclamer`, pour le processus web, et pour la meme raison :
+    affecter `creneau.article_id` sur une lecture perimee ecraserait un gel committe
+    par l'agent. Pourquoi : `publication.md`, « L'arbitrage ecrivait sur une lecture
+    perimee ». Une copie et non un import : `runner` importe ce module, et
+    `_reclamer` annule TOUTE la transaction sur un echec, or celle-ci porte un lot.
+    """
+    etat, article_id, post_id = lu
+    resultat = db.execute(
+        update(Creneau)
+        .where(
+            Creneau.id == creneau.id,
+            Creneau.etat == etat,
+            Creneau.article_id.is_(None) if article_id is None else Creneau.article_id == article_id,
+            Creneau.post_id.is_(None) if post_id is None else Creneau.post_id == post_id,
+        )
+        .values(**valeurs)
+        .execution_options(synchronize_session=False)
+    )
+    if resultat.rowcount != 1:
+        return False
+    db.refresh(creneau)
+    return True
+
+
+def creneau_mort(creneau: Creneau) -> bool:
+    """Epingle, et plus rien a epingler : ni article ni post.
+
+    Le profil : un article programme a la main, purge (`retention_days`) avant sa
+    composition. `ON DELETE SET NULL` vide `article_id`, et l'epingle reste. La
+    composition ne le voit plus (elle veut un article), l'arbitrage non plus (il ne
+    touche pas un epingle), et le creneau pourrit jusqu'a MANQUE. Un post orphelin
+    n'est PAS mort : voir `porte_un_post_orphelin`.
+    """
+    return (
+        creneau.epingle
+        and creneau.etat in MODIFIABLES
+        and creneau.article_id is None
+        and creneau.post_id is None
+    )
+
+
+def _ecart_a_l_arbitrage(db: Session, creneau: Creneau, article_id: int | None, format_: FormatCreneau) -> dict:
+    """Ce qu'il faut ecrire pour que le creneau porte ce que l'arbitrage a choisi."""
+    valeurs: dict = {}
+    if article_id != creneau.article_id:
+        valeurs["article_id"] = article_id
+        valeurs["post_id"] = post_a_reprendre(db, article_id, TEMPLATES[format_]) if article_id else None
+        if article_id is not None:
+            # Un NOUVEL article prend le creneau -- l'ancienne erreur
+            # (« visuel introuvable : ... », posee sur l'article
+            # precedent) ne le concerne plus et resterait trompeuse au
+            # dashboard tant qu'aucune composition n'a encore eu lieu
+            # pour celui-ci.
+            valeurs["erreur"] = None
+    etat = EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE
+    if etat != creneau.etat:
+        valeurs["etat"] = etat
+    return valeurs
+
+
 def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
     tous: list[Creneau] = []
     places_ce_passage: set[int] = set()
@@ -463,6 +587,15 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
             db.rollback()
             fenetres_fautives = exc
             continue
+        for creneau in creneaux:
+            if creneau_mort(creneau):
+                # Conditionnel comme le reste : perdue, cette ecriture se rejoue au
+                # passage suivant, rien n'en depend d'irreversible.
+                ecrire_si_inchange(
+                    db, creneau, lecture(creneau),
+                    epingle=False, etat=EtatCreneau.LIBRE,
+                    erreur=creneau.erreur or "article purge avant sa composition : creneau desepingle",
+                )
         occupes = _tenus_ailleurs(db, maintenant, format_) | places_ce_passage
         candidats = [c for c in candidats_eligibles(db, maintenant, format_) if c.article_id not in occupes]
         places = [
@@ -474,6 +607,7 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
             for c in creneaux
         ]
         affectation = arbitrer(places, candidats, maintenant)
+        lot_abandonne = False
         for creneau in creneaux:
             if porte_un_post_orphelin(creneau):
                 # Le post survit a son article : le creneau le garde jusqu'au
@@ -482,24 +616,29 @@ def appliquer_arbitrage(db: Session, maintenant: dt.datetime) -> list[Creneau]:
                 # invisible du gel, qui ne regarde que des creneaux PROGRAMME.
                 # Les etats VERROUILLES (GELE, PUBLIE, ...) ne sont jamais
                 # touches : ils passent par ce `continue` sans etre reecrits.
-                if creneau.etat == EtatCreneau.LIBRE:
-                    creneau.etat = EtatCreneau.PROGRAMME
+                if creneau.etat != EtatCreneau.LIBRE:
+                    continue
+                valeurs = {"etat": EtatCreneau.PROGRAMME}
+            elif creneau.epingle or creneau.etat in VERROUILLES:
                 continue
-            if creneau.epingle or creneau.etat in VERROUILLES:
-                continue
-            article_id = affectation.get(utc(creneau.publier_a))
-            if article_id != creneau.article_id:
-                creneau.article_id = article_id
-                creneau.post_id = post_a_reprendre(db, article_id, TEMPLATES[format_]) if article_id else None
-                if article_id is not None:
-                    # Un NOUVEL article prend le creneau -- l'ancienne erreur
-                    # (« visuel introuvable : ... », posee sur l'article
-                    # precedent) ne le concerne plus et resterait trompeuse au
-                    # dashboard tant qu'aucune composition n'a encore eu lieu
-                    # pour celui-ci.
-                    creneau.erreur = None
-            creneau.etat = EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE
-        db.commit()
+            else:
+                valeurs = _ecart_a_l_arbitrage(db, creneau, affectation.get(utc(creneau.publier_a)), format_)
+            if valeurs and not ecrire_si_inchange(db, creneau, lecture(creneau), **valeurs):
+                lot_abandonne = True
+                logger.warning(
+                    "arbitrage %s abandonne : le creneau %s a change depuis la lecture, le passage suivant reprend",
+                    format_.value, creneau.id,
+                )
+                break
+        if lot_abandonne:
+            # TOUT le lot du format, pas ce seul creneau : l'affectation supposait
+            # l'article de ce creneau disponible, et en ecrire le reste le poserait
+            # sur deux creneaux. Relu, car le rollback a tout expire et un creneau
+            # a pu disparaitre.
+            db.rollback()
+            creneaux = list(db.scalars(_futurs(format_, maintenant).order_by(Creneau.publier_a)))
+        else:
+            db.commit()
         places_ce_passage |= {c.article_id for c in creneaux if c.article_id is not None}
         tous += creneaux
     if fenetres_fautives is not None:
