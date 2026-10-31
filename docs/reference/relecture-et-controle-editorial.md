@@ -402,6 +402,35 @@ sans rien changer n'epingle pas, un refus non plus. La fiche le dit (`DepartOut.
 et propose « Desepingler ». Un depot de visuel n'epingle pas : ce n'est qu'un candidat, le
 mettre dans la liste passe par ici.
 
+### Modifier l'accroche (2026-10-31)
+
+`hl-hint` decrivait « une accroche » a entourer d'asterisques, sans champ ou le faire. La
+fiche porte desormais ce que le gabarit lit vraiment (`layout.GABARIT_*.roles`) : `headline`
+pour `kinda_post`, `title` et `subtitle` pour `kinda_reel`, le rappel sous le champ. Meme
+chemin que le reste : `ecrireDepuisLaFiche`, `PATCH /posts/{id}` avec `slides`, donc re-gel
+automatique d'un GELE, epingle d'un PROGRAMME, refus a moins de 20 min dit a cote du champ
+(`#etat-accroche`, parce qu'a 390 px la barre d'actions est loin) sans rien ecrire et sans
+perdre la saisie. Claude n'est pas repaye, rien n'approche Meta.
+
+**Le piege, et la seule regle nouvelle cote serveur.** Le gel rend `slides[0]`, mais `/covers`
+et le choix de variante lisent `variants.variantes`. Ecrire `slides` seul figeait le bon
+texte, montrait l'ancien, et un aller-retour de variante effacait la correction en 200.
+`posts._aligner_variante_sur_la_cover` recopie donc les textes dans la variante retenue (la
+premiere si aucune), en FUSION. Preuve : `tests/publish/test_accroche_gel.py` compare le JPEG
+gele par `_geler` et `preparer_fichiers`, avec le vrai rendu Chromium, a l'accroche corrigee
+et a l'ancienne ; retirer l'alignement fait perdre l'edition (mutation dans le meme fichier).
+
+**Son propre bouton, desactive sans changement** : envoyer `slides` rouvre un gel meme a
+l'identique, et « Enregistrer » legende ne doit jamais couter un gel, ni etre refuse a
+20 min. Son tampon (`brouillonAccroche`) survit au re-rendu comme celui de la legende,
+garde a la fermeture comprise. Apres ecriture, `/covers` est relu : un debordement s'affiche
+sous le champ, avec la saisie, et un apercu en panne se dit sans annuler l'ecriture.
+
+**Limite connue.** `_reperes_perimes` relit aussi le texte humain : un « ce soir » tape dans
+l'accroche d'un post compose la veille fait lacher le post au gel, et la composition suivante
+le refait, donc repaie Claude et ecrase la correction. Comportement deja vrai pour la legende,
+non change ici, DEDUIT DU CODE.
+
 ### Anti-doublon, demontre
 
 Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur

@@ -111,6 +111,34 @@ def _contenu(post: Post) -> tuple:
     return post.caption, post.hashtags, post.slides, post.template, post.variants
 
 
+TEXTES_DE_COVER = ("headline", "title", "subtitle")
+
+
+def _aligner_variante_sur_la_cover(post: Post) -> None:
+    """La variante a l'ecran porte les textes que la cover vient de recevoir.
+
+    Le gel rend `slides[0]`, mais `/covers` et le choix de variante lisent
+    `variants.variantes` : sans cet alignement, une accroche corrigee serait figee tout
+    en restant absente de l'apercu, et un aller-retour de variante l'effacerait en
+    silence. Variante retenue, ou la premiere par defaut (`create_post`). Reassignation
+    entiere et FUSION : ni la palette ni l'origine du fond ne bougent, et un fond ou une
+    liste changes laissent les textes intacts, donc rien a ecrire.
+    """
+    cover = (post.slides or [{}])[0]
+    variants = post.variants or {}
+    variantes = variants.get("variantes") or []
+    retenue = variants.get("retenue")
+    indice = retenue if retenue is not None else 0
+    if cover.get("kind", "cover") != "cover" or not 0 <= indice < len(variantes):
+        return
+    textes = {cle: cover[cle] for cle in TEXTES_DE_COVER if cover.get(cle) is not None}
+    if all(variantes[indice].get(cle) == valeur for cle, valeur in textes.items()):
+        return
+    alignees = [*variantes]
+    alignees[indice] = {**variantes[indice], **textes}
+    post.variants = {**variants, "variantes": alignees}
+
+
 def _regel_automatique(db: Session, post: Post) -> None:
     """Invalide le gel des creneaux qui portent ce post, avant de l'editer.
 
@@ -195,6 +223,8 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
         # Reassignation ENTIERE (liste de dicts simples, pas les modeles Pydantic) :
         # une mutation in place ne serait pas persistee sur la colonne JSON
         post.slides = [slide.model_dump() for slide in payload.slides]
+        if payload.variante_retenue is None:
+            _aligner_variante_sur_la_cover(post)
         # Un rapport de rendu parle d'un texte precis : une fois les slides
         # changees (l'editeur de carrousel EST une surface d'edition
         # d'accroche), un ancien rapport "overflow" ou "clean" ne veut plus rien

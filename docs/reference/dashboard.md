@@ -273,7 +273,8 @@ reconstruisaient `detailEl.innerHTML` depuis la reponse du serveur et
 detruisaient le texte en cours de frappe -- le geste editorial normal (ecrire
 la legende, puis choisir la cover qui va avec) perdait la legende. Un tampon a
 UN seul point de capture (l'evenement `input`) et UN seul point de lecture
-(`textesAReinjecter`, pure), plus une garde a la fermeture.
+(`textesAReinjecter`, pure), plus une garde a la fermeture. L'accroche a le sien depuis le
+2026-10-31 (`accrocheAReinjecter`, voir `relecture-et-controle-editorial.md`).
 
 **Le lien vers Instagram est DEDUIT** du shortcode (base 64 de l'id media), pas
 verifie : aucun permalien n'est stocke apres `media_publish`. S'il se trompe le

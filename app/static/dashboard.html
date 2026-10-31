@@ -315,6 +315,7 @@
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12.5px;
     font-family: inherit; resize: vertical; }
   .hl-hint { color: var(--muted); font-size: 11px; margin: 10px 0 12px; }
+  .accroche-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0 14px; }
   /* Meme palette que .badge.hot-high : le rouge est deja le langage "attention"
      du dashboard, pas une nouvelle convention. */
   .render-warning { background: var(--alerte-fond); color: var(--alerte); border: 1px solid var(--alerte-bord);
@@ -2263,6 +2264,29 @@ async function fetchArticleById(id) {
   }
 }
 
+// L'accroche en cours de frappe : meme discipline que la legende, un seul point de
+// capture (`input`), un seul point de lecture. Tampon a part : elle a son propre bouton,
+// parce qu'envoyer `slides` rouvre un gel, ce que la legende ne fait jamais.
+let brouillonAccroche = null; // { postId, textes: { headline } ou { title, subtitle } }
+
+// Ce que le gabarit lit vraiment (`layout.GABARIT_*.roles`) : l'accroche pour le post, le
+// couple titre / sous-titre pour le reel.
+const CHAMPS_DE_COVER = {
+  kinda_post: [["headline", "Accroche"]],
+  kinda_reel: [["title", "Titre"], ["subtitle", "Sous-titre"]],
+};
+
+function champsDeCover(post) {
+  return CHAMPS_DE_COVER[post.template] || CHAMPS_DE_COVER.kinda_post;
+}
+
+function accrocheAReinjecter(brouillon, post) {
+  if (!brouillon || brouillon.postId !== post.id) return null;
+  const cover = (post.slides || [])[0] || {};
+  const differe = champsDeCover(post).some(([cle]) => (brouillon.textes[cle] ?? "") !== (cover[cle] || ""));
+  return differe ? brouillon.textes : null;
+}
+
 async function chargerCovers(postId) {
   const reponse = await fetch(`/posts/${postId}/covers`, { method: "POST" });
   if (!reponse.ok) throw new Error(await reponse.text());
@@ -2272,6 +2296,7 @@ async function chargerCovers(postId) {
 async function ouvrirPost(postId) {
   // Le tampon est celui d'UNE fiche : ouvrir un autre post le perime.
   if (brouillonTexte && brouillonTexte.postId !== postId) brouillonTexte = null;
+  if (brouillonAccroche && brouillonAccroche.postId !== postId) brouillonAccroche = null;
   let post;
   try {
     post = await (await fetch(`/posts/${postId}`)).json();
@@ -2750,6 +2775,26 @@ function renderPostDetail(post, article, covers) {
       + ` crédit inconnus — l'aperçu du départ est injoignable</span></div>`;
   }
 
+  // Le champ de ce qui part sur la cover (`slides[0]`), selon ce que le gabarit lit.
+  const accrocheEditable = (cover.kind || "cover") === "cover" && (post.slides || []).length > 0;
+  const variantePrecisee = variantes.length
+    ? ` — variante ${indexActif + 1}${retenue == null ? " (par défaut)" : ""}` : "";
+  const accrocheHtml = accrocheEditable ? `
+        ${champsDeCover(post).map(([cle, nom]) => `
+        <div class="field">
+          <label for="edit-${cle}">${nom}${variantePrecisee}</label>
+          <textarea id="edit-${cle}" rows="2">${escapeHtml(cover[cle] || "")}</textarea>
+        </div>`).join("")}
+        <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> pour le surligner en rose sur l'image.</div>
+        ${enDefaut ? `<div class="render-warning" id="accroche-deborde">⚠ Ce texte déborde de la cover : le gel la refusera. Raccourcis-le.</div>` : ""}
+        <div class="render-warning" id="accroche-non-enregistree" hidden>
+          ⚠ Texte de cover modifié et NON enregistré.
+        </div>
+        <div class="accroche-actions">
+          <button id="btn-accroche">Enregistrer le texte de cover</button>
+          <div class="etat-geste" id="etat-accroche"></div>
+        </div>` : "";
+
   detailEl.innerHTML = `
     <div class="sheet">
       <div class="sheet-head">
@@ -2763,7 +2808,7 @@ function renderPostDetail(post, article, covers) {
       <section class="bloc">
         <div class="bloc-titre">Cover</div>
         <div class="covers-grid">${coversHtml}</div>
-        <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
+        ${accrocheHtml}
         <div class="sous-titre">Format</div>
         <div class="note" id="format-lu">${escapeHtml(
           depart
@@ -2892,10 +2937,69 @@ function renderPostDetail(post, article, covers) {
   hashtagsEl.oninput = capturerTextes;
   marquerNonEnregistre();
 
+  // --- Le texte de cover : meme tampon, son propre bouton ---
+  const btnAccroche = detailEl.querySelector("#btn-accroche");
+  const champsAccroche = btnAccroche
+    ? champsDeCover(post).map(([cle]) => [cle, detailEl.querySelector(`#edit-${cle}`)]) : [];
+  const aReinjecterAccroche = btnAccroche ? accrocheAReinjecter(brouillonAccroche, post) : null;
+  if (aReinjecterAccroche) {
+    for (const [cle, champ] of champsAccroche) champ.value = aReinjecterAccroche[cle] ?? "";
+  }
+  const marquerAccroche = () => {
+    if (!btnAccroche) return;
+    const enCours = accrocheAReinjecter(brouillonAccroche, post) != null;
+    detailEl.querySelector("#accroche-non-enregistree").hidden = !enCours;
+    // Envoyer `slides` rouvre un gel, meme a l'identique : rien de change, rien a offrir.
+    btnAccroche.disabled = !enCours;
+  };
+  for (const [, champ] of champsAccroche) {
+    champ.oninput = () => {
+      brouillonAccroche = { postId: post.id, textes: Object.fromEntries(champsAccroche.map(([c, e]) => [c, e.value])) };
+      marquerAccroche();
+    };
+  }
+  marquerAccroche();
+  if (btnAccroche) {
+    btnAccroche.onclick = async () => {
+      const envoye = brouillonAccroche;
+      if (!accrocheAReinjecter(envoye, post)) return;
+      const zone = () => detailEl.querySelector("#etat-accroche");
+      const updated = await ecrireDepuisLaFiche(post.id, {
+        bouton: btnAccroche,
+        libelle: "Texte de cover",
+        action: () => enregistrerPost(post.id, {
+          slides: [{ ...cover, ...envoye.textes }, ...(post.slides || []).slice(1)],
+        }),
+      });
+      if (zone()) peindreGeste(zone(), post.id); // sur telephone, la barre est loin du champ
+      if (!updated) return; // le refus reste affiche, la saisie aussi : rien n'a ete re-rendu
+      // Une frappe pendant l'ecriture n'est pas ce que le serveur porte : elle reste.
+      if (brouillonAccroche === envoye) brouillonAccroche = null;
+      let nouvellesCovers = null;
+      let panneApercu = null;
+      try {
+        nouvellesCovers = await chargerCovers(post.id);
+      } catch (erreur) {
+        panneApercu = erreur.message;
+      }
+      await chargerDeparts();
+      renderPostDetail(updated, article, nouvellesCovers);
+      if (panneApercu) {
+        annoncerGeste(post.id, "erreur", `✓ Texte enregistré, mais l'aperçu a échoué — ${panneApercu}`);
+      }
+      const zoneApres = zone();
+      if (zoneApres) peindreGeste(zoneApres, post.id);
+      if (!document.getElementById("schedule-panel").hidden) loadSchedulePanel();
+    };
+  }
+
   const fermerDetail = () => {
     if (textesAReinjecter(brouillonTexte, post)
         && !confirm("La légende n'est pas enregistrée. Fermer et perdre ces modifications ?")) return;
+    if (accrocheAReinjecter(brouillonAccroche, post)
+        && !confirm("L'accroche n'est pas enregistrée. Fermer et perdre ces modifications ?")) return;
     brouillonTexte = null;
+    brouillonAccroche = null;
     dernierGeste = null;
     detailEl.hidden = true;
     detailEl.innerHTML = "";
@@ -3090,6 +3194,7 @@ function renderPostDetail(post, article, covers) {
       });
       if (!fait) return;
       brouillonTexte = null;
+      brouillonAccroche = null;
       dernierGeste = null;
       detailEl.hidden = true; detailEl.innerHTML = "";
       if (!postsPanelEl.hidden) loadPostsPanel();
