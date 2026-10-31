@@ -2,18 +2,18 @@ import base64
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.content.export import construire_zip
 from app.content.legende import texte_legende
 from app.content.render import RenduIndisponible, render_covers, render_post
 from app.content.teinte import palette_du_post
-from app.content.visuels import fond_de_cover
+from app.content.visuels import fond_de_cover, url_propre
 from app.db import get_db
 from app.models import Article, Creneau, EtatCreneau, Post, PostStatus
 from app.schedule.publication_incertaine import erreur_incertaine
-from app.schedule.relecture import noter_edition, textes_du_post
+from app.schedule.relecture import RAISON_RELECTURE, contenu_fige, noter_edition, textes_du_post
 from app.schedule.reouverture import ReouvertureRefusee, rouvrir
 from app.schedule.runner import RAISON_RECLAMATION, RECLAMATION_EN_COURS
 from app.publish.preparation import candidats_editables
@@ -93,6 +93,29 @@ def _creneaux_geles(db: Session, post: Post) -> list[Creneau]:
 # `carrousel_explicite` en fait PARTIE : arreter la liste change ce que
 # `medias_du_carrousel` rendra, donc les fichiers a figer.
 CHAMPS_FIGES = ("slides", "variante_retenue", "template", "carrousel_explicite")
+
+
+def _marquer_la_relecture(db: Session, post: Post) -> None:
+    """Pose `RAISON_RELECTURE` sur le creneau PROGRAMME qui porte ce post, sans committer.
+
+    Un gel impossible apres cette edition libere alors le creneau au lieu d'exclure
+    l'article. En SQL, pour ne pas ecraser une erreur que l'agent ecrirait a la meme seconde,
+    et A LA SUITE d'une erreur existante : `supervision` lit `composition%`, et `_geler`
+    `texte perime` en tete.
+    """
+    suite = f" — {RAISON_RELECTURE}"
+    db.execute(
+        update(Creneau)
+        .where(
+            Creneau.post_id == post.id, Creneau.etat == EtatCreneau.PROGRAMME,
+            or_(Creneau.erreur.is_(None), Creneau.erreur.not_like(f"%{RAISON_RELECTURE}%")),
+        )
+        .values(erreur=case(
+            (Creneau.erreur.is_(None), RAISON_RELECTURE),
+            else_=func.substr(Creneau.erreur, 1, 1000 - len(suite)) + suite,
+        ))
+        .execution_options(synchronize_session=False)
+    )
 
 
 def _proteger_la_correction(db: Session, post: Post) -> None:
@@ -199,6 +222,7 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
 
     avant = _contenu(post)
     textes_avant = textes_du_post(post)
+    fige_avant = contenu_fige(post)
     edite_le_contenu = any(
         valeur is not None
         for valeur in (
@@ -222,6 +246,15 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
             # 422 a la frontiere plutot qu'un IndexError plus tard dans le renderer.
             raise HTTPException(status_code=422, detail="variante_retenue hors bornes")
         variante = variantes[payload.variante_retenue]
+    if payload.slides is not None and fond_de_cover(post) is not None:
+        # Avant tout re-gel. Sans fond, le brouillon devient perime au gel
+        # (`runner._brouillon_perime`) : le robot le recompose, donc repaie Sonnet et perd
+        # la correction.
+        if not payload.slides or url_propre(payload.slides[0].image_url) is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Le fond ne peut pas être vide : sans lui, le robot recomposerait ce post. Choisis une autre image.",
+            )
     if any(getattr(payload, champ) is not None for champ in CHAMPS_FIGES):
         # Les fichiers figes ne portent pas cette edition : on les invalide, et le
         # gel ordinaire du passage suivant les refait. Automatique, jamais un
@@ -283,6 +316,7 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
     # « Enregistrer » sans rien changer n'est pas une correction.
     if _contenu(post) != avant:
         carrousel = (post.variants or {}).get("carrousel") != (avant[4] or {}).get("carrousel")
+        fige = contenu_fige(post) != fige_avant
         noter_edition(
             post, textes_avant, _maintenant(),
             # Une variante choisie reste le texte du robot, a la date du robot.
@@ -290,8 +324,11 @@ def modifier_post(post_id: int, payload: PostUpdate, db: Session = Depends(get_d
             corrige=post.hashtags != avant[1] or carrousel or (
                 payload.slides is not None and _hors_textes(post.slides) != _hors_textes(avant[2])
             ),
+            fige=fige,
         )
         _proteger_la_correction(db, post)
+        if fige:
+            _marquer_la_relecture(db, post)
     db.commit()
     return post
 

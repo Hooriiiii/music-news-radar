@@ -13,17 +13,21 @@ import app.api.posts as posts_api
 import app.api.schedule as schedule_api
 import app.schedule.runner as runner
 from app.api.schedule import OCCUPANT_CHANGE
+from app.config import settings
 from app.content.choix_visuels import ChoixVisuels
 from app.content.compose import CoverVariante, PostDraft
 from app.content.media import entree
 from app.content.visuels import actif
 from app.models import Article, Creneau, EtatCreneau, Post
+from app.publish.preparation import PreparationDifferee, PreparationImpossible
 from app.schedule import relecture
+from app.schedule.pause_visuels import articles_en_pause
 from app.schedule.store import appliquer_arbitrage
 from tests.schedule.test_course_arbitrage_gel import (  # noqa: F401 -- fixtures
     BASE,
     _deux_carrousels,
     _ligne,
+    _publier_a_l_heure,
     client_web,
     fabrique,
     file_,
@@ -330,3 +334,130 @@ def test_noter_l_edition_fusionne_et_ne_note_que_ce_qui_change(client_web, fabri
     variants = _post(fabrique, file_["post_a"]).variants
     assert (variants["palette"], variants["fond"]) == ("rose", {"origine": "article"})
     assert variants[relecture.CLE_EDITION]["textes"]["caption"]["texte"] == "Autre"
+
+
+# --- 3. Allonger une accroche sur un PROGRAMME ne brule pas l'actu -----------------------
+
+
+def _impossible(post, article, dossier):
+    raise PreparationImpossible("accroche trop longue : la cover deborde")
+
+
+@pytest.mark.parametrize("corps", [
+    {"slides": [_cover(headline="**Beaucoup** trop long")]},
+    {"slides": [_cover(image_url="https://img/autre.jpg")]},
+    {"variante_retenue": 1},
+    {"carrousel_explicite": True},
+])
+def test_une_edition_du_fige_pose_le_marqueur(client_web, fabrique, file_, horloge_des_posts, corps):  # noqa: F811
+    variantes = [{"headline": "**A**"}, {"headline": "**Autre**"}]
+    _poser(fabrique, file_["post_a"], variants={"variantes": variantes})
+    assert client_web.patch(f"/posts/{file_['post_a']}", json=corps).status_code == 200
+    assert _creneau(fabrique, file_["tot"]).erreur == relecture.RAISON_RELECTURE
+
+
+def test_la_legende_ne_pose_pas_le_marqueur(client_web, fabrique, file_, horloge_des_posts):  # noqa: F811
+    """Le fige n'en depend pas : un gel impossible resterait la faute de l'article."""
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"caption": "Autre"}).status_code == 200
+    assert _creneau(fabrique, file_["tot"]).erreur is None
+
+
+def test_le_marqueur_n_ecrase_pas_une_erreur_existante(client_web, fabrique, file_, horloge_des_posts):  # noqa: F811
+    with fabrique() as db:
+        db.get(Creneau, file_["tot"]).erreur = "composition differee : quota"
+        db.commit()
+    corps = {"slides": [_cover(headline="**Autre**")]}
+    assert client_web.patch(f"/posts/{file_['post_a']}", json=corps).status_code == 200
+    assert client_web.patch(f"/posts/{file_['post_a']}", json={"slides": [_cover(headline="**Encore**")]}).status_code == 200
+    erreur = _creneau(fabrique, file_["tot"]).erreur
+    # En tete : `supervision` lit `composition%`.
+    assert erreur.startswith("composition differee : quota")
+    assert erreur.count(relecture.RAISON_RELECTURE) == 1
+
+
+def test_un_gel_impossible_apres_edition_libere_sans_exclure(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """La reproduction de Karim et Jo. Avant : article exclu a vie, sans notification."""
+    corps = {"slides": [_cover(headline="**Beaucoup** trop long")]}
+    assert client_web.patch(f"/posts/{file_['post_a']}", json=corps).status_code == 200
+    passages.preparer = _impossible
+
+    passages.tourner(_une_heure_avant(file_))
+
+    assert _raison(fabrique, file_["a"]) is None
+    assert _post(fabrique, file_["post_a"]).slides[0]["headline"] == "**Beaucoup** trop long"
+    assert any("deborde" in note for note in passages.notes)
+    assert file_["a"] in articles_en_pause(_une_heure_avant(file_))
+
+
+def test_le_creneau_libere_prend_une_autre_actu(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    """Sans mise a l'ecart, la meme actu reviendrait a chaque passage jusqu'a MANQUE."""
+    corps = {"slides": [_cover(headline="**Beaucoup** trop long")]}
+    client_web.patch(f"/posts/{file_['post_a']}", json=corps)
+    passages.preparer = _impossible
+    passages.tourner(_une_heure_avant(file_))
+    assert _creneau(fabrique, file_["tot"]).article_id != file_["a"]
+
+
+def test_la_protection_survit_a_la_reprise_du_post(client_web, fabrique, file_, passages, horloge_des_posts, monkeypatch):  # noqa: F811
+    """Liberee, l'actu revient apres sa pause : l'arbitrage reprend le post et efface
+    `erreur`, donc le marqueur. L'edition notee sur le post prend le relais."""
+    monkeypatch.setattr(settings, "visuel_saute_pause_minutes", 1)
+    client_web.patch(f"/posts/{file_['post_a']}", json={"slides": [_cover(headline="**Beaucoup** trop long")]})
+    passages.preparer = _impossible
+    for minutes in (0, 10, 20):
+        passages.tourner(_une_heure_avant(file_) + dt.timedelta(minutes=minutes))
+        assert _raison(fabrique, file_["a"]) is None
+    assert len(passages.rendus) >= 2
+
+
+@pytest.mark.parametrize("panne", [RuntimeError("chromium absent"), PreparationDifferee("yt-dlp en pause")])
+def test_le_marqueur_survit_a_une_panne_du_gel(fabrique, file_, passages, panne):  # noqa: F811
+    """Un `rouvrir` sans edition notee : seul le marqueur protege."""
+    with fabrique() as db:
+        creneau = db.get(Creneau, file_["tot"])
+        creneau.erreur, creneau.epingle = relecture.RAISON_RELECTURE, True
+        db.commit()
+
+    def en_panne(post, article, dossier):
+        raise panne
+
+    passages.preparer = en_panne
+    passages.tourner(_une_heure_avant(file_))
+    assert relecture.RAISON_RELECTURE in _creneau(fabrique, file_["tot"]).erreur
+
+    passages.preparer = _impossible
+    passages.tourner(_une_heure_avant(file_) + dt.timedelta(minutes=10))
+    assert _raison(fabrique, file_["a"]) is None
+
+
+def test_le_marqueur_n_empeche_pas_un_post_sain_de_partir(client_web, fabrique, file_, passages, horloge_des_posts):  # noqa: F811
+    client_web.patch(f"/posts/{file_['post_a']}", json={"slides": [_cover(headline="**Corrigee**")]})
+    passages.tourner(_une_heure_avant(file_))
+    creneau = _creneau(fabrique, file_["tot"])
+    assert (creneau.etat, creneau.erreur) == (EtatCreneau.GELE, None)
+    assert _publier_a_l_heure(fabrique, file_["h0"]) == [(["p_01.jpg"], "Legende de A")]
+
+
+def test_sans_edition_un_gel_impossible_exclut_toujours(fabrique, file_, passages):  # noqa: F811
+    with fabrique() as db:
+        db.get(Creneau, file_["tot"]).epingle = True
+        db.commit()
+    passages.preparer = _impossible
+    passages.tourner(_une_heure_avant(file_))
+    assert _raison(fabrique, file_["a"]) is not None
+
+
+@pytest.mark.parametrize("vide", [None, "", "None"])
+def test_le_fond_vide_est_refuse_avant_de_rien_toucher(client_web, fabrique, file_, vide):  # noqa: F811
+    """`|| null` au dashboard : le brouillon devenait perime et repayait Sonnet."""
+    with fabrique() as db:
+        creneau = db.get(Creneau, file_["tot"])
+        creneau.etat = EtatCreneau.GELE
+        creneau.fichiers = ["p_01.jpg"]
+        creneau.publier_a = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+        db.commit()
+    reponse = client_web.patch(f"/posts/{file_['post_a']}", json={"slides": [_cover(image_url=vide)]})
+    assert reponse.status_code == 422
+    assert "fond" in reponse.json()["detail"]
+    assert _post(fabrique, file_["post_a"]).slides[0]["image_url"] == "https://img/A.jpg"
+    assert _creneau(fabrique, file_["tot"]).etat is EtatCreneau.GELE

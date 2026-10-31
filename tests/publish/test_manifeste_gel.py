@@ -316,7 +316,7 @@ def test_la_reserve_offre_les_actifs_ET_les_medias_de_l_actu_sans_doublon():
 
 @pytest.mark.parametrize("payload", [
     {"carrousel_explicite": True},
-    {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**"}]},
+    {"slides": [{"kind": "cover", "headline": "**H**", "title": "**T**", "subtitle": "**S**", "image_url": "https://img/autre.jpg"}]},
 ])
 def test_editer_la_liste_rouvre_le_gel_et_garde_le_post(client, db_session, payload):
     """Le re-gel est AUTOMATIQUE, et Claude n'est JAMAIS repaye : le creneau garde

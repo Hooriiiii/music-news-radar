@@ -135,10 +135,9 @@ est touchee et l'API rend 409. Apres l'appel le creneau est PROGRAMME, or
 l'appel a Meta) n'a pas ete touchee.
 
 **Limite connue, assumee.** Le marqueur de relecture vit dans `creneaux.erreur` :
-les chemins de `_geler` qui ecrivent une AUTRE erreur et lachent le post
-(gabarit qui ne correspond plus, post supprime) l'effacent. Ces cas font de toute
-facon perdre le post au creneau, donc la protection n'y a pas d'objet — mais
-c'est une propriete du marqueur, pas une garantie du schema.
+les chemins de `_geler` qui lachent le post (gabarit qui ne correspond plus, post
+supprime, visuels perimes) l'effacent. Depuis le 2026-10-31 il est aussi pose sur un
+PROGRAMME, et relaye par le post : voir « Une edition du fige ne brule pas l'actu ».
 ## Le controle editorial sur ce qui va partir (2026-10-04)
 
 Suite directe de la fenetre de relecture ci-dessus. Demande de l'utilisateur :
@@ -452,6 +451,32 @@ revient pas.
 robot. `_brouillon_perime` (visuels interdits, fond absent) peut encore lacher un post corrige :
 ce sont des regles du projet, pas un controle de forme. Prouve par test
 (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
+
+### Une edition du fige ne brule pas l'actu (2026-10-31)
+
+`RAISON_RELECTURE` n'etait pose que par `rouvrir`, donc sur un GELE. Sur un PROGRAMME, une accroche
+rallongee a T-5 h repondait 200, puis le gel excluait l'article a vie. Reproduit sur le vrai code.
+
+- **`PATCH /posts/{id}` pose le marqueur** quand un contenu fige change sur un PROGRAMME
+  (accroche, slides, variante, fond, liste : `relecture.contenu_fige`), en SQL, A LA SUITE d'une
+  erreur existante (`supervision` lit `composition%`, `_geler` lit `texte perime` en tete). Une
+  legende ne le pose pas : le fige n'en depend pas.
+- **Il survit** a un gel differe, a une panne de rendu et a un format sans preparateur
+  (`_garder_le_marqueur`). **Il n'a pas a survivre a l'arbitrage**, qui l'efface en reprenant le
+  post (`store._ecart_a_l_arbitrage`) : `variants.edition_humaine.fige_le` prend le relais, et c'est
+  ce qui evitait l'exclusion au passage d'apres, chemin que `rouvrir` avait deja.
+- **Un post sain part** : le gel reussi efface le marqueur. Le marqueur seul n'allume pas l'alerte
+  de la ligne de Programmation : il peut y rester des heures, rien n'est en panne.
+- **Un gel impossible libere, notifie, et met l'actu a l'ecart** par `marquer_saute`
+  (`visuel_saute_pause_minutes`, reglage repris tel quel, jamais mesure pour ce cas) : sans cette
+  pause, elle revenait a chaque passage et le creneau finissait en MANQUE. Elle revient d'elle-meme
+  avec son post corrige, et un second refus refait le meme tour. Le voyant `pauses` le dit.
+- **Le message de la fiche dit la vraie consequence** : ce post ne part pas a cette heure, le creneau
+  se libere, l'actu reste dans la file.
+- **Fond vide : 422 lisible**, avant tout re-gel. Le dashboard envoie encore `null` sur un champ
+  vide ; c'est le serveur qui refuse. Un post qui n'avait deja plus de fond n'est pas concerne.
+
+Prouve par test (`tests/schedule/test_verification_humaine.py`), jamais observe en production.
 
 ### Ce que l'humain a vu est ce qu'il frappe (2026-10-31)
 

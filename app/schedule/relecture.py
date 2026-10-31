@@ -57,7 +57,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # Sentinelle posee dans `creneaux.erreur` quand l'utilisateur ROUVRE un creneau
-# gele pour le corriger. Meme procede que `runner.RAISON_RECLAMATION` : un marqueur
+# gele pour le corriger, ou edite un contenu fige sur un creneau PROGRAMME. Meme procede que `runner.RAISON_RECLAMATION` : un marqueur
 # lisible dans un champ libre, relu par un autre module pour decider d'un
 # comportement -- ici, qu'un gel qui echoue apres une edition MANUELLE libere le
 # creneau au lieu d'exclure l'article a vie. Sans elle, une accroche rallongee a
@@ -85,7 +85,25 @@ def _edition(post) -> dict:
     return edition if isinstance(edition, dict) else {}
 
 
-def noter_edition(post, textes_avant: dict, maintenant: dt.datetime, *, textes: bool, corrige: bool) -> None:
+def contenu_fige(post) -> tuple:
+    """Ce dont les fichiers figes dependent. `variantes` et `retenue` n'y sont pas, leur
+    effet est dans `slides` ; l'edition non plus : une legende corrigee ne les change pas."""
+    utiles = {
+        cle: valeur for cle, valeur in (post.variants or {}).items()
+        if cle not in (CLE_EDITION, "variantes", "retenue")
+    }
+    return post.slides, post.template, utiles
+
+
+def fige_par_un_humain(post) -> bool:
+    """Un humain a touche ce que le gel rend : un gel impossible n'est pas la faute de
+    l'article. Vit sur le post, parce que l'arbitrage efface `creneaux.erreur` en le reprenant."""
+    return bool(_edition(post).get("fige_le"))
+
+
+def noter_edition(
+    post, textes_avant: dict, maintenant: dt.datetime, *, textes: bool, corrige: bool, fige: bool = False
+) -> None:
     """Note une edition humaine deja appliquee au post.
 
     `textes` : les textes changes sont de la main de l'humain (faux quand il choisit une
@@ -101,6 +119,8 @@ def noter_edition(post, textes_avant: dict, maintenant: dt.datetime, *, textes: 
     nouvelle = {**edition, "textes": notes}
     if corrige:
         nouvelle["corrige_le"] = maintenant.isoformat()
+    if fige:
+        nouvelle["fige_le"] = maintenant.isoformat()
     post.variants = {**(post.variants or {}), CLE_EDITION: nouvelle}
 
 

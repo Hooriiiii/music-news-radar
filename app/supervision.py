@@ -970,7 +970,7 @@ def voyant_pauses(maintenant: dt.datetime) -> Voyant:
             if niveau == OK:
                 niveau = ATTENTION
             raisons.append(
-                f"{actives} article(s) mis à l'écart faute d'un visuel publiable "
+                f"{actives} article(s) mis à l'écart : pas de visuel publiable, ou correction refusée au gel "
                 "(ils reviendront d'eux-mêmes)."
             )
         if isinstance(reports, dict) and reports:

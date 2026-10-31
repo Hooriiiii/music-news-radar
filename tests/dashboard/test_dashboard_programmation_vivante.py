@@ -307,3 +307,20 @@ def test_le_rechargement_ne_perd_ni_la_frappe_ni_le_focus_de_la_fiche():
     avant, texte, focus = _jouer(monde, geste)
     assert monde.lectures_schedule == avant + 1
     assert texte == "Je suis en train d'ecrire" and focus == "edit-headline"
+
+
+# --- Le marqueur de relecture ne crie pas au loup ---------------------------------------
+
+
+@chromium_absent
+def test_le_marqueur_seul_ne_s_affiche_pas_en_alerte():
+    """Une correction a T-20 h le pose : un ⚠ rouge pendant vingt heures sur un post sain
+    apprendrait a ignorer l'alerte."""
+    monde = Monde([_creneau(erreur="rouvert pour relecture")])
+    assert _jouer(monde, lambda page: page.is_hidden(".slot-alerte"))
+
+
+@chromium_absent
+def test_une_vraie_erreur_a_cote_du_marqueur_s_affiche():
+    monde = Monde([_creneau(erreur="rouvert pour relecture — gel differe : yt-dlp en pause")])
+    assert "yt-dlp" in _jouer(monde, lambda page: page.text_content(".slot-alerte"))

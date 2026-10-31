@@ -1939,7 +1939,9 @@ async function loadSchedulePanel() {
     // elle etait tassee en gris au milieu d'une phrase jointe par des « · »,
     // ou une panne se noie. Plus visible qu'avant, jamais moins.
     const alerte = row.querySelector(".slot-alerte");
-    if (c.erreur && !enCours) {
+    // Le marqueur seul dit qu'un humain a corrige ce post : rien n'est en panne, et il reste
+    // jusqu'au gel. L'alerte n'y survivrait pas des heures sans apprendre a l'ignorer.
+    if (c.erreur && !enCours && c.erreur !== "rouvert pour relecture") {
       alerte.hidden = false;
       alerte.textContent = `⚠ ${c.erreur}`;
     }
@@ -3259,7 +3261,7 @@ function renderPostDetail(post, article, covers) {
           <textarea id="edit-${cle}" rows="2">${escapeHtml(cover[cle] || "")}</textarea>
         </div>`).join("")}
         <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> pour le surligner en rose sur l'image.</div>
-        ${enDefaut ? `<div class="render-warning" id="accroche-deborde">⚠ Ce texte déborde de la cover : le gel la refusera. Raccourcis-le.</div>` : ""}
+        ${enDefaut ? `<div class="render-warning" id="accroche-deborde">⚠ Ce texte déborde de la cover. Si tu le laisses ainsi, le gel le refusera : ce post ne partira pas à cette heure, le créneau se libère pour une autre actu, et celle-ci reste dans la file. Raccourcis-le.</div>` : ""}
         <div class="render-warning" id="accroche-non-enregistree" hidden>
           ⚠ Texte de cover modifié et NON enregistré.
         </div>
