@@ -182,8 +182,8 @@ def _un_passage(constat: dict) -> None:
         signaler_panne(f"agent de publication en panne : {exc}", maintenant)
     # `tourner` avale les pannes d'etape pour que les suivantes tournent : sans ce
     # report, un agent dont toutes les etapes echouent se lirait « passe, tout va
-    # bien ». Le nom de l'etape seulement : son message peut porter un jeton.
-    constat["pannes"] += [erreur.split(" : ")[0] for erreur in rapport.erreurs]
+    # bien ». Pas `rapport.erreurs` : une faute d'article n'est pas une panne de l'agent.
+    constat["pannes"] += rapport.pannes
 
     compteurs = {
         "composes": rapport.composes, "geles": rapport.geles, "publies": rapport.publies,

@@ -356,6 +356,7 @@ def test_une_etape_en_panne_ne_se_lit_pas_comme_un_passage_sain(monkeypatch):
     _base_ok(monkeypatch)
     rapport = script.RapportPublication()
     rapport.erreurs.append("etape publication en panne : access_token=SECRET")
+    rapport.pannes.append("etape publication en panne (RuntimeError)")
     monkeypatch.setattr(script, "tourner", lambda *a, **k: rapport)
     script.main()
     panne = _etat_passage()["panne"]

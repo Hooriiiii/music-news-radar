@@ -106,6 +106,9 @@ RECLAMATION_EN_COURS = dt.timedelta(minutes=20)
 
 @dataclass
 class RapportPublication:
+    # Les etapes tombees, nom et type d'exception seuls : leur message peut porter un
+    # jeton, et ce champ finit dans un fichier d'etat lu par le bandeau.
+    pannes: list[str] = field(default_factory=list)
     composes: int = 0
     geles: int = 0
     publies: int = 0
@@ -1335,6 +1338,7 @@ def tourner(
                 logger.exception("rollback impossible apres l'etape %s", nom)
             message = f"etape {nom} en panne : {exc}"[:1000]
             rapport.erreurs.append(message)
+            rapport.pannes.append(f"etape {nom} en panne ({type(exc).__name__})")
             _prevenir(notifier, message)
             return None
 
