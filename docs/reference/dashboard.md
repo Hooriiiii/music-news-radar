@@ -413,6 +413,34 @@ l'autre bout de la barre (`margin-left: auto`), qui devient `sticky` -- sauf sou
 700 px, ou les boutons passent pleine largeur et une barre collante mangerait la
 moitie de l'ecran.
 
+### « Programmer » remplace « Générer le post » (2026-10-31)
+
+Règles, calcul de purge et limites : `publication.md`, « Programmer ». Ici, l'écran.
+
+- **Un seul sélecteur, deux sens** (`ouvrirSelecteur`) : « Programmer » / « Changer » sur la
+  carte, « Choisir une actu » sur la ligne de créneau (avec titres, pertinence et âge, sans
+  identifiant à recopier : le `prompt` numérique et « ✏️ Remplacer » sont partis), et le
+  même bouton sur une citation vivante et l'actu représentante d'un événement
+  (`EventObservationOut.representant`), sans code dupliqué. Pas de `prompt`, `alert` ni
+  `confirm`.
+- Le prochain créneau compatible en premier, puis par jour. Une option impossible est
+  désactivée, sa raison à côté, jamais dans une infobulle. Le mode est LU (`annonce_mode`) :
+  en `arret`, le sélecteur dit que rien ne sera composé ni publié.
+- La validation nomme ce qui sort, avec une étape de plus si l'occupant est épinglé ou
+  composé. Un refus s'affiche à côté du bouton, avec la raison du serveur.
+- La carte montre l'état réel (`ArticleOut.creneau`, lecture groupée) : « 🗓 jeu. 18:00 » et
+  « Changer » ; gelée, l'heure sans bouton ; publiée ou exclue, pas de Programmer. Après le
+  geste, seules les cartes touchées se repeignent : un `load()` perdrait le résultat.
+- Une ligne programmée sans post dit « composé vers … », ou « au prochain passage », ou
+  « composition suspendue » en mode `arret`. « Désépingler » reste sur un créneau mort.
+- **Retraits.** Le sélecteur POST / REELS devient `#format-lu`, en lecture seule, et
+  `raisonPasDeReel` part avec ses miroirs navigateur. « ⬇ Télécharger » quitte la fiche,
+  l'endpoint reste. Un post hors créneau reste consultable et éditable.
+
+Validé au navigateur sur données de test à 1440 et 390 px : aucun débordement mesuré
+(`scrollWidth - clientWidth` = 0) sur la carte, la Programmation, les Artistes, les
+Événements et la fiche.
+
 ## La charte Kinda dans la console (2026-10-02)
 
 Le compte Instagram etait a la charte ; la console qui le pilote portait un

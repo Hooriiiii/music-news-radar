@@ -143,7 +143,7 @@ def _fiche(page):
 
 
 @pytest.mark.parametrize("trace", [
-    "btn-approve", "btn-publish", "Valider le statut", "Marquer comme publié",
+    "btn-approve", "btn-publish", "Valider le statut", "Marquer comme publié", "Générer le post",
     '<option value="approved">', 'data-status="used"', "📸 Posté</button>", "🚫 Sauter",
 ])
 def test_les_gestes_hérités_ont_disparu_de_la_page(trace):
@@ -205,20 +205,6 @@ def test_preuve_par_mutation_sans_lecture_de_la_reponse_le_refus_est_muet():
     refus, _, _ = _jouer(geste, articles=[_article()], code=409, html=mutee)
 
     assert REFUS not in refus
-
-
-@chromium_absent
-def test_un_refus_de_generation_s_affiche_a_cote_du_bouton():
-    def geste(page):
-        page.wait_for_selector(".card")
-        page.click(".gen-post")
-        page.wait_for_timeout(250)
-        return page.text_content(".refus-statut"), page.text_content(".gen-post")
-
-    (refus, libelle), _, dialogues = _jouer(geste, articles=[_article()], generation=502)
-
-    assert REFUS in refus and libelle == "Générer le post"
-    assert dialogues == []
 
 
 # --- 3. Supprimer ---------------------------------------------------------------

@@ -147,6 +147,36 @@
   .meta { color: #6a6a78; font-size: 11px; margin-top: auto; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .actions button.reintegrer { flex-basis: 100%; border-color: var(--alerte-bord); color: var(--alerte); }
+  /* --- Programmer : le selecteur, sur la carte comme sur la ligne de creneau --- */
+  .obs-row:has(.prog-hote), .cit-row:has(.prog-hote), .post-row:has(> .prog-zone:not(:empty)) { flex-wrap: wrap; }
+  .prog-hote { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
+  .prog-etat { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+  .prog-etat.note-file { color: var(--muted); }
+  .prog-resultat { flex-basis: 100%; }
+  .prog-zone { flex-basis: 100%; min-width: 0; }
+  .prog-zone:empty { display: none; }
+  .prog-selecteur { margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+    background: #17171f; font-size: 12px; display: flex; flex-direction: column; gap: 6px; cursor: default;
+    max-height: 420px; overflow-y: auto; min-width: 0; }
+  .prog-entete { color: var(--muted); overflow-wrap: anywhere; }
+  .prog-mode { color: #ffb38a; font-weight: 600; }
+  .prog-jour { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 4px; }
+  .prog-ligne { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .prog-selecteur button.prog-option { flex: none; width: 100%; text-align: left; padding: 6px 8px; display: block;
+    background: #20202a; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    cursor: pointer; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+  .prog-selecteur button.prog-option:hover:enabled { border-color: var(--accent); }
+  .prog-selecteur button.prog-option:disabled { opacity: .55; cursor: not-allowed; }
+  .prog-selecteur button.prog-option.choisie { border-color: var(--accent); }
+  .prog-detail { display: block; color: var(--muted); font-size: 11px; }
+  .prog-raison { color: #ffb38a; font-size: 11px; overflow-wrap: anywhere; }
+  .prog-annonce { color: #ffb38a; font-size: 11px; overflow-wrap: anywhere; }
+  .prog-validation { border-left: 2px solid var(--accent); padding: 4px 0 4px 8px; display: flex;
+    flex-direction: column; gap: 5px; overflow-wrap: anywhere; }
+  .prog-gestes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .prog-selecteur .prog-gestes button { flex: 0 1 auto; padding: 5px 10px; border: 1px solid var(--border); background: #20202a;
+    color: var(--text); border-radius: 6px; cursor: pointer; font-size: 12px; white-space: normal; text-align: left; }
+  .prog-selecteur .prog-gestes button.confirmer { border-color: var(--accent); }
   .verif-publication { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
     font-size: 12px; color: var(--alerte); }
   .verif-publication[hidden] { display: none; }
@@ -452,11 +482,6 @@
      dashboard, pas une nouvelle convention. */
   .cover-choice.en-defaut { border-color: var(--alerte-bord); }
   .cover-choice.en-defaut .tag { color: var(--alerte); }
-  .template-switch { display: flex; gap: 8px; align-items: center; }
-  .template-switch button { border: 1px solid var(--border); background: #20202a; color: var(--text);
-    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 12.5px; }
-  .template-switch button.on { border-color: var(--accent); background: var(--accent-doux); color: var(--accent-clair); }
-  .template-switch button:disabled { opacity: .4; cursor: not-allowed; }
   .reel-reason { color: var(--alerte); font-size: 11.5px; }
   .bg-field { display: flex; gap: 8px; }
   .bg-field input { flex: 1; background: #0c0c10; color: var(--text); border: 1px solid var(--border);
@@ -1044,7 +1069,7 @@ async function load() {
         <div class="actions">
           ${a.status === "new" ? '<button data-status="reviewed">✓ Vu</button>' : ""}
           ${a.status === "reviewed" ? `<button data-status="new" title="Remettre l'article en « À traiter »">↩ À traiter</button>` : ""}
-          <button class="gen-post">Générer le post</button>
+          <div class="prog-hote"></div>
           ${a.file_exclu_raison ? '<button class="reintegrer">↩ Remettre dans la file</button>' : ""}
           ${a.exclusion_a_verifier ? `<div class="verif-publication" hidden>
             <span>Le post est peut-être en ligne. Vérifie le compte</span>
@@ -1076,7 +1101,8 @@ async function load() {
         load();
       };
     }
-    card.querySelector(".gen-post").onclick = (e) => genererPost(a.id, e.target, refusStatut);
+    card.dataset.article = a.id;
+    peindreProgrammation(card, a);
     // Le retour en arriere de « 🚫 Ne pas publier » -- et de toute exclusion posee par
     // l'agent (gel, composition). Avant lui, le seul recours etait un UPDATE
     // a la main en base.
@@ -1393,22 +1419,276 @@ document.getElementById("src-form").onsubmit = async (e) => {
   }
 };
 
-// --- Génération et file éditoriale des posts ---
+// --- Programmer -------------------------------------------------------------
+//
+// La console publie seule et l'utilisateur gere le planning : il ne genere jamais a
+// la main (decision du 2026-10-31). Un seul selecteur, dans les deux sens : les
+// creneaux d'une actu, les actus d'un creneau. Le navigateur ne porte AUCUNE regle :
+// ce qui est possible, pourquoi, et le mode viennent du serveur
+// (`app/schedule/programmation.py`), qui applique les memes controles au PATCH.
+const fmtCreneau = (iso) => iso ? new Date(iso).toLocaleString("fr-FR",
+  { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "heure inconnue";
+const fmtJour = (iso) => new Date(iso).toLocaleDateString("fr-FR",
+  { weekday: "long", day: "numeric", month: "long" });
 
-async function genererPost(articleId, bouton, zoneRefus) {
-  bouton.disabled = true;
-  zoneRefus.textContent = '';
-  bouton.textContent = 'Génération…';
+function texteComposition(c) {
+  if (c.composition_suspendue) return "composition suspendue (mode arrêt)";
+  if (c.composition_due) return "composé au prochain passage de l'agent";
+  return c.composition_a ? `composé vers ${fmtCreneau(c.composition_a)}` : null;
+}
+
+function texteAge(heures) {
+  if (heures == null) return "âge inconnu";
+  return heures < 24 ? `il y a ${heures} h` : `il y a ${Math.floor(heures / 24)} j ${heures % 24} h`;
+}
+
+function nouvelElement(balise, classe, texte) {
+  const el = document.createElement(balise);
+  if (classe) el.className = classe;
+  if (texte != null) el.textContent = texte;
+  return el;
+}
+
+// Ce qui sort, nomme. Une etape de plus quand l'occupant est epingle ou compose : le
+// geste defait alors un choix humain, ou un post deja paye.
+function etapesDeValidation(occupant) {
+  if (!occupant) return [{ texte: null, bouton: "Programmer ici" }];
+  const nom = occupant.titre || `post ${occupant.post_id}`;
+  const sortie = { texte: `« ${nom} » sort de ce créneau et redevient candidate.`, bouton: `Remplacer « ${nom} »` };
+  if (!occupant.epingle && !occupant.compose) return [sortie];
+  const raisons = [occupant.epingle ? "épinglée" : null, occupant.compose ? "déjà composée" : null]
+    .filter(Boolean).join(" et ");
+  const brouillon = occupant.compose ? " Son post reste en brouillon, repris si elle revient sur un créneau." : "";
+  return [
+    { ...sortie, bouton: "Continuer" },
+    { texte: `« ${nom} » est ${raisons}.${brouillon}`, bouton: `Oui, faire sortir « ${nom} »` },
+  ];
+}
+
+async function envoyerProgrammation(creneauId, articleId, occupant) {
+  const reponse = await fetch(`/schedule/${creneauId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ article_id: articleId, occupant_attendu: occupant ? occupant.article_id : null }),
+  });
+  if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
+  return reponse.json();
+}
+
+function afficherValidation(ligne, option, apres) {
+  const selecteur = ligne.closest(".prog-selecteur");
+  selecteur.querySelector(".prog-validation")?.remove();
+  selecteur.querySelector(".prog-option.choisie")?.classList.remove("choisie");
+  ligne.querySelector(".prog-option").classList.add("choisie");
+  const bloc = nouvelElement("div", "prog-validation");
+  ligne.appendChild(bloc);
+  const etapes = etapesDeValidation(option.occupant);
+  const montrer = (rang) => {
+    bloc.innerHTML = "";
+    const etape = etapes[rang];
+    if (etape.texte) bloc.appendChild(nouvelElement("div", null, etape.texte));
+    for (const annonce of option.annonces || []) bloc.appendChild(nouvelElement("div", "prog-annonce", `⚠ ${annonce}`));
+    const gestes = nouvelElement("div", "prog-gestes");
+    const confirmer = nouvelElement("button", "confirmer", etape.bouton);
+    const annuler = nouvelElement("button", null, "Annuler");
+    const refus = nouvelElement("span", "etat-geste erreur prog-refus");
+    annuler.onclick = () => { bloc.remove(); ligne.querySelector(".prog-option").classList.remove("choisie"); };
+    confirmer.onclick = async () => {
+      if (rang + 1 < etapes.length) { montrer(rang + 1); return; }
+      confirmer.disabled = true;
+      refus.textContent = "";
+      try {
+        const creneau = await envoyerProgrammation(option.creneauId, option.articleId, option.occupant);
+        await apres(creneau, option);
+      } catch (erreur) {
+        refus.textContent = "Refusé : " + erreur.message;
+        confirmer.disabled = false;
+      }
+    };
+    gestes.append(confirmer, annuler, refus);
+    bloc.appendChild(gestes);
+  };
+  montrer(0);
+}
+
+function ligneOption(option, apres) {
+  const ligne = nouvelElement("div", "prog-ligne");
+  const bouton = nouvelElement("button", "prog-option", option.titre);
+  for (const detail of option.details) bouton.appendChild(nouvelElement("span", "prog-detail", detail));
+  bouton.disabled = !option.possible;
+  if (option.possible) bouton.onclick = () => afficherValidation(ligne, option, apres);
+  ligne.appendChild(bouton);
+  // Une option impossible dit pourquoi, A COTE d'elle et non dans une infobulle.
+  if (option.raison) ligne.appendChild(nouvelElement("div", "prog-raison", option.raison));
+  else for (const annonce of option.annonces || []) ligne.appendChild(nouvelElement("div", "prog-annonce", `⚠ ${annonce}`));
+  return ligne;
+}
+
+// Le squelette commun aux deux sens. `lire` rend les textes d'en-tete et les options,
+// `groupes` l'ordre d'affichage ; un clic sur le bouton qui l'a ouvert le referme.
+async function ouvrirSelecteur(zone, { url, lire, apres }) {
+  if (zone.firstChild) { zone.innerHTML = ""; return; }
+  zone.appendChild(nouvelElement("div", "prog-selecteur", "Chargement…"));
+  const relancer = () => { zone.innerHTML = ""; ouvrirSelecteur(zone, { url, lire, apres }); };
+  let donnees;
   try {
-    const reponse = await fetch(`/articles/${articleId}/posts`, { method: 'POST' });
+    const reponse = await fetch(url);
     if (!reponse.ok) throw new Error(await raisonDuRefus(reponse));
-    const post = await reponse.json();
-    ouvrirPost(post.id);
+    donnees = await reponse.json();
   } catch (erreur) {
-    zoneRefus.textContent = 'Échec de la génération : ' + erreur.message;
-    bouton.disabled = false;
-    bouton.textContent = 'Générer le post';
+    afficherErreur(zone.firstChild, "Options indisponibles : " + erreur.message, relancer);
+    return;
   }
+  const selecteur = nouvelElement("div", "prog-selecteur");
+  const { entete, refus, groupes, vide, pied } = lire(donnees);
+  // Le mode est LU, jamais recopie : en arret, rien ne partira, et il faut le savoir ici.
+  if (donnees.annonce_mode) selecteur.appendChild(nouvelElement("div", "prog-mode", donnees.annonce_mode));
+  for (const texte of entete) selecteur.appendChild(nouvelElement("div", "prog-entete", texte));
+  if (refus) selecteur.appendChild(nouvelElement("div", "prog-raison", refus));
+  for (const groupe of groupes) {
+    selecteur.appendChild(nouvelElement("div", "prog-jour", groupe.titre));
+    for (const option of groupe.options) selecteur.appendChild(ligneOption(option, apres));
+  }
+  if (!groupes.length && vide) selecteur.appendChild(nouvelElement("div", "prog-entete", vide));
+  if (pied) selecteur.appendChild(nouvelElement("div", "prog-entete", pied));
+  zone.innerHTML = "";
+  zone.appendChild(selecteur);
+}
+
+function lireCreneaux(articleId) {
+  return (d) => {
+    const options = d.options.map((o) => ({
+      creneauId: o.creneau_id,
+      articleId,
+      publierA: o.publier_a,
+      titre: `${fmtCreneau(o.publier_a)} · ${FORMATS_CRENEAU[o.format] || o.format}`,
+      details: [
+        o.occupant ? `occupé : ${o.occupant.titre || `post ${o.occupant.post_id}`}`
+          + (o.occupant.epingle ? " · 📌 épinglée" : "") + (o.occupant.compose ? " · déjà composée" : "") : "libre",
+        o.brouillon ? "brouillon déjà prêt" : (o.possible ? texteComposition(o) : null),
+      ].filter(Boolean),
+      possible: o.possible,
+      raison: o.raison,
+      annonces: o.annonces,
+      occupant: o.occupant,
+      prochain: o.creneau_id === d.prochain_creneau_id,
+    }));
+    const groupes = [];
+    const prochain = options.find((o) => o.prochain);
+    if (prochain) groupes.push({ titre: "Prochain créneau compatible", options: [prochain] });
+    for (const option of options) {
+      if (option.prochain) continue;
+      const jour = fmtJour(option.publierA);
+      const dernier = groupes[groupes.length - 1];
+      if (dernier && dernier.titre === jour) dernier.options.push(option);
+      else groupes.push({ titre: jour, options: [option] });
+    }
+    const raisonArticle = d.raison_article;
+    return {
+      entete: [[
+        `pertinence ${d.pertinence ?? "inconnue"}`, texteAge(d.age_heures), ...d.notes,
+      ].join(" · ")],
+      refus: raisonArticle,
+      // Refuse pour lui-meme, l'article n'a pas neuf fois la meme raison a lire.
+      groupes: raisonArticle ? [] : groupes,
+      vide: raisonArticle ? null : "Aucun créneau à venir : recalcule la file depuis Programmation.",
+    };
+  };
+}
+
+function lireActus(creneauId) {
+  return (d) => {
+    const quand = `${fmtCreneau(d.publier_a)} · ${FORMATS_CRENEAU[d.format] || d.format}`;
+    const options = d.candidats.map((c) => ({
+      creneauId,
+      articleId: c.article_id,
+      titre: c.titre,
+      details: [
+        [`pertinence ${c.pertinence ?? "inconnue"}`, texteAge(c.age_heures), ...c.notes].join(" · "),
+        c.creneau_actuel ? `quitte ${fmtCreneau(c.creneau_actuel)}` : null,
+        c.brouillon ? "brouillon déjà prêt" : (c.possible ? texteComposition(c) : null),
+      ].filter(Boolean),
+      possible: c.possible,
+      raison: c.raison,
+      annonces: d.annonces,
+      occupant: d.occupant,
+    }));
+    const possibles = options.filter((o) => o.possible);
+    const impossibles = options.filter((o) => !o.possible);
+    return {
+      entete: [quand + (d.occupant ? ` · occupé : ${d.occupant.titre || `post ${d.occupant.post_id}`}` : " · libre")],
+      refus: d.raison_creneau,
+      groupes: d.raison_creneau ? [] : [
+        possibles.length ? { titre: "Actus possibles", options: possibles } : null,
+        impossibles.length ? { titre: "Impossibles ici", options: impossibles } : null,
+      ].filter(Boolean),
+      vide: d.raison_creneau ? null : "Aucune actu en base pour ce créneau.",
+      pied: d.non_affichees ? `${d.non_affichees} autre(s) non affichée(s), les moins pertinentes.` : null,
+    };
+  };
+}
+
+function texteResultat(creneau) {
+  const composition = creneau.post_id != null ? "brouillon repris, composition déjà faite" : texteComposition(creneau);
+  return `✓ Programmé ${fmtCreneau(creneau.publier_a)}` + (composition ? ` · ${composition}` : "");
+}
+
+// Le geste, partout ou une actu vivante se montre : carte, citation, evenement. Il pose
+// le bouton, la zone et le resultat ; `apres` met a jour ce qui entoure.
+function poserProgrammer(hote, articleId, libelle, apres) {
+  const bouton = nouvelElement("button", "programmer", libelle);
+  const resultat = hote.querySelector(":scope > .prog-resultat") || nouvelElement("div", "etat-geste ok prog-resultat");
+  const zone = nouvelElement("div", "prog-zone");
+  // Le selecteur vit dans des lignes cliquables : un clic dedans ne les ouvre pas.
+  zone.onclick = (evenement) => evenement.stopPropagation();
+  bouton.onclick = (evenement) => {
+    evenement.stopPropagation();
+    ouvrirSelecteur(zone, {
+      url: `/articles/${articleId}/creneaux-possibles`,
+      lire: lireCreneaux(articleId),
+      apres: async (creneau, option) => {
+        zone.innerHTML = "";
+        resultat.textContent = texteResultat(creneau);
+        if (apres) await apres(creneau, option);
+      },
+    });
+  };
+  hote.append(bouton, resultat, zone);
+}
+
+// L'etat REEL de la carte : ce qui est au programme, et le geste qui reste possible.
+function peindreProgrammation(card, a) {
+  const hote = card.querySelector(".prog-hote");
+  const resultat = hote.querySelector(":scope > .prog-resultat");
+  hote.innerHTML = "";
+  if (resultat) hote.appendChild(resultat);
+  const c = a.creneau;
+  if (a.raison_non_programmable && !(c && c.etat === "gele")) {
+    // L'exclusion a deja son badge et son « Remettre dans la file ».
+    if (!a.file_exclu_raison) {
+      hote.prepend(nouvelElement("span", "prog-etat note-file", a.raison_non_programmable));
+    }
+    return;
+  }
+  if (c && c.etat === "gele") {
+    hote.prepend(nouvelElement("span", "prog-etat", `🧊 ${fmtCreneau(c.publier_a)} · gelé, part à l'heure`));
+    return;
+  }
+  if (c) {
+    const composition = c.post_id != null ? "composé" : texteComposition(c);
+    hote.prepend(nouvelElement("span", "prog-etat", `🗓 ${fmtCreneau(c.publier_a)}` + (composition ? ` · ${composition}` : "")));
+  }
+  const apres = async (_creneau, option) => {
+    // Pas de `load()` : la grille garderait sa place, mais perdrait ce resultat. Seules
+    // les cartes touchees se repeignent : celle-ci, et celle de l'actu qui sort.
+    const touchees = [a.id, option.occupant && option.occupant.article_id].filter(Boolean);
+    for (const id of touchees) {
+      const carte = grid.querySelector(`.card[data-article="${id}"]`);
+      const article = await fetchArticleById(id);
+      if (carte && article) peindreProgrammation(carte, article);
+    }
+  };
+  poserProgrammer(hote, a.id, c ? "Changer" : "Programmer", apres);
 }
 
 const STATUS_LABELS = { draft: "Brouillon", approved: "Validé", published: "Publié" };
@@ -1576,7 +1856,7 @@ async function loadSchedulePanel() {
     }
     // Les identifiants servent, et servent MIEUX en liens : `article_id`
     // mene a l'actu, `post_id` ouvre sa fiche, `ig_media_id` ouvre la
-    // publication. Ils restent lisibles et recopiables pour « Remplacer ».
+    // publication.
     // Ce qui partira, résumé sur la ligne : combien d'éléments, et combien le gel
     // a écartés. C'est l'information qui manquait — le post 164 annonçait 1 slide
     // et Instagram en a reçu 3. `null` = pas encore gelé : on l'écrit, on ne
@@ -1595,6 +1875,8 @@ async function loadSchedulePanel() {
         : null,
       c.relevance != null ? `pertinence ${c.relevance}` : null,
       c.epingle ? "📌 épinglé" : null,
+      // Programme sans post : la ligne dit quand l'agent s'en chargera.
+      texteComposition(c),
     ]);
     // Cliquer la ligne OUVRE ce qui va partir, et le rend modifiable. L'éditeur
     // vivait dans l'onglet Posts seulement, et il fallait y aller à la main.
@@ -1602,7 +1884,7 @@ async function loadSchedulePanel() {
       row.style.cursor = "pointer";
       row.title = "Voir et modifier ce qui va partir";
       row.onclick = (evenement) => {
-        // Les boutons d'action de la ligne (épingler, remplacer, décaler, ne pas publier)
+        // Les boutons d'action de la ligne (épingler, choisir, décaler, ne pas publier)
         // et les liens ne doivent pas ouvrir la fiche par-dessus leur effet.
         if (evenement.target.closest("button, a")) return;
         ouvrirPost(c.post_id);
@@ -1627,7 +1909,8 @@ async function loadSchedulePanel() {
         b.onclick = () => modifierCreneau(c.id, donnees);
         actions.appendChild(b);
       };
-      if (c.article_id) {
+      // `c.epingle` seul : un creneau mort (article purge) doit pouvoir se desepingler.
+      if (c.article_id || c.epingle) {
         bouton(
           c.epingle ? "📍 Désépingler" : "📌 Épingler",
           c.epingle
@@ -1636,11 +1919,22 @@ async function loadSchedulePanel() {
           { epingle: !c.epingle },
         );
       }
-      bouton(
-        "✏️ Remplacer",
-        "Remplacer par un autre article (identifiant)",
-        c.format === "reel" ? "remplacer-reel" : "remplacer",
-      );
+      const choisir = document.createElement("button");
+      choisir.textContent = "Choisir une actu";
+      choisir.title = "Voir les actus possibles pour ce créneau";
+      choisir.setAttribute("aria-label", choisir.title);
+      const zoneChoix = nouvelElement("div", "prog-zone");
+      zoneChoix.onclick = (evenement) => evenement.stopPropagation();
+      row.appendChild(zoneChoix);
+      choisir.onclick = () => ouvrirSelecteur(zoneChoix, {
+        url: `/schedule/${c.id}/actus-possibles`,
+        lire: lireActus(c.id),
+        apres: async (creneau) => {
+          document.getElementById("retrait-programmation").textContent = texteResultat(creneau);
+          await loadSchedulePanel();
+        },
+      });
+      actions.appendChild(choisir);
       if (c.article_id) {
         bouton("⏬ Décaler", "Décaler au créneau suivant", { decaler: true });
       }
@@ -1712,14 +2006,6 @@ function boutonNePasPublier(parent, { creneauId, titre, postId, publierA, articl
 }
 
 async function modifierCreneau(id, donnees) {
-  if (donnees === "remplacer" || donnees === "remplacer-reel") {
-    const question = donnees === "remplacer-reel"
-      ? "Identifiant de l'article (vidéo d'un compte artiste, festival, label ou club) :"
-      : "Identifiant de l'article à programmer ici :";
-    const saisie = prompt(question);
-    if (!saisie) return;
-    donnees = { article_id: Number(saisie) };
-  }
   const reponse = await fetch(`/schedule/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1933,73 +2219,10 @@ function textesAReinjecter(brouillon, post) {
 // --- Predicat "video exploitable" reimplemente depuis app/content/media.py :
 // on ne peut pas importer du Python dans le navigateur. Toute modification de
 // la regle cote serveur doit etre reportee ici a la main.
-const DUREE_MAX_REEL_MS = 90000;
 // Limite Instagram pour une slide de carrousel (app.content.media.DUREE_MAX_SLIDE_MS) :
 // une video plus longue reste affichee (pour qu'on sache qu'elle existe) mais n'est
 // pas cochable comme slide.
 const DUREE_MAX_SLIDE_MS = 60000;
-
-function videosExploitables(media) {
-  return (media || []).filter((m) =>
-    m.type === "video" && m.url && (m.duration_ms == null || m.duration_ms <= DUREE_MAX_REEL_MS)
-  );
-}
-
-// Mirroir de `app/content/media.py::est_lien_instagram` / `lien_de_reel` /
-// `video_recuperable` -- la SECONDE question de l'eligibilite reel, celle que le
-// dashboard ignorait : « yt-dlp saura-t-il aller chercher la video sur la page du
-// post, AU GEL ? ». Meta omet `media_url` des reels a musique protegee (donc de
-// presque tous les reels d'artistes et de festivals) : sans cette question, le
-// switch REELS etait grise sur des articles que le serveur juge PARFAITEMENT
-// eligibles -- mesure du 2026-10-05 sur l'article 22571 (Tomorrowland),
-// `store.raison_ineligible_reel` rend None et la source de la video est "ytdlp",
-// pendant que la fiche affichait « pas d'URL directe vers la vidéo ».
-//
-// Deux conditions du serveur ne sont PAS visibles d'ici : le type de la source
-// (`SourceType.INSTAGRAM`) et le reglage `PUBLICATION_REEL_YTDLP`. On penche donc
-// du cote qui est deja la regle du depot (`videos_exploitables` : « mieux vaut
-// proposer le reel que griser un bouton sur une donnee absente ») -- l'eligibilite
-// est de toute facon REVERIFIEE au gel, qui libere le creneau sans exclure.
-function lienDeReelInstagram(url) {
-  let hote, segments;
-  try {
-    const lien = new URL(url);
-    if (lien.protocol !== "https:") return false;
-    hote = lien.hostname.toLowerCase();
-    segments = lien.pathname.split("/").filter(Boolean);
-  } catch {
-    return false;
-  }
-  if (hote !== "instagram.com" && !hote.endsWith(".instagram.com")) return false;
-  return segments.length >= 2 && (segments[0] === "reel" || segments[0] === "reels");
-}
-
-function videoRecuperable(media, permalink) {
-  if (!permalink) return false;
-  if (lienDeReelInstagram(permalink)) return true;
-  const liste = media || [];
-  return liste.length === 1 && liste[0].type === "video" && !liste[0].url;
-}
-
-function raisonPasDeReel(media, permalink) {
-  if (videosExploitables(media).length) return null;
-  const videos = (media || []).filter((m) => m.type === "video");
-  if (!videos.length) return "aucune vidéo dans cette actu";
-  const durees = videos.map((m) => m.duration_ms).filter((d) => d != null);
-  const tropLongues = durees.length && Math.min(...durees) > DUREE_MAX_REEL_MS;
-  if (!videos.some((m) => m.url)) {
-    // Pas de fichier direct, mais yt-dlp ira le chercher au gel : ce n'est PAS
-    // une raison de griser le switch.
-    if (videoRecuperable(media, permalink) && !tropLongues) return null;
-    return "pas d'URL directe vers la vidéo, et aucun permalien de reel où yt-dlp"
-      + " pourrait aller la chercher";
-  }
-  if (tropLongues) {
-    const duree = Math.min(...durees);
-    return `vidéo trop longue : ${Math.floor(duree / 1000)} s, maximum ${DUREE_MAX_REEL_MS / 1000} s pour un reel`;
-  }
-  return "aucune vidéo exploitable";
-}
 
 // Un post survit a la purge de son article (`retention_days`) : GET peut donc
 // legitimement rendre 404, pas seulement en cas de panne reseau -- dans les
@@ -2258,43 +2481,13 @@ function renderPostDetail(post, article, covers) {
     </div>`;
   }).join("") : `<div class="media-empty">Pas de variantes pour ce post.</div>`;
 
-  // --- Format : le selecteur ne MENT PLUS ------------------------------------
+  // --- Format : lu, jamais choisi -----------------------------------------------
   //
-  // Le defaut (post 176, 2026-10-05) : `template` valait `kinda_reel`, et
-  // l'interface montrait POST actif et REELS grise « pas d'URL directe vers la
-  // vidéo ». Deux causes, toutes deux corrigees ici.
-  //
-  // 1. AUCUN des deux boutons ne portait `on` dans ce cas (`post.template` ne
-  //    valait ni l'un ni l'autre des deux libelles testes separement), et un
-  //    REELS grise a cote d'un POST normal se LIT « POST est l'actif ». Le
-  //    bouton du gabarit COURANT porte donc desormais `on` dans tous les cas, et
-  //    n'est jamais desactive : on ne grise pas l'etat dans lequel on est.
-  // 2. `raisonPasDeReel` ne mirrorait que `media.videos_exploitables` et ignorait
-  //    `media.video_recuperable` -- la seconde question, « yt-dlp saura-t-il
-  //    aller la chercher au gel ? ». Meta omet `media_url` des reels a musique
-  //    protegee : sans elle, TOUS les reels d'artistes sont annonces impossibles
-  //    alors que le serveur les juge eligibles (verifie sur l'article 22571 :
-  //    `store.raison_ineligible_reel` rend None, source de la video « ytdlp »).
-  const raisonReel = raisonPasDeReel(article ? article.media : null, article ? article.url : null);
+  // Le creneau l'impose (decision du 2026-10-31) : basculer un gabarit a la main faisait
+  // lacher le post au gel, et repayait une composition. Plus de selecteur, donc plus
+  // de miroir navigateur des regles de reel : c'est le serveur qui les applique au geste
+  // de programmation, et au gel.
   const estReel = post.template === "kinda_reel";
-  // On ne grise jamais le format COURANT : il est deja choisi, et le dire
-  // impossible serait un mensonge sur l'etat de la base.
-  const reelDisabled = raisonReel != null && !estReel;
-  const texteRaisonReel = article ? raisonReel : "actu introuvable (" + retentionTexte() + ")";
-  // Trois cas, trois phrases differentes -- et jamais la contradiction d'avant
-  // (REELS grise a cote d'un post qui EST un reel) :
-  const raisonFormat = reelDisabled
-    ? `<div class="reel-reason" id="reel-reason">REELS indisponible — ${escapeHtml(texteRaisonReel)}</div>`
-    : estReel && raisonReel
-      // Le post est DEJA un reel et l'actu n'offre plus de video : on ne grise
-      // pas l'etat courant (ce serait mentir sur la base), on dit ce qui va se
-      // passer. Le gel reverifie l'eligibilite et LIBERE le creneau sans exclure
-      // l'article (`preparation_reel.ReelInadapte`).
-      ? `<div class="reel-reason" id="reel-reason">Ce post est un reel, mais l'actu n'offre`
-        + ` plus de vidéo exploitable — ${escapeHtml(texteRaisonReel)}. Le gel libérera le`
-        + ` créneau (l'article reste publiable en carrousel).</div>`
-      : "";
-
   // D'où vient le FOND de la cover. Posé à la composition (`variants.fond`),
   // jamais déduit : une fois l'URL dans la slide, plus rien ne dirait si elle
   // vient de l'actu, du compte qui l'a publiée, d'un artiste cité, ou du web.
@@ -2547,12 +2740,11 @@ function renderPostDetail(post, article, covers) {
         <div class="covers-grid">${coversHtml}</div>
         <div class="hl-hint">Entoure un segment de <code>**deux astérisques**</code> dans une accroche pour le surligner en rose sur l'image.</div>
         <div class="sous-titre">Format</div>
-        <div class="template-switch">
-          <button id="tpl-post" class="${post.template === "kinda_post" ? "on" : ""}">POST</button>
-          <button id="tpl-reel" class="${estReel ? "on" : ""}" ${reelDisabled ? "disabled" : ""}
-            title="${reelDisabled ? escapeHtml(texteRaisonReel) : ""}">REELS</button>
-        </div>
-        ${raisonFormat}
+        <div class="note" id="format-lu">${escapeHtml(
+          depart
+            ? `${FORMATS_CRENEAU[depart.format] || depart.format} — imposé par le créneau`
+            : `${estReel ? FORMATS_CRENEAU.reel : FORMATS_CRENEAU.carrousel} — gabarit de ce brouillon`
+        )}</div>
         <div class="sous-titre">Image de fond</div>
         ${fondSection}
         <div class="bg-field">
@@ -2584,7 +2776,6 @@ function renderPostDetail(post, article, covers) {
 
       <div class="detail-actions">
         <button class="primary" id="btn-save">Enregistrer</button>
-        <a href="/posts/${post.id}/export.zip">⬇ Télécharger</a>
         <div class="etat-geste" id="etat-geste"></div>
         ${post.status === "draft" && departsParPost && !depart ? '<button class="danger" id="btn-delete">🗑 Supprimer</button>' : ""}
       </div>
@@ -2593,6 +2784,33 @@ function renderPostDetail(post, article, covers) {
   // Au programme, le retrait c'est ceci : « Supprimer » n'apparait qu'une fois le
   // post sorti du creneau (le serveur le refuse avant).
   const zoneDepart = detailEl.querySelector(".depart-actions");
+  // Une correction epingle le creneau (`posts._proteger_la_correction`), sinon
+  // l'arbitrage remplacerait le post dans les 10 minutes. Cela se dit, et se defait.
+  if (zoneDepart && depart && depart.epingle && CRENEAUX_MODIFIABLES.has(depart.etat)) {
+    zoneDepart.appendChild(nouvelElement("span", "note",
+      "📌 Épinglé : le robot ne remplacera pas ce post."));
+    const desepingler = nouvelElement("button", "desepingler", "📍 Désépingler");
+    const refusEpingle = nouvelElement("span", "etat-geste erreur");
+    desepingler.onclick = async () => {
+      desepingler.disabled = true;
+      refusEpingle.textContent = "";
+      const reponse = await fetch(`/schedule/${depart.creneau_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ epingle: false }),
+      });
+      if (!reponse.ok) {
+        refusEpingle.textContent = "Refusé : " + await raisonDuRefus(reponse);
+        desepingler.disabled = false;
+        return;
+      }
+      annoncerGeste(post.id, "ok", "✓ Désépinglé : le robot peut de nouveau remplacer ce post.");
+      await chargerDeparts();
+      renderPostDetail(post, article, covers);
+      if (!schedulePanelEl.hidden) loadSchedulePanel();
+    };
+    zoneDepart.append(desepingler, refusEpingle);
+  }
   if (zoneDepart && depart && RETIRABLES.has(depart.etat)) {
     boutonNePasPublier(zoneDepart, {
       creneauId: depart.creneau_id,
@@ -2670,37 +2888,13 @@ function renderPostDetail(post, article, covers) {
       });
       // Les 4 covers rendues ne changent pas (meme fond, memes 4 textes) --
       // seule la marque "retenue" bouge : pas besoin de repayer un rendu.
-      if (updated) renderPostDetail(updated, article, covers);
+      if (updated) {
+        // La correction vient d'epingler le creneau : la fiche le dit.
+        await chargerDeparts();
+        renderPostDetail(updated, article, covers);
+      }
     };
   }
-
-  // --- Switch POST / REELS ---
-  //
-  // Deux appels reseau DISTINCTS et un seul engage un changement persiste : le
-  // PATCH d'abord (annonce par `ecrireDepuisLaFiche`), le rendu des covers
-  // ensuite. Un echec du rendu (Chromium, 503 transitoire) ne doit jamais faire
-  // croire que le format n'a pas change -- il a change.
-  const basculerTemplate = async (template) => {
-    if (template === post.template) return;
-    const updated = await ecrireDepuisLaFiche(post.id, {
-      libelle: template === "kinda_reel" ? "Format REELS" : "Format POST",
-      action: () => enregistrerPost(post.id, { template }),
-    });
-    if (!updated) return;
-    let nouvellesCovers = null;
-    try {
-      nouvellesCovers = await chargerCovers(post.id);
-    } catch (erreur) {
-      annoncerGeste(post.id, "erreur",
-        "✓ format changé, mais l'aperçu des covers a échoué — " + erreur.message);
-    }
-    // Le gabarit change le pictogramme du credit (📸 / 🎥), donc le texte publie.
-    await chargerDeparts();
-    renderPostDetail(updated, article, nouvellesCovers);
-  };
-  detailEl.querySelector("#tpl-post").onclick = () => basculerTemplate("kinda_post");
-  const btnReel = detailEl.querySelector("#tpl-reel");
-  if (!reelDisabled) btnReel.onclick = () => basculerTemplate("kinda_reel");
 
   // --- Fond de la cover ---
   const btnFond = detailEl.querySelector("#bg-valider");
@@ -3011,6 +3205,12 @@ async function loadEventsPanel() {
             o.article_id != null ? renvoiArticle(o.article_id, o.url) : "archivé",
             o.post_id != null ? renvoiPost(o.post_id) : null,
           ]);
+          // L'actu representante seulement : un doublon serait refuse.
+          if (o.representant) {
+            const hote = nouvelElement("div", "prog-hote");
+            ligne.appendChild(hote);
+            poserProgrammer(hote, o.article_id, "Programmer");
+          }
           obsZone.appendChild(ligne);
         }
       } catch (erreur) {
@@ -3269,6 +3469,12 @@ function remplirCitations(zone, mentions) {
     poserParties(ligne.querySelector(".renvois"), [
       m.article_id != null ? renvoiArticle(m.article_id, m.url) : "archivée",
     ]);
+    // Une citation vivante : l'actu existe encore, elle se programme comme sur sa carte.
+    if (m.article_id != null) {
+      const hote = nouvelElement("div", "prog-hote");
+      ligne.appendChild(hote);
+      poserProgrammer(hote, m.article_id, "Programmer");
+    }
     zone.appendChild(ligne);
   }
 }

@@ -440,6 +440,10 @@ Purge à chaque run + skip à l'ingestion (on ne score pas un article déjà hor
 Articles sans date de publication : filet sur `fetched_at` (seul recours possible).
 Récolte X bornée à `x_backfill_days` (2) au premier fetch. Réglables via `.env`.
 
+**La programmation à la main lit cette fenêtre sans la changer** (2026-10-31) : une option
+dont la composition tomberait après la purge est refusée. Calcul : `publication.md`,
+« Programmer ».
+
 **Un article que la machine n'a PAS PU juger bénéficie d'un SURSIS**
 (2026-10-08, `retention_sursis_non_juges_days`, **7 jours**). Le prédicat ne
 regardait pas `relevance_score` : un article que Claude n'a jamais pu noter —

@@ -258,7 +258,7 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Installer / synchroniser les deps : `uv sync` (groupe dev inclus par défaut)
 - Dashboard + API : `uv run uvicorn app.main:app --reload` → http://localhost:8000
   (page servie depuis `app/static/dashboard.html`, lit Neon en direct ; boutons
-  vu/posté = workflow éditorial via PATCH /articles/{id})
+  vu / à traiter = tri via PATCH /articles/{id} ; statut « utilisé » posé par le robot seul)
 - Ajouter une source : `uv run python -m scripts.sources.add_source --name "..." --type rss|reddit_rss|instagram --url ... [--genre ...] [--categorie artiste|media|festival|label|club|autre]`
   (Instagram : URL au format `ig:<compte>`, ex. `ig:tsugimag` — compte professionnel
   business/creator uniquement, `business_discovery` ne voit pas les profils perso)
@@ -273,7 +273,8 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Alertes Discord : `uv run python -m scripts.livraison.send_hot_alerts`
 - Rendu des posts : nécessite Chromium Playwright en local
   (`uv run playwright install chromium`). Le pipeline cron ne génère AUCUN post —
-  la génération est déclenchée à la main depuis le dashboard.
+  c'est l'agent de publication qui compose, à T-24 h ; au dashboard, on programme
+  (« Programmer »), on ne génère jamais à la main.
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - Passage de veille rapide (les seuls comptes de `VEILLE_COMPTES`) :
   `uv run python -m scripts.run_veille` — voir « Veille rapide »

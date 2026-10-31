@@ -390,6 +390,18 @@ la condition d'etat de `_reclamer` rougit
 `test_un_passage_du_robot_apres_le_retrait_ne_publie_rien` : le meme creneau, sans
 retrait, publie.
 
+### Une correction humaine epingle (2026-10-31)
+
+Toute ecriture de `PATCH /posts/{id}` qui CHANGE le contenu d'un post porte par un creneau
+PROGRAMME (legende, hashtags, liste, variante) epingle ce creneau, dans la meme
+transaction, par un UPDATE conditionnel sur (etat, post) : sinon l'arbitrage pouvait
+remplacer le post corrige 10 minutes apres, le defaut que `rouvrir` corrigeait deja pour un
+GELE. Gratuit, sans re-gel : un GELE garde ses fichiers
+(`test_editer_la_legende_ne_jette_JAMAIS_les_fichiers_figes` n'a pas bouge). « Enregistrer »
+sans rien changer n'epingle pas, un refus non plus. La fiche le dit (`DepartOut.epingle`)
+et propose « Desepingler ». Un depot de visuel n'epingle pas : ce n'est qu'un candidat, le
+mettre dans la liste passe par ici.
+
 ### Anti-doublon, demontre
 
 Rien ici n'appelle Meta. La reouverture est une ecriture CONDITIONNELLE sur

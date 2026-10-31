@@ -715,3 +715,59 @@ republication, limitation de l'IP résidentielle — démarrer en `apercu`.
 `posts.credit`) : décocher « Reels auto », attendre que plus aucun créneau reel ne
 soit « Gelé » (publié, aperçu ou manqué), puis descendre. Sinon un reel gelé
 perdrait en cours de route son format et son crédit obligatoire.
+
+## Programmer (2026-10-31)
+
+Décision de l'utilisateur : la console publie seule avec vérification humaine ; il gère
+le planning et ce qui va sortir, il ne génère JAMAIS à la main. `POST /articles/{id}/posts`
+a disparu ; `create_post` reste, le robot s'en sert. Aucun appel à Meta ni à Claude au
+clic, aucun nouveau chemin vers `media_publish` : le geste écrit un créneau PROGRAMME, et
+l'agent compose puis gèle à son passage.
+
+**Une seule règle, `app/schedule/programmation.py::raison_refus`.** `PATCH /schedule/{id}`
+l'applique, `GET /articles/{id}/creneaux-possibles` et `GET /schedule/{id}/actus-possibles`
+l'annoncent, le navigateur n'en recopie aucune.
+`test_les_lectures_et_le_patch_ne_divergent_jamais` joue le PATCH sur toute une matrice et
+compare la raison au mot près. Lectures groupées : ni requête par ligne (y compris sur un
+créneau reel, où l'arbitrage garde son coût connu), ni écriture, ni réseau.
+
+**La limite de purge, et son calcul.** La composition s'ouvre à
+`publier_a - publication_composition_heures`. La purge vise un article non publié à
+`published_at + retention_days` (`fetched_at` sans date ; sursis si aucune machine ne l'a
+jugé, `moment_de_purge` relit `_predicat_purgeable` et un test les confronte). Si
+`max(composition, maintenant) >= purge`, le créneau serait vidé par `ON DELETE SET NULL`
+avant d'avoir un post : l'option est refusée avec sa raison, au PATCH aussi. Avec les
+valeurs actuelles (2 j, 24 h), un article ne se programme donc pas à plus de 72 h de sa
+date de publication. **Sauf brouillon valide** : `post_a_reprendre` l'accroche dès le geste,
+et un post survit à son article. Valide = non `_brouillon_perime` : sans fond, le gel le
+lâcherait, et le créneau mourrait quand même. La rétention n'a pas bougé.
+
+**Non bloquants** : le seuil de pertinence et la fraîcheur. L'humain prime : on affiche
+« sous le seuil de N, choix manuel » et l'âge. Une note absente n'est ni « 0 » ni sous le
+seuil : « pas encore notée ». **Permis mais annoncé** : sous
+`publication_relecture_avance_minutes`, « partira sans fenêtre de relecture » ; sous
+`publication_relecture_regel_minutes`, une fois gelé la cover et les éléments ne se
+corrigent plus.
+
+**`occupant_attendu`** : la validation nomme ce qui sort, et l'arbitrage a pu changer
+d'occupant depuis l'affichage. Présent et faux, le PATCH rend 409 sans rien écrire.
+
+**`creneaux.erreur` s'efface quand l'article change** (reproduit d'abord). Survivant, un
+marqueur `RAISON_TEXTE_PERIME` faisait sauter au nouveau post le contrôle de texte du gel
+(`deja_tente`). Sur « Décaler », l'erreur s'efface aussi, sauf `RAISON_RELECTURE`, qui suit
+son post : il protège d'une exclusion l'article qu'on vient de corriger.
+
+**Le créneau mort** (reproduit d'abord) : épinglé à la main, article purgé avant sa
+composition, ni article ni post. Ni la composition ni l'arbitrage ne le voyaient, jusqu'à
+MANQUE. `store.creneau_mort` : l'arbitrage le désépingle et le rend à la file, par écriture
+conditionnelle. Un post orphelin n'est pas mort (`porte_un_post_orphelin`).
+
+**Une correction humaine épingle** : voir `relecture-et-controle-editorial.md`.
+
+**Limites connues, déduites du code.** La composition peut tomber jusqu'à un passage
+d'agent après l'heure calculée, et plus si le Mac dort ; une purge dans cet intervalle
+donne un créneau mort, que l'arbitrage répare. « Décaler » n'applique pas la limite de
+purge, même réparation. Un article passé par un créneau MANQUE ou ECHEC reste « engagé » et
+refusé à la main, règle antérieure, désormais visible sur la carte. `PATCH /posts` accepte
+encore `template` sans plus aucun bouton. `GET /posts/{id}/export.zip` reste sans bouton.
+
