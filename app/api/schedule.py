@@ -8,8 +8,8 @@ l'arbitrage suivant la defait dans les 10 minutes.
 Une seule exception, « Ne pas publier » (`sauter`) : RETIRER ne publie rien d'autre,
 donc ce geste vaut aussi sur un GELE, et apres l'heure tant que le robot peut partir.
 
-Un creneau reel n'accepte qu'un article eligible en reel, et decaler n'echange
-qu'avec un creneau du meme format. `/publication/reels` coupe ou rallume les reels
+Un creneau reel n'accepte qu'un article eligible en reel, et un echange ne change
+jamais le format d'un post (`programmation.raison_echange`). `/publication/reels` coupe ou rallume les reels
 automatiques ; yt-dlp seul se coupe dans `.env`.
 """
 
@@ -42,6 +42,7 @@ from app.schemas import (
     CreneauOut,
     CreneauUpdate,
     CreneauxPossiblesOut,
+    EchangesPossiblesOut,
     ModeOut,
     ModeUpdate,
     OffreReelsOut,
@@ -96,10 +97,11 @@ def _liste(db: Session, maintenant: dt.datetime) -> list[CreneauOut]:
     return [_vue(db, creneau, mode, articles) for creneau in creneaux]
 
 
-def _reprogramme(article_id: int | None) -> dict:
+def _reprogramme(occupant: int | None) -> dict:
+    """`occupant` : l'article, ou a defaut le post -- un post orphelin occupe un creneau."""
     return {
-        "etat": EtatCreneau.PROGRAMME if article_id else EtatCreneau.LIBRE,
-        "epingle": article_id is not None,
+        "etat": EtatCreneau.PROGRAMME if occupant else EtatCreneau.LIBRE,
+        "epingle": occupant is not None,
     }
 
 
@@ -146,6 +148,16 @@ def actus_possibles(creneau_id: int, db: Session = Depends(get_db)):
     if creneau is None:
         raise HTTPException(status_code=404, detail="Creneau introuvable")
     return programmation.actus_du_creneau(db, creneau, _maintenant())
+
+
+@router.get("/schedule/{creneau_id}/echanges-possibles", response_model=EchangesPossiblesOut)
+def echanges_possibles(creneau_id: int, db: Session = Depends(get_db)):
+    """Avec quels creneaux celui-ci peut permuter, et pourquoi pas les autres. Memes regles
+    que le PATCH, a un seul endroit ; rien n'est ecrit."""
+    creneau = db.get(Creneau, creneau_id)
+    if creneau is None:
+        raise HTTPException(status_code=404, detail="Creneau introuvable")
+    return programmation.echanges_du_creneau(db, creneau, _maintenant())
 
 
 @router.get("/publication/mode", response_model=ModeOut)
@@ -198,11 +210,14 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
     if creneau is None:
         raise HTTPException(status_code=404, detail="Creneau introuvable")
     maintenant = _maintenant()
-    actions = [payload.epingle is not None, payload.article_id is not None, payload.sauter, payload.decaler]
+    actions = [payload.epingle is not None, payload.article_id is not None, payload.sauter,
+               payload.echanger_avec is not None]
     if sum(actions) != 1:
-        raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou decaler")
+        raise HTTPException(status_code=422, detail="Une seule action a la fois : epingle, article_id, sauter ou echanger_avec")
     if payload.sauter:
         return _ne_pas_publier(db, creneau, maintenant)
+    if payload.echanger_avec is not None:
+        return _echanger(db, creneau.id, payload, maintenant)
     raison = programmation.raison_creneau(creneau, maintenant)
     if raison is not None:
         raise HTTPException(status_code=409, detail=raison)
@@ -212,7 +227,7 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
         if payload.epingle and creneau.article_id is None:
             raise HTTPException(status_code=409, detail="rien a epingler")
         _ecrire(db, creneau, lu, epingle=payload.epingle)
-    elif payload.article_id is not None:
+    else:
         article = db.get(Article, payload.article_id)
         if article is None:
             raise HTTPException(status_code=404, detail="Article introuvable")
@@ -248,32 +263,60 @@ def modifier_creneau(creneau_id: int, payload: CreneauUpdate, db: Session = Depe
             post_id=post_a_reprendre(db, article.id, TEMPLATES[creneau.format]),
             **_reprogramme(article.id),
         )
-    else:
-        suivant = db.scalar(
-            select(Creneau)
-            # Un echange ne change jamais le format d'un article : un reel ne
-            # glisse pas sur un creneau carrousel.
-            .where(
-                Creneau.publier_a > creneau.publier_a,
-                Creneau.format == creneau.format,
-                Creneau.etat.in_(MODIFIABLES),
-            )
-            .order_by(Creneau.publier_a)
-            .limit(1)
-        )
-        if suivant is None:
-            raise HTTPException(status_code=409, detail="Aucun creneau modifiable apres celui-ci")
-        lu_suivant = lecture(suivant)
-        _, article_ici, post_ici = lu
-        _, article_apres, post_apres = lu_suivant
-        erreur_ici, erreur_apres = _marqueur_du_post(creneau), _marqueur_du_post(suivant)
-        _ecrire(db, creneau, lu, article_id=article_apres, post_id=post_apres, erreur=erreur_apres,
-                **_reprogramme(article_apres))
-        _ecrire(db, suivant, lu_suivant, article_id=article_ici, post_id=post_ici, erreur=erreur_ici,
-                **_reprogramme(article_ici))
-
     db.commit()
     return _vue(db, creneau)
+
+
+def _echanger(db: Session, creneau_id: int, payload: CreneauUpdate, maintenant: dt.datetime) -> CreneauOut:
+    """Permute ce que portent deux creneaux, en une transaction : les deux, ou rien.
+
+    LE VERROU, par id croissant : deux echanges croises (A↔B, B↔A) prendraient sinon leurs
+    lignes en sens inverse, et Postgres en tuerait un. Il fait aussi attendre l'agent, dont
+    la reclamation et le gel relisent l'etat. L'ECRITURE reste conditionnelle : SQLite n'a
+    pas de `FOR UPDATE`, et c'est la meme garantie que partout ailleurs (`publication.md`,
+    « L'arbitrage ecrivait sur une lecture perimee »). `_ecrire` annule tout sur un refus,
+    la premiere ligne comprise.
+
+    Rien n'est compose : la paire (actu, post) se deplace, et l'agent gele a son passage.
+    """
+    ids = {creneau_id, payload.echanger_avec}
+    lignes = {c.id: c for c in db.scalars(
+        select(Creneau).where(Creneau.id.in_(ids)).order_by(Creneau.id).with_for_update()
+        .execution_options(populate_existing=True)
+    )}
+    if len(lignes) != len(ids):
+        raise HTTPException(status_code=404, detail="Creneau introuvable")
+    ici, la = lignes[creneau_id], lignes[payload.echanger_avec]
+    vue = programmation.lire_echange(db, [ici, la], maintenant)
+    raison = programmation.raison_echange(ici, la, vue)
+    if raison is not None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=raison)
+    if (
+        ("occupant_attendu" in payload.model_fields_set and payload.occupant_attendu != la.article_id)
+        or ("occupant_source_attendu" in payload.model_fields_set and payload.occupant_source_attendu != ici.article_id)
+    ):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=OCCUPANT_CHANGE)
+    ecritures = [_arrivee(db, ici, la), _arrivee(db, la, ici)]
+    for cible, lu, valeurs in sorted(ecritures, key=lambda e: e[0].id):
+        _ecrire(db, cible, lu, **valeurs)
+    db.commit()
+    return _vue(db, ici)
+
+
+def _arrivee(db: Session, depart: Creneau, arrivee: Creneau) -> tuple[Creneau, tuple, dict]:
+    """Ce que `arrivee` recoit de `depart`. Le brouillon n'est repris qu'au gabarit de
+    l'arrivee, comme Programmer : c'est lui qui a leve la limite de purge."""
+    post_id = depart.post_id
+    if post_id is None and depart.article_id is not None:
+        post_id = post_a_reprendre(db, depart.article_id, TEMPLATES[arrivee.format])
+    return arrivee, lecture(arrivee), {
+        "article_id": depart.article_id,
+        "post_id": post_id,
+        "erreur": _marqueur_du_post(depart),
+        **_reprogramme(depart.article_id or depart.post_id),
+    }
 
 
 def _ne_pas_publier(db: Session, creneau: Creneau, maintenant: dt.datetime) -> CreneauOut:

@@ -16,6 +16,8 @@ creneaux, avant les ecritures. Rien n'est simule au-dela de cet ordre.
 
 import datetime as dt
 import os
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -237,9 +239,9 @@ def client_web(fabrique):
     app.dependency_overrides.clear()
 
 
-@pytest.mark.parametrize("action", ["article_id", "decaler", "epingle"])
+@pytest.mark.parametrize("action", ["article_id", "echanger", "epingle"])
 def test_le_patch_rend_409_si_l_agent_a_gele_pendant_sa_lecture(client_web, fabrique, file_, monkeypatch, action):
-    """Meme course, meme faux post pour `article_id` et `decaler` : `_maintenant` est
+    """Meme course, meme faux post pour `article_id` et l'echange : `_maintenant` est
     appele juste apres la lecture du creneau, le gel tombe donc apres le controle
     d'etat qui, lui, ne lit que l'objet en memoire."""
     vrai = schedule_api._maintenant
@@ -259,11 +261,149 @@ def test_le_patch_rend_409_si_l_agent_a_gele_pendant_sa_lecture(client_web, fabr
         db.get(Creneau, file_["tard"]).publier_a = futur + dt.timedelta(hours=6)
         db.get(Article, file_["a"]).published_at = futur
         db.commit()
-    corps = {"article_id": {"article_id": file_["b"]}, "decaler": {"decaler": True}, "epingle": {"epingle": True}}[action]
+    corps = {"article_id": {"article_id": file_["b"]}, "echanger": {"echanger_avec": file_["tard"]},
+             "epingle": {"epingle": True}}[action]
 
     reponse = client_web.patch(f"/schedule/{file_['tot']}", json=corps)
 
     assert reponse.status_code == 409
-    assert "entre-temps" in reponse.json()["detail"]
+    # L'echange reprend ses lignes sous verrou : il voit le gel et dit « gele ». Les autres
+    # gestes ne le voient qu'a l'ecriture conditionnelle.
+    assert ("gelé" if action == "echanger" else "entre-temps") in reponse.json()["detail"]
     assert _ligne(fabrique, file_["tot"]) == (EtatCreneau.GELE, file_["a"], file_["post_a"], FICHIERS_DE_A)
     assert _ligne(fabrique, file_["tard"])[:3] == (EtatCreneau.PROGRAMME, file_["b"], file_["post_b"])
+
+
+# --- L'echange : deux lignes, une seule transaction ---------------------------------
+
+
+def _a_venir(fabrique, file_):
+    """Les creneaux doivent etre encore a venir pour l'horloge reelle de l'API."""
+    futur = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=5)
+    with fabrique() as db:
+        db.get(Creneau, file_["tot"]).publier_a = futur
+        db.get(Creneau, file_["tard"]).publier_a = futur + dt.timedelta(hours=6)
+        for cle in ("a", "b"):
+            db.get(Article, file_[cle]).published_at = dt.datetime.now(dt.timezone.utc)
+        db.commit()
+
+
+def _pendant_les_regles(monkeypatch, geste):
+    """`geste` part une fois, apres la lecture des lignes et avant les ecritures : c'est la
+    fenetre que le verrou ferme sur Postgres, et que seule la condition ferme sur SQLite."""
+    vrai = schedule_api.programmation.raison_echange
+    deja = []
+
+    def regle(*args, **champs):
+        if not deja:
+            deja.append(True)
+            geste()
+        return vrai(*args, **champs)
+
+    monkeypatch.setattr(schedule_api.programmation, "raison_echange", regle)
+
+
+sans_verrou = pytest.mark.skipif(
+    bool(os.environ.get("KINDA_TEST_POSTGRES_URL")),
+    reason="Sur Postgres le verrou fait attendre le gel : voir le test a deux fils",
+)
+
+
+@sans_verrou
+@pytest.mark.parametrize("gele", ["tot", "tard"])
+def test_l_echange_n_ecrit_rien_si_l_agent_gele_l_un_des_deux_pendant_les_regles(
+    client_web, fabrique, file_, monkeypatch, gele
+):
+    """PREUVE PAR MUTATION : sans la condition, le gel de « tard » se ferait ecraser (faux
+    post : les fichiers de l'un, la legende de l'autre). Sans le rollback, « tot » resterait
+    ecrit seul, et une actu serait sur deux creneaux."""
+    _a_venir(fabrique, file_)
+    _pendant_les_regles(monkeypatch, lambda: _geler_comme_l_agent(fabrique, file_[gele]))
+    autre = "tard" if gele == "tot" else "tot"
+    occupants = {"tot": (file_["a"], file_["post_a"]), "tard": (file_["b"], file_["post_b"])}
+
+    reponse = client_web.patch(f"/schedule/{file_['tot']}", json={"echanger_avec": file_["tard"]})
+
+    assert reponse.status_code == 409
+    assert "entre-temps" in reponse.json()["detail"]
+    assert _ligne(fabrique, file_[gele]) == (EtatCreneau.GELE, *occupants[gele], FICHIERS_DE_A)
+    assert _ligne(fabrique, file_[autre])[:3] == (EtatCreneau.PROGRAMME, *occupants[autre])
+    with fabrique() as db:
+        assert db.get(Creneau, file_[autre]).epingle is False
+
+
+@sans_verrou
+def test_apres_un_echange_refuse_le_gel_publie_ce_qu_il_a_fige(client_web, fabrique, file_, monkeypatch):
+    """Le bout de la chaine : c'est bien l'actu gelee qui part, avec ses fichiers."""
+    _a_venir(fabrique, file_)
+    _pendant_les_regles(monkeypatch, lambda: _geler_comme_l_agent(fabrique, file_["tot"]))
+    assert client_web.patch(f"/schedule/{file_['tot']}", json={"echanger_avec": file_["tard"]}).status_code == 409
+
+    with fabrique() as db:
+        heure = db.get(Creneau, file_["tot"]).publier_a
+
+    assert _publier_a_l_heure(fabrique, heure.replace(tzinfo=dt.timezone.utc)) == [(FICHIERS_DE_A, "Legende de A")]
+
+
+def test_sans_course_l_echange_passe_et_le_gel_suivant_prend_le_nouvel_occupant(client_web, fabrique, file_):
+    """Le temoin : les deux tests d'au-dessus ne prouveraient rien si l'echange echouait."""
+    _a_venir(fabrique, file_)
+
+    reponse = client_web.patch(f"/schedule/{file_['tot']}", json={"echanger_avec": file_["tard"]})
+
+    assert reponse.status_code == 200, reponse.text
+    assert _ligne(fabrique, file_["tot"])[:3] == (EtatCreneau.PROGRAMME, file_["b"], file_["post_b"])
+    assert _ligne(fabrique, file_["tard"])[:3] == (EtatCreneau.PROGRAMME, file_["a"], file_["post_a"])
+
+
+@pytest.mark.skipif(not os.environ.get("KINDA_TEST_POSTGRES_URL"), reason="Verrous de lignes : Postgres seulement")
+def test_sur_postgres_le_gel_attend_la_fin_de_l_echange_et_ne_touche_plus_rien(client_web, fabrique, file_, monkeypatch):
+    """Le gel arrive pendant que l'echange tient ses lignes : il attend, puis sa condition
+    voit l'occupant change et n'ecrit rien. Le post ne se gele pas sur une lecture perimee."""
+    _a_venir(fabrique, file_)
+    resultats = []
+
+    def geler():
+        with fabrique() as db:
+            creneau = db.get(Creneau, file_["tot"])
+            resultats.append(runner._ecrire_si(
+                db, creneau, runner._attendu(creneau),
+                fichiers=FICHIERS_DE_A, elements=None, etat=EtatCreneau.GELE, gele_le=BASE, erreur=None,
+            ))
+
+    fil = threading.Thread(target=geler)
+
+    def lancer():
+        # Le fil lit le creneau PUIS bute sur le verrou. Sa lecture doit passer avant.
+        fil.start()
+        time.sleep(0.3)
+
+    _pendant_les_regles(monkeypatch, lancer)
+
+    assert client_web.patch(f"/schedule/{file_['tot']}", json={"echanger_avec": file_["tard"]}).status_code == 200
+    fil.join(10)
+
+    assert resultats == [False]
+    assert _ligne(fabrique, file_["tot"])[:3] == (EtatCreneau.PROGRAMME, file_["b"], file_["post_b"])
+
+
+@pytest.mark.skipif(not os.environ.get("KINDA_TEST_POSTGRES_URL"), reason="Verrous de lignes : Postgres seulement")
+def test_sur_postgres_deux_echanges_croises_ne_se_bloquent_pas(client_web, fabrique, file_):
+    """PREUVE PAR MUTATION de l'ordre stable : A↔B et B↔A en meme temps, sans ORDER BY sur
+    le verrou, se tiennent mutuellement. Postgres tuerait l'un par `deadlock detected`."""
+    _a_venir(fabrique, file_)
+    codes = []
+
+    def echanger(ici, la):
+        for _ in range(15):
+            codes.append(client_web.patch(f"/schedule/{ici}", json={"echanger_avec": la}).status_code)
+
+    fils = [threading.Thread(target=echanger, args=args)
+            for args in ((file_["tot"], file_["tard"]), (file_["tard"], file_["tot"]))]
+    for fil in fils:
+        fil.start()
+    for fil in fils:
+        fil.join(60)
+
+    assert set(codes) <= {200, 409}, codes
+    assert len(codes) == 30

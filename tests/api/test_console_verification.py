@@ -467,7 +467,11 @@ def test_les_autres_gestes_restent_refuses_sur_un_creneau_gele(client, db_sessio
     _, _, creneau, _ = _gele(db_session)
 
     assert client.patch(f"/schedule/{creneau.id}", json={"epingle": True}).status_code == 409
-    assert client.patch(f"/schedule/{creneau.id}", json={"decaler": True}).status_code == 409
+    libre = Creneau(publier_a=creneau.publier_a + dt.timedelta(hours=6), etat=EtatCreneau.LIBRE)
+    db_session.add(libre)
+    db_session.commit()
+    assert client.patch(f"/schedule/{creneau.id}", json={"echanger_avec": libre.id}).status_code == 409
+    assert client.patch(f"/schedule/{libre.id}", json={"echanger_avec": creneau.id}).status_code == 409
     assert client.patch(f"/schedule/{creneau.id}", json={"sauter": True, "epingle": True}).status_code == 422
     db_session.refresh(creneau)
     assert creneau.etat == EtatCreneau.GELE

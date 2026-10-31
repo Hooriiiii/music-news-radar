@@ -85,10 +85,10 @@ def test_sauter_exclut_l_article_de_la_file(client, db_session):
     assert article.file_exclu_raison == "« Ne pas publier » depuis le dashboard"
 
 
-def test_decaler_echange_avec_le_creneau_suivant_et_epingle(client, db_session):
+def test_echanger_avec_un_creneau_et_epingle(client, db_session):
     a, b = _articles(db_session, 80, 70)
     premier, second = _creneau(db_session, 5, a), _creneau(db_session, 17, b)
-    vue = client.patch(f"/schedule/{premier.id}", json={"decaler": True}).json()
+    vue = client.patch(f"/schedule/{premier.id}", json={"echanger_avec": second.id}).json()
     assert (vue["article_id"], vue["epingle"]) == (b.id, True)
     db_session.refresh(second)
     assert (second.article_id, second.epingle) == (a.id, True)
@@ -105,12 +105,6 @@ def test_une_seule_action_a_la_fois(client, db_session):
     creneau = _creneau(db_session, 5, article)
     reponse = client.patch(f"/schedule/{creneau.id}", json={"epingle": True, "sauter": True})
     assert reponse.status_code == 422
-
-
-def test_decaler_le_dernier_creneau_est_refuse(client, db_session):
-    (article,) = _articles(db_session, 80)
-    creneau = _creneau(db_session, 5, article)
-    assert client.patch(f"/schedule/{creneau.id}", json={"decaler": True}).status_code == 409
 
 
 def test_remplacer_par_un_article_deja_publie_est_refuse(client, db_session):
