@@ -499,6 +499,18 @@ def score_pending(
 
     Commit après chaque article : un run interrompu ne perd pas les appels API
     déjà payés, et un article qui échoue n'annule pas les autres.
+
+    Du PLUS RÉCENT au plus ancien : après une panne, l'ordre inverse faisait passer
+    l'arriéré vieux avant le frais, alors que seul le frais peut donner un post. La
+    veille passe une limite et prend donc le frais ; le passage horaire, sans limite,
+    prend tout le reste : pas de famine. `articles_jamais_atteints_par_le_scoring`
+    (`app/supervision.py`) raisonne sur cet ordre.
+
+    Le PREMIER refus de crédits arrête le passage : le suivant serait refusé aussi
+    (4 000 à 14 600 appels refusés par jour, relevés dans les logs). Il arrête aussi
+    les notes locales du passage, qui attendent la recharge sous le sursis de
+    `retention._jamais_juge`. Toute autre erreur n'arrête rien : une coupure peut ne
+    durer qu'un article, et elle ne dit rien du solde.
     """
     if scorer is None:
         scorer = make_claude_scorer()
@@ -515,7 +527,7 @@ def score_pending(
         # Retire a la main : aucun creneau ne l'attend. « Remettre dans la file » le rend
         # au scoring. Le doublon qui herite du retrait a la purge n'a jamais ete note.
         .where(or_(Article.file_exclu_raison.is_(None), Article.file_exclu_raison.not_in(RAISONS_HUMAINES)))
-        .order_by(Article.fetched_at)
+        .order_by(Article.fetched_at.desc(), Article.id.desc())
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -583,4 +595,6 @@ def score_pending(
                 credits_anthropic.consigner_succes()
             if credits_anthropic.est_refus_de_credits(exc):
                 credits_anthropic.consigner_refus()
+                logger.warning("Crédits Anthropic épuisés : passage de scoring arrêté au premier refus")
+                break
     return stats

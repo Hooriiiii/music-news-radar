@@ -93,7 +93,7 @@ def diagnostiquer(
 
     if scoring is not None and scoring.errors:
         derniere = getattr(scoring, "derniere_erreur", None) or ""
-        if SIGNATURE_CREDITS in derniere:
+        if SIGNATURE_CREDITS in derniere.lower():
             problemes.append(f"{CREDITS_EPUISES} — le scoring est arrêté")
         else:
             problemes.append(f"scoring en échec sur {scoring.errors} article(s)")

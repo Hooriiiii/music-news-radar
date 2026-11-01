@@ -69,17 +69,20 @@ avaient bien ete lies.
 `fetched_at` n'est donc PAS la date a laquelle un article est devenu notable, et
 rien dans le schema ne la date — ce qui ne vaut pas une colonne. Le voyant
 mesure desormais la PREUVE au lieu de la duree
-(`articles_jamais_atteints_par_le_scoring`) : `score_pending` sert les articles
-notables par `fetched_at` CROISSANT et **sans limite** au passage horaire, donc
-un article note a T prouve que le scoring a tourne apres T, et qu'il aurait
-servi avant lui tout article notable plus ancien. On ne compte que les articles
-sans note dont le `fetched_at` depasse STRICTEMENT le dernier `fetched_at` deja
-note. Rien de note du tout = aucun repere = on compte tout (regle 1 du module :
-le doute ne se degrade jamais en vert). Faux negatif ASSUME : `run_veille` note
-au plus 20 articles toutes les 5 min, donc un arriere peut faire avancer le
-repere au-dela d'articles encore en attente — le passage horaire le resorbe dans
-l'heure, et un trou d'une heure vaut mieux qu'un faux positif permanent, qui
-apprend a ignorer le bandeau.
+(`articles_jamais_atteints_par_le_scoring`) : depuis le 2026-11-01, `score_pending`
+sert les articles notables par `fetched_at` DECROISSANT, donc le dernier `fetched_at`
+note marque le front du scoring. On ne compte que les articles sans note dont le
+`fetched_at` depasse STRICTEMENT ce repere : si le scoring s'arrete, les nouveaux
+articles le depassent et sont comptes, et un doublon libere par la purge reste
+dessous. Rien de note du tout = aucun repere = on compte tout (regle 1 du module :
+le doute ne se degrade jamais en vert). Faux negatif ASSUME, et elargi par l'ordre
+decroissant : un arriere ANCIEN (passage interrompu, limite de 20 de `run_veille`)
+reste sous le repere, donc invisible tant que le frais est note. Le passage horaire
+sans limite le resorbe, mais des passages interrompus a repetition le laisseraient
+muet jusqu'au sursis de la purge. Un refus de credits n'en souffre pas : le voyant lit
+`credits_anthropic.json`. Non corrige : sous le repere, un retard ne se distingue ni
+d'un doublon libere (la mesure du 2026-10-02), ni d'un article remis a noter ou retire
+a la main, et rien ne date « devenu notable ».
 
 **Et un article LEUR PROPRE doublon, lui, est reellement bloque** (meme jour,
 voir « Dedup a deux etages ») : il est compte a part

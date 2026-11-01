@@ -71,7 +71,7 @@ INGESTION_ATTENTION = dt.timedelta(hours=2)
 INGESTION_PANNE = dt.timedelta(hours=4)
 
 # `score_pending` note TOUS les articles en attente a chaque passage horaire,
-# sans limite. Un article ingere il y a plus de deux heures et toujours sans
+# sans limite, du plus recent au plus ancien. Un article ingere il y a plus de deux heures et toujours sans
 # note n'est donc pas un retard : c'est un scoring qui ne tourne plus.
 #
 # MAIS `fetched_at` n'est PAS la date a laquelle l'article est devenu notable,
@@ -402,25 +402,36 @@ def articles_jamais_atteints_par_le_scoring(db: Session, maintenant: dt.datetime
     Le voyant affirme « le scoring ne tourne plus ». La preuve de cette
     affirmation n'est pas la duree d'attente d'un article (voir
     `RETARD_SCORING` : `fetched_at` ne dit pas quand l'article est devenu
-    notable) mais ceci : `score_pending` prend les articles notables par
-    `fetched_at` CROISSANT et sans limite au passage horaire. Donc si un
-    article ingere a T a recu une note, le scoring a tourne apres T -- et tout
-    article notable ingere avant T aurait ete servi AVANT lui.
+    notable) mais ceci : `score_pending` prend les articles notables du PLUS
+    RECENT au plus ancien (`fetched_at` DECROISSANT). Le dernier `fetched_at`
+    note marque donc le front du scoring. Un article sans note plus recent que ce
+    front, ingere il y a plus de `RETARD_SCORING`, a vu passer au moins un passage
+    horaire sans etre note : si le scoring s'arrete, les nouveaux articles
+    depassent le repere et sont comptes.
 
-    On ne compte donc que les articles sans note dont le `fetched_at` est
-    STRICTEMENT plus recent que le dernier `fetched_at` deja note. Un doublon
-    libere par la purge est, lui, plus ANCIEN que ce repere (c'est tout l'objet
-    du correctif) : il n'est pas compte, et le passage suivant le notera.
+    On ne compte que les articles sans note dont le `fetched_at` est STRICTEMENT
+    plus recent que ce repere. Un doublon libere par la purge est, lui, plus ANCIEN
+    que le repere (c'est tout l'objet du correctif) : il n'est pas compte, et le
+    passage suivant le notera.
 
     Rien de note du tout -> aucun repere, on compte tout : « on ne sait pas »
     ne doit jamais se degrader en « tout va bien » (regle 1 du module).
 
-    Faux negatif assume : `run_veille` note au plus `veille_scoring_max` (20)
-    articles toutes les 5 min, donc un arriere peut faire avancer le repere
-    au-dela d'articles encore en attente. Le passage HORAIRE, lui, n'a pas de
-    limite et resorbe cet arriere dans l'heure -- un trou d'une heure vaut
-    mieux qu'un faux positif permanent, qui apprend a ne plus regarder le
-    bandeau.
+    LIMITE, ASSUMEE : ce compteur ne voit RIEN sous le repere. Avec l'ordre
+    decroissant, le frais est note d'abord : un passage interrompu, ou la limite de
+    `run_veille` (`veille_scoring_max`, 20), laisse un arriere ANCIEN sous le repere,
+    invisible tant que le frais est note. Avant l'ordre decroissant, cet arriere se
+    retrouvait au-dessus du repere ; le faux negatif est donc plus large qu'avant.
+    Si les passages horaires sont interrompus a repetition, il peut durer jusqu'au
+    sursis de la purge. Un refus de credits en cours de passage n'en souffre pas :
+    `voyant_composition` lit `credits_anthropic.json`.
+
+    Il n'est pas corrige, faute de pouvoir le faire sans crier au loup : sous le
+    repere, un article en retard ressemble a un doublon libere par la purge (le faux
+    positif du 2026-10-02), a un article remis a noter par l'election ou un retrait
+    humain (`score_pending` les ecarte, pas ce compteur). Aucune colonne ne date
+    « devenu notable », et `event_observations` ne tranche pas : un article isole y
+    entre aussi. Le fixer demanderait une trace du dernier passage vide, pas un seuil.
     """
     repere = db.scalar(
         select(func.max(Article.fetched_at)).where(Article.relevance_score.is_not(None))

@@ -24,9 +24,11 @@ import datetime as dt
 import pytest
 
 from app.models import Article, Source, SourceType
+from app.pipeline.scoring import ArticleScore, Category, score_pending
 from app.supervision import (
     ATTENTION,
     OK,
+    PANNE,
     articles_jamais_atteints_par_le_scoring,
     articles_leur_propre_doublon,
     voyant_composition,
@@ -74,10 +76,9 @@ def _article(db, source, *, heures, note=None, duplicate_of_id=None, rang=0):
 
 def test_un_ancien_doublon_libere_par_la_purge_n_est_pas_un_scoring_en_panne(db_session):
     """LE faux positif mesure. L'article sans note est le PLUS ANCIEN : un
-    article plus recent a bien recu sa note, donc le scoring a tourne depuis --
-    et le seul ordre de `score_pending` (`fetched_at` croissant, sans limite)
-    prouve qu'il n'a jamais eu l'occasion de voir celui-la, parce qu'il etait
-    encore un doublon a ce moment-la.
+    article plus recent a bien recu sa note, donc le scoring a tourne depuis.
+    Il reste sous le repere, et n'est donc pas compte, quel que soit l'ordre de
+    `score_pending` : le passage suivant le notera.
 
     Preuve par mutation : retirer le filtre `fetched_at > repere` de
     `articles_jamais_atteints_par_le_scoring` fait repasser ce test au rouge.
@@ -131,6 +132,82 @@ def test_un_doublon_ordinaire_n_est_jamais_compte(db_session):
     db_session.commit()
 
     assert articles_jamais_atteints_par_le_scoring(db_session, _maintenant()) == 0
+
+
+# -- `score_pending` note du plus recent au plus ancien ----------------------
+
+
+def _note(_article=None):
+    return ArticleScore(
+        relevance=70, hotness=40, emergence=10, category=Category.ANNOUNCEMENT, imprint=None,
+        summary="s", artists=[],
+    )
+
+
+def _au_fond(db, source, *, heures, rang):
+    article = _article(db, source, heures=heures, rang=rang)
+    article.summary = "Un resume assez long pour ne pas passer pour un post quasi vide."
+    db.commit()
+    return article
+
+
+def test_apres_un_vrai_passage_un_scoring_qui_s_arrete_reste_signale(db_session):
+    """Ce que le voyant affirme tient avec le nouvel ordre : les articles ingeres apres
+    l'arret depassent le repere, et sont comptes."""
+    db_session.autoflush = False
+    source = _source(db_session)
+    _au_fond(db_session, source, heures=10, rang=1)
+    _au_fond(db_session, source, heures=9, rang=2)
+    assert score_pending(db_session, scorer=_note, prefilter=None).scored == 2
+
+    _au_fond(db_session, source, heures=5, rang=3)  # ingere apres l'arret
+    _au_fond(db_session, source, heures=3, rang=4)
+
+    assert articles_jamais_atteints_par_le_scoring(db_session, _maintenant()) == 2
+
+
+def test_limite_connue_un_arriere_ancien_reste_invisible_tant_que_le_frais_est_note(db_session):
+    """LA LIMITE, ecrite pour qu'on ne la decouvre pas : deux articles vieux de 5 et 8 h
+    que le passage n'a pas atteints, sous un article frais qui a sa note. Le compteur dit
+    0. Il ne peut pas les distinguer d'un doublon libere par la purge, ni d'un article
+    remis a noter : rien dans le schema ne date « devenu notable ». Le passage horaire
+    sans limite les reprend ; si ce test rougit parce que le compteur les voit, relire
+    le faux positif du 2026-10-02 avant de s'en feliciter."""
+    db_session.autoflush = False
+    source = _source(db_session)
+    _au_fond(db_session, source, heures=8, rang=1)
+    _au_fond(db_session, source, heures=5, rang=2)
+    _au_fond(db_session, source, heures=1, rang=3)
+
+    assert score_pending(db_session, scorer=_note, prefilter=None, limit=1).scored == 1
+
+    assert articles_jamais_atteints_par_le_scoring(db_session, _maintenant()) == 0
+    assert score_pending(db_session, scorer=_note, prefilter=None).scored == 2
+
+
+def test_un_refus_de_credits_en_cours_de_passage_ne_passe_pas_par_cette_limite(db_session):
+    """Le cas le plus cher de la limite : le frais est note, puis les credits tombent.
+    Le compteur ne voit pas l'arriere, mais le voyant dit la panne par le fichier d'etat."""
+    db_session.autoflush = False
+    source = _source(db_session)
+    _au_fond(db_session, source, heures=8, rang=1)
+    _au_fond(db_session, source, heures=5, rang=2)
+    _au_fond(db_session, source, heures=1, rang=3)
+    appels = []
+
+    def scorer(_article):
+        appels.append(1)
+        if len(appels) == 2:
+            raise RuntimeError("Your credit balance is too low to access the Anthropic API.")
+        return _note()
+
+    score_pending(db_session, scorer=scorer, prefilter=None)
+
+    maintenant = _maintenant()
+    assert articles_jamais_atteints_par_le_scoring(db_session, maintenant) == 0
+    voyant = voyant_composition(db_session, maintenant)
+    assert voyant.niveau == PANNE
+    assert voyant.valeur == "crédits épuisés"
 
 
 # -- l'autre moitie : le reflexif, qui doit RESTER visible -------------------

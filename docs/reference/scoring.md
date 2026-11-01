@@ -126,6 +126,24 @@ jamais touchés.
   idempotent ; les notes ne sont jamais touchées) — voir « Dédup à deux
   étages » pour la cause et les deux gardes qui l'empêchent de revenir.
 
+## Ordre de notation et arret au premier refus (2026-11-01)
+
+`score_pending` note du **plus recent au plus ancien** (`fetched_at` puis `id`,
+decroissants). Avant, apres une panne, la veille (20 articles par passage) et le
+pipeline notaient l'arriere vieux avant le frais, alors que seul le frais peut donner un
+post. Pas de famine : seule la veille passe une limite, et le passage horaire prend le
+reste. La purge ne depend pas de cet ordre : un article laisse de cote reste « jamais
+juge », sous le sursis de 7 jours. Effet sur le bandeau : voir `articles_jamais_atteints_par_le_scoring`
+dans `dashboard.md`, le faux negatif sur l'arriere ancien s'est elargi.
+
+Le **premier refus de credits arrete le passage**, apres consignation : chaque article
+pris faisait un appel refuse, 4 000 a 14 600 par jour dans les logs. `errors` vaut alors
+souvent 1, et `health.diagnostiquer` nomme quand meme « crédits API épuisés », car il lit
+`derniere_erreur`. Une coupure ou une autre erreur n'arrete rien. Contrepartie : les
+notes locales restantes du passage (pre-filtre, post quasi vide) attendent aussi la
+recharge. `reevaluer_actus.py` arrete son plan de la meme facon, car il appelle Claude
+sans passer par `score_pending`.
+
 ## Modele de notation : cache, decouplage, mesure avant tout passage a 5.5
 
 **Le defaut reste `claude-haiku-4-5` tant que la mesure n'est pas faite.** Rien ci-dessous
