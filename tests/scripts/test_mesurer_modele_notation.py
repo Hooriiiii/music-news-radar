@@ -3,6 +3,8 @@
 import json
 from types import SimpleNamespace
 
+import anthropic
+import httpx
 import pydantic
 import pytest
 from sqlalchemy import select
@@ -168,7 +170,7 @@ def test_trois_passes_par_article_et_rien_d_ecrit_en_base(base, tmp_path):
     assert [c["model"] for c in client.appels] == [
         "claude-haiku-4-5", "claude-haiku-4-5", "claude-haiku-5-5",
     ] * 2
-    assert "output_config" not in client.appels[0]
+    assert "effort" not in client.appels[0].get("output_config", {})
     assert client.appels[2]["output_config"] == {"effort": "low"}
     assert commits == []
     assert _etat_articles(base) == avant
@@ -225,6 +227,128 @@ def test_refus_vides_invalides_et_erreurs_comptes_sans_planter(base, tmp_path, c
     assert donnees["statuts"]["claude-haiku-4-5"]["erreur"] == 1
     # La sortie invalide est facturee sans qu'on sache combien : INCONNU, jamais 0.
     assert "INCONNU" in capsys.readouterr().out
+
+
+def _rejet(classe, statut, message):
+    requete = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return classe(message, response=httpx.Response(statut, request=requete), body=None)
+
+
+def _rejet_du_5_5(exception):
+    return _Client(lambda n, kw: exception if kw["model"] == "claude-haiku-5-5" else _reponse())
+
+
+@pytest.mark.parametrize(
+    ("classe", "statut"),
+    [
+        (anthropic.BadRequestError, 400),
+        (anthropic.AuthenticationError, 401),
+        (anthropic.PermissionDeniedError, 403),
+        (anthropic.NotFoundError, 404),
+    ],
+)
+def test_un_modele_rejete_arrete_tout_avec_un_code_non_nul(base, tmp_path, capsys, classe, statut):
+    """Sinon les 4.5 de tous les autres articles sont payes pour une comparaison impossible."""
+    client = _rejet_du_5_5(_rejet(classe, statut, "acces refuse"))
+
+    code, client = _lancer(base, tmp_path, "--apply", client=client)
+
+    sortie = capsys.readouterr().out
+    assert code == 1
+    assert len(client.appels) == 3  # 4.5, 4.5, puis le 5.5 rejete : rien apres
+    assert f"claude-haiku-5-5 rejete (HTTP {statut})" in sortie
+    assert f"HTTP {statut}" in _json(tmp_path)["arret"]
+    assert not credits_anthropic.chemin_etat().exists()
+
+
+def test_un_400_de_credits_reste_un_arret_pour_credits(base, tmp_path, capsys):
+    rejet = _rejet(anthropic.BadRequestError, 400, "Your credit balance is too low")
+    code, _ = _lancer(base, tmp_path, "--apply", client=_rejet_du_5_5(rejet))
+    assert code == 1
+    assert "credits epuises" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "panne",
+    [
+        _rejet(anthropic.RateLimitError, 429, "trop de requetes"),
+        _rejet(anthropic.InternalServerError, 500, "panne"),
+    ],
+    ids=["429", "500"],
+)
+def test_une_panne_transitoire_est_comptee_sans_arreter(base, tmp_path, panne):
+    code, client = _lancer(base, tmp_path, "--apply", "--taille", "2", client=_rejet_du_5_5(panne))
+    assert code == 0
+    assert len(client.appels) == 6
+    assert _json(tmp_path)["statuts"]["claude-haiku-5-5"]["erreur"] == 2
+
+
+def test_refus_de_securite_et_reponse_vide_n_arretent_pas(base, tmp_path):
+    def reponse(n, kw):
+        if kw["model"] == "claude-haiku-5-5":
+            return _reponse(parsed=False, stop_reason="refusal" if n == 3 else "max_tokens")
+        return _reponse()
+
+    code, client = _lancer(base, tmp_path, "--apply", "--taille", "2", client=_Client(reponse))
+
+    assert code == 0
+    assert len(client.appels) == 6
+    statuts = _json(tmp_path)["statuts"]["claude-haiku-5-5"]
+    assert (statuts["refus"], statuts["vide"]) == (1, 1)
+
+
+def _sans_usage():
+    r = _reponse()
+    r.usage = None
+    return r
+
+
+def _ligne_de(sortie, debut):
+    return next(ligne for ligne in sortie.splitlines() if ligne.startswith(debut))
+
+
+def test_usage_entierement_inconnu_jamais_zero(base, tmp_path, capsys):
+    """Le 5.5 sans usage lisible : INCONNU partout, ni 0 dans le JSON ni $0.0000 au rapport."""
+    client = _Client(lambda n, kw: _sans_usage() if kw["model"] == "claude-haiku-5-5" else _reponse())
+    _lancer(base, tmp_path, "--apply", "--taille", "1", client=client)
+    consommation = _json(tmp_path)["consommation"]["claude-haiku-5-5"]
+
+    assert consommation["cout"] is None
+    assert consommation["appels_au_cout_inconnu"] == 1
+    for champ in mesure.CHAMPS_TOKENS:
+        assert consommation[champ] is None
+        assert consommation["appels_exclus_des_tokens"][champ] == 1
+
+    ligne = _ligne_de(capsys.readouterr().out, "  claude-haiku-5-5 : 1 appels")
+    assert "$" not in ligne
+    assert "INCONNU (1 appel(s))" in ligne
+    assert "input_tokens=INCONNU" in ligne
+
+
+def test_total_partiel_dit_combien_d_appels_il_exclut(base, tmp_path, capsys):
+    client = _Client(lambda n, kw: _sans_usage() if n == 2 else _reponse())
+    _lancer(base, tmp_path, "--apply", "--taille", "1", client=client)
+    consommation = _json(tmp_path)["consommation"]["claude-haiku-4-5"]
+
+    assert consommation["input_tokens"] == 100
+    assert consommation["appels_exclus_des_tokens"]["input_tokens"] == 1
+    assert consommation["appels_au_cout_inconnu"] == 1
+
+    ligne = _ligne_de(capsys.readouterr().out, "  claude-haiku-4-5 : 2 appels")
+    assert "+ INCONNU (1 appel(s))" in ligne
+    assert "input_tokens=100 (hors 1 appel(s))" in ligne
+    # Un vrai zero mesure reste un zero, avec ce qu'il exclut : pas INCONNU.
+    assert "cache_read_input_tokens=0 (hors 1 appel(s))" in ligne
+
+
+def test_usage_entierement_connu_sans_mention_d_exclusion(base, tmp_path, capsys):
+    _lancer(base, tmp_path, "--apply", "--taille", "1")
+    consommation = _json(tmp_path)["consommation"]["claude-haiku-4-5"]
+    assert consommation["input_tokens"] == 200
+    assert consommation["appels_exclus_des_tokens"]["input_tokens"] == 0
+    sortie = capsys.readouterr().out
+    assert "input_tokens=200 " in sortie
+    assert "hors" not in sortie
 
 
 def test_deltas_et_franchissements_dans_les_deux_comparaisons(base, tmp_path, capsys):

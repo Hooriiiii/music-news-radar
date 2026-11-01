@@ -169,6 +169,8 @@ le poste `mesure_notation`. Arreter pipeline et veille avant, sinon la recharge 
 l'arriere ; le script ne les arrete pas. Echantillon : articles NON notes (une note ecrase
 le resume brut, donc on ne re-note pas a entrees egales), sans les posts quasi vides.
 Trois passes par article : 4.5, 4.5, 5.5. La seconde passe 4.5 mesure le BRUIT du modele
-contre lui-meme : l'ecart 4.5/5.5 se juge contre lui, pas contre un seuil a l'oeil. Le
-script ne rend pas de verdict. Le passage se fait par `SCORING_MODEL` une fois les chiffres
+contre lui-meme : l'ecart 4.5/5.5 se juge contre lui, pas contre un seuil a l'oeil. Tout
+s'arrete, code de sortie 1, au premier refus de credits ou rejet definitif d'un modele
+(HTTP 400, 401, 403, 404) : un 5.5 inaccessible ne coute que les deux passes 4.5 du premier
+article. Le script ne rend pas de verdict. Le passage se fait par `SCORING_MODEL` une fois les chiffres
 lus, et ils s'ecrivent ici.

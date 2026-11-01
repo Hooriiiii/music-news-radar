@@ -296,9 +296,11 @@ MAX_TOKENS_NOTATION = 2000
 
 
 class ReponseSansNote(Exception):
-    """Claude a repondu (HTTP 200) sans sortie structuree : refus de securite, sans repli
-    sur Haiku 5.5, ou `max_tokens`. L'article reste sans note, jamais exclu : le chemin
-    d'erreur de `score_pending` s'applique."""
+    """Claude a repondu (HTTP 200) sans aucun bloc texte : contenu vide ou reflexion seule,
+    quel que soit `stop_reason`. Un bloc texte qui ne valide pas (JSON tronque par
+    `max_tokens`, refus en texte) leve `pydantic.ValidationError` dans le SDK, jamais cette
+    exception. Dans les deux cas l'article reste sans note, jamais exclu : le chemin d'erreur
+    de `score_pending` s'applique."""
 
     def __init__(self, stop_reason: str | None):
         self.stop_reason = stop_reason
@@ -589,8 +591,9 @@ def score_pending(
             db.rollback()
             stats.errors += 1
             stats.derniere_erreur = str(exc)
-            # Un refus de securite ou un max_tokens est une reponse recue, donc facturee :
-            # il prouve le solde autant qu'une note, sans rien dire de l'article.
+            # Une reponse sans bloc texte est recue, donc facturee : elle prouve le solde
+            # autant qu'une note. Une `ValidationError` aussi, mais elle ne consigne rien :
+            # c'est acceptable, le voyant s'eteint au premier vrai succes.
             if isinstance(exc, ReponseSansNote):
                 credits_anthropic.consigner_succes()
             if credits_anthropic.est_refus_de_credits(exc):

@@ -15,6 +15,11 @@ POURQUOI DEUX PASSES 4.5. La seconde mesure le BRUIT du modele contre lui-meme :
 lui qui permet de juger l'ecart avec 5.5 sans seuil a l'oeil. Le script affiche les
 chiffres et ne rend pas de verdict.
 
+ARRET TOTAL, CODE DE SORTIE 1 : au premier refus de credits, et au premier rejet definitif
+d'un modele (HTTP 400, 401, 403, 404), que seules les deux passes 4.5 du premier article
+auront precede. Un refus de securite, une reponse vide ou invalide, une panne transitoire
+sont comptes sans arreter.
+
 Le tirage prend chaque strate a tour de role : les petites strates sont surrepresentees
 par rapport au flux, c'est voulu pour qu'elles soient mesurees. Les moyennes globales ne
 decrivent donc pas le flux reel : lire aussi le detail par categorie.
@@ -50,7 +55,7 @@ from app.pipeline.scoring import (
     make_claude_scorer,
     post_quasi_vide,
 )
-from scripts.diagnostic.consommation_api import CHAMPS_TOKENS, Agregat, cout_ligne
+from scripts.diagnostic.consommation_api import CHAMPS_TOKENS, Agregat, Compteur, cout_ligne
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,9 @@ COMPARAISONS = {"bruit_4_5_contre_4_5": ("a", "b"), "modele_4_5_contre_5_5": ("a
 AXES = ("relevance", "hotness", "emergence")
 # Les bornes du feed et de l'A&R citees par la decision, pas des reglages.
 SEUILS = {"relevance": 60, "emergence": 50}
+# Identifiant, acces, cle ou requete : reessayer n'y change rien. Un refus de credits est
+# un 400 aussi, reconnu avant par sa signature.
+STATUTS_REJET_DEFINITIF = {400, 401, 403, 404}
 
 # Hypotheses du plan, aucune n'est une mesure : la mesure sert justement a les remplacer.
 CARACTERES_PAR_TOKEN = 3.0
@@ -228,6 +236,12 @@ def mesurer(tirage: list[Article], client) -> Mesure:
                 if est_refus_de_credits(exc):
                     mesure.arret = f"credits epuises sur {modele} : {exc}"
                     return mesure
+                # Le meme rejet attend tous les appels suivants : continuer paierait les
+                # passes 4.5 pour une comparaison impossible.
+                statut_http = getattr(exc, "status_code", None)
+                if statut_http in STATUTS_REJET_DEFINITIF:
+                    mesure.arret = f"{modele} rejete (HTTP {statut_http}) : {exc}"
+                    return mesure
                 logger.warning("mesure en erreur sur l'article %s : %s", article.id, exc)
                 statut = "erreur"
             mesure.statuts[modele][statut] += 1
@@ -319,8 +333,28 @@ def _consommation(agregat: Agregat) -> dict:
         "appels": agregat.appels,
         "cout": agregat.cout if agregat.appels > agregat.sans_cout else None,
         "appels_au_cout_inconnu": agregat.sans_cout,
-        **{champ: compteur.somme for champ, compteur in tokens.items()},
+        "appels_exclus_des_tokens": {c: compteur.inconnues for c, compteur in tokens.items()},
+        **{c: _total_tokens(compteur, agregat.appels) for c, compteur in tokens.items()},
     }
+
+
+def _total_tokens(compteur: Compteur, appels: int) -> int | None:
+    """`None` si aucun appel n'a d'usage lisible : inconnu n'est jamais 0."""
+    return None if appels and compteur.inconnues == appels else compteur.somme
+
+
+def _tokens_txt(compteur: Compteur, appels: int) -> str:
+    total = _total_tokens(compteur, appels)
+    if total is None:
+        return "INCONNU"
+    return f"{total} (hors {compteur.inconnues} appel(s))" if compteur.inconnues else str(total)
+
+
+def _cout_txt(agregat: Agregat) -> str:
+    inconnu = f"INCONNU ({agregat.sans_cout} appel(s))"
+    if agregat.appels and agregat.sans_cout == agregat.appels:
+        return inconnu
+    return f"${agregat.cout:.4f} + {inconnu}" if agregat.sans_cout else f"${agregat.cout:.4f}"
 
 
 def donnees(mesure: Mesure, graine: int) -> dict:
@@ -347,11 +381,10 @@ def rapport(resultats: dict, mesure: Mesure) -> str:
         lignes.append(f"  {modele} : {details}")
     lignes += ["", "Consommation reelle, depuis `usage`"]
     for modele, agregat in mesure.consommation.items():
-        tokens = " ".join(f"{champ}={agregat.tokens[champ]}" for champ in CHAMPS_TOKENS)
-        cout = f"${agregat.cout:.4f}"
-        if agregat.sans_cout:
-            cout = f"{cout} + INCONNU ({agregat.sans_cout} appel(s))"
-        lignes.append(f"  {modele} : {agregat.appels} appels, {cout}, {tokens}")
+        tokens = " ".join(
+            f"{champ}={_tokens_txt(agregat.tokens[champ], agregat.appels)}" for champ in CHAMPS_TOKENS
+        )
+        lignes.append(f"  {modele} : {agregat.appels} appels, {_cout_txt(agregat)}, {tokens}")
     lignes += ["", f"Franchissements : {len(resultats['franchissements'])}"]
     for f in resultats["franchissements"]:
         lignes.append(
