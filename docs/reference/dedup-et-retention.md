@@ -92,7 +92,7 @@ purge des evenements.
      recouvrement) ≥ 0.65 → **Claude tranche** (`app/pipeline/
      cluster_arbitrage.py`), avec les DEUX titres et leurs résumés
      (`Article.summary`) ; motif `messages.parse()` identique à
-     `scoring.make_claude_scorer`, modèle `settings.scoring_model` (Haiku,
+     `scoring.make_claude_scorer`, modèle `settings.arbitrage_model` (Haiku 4.5,
      ~800 jetons d'entrée / ~35 de sortie mesurés, ~0,001 $/appel). Le résumé
      n'est PAS encore réécrit par le scoring à ce stade — `link_duplicates`
      tourne AVANT (voir plus haut) : c'est la description RSS brute (parfois

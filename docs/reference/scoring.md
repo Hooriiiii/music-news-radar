@@ -125,3 +125,32 @@ jamais touchés.
   scripts.reparations.reparer_doublons_reflexifs [--apply]` (sans `--apply` : le plan ;
   idempotent ; les notes ne sont jamais touchées) — voir « Dédup à deux
   étages » pour la cause et les deux gardes qui l'empêchent de revenir.
+
+## Modele de notation : cache, decouplage, mesure avant tout passage a 5.5
+
+**Le defaut reste `claude-haiku-4-5` tant que la mesure n'est pas faite.** Rien ci-dessous
+n'est un resultat : ces lignes decrivent la procedure, aucun chiffre n'a encore ete releve.
+
+- **Cache** : `make_claude_scorer` pose `cache_control` sur `SYSTEM_PROMPT`, quel que soit
+  le modele. Sous le minimum (4 096 tokens sur Haiku 4.5, 512 sur 5.5), l'API l'ignore sans
+  erreur. L'effet se lit dans `cache_read_input_tokens`, via `consommation_api`.
+- **Effort** : `scoring_effort` (`low`) n'est envoye qu'aux modeles `claude-haiku-5*` : il
+  provoque une erreur sur 4.5. `max_tokens` passe a 2000 : la reflexion de 5.5 le consomme.
+- **Reponse sans note** : un refus de securite est une reponse 200, sans repli sur 5.5.
+  `parsed_output` vide leve `ReponseSansNote`, qui nomme `stop_reason`. L'article reste
+  sans note et n'est pas exclu, donc il repart au passage suivant, et chaque essai est
+  facture, jusqu'a la purge. Elle compte en succes de credits : une reponse prouve le solde.
+  Le SDK valide le JSON avant de rendre la main : un JSON coupe ou un refus en texte levent
+  plutot `ValidationError`, sans `stop_reason`.
+- **Decouplage** : l'arbitrage de doublons suit `arbitrage_model`, plus `scoring_model`.
+  Changer le modele de notation ne deplace donc pas une decision mesuree sur Haiku 4.5.
+
+**Procedure** : `uv run python -m scripts.diagnostic.mesurer_modele_notation` affiche le
+plan et le cout estime ; `--apply` appelle Claude, n'ecrit jamais en base, et consigne sous
+le poste `mesure_notation`. Arreter pipeline et veille avant, sinon la recharge part dans
+l'arriere ; le script ne les arrete pas. Echantillon : articles NON notes (une note ecrase
+le resume brut, donc on ne re-note pas a entrees egales), sans les posts quasi vides.
+Trois passes par article : 4.5, 4.5, 5.5. La seconde passe 4.5 mesure le BRUIT du modele
+contre lui-meme : l'ecart 4.5/5.5 se juge contre lui, pas contre un seuil a l'oeil. Le
+script ne rend pas de verdict. Le passage se fait par `SCORING_MODEL` une fois les chiffres
+lus, et ils s'ecrivent ici.

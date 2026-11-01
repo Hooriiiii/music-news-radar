@@ -10,7 +10,9 @@ ete tentee -- rien n'en tente quand aucun creneau n'attend.
 CE QUI COMPTE COMME SIGNAL. Le refus, par sa signature (`SIGNATURE_CREDITS`) ; le
 succes, par une reponse de Claude. Une coupure reseau, une cle invalide ou une sortie
 mal formee ne disent RIEN du solde : elles ne touchent pas au fichier. C'est ce qui
-garde le voyant de crier « crédits épuisés » sur une panne reseau passagere.
+garde le voyant de crier « crédits épuisés » sur une panne reseau passagere. Une reponse
+sans sortie (`scoring.ReponseSansNote` : refus de securite, max_tokens) compte en succes :
+c'est bien une reponse de Claude.
 
 DEUX DATES, PAS UN BOOLEEN. Trois agents ecrivent (pipeline, veille, publication) et
 peuvent se croiser : un `epuise` serait au dernier qui ecrit, pas au dernier qui a

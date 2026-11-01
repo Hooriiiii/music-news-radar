@@ -268,6 +268,9 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Scorer les articles : `uv run python -m scripts.score_articles [--limit N]`
   (nécessite `ANTHROPIC_API_KEY` dans `.env` ; modèle : `SCORING_MODEL`,
   défaut `claude-haiku-4-5` — choix validé par l'utilisateur pour le coût)
+- Mesurer la notation Haiku 4.5 contre 5.5 : `uv run python -m scripts.diagnostic.mesurer_modele_notation [--taille N] [--graine G] [--sortie DOSSIER] [--apply]`
+  (sans `--apply` : le plan et le coût estimé, aucun appel ; avec : appelle Claude, n'écrit
+  jamais en base ; arrêter pipeline et veille avant — voir `docs/reference/scoring.md`)
 - Digest mail : `uv run python -m scripts.livraison.send_digest [--dry-run] [--date YYYY-MM-DD]`
   (`--dry-run` écrit l'aperçu dans /tmp/digest_preview.html sans toucher la base)
 - Alertes Discord : `uv run python -m scripts.livraison.send_hot_alerts`

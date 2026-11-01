@@ -291,24 +291,58 @@ def is_hot(article: Article) -> bool:
     return score is not None and score >= settings.alert_hotness_threshold
 
 
-def make_claude_scorer(client: anthropic.Anthropic | None = None):
-    """Scorer par défaut : un appel API par article, sortie structurée validée."""
+# La reflexion de Haiku 5.5 consomme ce plafond ; il n'est facture que s'il est utilise.
+MAX_TOKENS_NOTATION = 2000
+
+
+class ReponseSansNote(Exception):
+    """Claude a repondu (HTTP 200) sans sortie structuree : refus de securite, sans repli
+    sur Haiku 5.5, ou `max_tokens`. L'article reste sans note, jamais exclu : le chemin
+    d'erreur de `score_pending` s'applique."""
+
+    def __init__(self, stop_reason: str | None):
+        self.stop_reason = stop_reason
+        super().__init__(f"reponse de Claude sans note (stop_reason={stop_reason})")
+
+
+def accepte_effort(modele: str) -> bool:
+    return modele.startswith("claude-haiku-5")
+
+
+def make_claude_scorer(
+    client: anthropic.Anthropic | None = None,
+    modele: str | None = None,
+    poste: str = "notation",
+):
+    """Scorer par défaut : un appel API par article, sortie structurée validée.
+
+    `modele` et `poste` servent a la mesure de modele, qui ne doit ni dupliquer cet
+    appel ni se melanger a la depense de la notation.
+    """
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    modele = modele or settings.scoring_model
+    # Sous le minimum du modele (4 096 tokens sur 4.5, 512 sur 5.5), l'API ignore le
+    # cache sans erreur : le meme appel vaut pour tous les modeles.
+    systeme = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    options = {"output_config": {"effort": settings.scoring_effort}} if accepte_effort(modele) else {}
 
     def scorer(article: Article) -> ArticleScore:
         try:
             response = client.messages.parse(
-                model=settings.scoring_model,
-                max_tokens=1000,
-                system=SYSTEM_PROMPT,
+                model=modele,
+                max_tokens=MAX_TOKENS_NOTATION,
+                system=systeme,
                 messages=[{"role": "user", "content": build_user_prompt(article)}],
                 output_format=ArticleScore,
+                **options,
             )
         except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
-            usage_anthropic.consigner("notation", None, modele=settings.scoring_model)
+            usage_anthropic.consigner(poste, None, modele=modele)
             raise
-        usage_anthropic.consigner("notation", response, modele=settings.scoring_model)
+        usage_anthropic.consigner(poste, response, modele=modele)
+        if response.parsed_output is None:
+            raise ReponseSansNote(getattr(response, "stop_reason", None))
         return response.parsed_output
 
     return scorer
@@ -543,6 +577,10 @@ def score_pending(
             db.rollback()
             stats.errors += 1
             stats.derniere_erreur = str(exc)
+            # Un refus de securite ou un max_tokens est une reponse recue, donc facturee :
+            # il prouve le solde autant qu'une note, sans rien dire de l'article.
+            if isinstance(exc, ReponseSansNote):
+                credits_anthropic.consigner_succes()
             if credits_anthropic.est_refus_de_credits(exc):
                 credits_anthropic.consigner_refus()
     return stats

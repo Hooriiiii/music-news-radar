@@ -450,16 +450,16 @@ def make_claude_arbitre(client: anthropic.Anthropic | None = None):
         try:
             try:
                 response = client.messages.parse(
-                    model=settings.scoring_model,
+                    model=settings.arbitrage_model,
                     max_tokens=500,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": build_user_prompt(reference, nouveau)}],
                     output_format=VerdictArbitrage,
                 )
             except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
-                usage_anthropic.consigner("arbitrage", None, modele=settings.scoring_model)
+                usage_anthropic.consigner("arbitrage", None, modele=settings.arbitrage_model)
                 raise
-            usage_anthropic.consigner("arbitrage", response, modele=settings.scoring_model)
+            usage_anthropic.consigner("arbitrage", response, modele=settings.arbitrage_model)
             sortie = response.parsed_output
             if sortie is None:
                 logger.warning(
