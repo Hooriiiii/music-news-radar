@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ScoredBy, SourceType
-from app.pipeline import credits_anthropic
+from app.pipeline import credits_anthropic, usage_anthropic
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.pipeline.election import tailles_clusters
 from app.pipeline.retrait_humain import RAISONS_HUMAINES
@@ -291,19 +291,60 @@ def is_hot(article: Article) -> bool:
     return score is not None and score >= settings.alert_hotness_threshold
 
 
-def make_claude_scorer(client: anthropic.Anthropic | None = None):
-    """Scorer par défaut : un appel API par article, sortie structurée validée."""
+# La reflexion de Haiku 5.5 consomme ce plafond ; il n'est facture que s'il est utilise.
+MAX_TOKENS_NOTATION = 2000
+
+
+class ReponseSansNote(Exception):
+    """Claude a repondu (HTTP 200) sans aucun bloc texte : contenu vide ou reflexion seule,
+    quel que soit `stop_reason`. Un bloc texte qui ne valide pas (JSON tronque par
+    `max_tokens`, refus en texte) leve `pydantic.ValidationError` dans le SDK, jamais cette
+    exception. Dans les deux cas l'article reste sans note, jamais exclu : le chemin d'erreur
+    de `score_pending` s'applique."""
+
+    def __init__(self, stop_reason: str | None):
+        self.stop_reason = stop_reason
+        super().__init__(f"reponse de Claude sans note (stop_reason={stop_reason})")
+
+
+def accepte_effort(modele: str) -> bool:
+    return modele.startswith("claude-haiku-5")
+
+
+def make_claude_scorer(
+    client: anthropic.Anthropic | None = None,
+    modele: str | None = None,
+    poste: str = "notation",
+):
+    """Scorer par défaut : un appel API par article, sortie structurée validée.
+
+    `modele` et `poste` servent a la mesure de modele, qui ne doit ni dupliquer cet
+    appel ni se melanger a la depense de la notation.
+    """
     if client is None:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    modele = modele or settings.scoring_model
+    # Sous le minimum du modele (4 096 tokens sur 4.5, 512 sur 5.5), l'API ignore le
+    # cache sans erreur : le meme appel vaut pour tous les modeles.
+    systeme = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    options = {"output_config": {"effort": settings.scoring_effort}} if accepte_effort(modele) else {}
 
     def scorer(article: Article) -> ArticleScore:
-        response = client.messages.parse(
-            model=settings.scoring_model,
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(article)}],
-            output_format=ArticleScore,
-        )
+        try:
+            response = client.messages.parse(
+                model=modele,
+                max_tokens=MAX_TOKENS_NOTATION,
+                system=systeme,
+                messages=[{"role": "user", "content": build_user_prompt(article)}],
+                output_format=ArticleScore,
+                **options,
+            )
+        except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
+            usage_anthropic.consigner(poste, None, modele=modele)
+            raise
+        usage_anthropic.consigner(poste, response, modele=modele)
+        if response.parsed_output is None:
+            raise ReponseSansNote(getattr(response, "stop_reason", None))
         return response.parsed_output
 
     return scorer
@@ -460,6 +501,18 @@ def score_pending(
 
     Commit après chaque article : un run interrompu ne perd pas les appels API
     déjà payés, et un article qui échoue n'annule pas les autres.
+
+    Du PLUS RÉCENT au plus ancien : après une panne, l'ordre inverse faisait passer
+    l'arriéré vieux avant le frais, alors que seul le frais peut donner un post. La
+    veille passe une limite et prend donc le frais ; le passage horaire, sans limite,
+    prend tout le reste : pas de famine. `articles_jamais_atteints_par_le_scoring`
+    (`app/supervision.py`) raisonne sur cet ordre.
+
+    Le PREMIER refus de crédits arrête le passage : le suivant serait refusé aussi
+    (4 000 à 14 600 appels refusés par jour, relevés dans les logs). Il arrête aussi
+    les notes locales du passage, qui attendent la recharge sous le sursis de
+    `retention._jamais_juge`. Toute autre erreur n'arrête rien : une coupure peut ne
+    durer qu'un article, et elle ne dit rien du solde.
     """
     if scorer is None:
         scorer = make_claude_scorer()
@@ -476,7 +529,7 @@ def score_pending(
         # Retire a la main : aucun creneau ne l'attend. « Remettre dans la file » le rend
         # au scoring. Le doublon qui herite du retrait a la purge n'a jamais ete note.
         .where(or_(Article.file_exclu_raison.is_(None), Article.file_exclu_raison.not_in(RAISONS_HUMAINES)))
-        .order_by(Article.fetched_at)
+        .order_by(Article.fetched_at.desc(), Article.id.desc())
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -538,6 +591,13 @@ def score_pending(
             db.rollback()
             stats.errors += 1
             stats.derniere_erreur = str(exc)
+            # Une reponse sans bloc texte est recue, donc facturee : elle prouve le solde
+            # autant qu'une note. Une `ValidationError` aussi, mais elle ne consigne rien :
+            # c'est acceptable, le voyant s'eteint au premier vrai succes.
+            if isinstance(exc, ReponseSansNote):
+                credits_anthropic.consigner_succes()
             if credits_anthropic.est_refus_de_credits(exc):
                 credits_anthropic.consigner_refus()
+                logger.warning("Crédits Anthropic épuisés : passage de scoring arrêté au premier refus")
+                break
     return stats

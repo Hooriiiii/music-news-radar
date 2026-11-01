@@ -3,9 +3,11 @@ Plan par defaut, aucune ecriture ; --apply re-note par Claude."""
 
 import datetime as dt
 import itertools
+import json
 
 import pytest
 
+import app.pipeline.credits_anthropic as credits
 import scripts.reparations.reevaluer_actus as script
 from app.models import Article, ArticleStatus, ScoredBy, Source, SourceCategorie, SourceType
 from app.pipeline.scoring import ArticleScore, Category, ScoringStats
@@ -153,3 +155,48 @@ def test_le_budget_est_borne_et_rapporte_par_phase(db_session, fred, monkeypatch
     assert appels == [7]
     assert (budget.en_attente, budget.plan) == (2, len(plan))
     assert budget.election == election.a_rescorer
+
+
+def test_le_premier_refus_de_credits_arrete_le_plan(db_session, fred):
+    """Le plan appelle Claude lui-meme, sans passer par `score_pending` : sans cet arret,
+    --limite appels refuses (100 par defaut). Une autre erreur, elle, n'arrete rien."""
+    presse = _source(db_session, "presse")
+    _article(db_session, presse, "Fred again.. et la BO de GTA VI", 45)
+    _article(db_session, presse, "Fred again.. annonce une date", 46)
+    appels = []
+
+    def refus(article):
+        appels.append(article.id)
+        raise RuntimeError("Your credit balance is too low to access the Anthropic API.")
+
+    _, plan, budget = script.reevaluer(
+        db_session, MAINTENANT, appliquer=True, scorer=refus,
+        noter_en_attente=lambda db, scorer, limit: ScoringStats(),
+    )
+
+    assert len(plan) == 2
+    assert len(appels) == 1
+    assert budget.plan == 1
+    assert read_etat_credits().epuises is True
+
+
+def test_une_coupure_n_arrete_pas_le_plan(db_session, fred):
+    presse = _source(db_session, "presse")
+    _article(db_session, presse, "Fred again.. et la BO de GTA VI", 45)
+    _article(db_session, presse, "Fred again.. annonce une date", 46)
+    appels = []
+
+    def coupure(article):
+        appels.append(article.id)
+        raise ConnectionError("Connection error.")
+
+    script.reevaluer(
+        db_session, MAINTENANT, appliquer=True, scorer=coupure,
+        noter_en_attente=lambda db, scorer, limit: ScoringStats(),
+    )
+
+    assert len(appels) == 2
+
+
+def read_etat_credits():
+    return credits.lire_etat(json.loads(credits.chemin_etat().read_text()))

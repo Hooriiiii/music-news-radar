@@ -125,3 +125,52 @@ jamais touchés.
   scripts.reparations.reparer_doublons_reflexifs [--apply]` (sans `--apply` : le plan ;
   idempotent ; les notes ne sont jamais touchées) — voir « Dédup à deux
   étages » pour la cause et les deux gardes qui l'empêchent de revenir.
+
+## Ordre de notation et arret au premier refus (2026-11-01)
+
+`score_pending` note du **plus recent au plus ancien** (`fetched_at` puis `id`,
+decroissants). Avant, apres une panne, la veille (20 articles par passage) et le
+pipeline notaient l'arriere vieux avant le frais, alors que seul le frais peut donner un
+post. Pas de famine : seule la veille passe une limite, et le passage horaire prend le
+reste. La purge ne depend pas de cet ordre : un article laisse de cote reste « jamais
+juge », sous le sursis de 7 jours. Effet sur le bandeau : voir `articles_jamais_atteints_par_le_scoring`
+dans `dashboard.md`, le faux negatif sur l'arriere ancien s'est elargi.
+
+Le **premier refus de credits arrete le passage**, apres consignation : chaque article
+pris faisait un appel refuse, 4 000 a 14 600 par jour dans les logs. `errors` vaut alors
+souvent 1, et `health.diagnostiquer` nomme quand meme « crédits API épuisés », car il lit
+`derniere_erreur`. Une coupure ou une autre erreur n'arrete rien. Contrepartie : les
+notes locales restantes du passage (pre-filtre, post quasi vide) attendent aussi la
+recharge. `reevaluer_actus.py` arrete son plan de la meme facon, car il appelle Claude
+sans passer par `score_pending`.
+
+## Modele de notation : cache, decouplage, mesure avant tout passage a 5.5
+
+**Le defaut reste `claude-haiku-4-5` tant que la mesure n'est pas faite.** Rien ci-dessous
+n'est un resultat : ces lignes decrivent la procedure, aucun chiffre n'a encore ete releve.
+
+- **Cache** : `make_claude_scorer` pose `cache_control` sur `SYSTEM_PROMPT`, quel que soit
+  le modele. Sous le minimum (4 096 tokens sur Haiku 4.5, 512 sur 5.5), l'API l'ignore sans
+  erreur. L'effet se lit dans `cache_read_input_tokens`, via `consommation_api`.
+- **Effort** : `scoring_effort` (`low`) n'est envoye qu'aux modeles `claude-haiku-5*` : il
+  provoque une erreur sur 4.5. `max_tokens` passe a 2000 : la reflexion de 5.5 le consomme.
+- **Reponse sans note** : un refus de securite est une reponse 200, sans repli sur 5.5.
+  `parsed_output` vide leve `ReponseSansNote`, qui nomme `stop_reason`. L'article reste
+  sans note et n'est pas exclu, donc il repart au passage suivant, et chaque essai est
+  facture, jusqu'a la purge. Elle compte en succes de credits : une reponse prouve le solde.
+  Le SDK valide le JSON avant de rendre la main : un JSON coupe ou un refus en texte levent
+  plutot `ValidationError`, sans `stop_reason`.
+- **Decouplage** : l'arbitrage de doublons suit `arbitrage_model`, plus `scoring_model`.
+  Changer le modele de notation ne deplace donc pas une decision mesuree sur Haiku 4.5.
+
+**Procedure** : `uv run python -m scripts.diagnostic.mesurer_modele_notation` affiche le
+plan et le cout estime ; `--apply` appelle Claude, n'ecrit jamais en base, et consigne sous
+le poste `mesure_notation`. Arreter pipeline et veille avant, sinon la recharge part dans
+l'arriere ; le script ne les arrete pas. Echantillon : articles NON notes (une note ecrase
+le resume brut, donc on ne re-note pas a entrees egales), sans les posts quasi vides.
+Trois passes par article : 4.5, 4.5, 5.5. La seconde passe 4.5 mesure le BRUIT du modele
+contre lui-meme : l'ecart 4.5/5.5 se juge contre lui, pas contre un seuil a l'oeil. Tout
+s'arrete, code de sortie 1, au premier refus de credits ou rejet definitif d'un modele
+(HTTP 400, 401, 403, 404) : un 5.5 inaccessible ne coute que les deux passes 4.5 du premier
+article. Le script ne rend pas de verdict. Le passage se fait par `SCORING_MODEL` une fois les chiffres
+lus, et ils s'ecrivent ici.

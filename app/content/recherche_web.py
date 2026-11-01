@@ -57,6 +57,7 @@ from app.models import SourceCategorie
 # seconde liste finirait par diverger de celle-la.
 from app.pipeline.cluster import _STOPWORDS as MOTS_VIDES
 from app.pipeline.illustrations import image_de_partage
+from app.pipeline import usage_anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +337,7 @@ def make_chercheur_claude(client: anthropic.Anthropic | None = None):
                 }
             ],
         )
+        usage_anthropic.consigner("recherche_web", reponse, modele=settings.visuels_model)
         pages: list[tuple[str, str]] = []
         for bloc in reponse.content:
             if getattr(bloc, "type", None) != "web_search_tool_result":

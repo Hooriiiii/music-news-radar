@@ -47,7 +47,17 @@ class Settings(BaseSettings):
 
     # Scoring Claude (étape 4)
     anthropic_api_key: str | None = None
+    # Le defaut reste Haiku 4.5 : le passage a 5.5 se decide apres mesure
+    # (`scripts/diagnostic/mesurer_modele_notation.py`), jamais par un commit.
     scoring_model: str = "claude-haiku-4-5"
+    # Applique seulement a un modele qui l'accepte (`scoring.accepte_effort`) :
+    # le parametre provoque une erreur sur Haiku 4.5. Sur Haiku 5.5, la reflexion est
+    # active par defaut et compte dans `max_tokens` ; c'est le levier recommande.
+    scoring_effort: str = "low"
+    # L'arbitrage de doublons utilisait `scoring_model`. Le decoupler evite qu'un
+    # changement de modele de notation deplace en silence une decision mesuree sur
+    # Haiku 4.5 (voir « Dedup a deux etages »).
+    arbitrage_model: str = "claude-haiku-4-5"
     # Composition des posts : contrairement au scoring (volume eleve, Haiku pour
     # le cout), la composition tourne quelques fois par jour a la demande et sa
     # qualite se voit directement sur le feed -- on paie un modele plus fort.

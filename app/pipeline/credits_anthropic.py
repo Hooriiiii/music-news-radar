@@ -8,9 +8,12 @@ seule trace lisible par le bandeau, `creneaux.erreur`, demande qu'une compositio
 ete tentee -- rien n'en tente quand aucun creneau n'attend.
 
 CE QUI COMPTE COMME SIGNAL. Le refus, par sa signature (`SIGNATURE_CREDITS`) ; le
-succes, par une reponse de Claude. Une coupure reseau, une cle invalide ou une sortie
-mal formee ne disent RIEN du solde : elles ne touchent pas au fichier. C'est ce qui
-garde le voyant de crier « crédits épuisés » sur une panne reseau passagere.
+succes, par une reponse de Claude validee ou sans bloc texte (`scoring.ReponseSansNote` :
+contenu vide ou reflexion seule). Une coupure reseau ou une cle invalide ne disent RIEN du
+solde : elles ne touchent pas au fichier. C'est ce qui garde le voyant de crier « crédits
+épuisés » sur une panne reseau passagere. Une `ValidationError` du SDK (JSON tronque par
+max_tokens, refus en texte) est pourtant facturee, mais ne consigne pas de succes : c'est
+acceptable, le voyant s'eteint au premier vrai succes.
 
 DEUX DATES, PAS UN BOOLEEN. Trois agents ecrivent (pipeline, veille, publication) et
 peuvent se croiser : un `epuise` serait au dernier qui ecrit, pas au dernier qui a

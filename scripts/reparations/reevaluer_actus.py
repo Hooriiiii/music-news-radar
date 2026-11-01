@@ -39,6 +39,7 @@ from app.db import SessionLocal, attendre_base
 from app.models import Article, ArticleStatus, ScoredBy, SourceCategorie
 from app.pipeline.comptes_artistes import construire_index
 from app.pipeline.election import ElectionStats, elire_representants, tailles_clusters
+from app.pipeline import credits_anthropic
 from app.pipeline.scoring import apply_score, appliquer_garde_fous, make_claude_scorer, score_pending
 from app.sources.instagram import TITRE_PAR_DEFAUT
 
@@ -166,6 +167,10 @@ def reevaluer(
         except Exception as exc:  # noqa: BLE001 -- un echec n'arrete pas les autres
             db.rollback()
             print(f"  ! #{reevaluation.article_id} : {exc}")
+            if credits_anthropic.est_refus_de_credits(exc):
+                credits_anthropic.consigner_refus()
+                print("  ! Credits Anthropic epuises : plan arrete au premier refus.")
+                break
     return election, plan, budget
 
 
