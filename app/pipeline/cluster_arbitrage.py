@@ -95,6 +95,7 @@ from pydantic import BaseModel, field_validator
 
 from app.config import settings
 from app.models import Article, ArticleStatus
+from app.pipeline import usage_anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -447,13 +448,18 @@ def make_claude_arbitre(client: anthropic.Anthropic | None = None):
 
     def arbitre(reference: Article, nouveau: Article) -> tuple[bool, str] | None:
         try:
-            response = client.messages.parse(
-                model=settings.scoring_model,
-                max_tokens=500,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_user_prompt(reference, nouveau)}],
-                output_format=VerdictArbitrage,
-            )
+            try:
+                response = client.messages.parse(
+                    model=settings.scoring_model,
+                    max_tokens=500,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_user_prompt(reference, nouveau)}],
+                    output_format=VerdictArbitrage,
+                )
+            except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
+                usage_anthropic.consigner("arbitrage", None, modele=settings.scoring_model)
+                raise
+            usage_anthropic.consigner("arbitrage", response, modele=settings.scoring_model)
             sortie = response.parsed_output
             if sortie is None:
                 logger.warning(

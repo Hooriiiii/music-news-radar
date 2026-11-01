@@ -55,6 +55,7 @@ from app.content.visuels import (
     visuels_autorises,
 )
 from app.models import Article, Post
+from app.pipeline import usage_anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -615,6 +616,8 @@ def make_claude_composer(
                     output_format=PostDraft,
                 )
             except (pydantic.ValidationError, ValueError) as exc:
+                # Reponse invalide, mais facturee : elle ne disparait pas des comptes.
+                usage_anthropic.consigner("composition", None, modele=settings.composer_model)
                 derniere_erreur = exc
                 consigne = str(exc)[:1500]
                 logger.warning(
@@ -625,6 +628,7 @@ def make_claude_composer(
                     exc,
                 )
                 continue
+            usage_anthropic.consigner("composition", response, modele=settings.composer_model)
             draft = response.parsed_output
             if draft is None:
                 # max_tokens atteint ou refus : aucune sortie structuree. Meme

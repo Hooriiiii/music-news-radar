@@ -219,3 +219,16 @@ ouverte pendant une attente, `op.f()` hors contexte de migration.
   Aucun test n'importait les migrations, si bien que la suite entiere passait
   au vert dessus : d'ou la sentinelle `tests/socle/test_migrations.py`, qui les fait
   toutes charger sans base de donnees.
+- **Usage Anthropic consigné.** Chaque appel des cinq sites (`notation`,
+  `arbitrage`, `composition`, `juge_image`, `recherche_web`) ajoute une ligne à
+  `usage_anthropic-AAAA-MM.jsonl`, à côté du jeton Meta
+  (`app/pipeline/usage_anthropic.py`). Exception assumée à la relecture-fusion des
+  états partagés : ce fichier ne fait que grandir, trois agents y écrivent, donc
+  `O_APPEND` et un seul `os.write` par ligne. Une valeur absente vaut `null`, jamais
+  0 ; un `ValueError`/`ValidationError` de `messages.parse()` (réponse invalide mais
+  facturée) laisse une ligne à tokens `null`, une erreur d'API (non facturée) aucune.
+  Tout nouvel appel à Claude doit y passer, sinon sa dépense est invisible. Lecture :
+  `scripts/diagnostic/consommation_api.py`, seul endroit des tarifs ; modèle hors
+  table ou tokens `null` : coût INCONNU, compté à part, exclu et signalé au total.
+  Aucune mesure encore : le compte est à l'arrêt sans crédits depuis le 2026-10-31,
+  le premier chiffre réel viendra avec la reprise des appels.

@@ -74,6 +74,7 @@ from app.config import settings
 from app.content.export import telecharger as telecharger_media
 from app.content.media import PHOTO
 from app.content.urls import url_propre
+from app.pipeline import usage_anthropic
 from app.content.visuels import (
     FOND_KINDA,
     ORIGINE_ARTICLE,
@@ -270,13 +271,18 @@ def make_claude_juge(client: anthropic.Anthropic | None = None):
                     },
                 }
             )
-        reponse = client.messages.parse(
-            model=settings.visuels_model,
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": contenu}],
-            output_format=Verdicts,
-        )
+        try:
+            reponse = client.messages.parse(
+                model=settings.visuels_model,
+                max_tokens=500,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": contenu}],
+                output_format=Verdicts,
+            )
+        except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
+            usage_anthropic.consigner("juge_image", None, modele=settings.visuels_model)
+            raise
+        usage_anthropic.consigner("juge_image", reponse, modele=settings.visuels_model)
         sortie = reponse.parsed_output
         if sortie is None or len(sortie.verdicts) != len(images):
             # Un verdict de moins et tout l'appariement glisse d'un rang : une

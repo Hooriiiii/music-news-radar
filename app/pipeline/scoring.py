@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Article, ScoredBy, SourceType
-from app.pipeline import credits_anthropic
+from app.pipeline import credits_anthropic, usage_anthropic
 from app.pipeline.comptes_artistes import IndexComptes, construire_index
 from app.pipeline.election import tailles_clusters
 from app.pipeline.retrait_humain import RAISONS_HUMAINES
@@ -297,13 +297,18 @@ def make_claude_scorer(client: anthropic.Anthropic | None = None):
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     def scorer(article: Article) -> ArticleScore:
-        response = client.messages.parse(
-            model=settings.scoring_model,
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_prompt(article)}],
-            output_format=ArticleScore,
-        )
+        try:
+            response = client.messages.parse(
+                model=settings.scoring_model,
+                max_tokens=1000,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_user_prompt(article)}],
+                output_format=ArticleScore,
+            )
+        except ValueError:  # ValidationError en herite : reponse invalide, mais facturee
+            usage_anthropic.consigner("notation", None, modele=settings.scoring_model)
+            raise
+        usage_anthropic.consigner("notation", response, modele=settings.scoring_model)
         return response.parsed_output
 
     return scorer

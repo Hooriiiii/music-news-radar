@@ -278,6 +278,10 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
 - Run complet (ingestion + scoring + alertes) : `uv run python -m scripts.run_pipeline`
 - Passage de veille rapide (les seuls comptes de `VEILLE_COMPTES`) :
   `uv run python -m scripts.run_veille` — voir « Veille rapide »
+- Ce que les appels Anthropic ont consommé, par jour et par poste :
+  `uv run python -m scripts.diagnostic.consommation_api [--jours N]`
+  (lecture seule, sans base ni réseau ; un coût non calculable s'affiche INCONNU —
+  voir « Usage Anthropic consigné » dans les contraintes)
 - Pourquoi les créneaux de publication sont manqués, avec des effectifs :
   `uv run python -m scripts.diagnostic.diagnostiquer_creneaux [--jours N] [--detail]`
   (lecture seule ; croise la base et les logs pour séparer une PANNE d'une
