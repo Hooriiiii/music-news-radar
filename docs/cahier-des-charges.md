@@ -313,19 +313,34 @@ l'article B du même événement ».
   sur aucun post : le FEED ne voit que `relevance ≥ 60`. Exemple : un post
   hebdomadaire de 3 à 5 émergents FR, sur créneau réservé, avec ses propres
   critères.
-- **C6-4 bis Maquettes de référence.** Le rendu des posts se juge contre
-  les deux maquettes de la direction artistique, versionnées dans le dépôt.
-  Elles fixent le logo Kinda en haut à droite, l'accroche en bas (cover de
-  post) ou au centre (cover de reel), et le surlignage rose de la partie
-  mise en avant.
+- **C6-4 bis Maquettes de référence : Figma fait foi.** Les maquettes de la
+  direction artistique vivent dans le fichier Figma
+  [🎀 Kinda](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=6-2),
+  page « 📰 Média · Templates » (état noté dans le fichier : « en cours »).
+  Le rendu des posts se juge contre elles :
 
-  | Cover de post, 1080 × 1350 | Cover de reel, 1080 × 1920 |
+  | Maquette Figma | Nœud | Rendu dans le code |
+  |---|---|---|
+  | `[PREVIEW] - Post information` (cover de post, 1080 × 1350) | [1:327](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-327) | gabarit `kinda_post` |
+  | `[PREVIEW] - Cover Reels` (cover de reel, 1080 × 1920) | [1:416](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-416) | gabarit `kinda_reel` |
+  | `TEMPLATE POST` / `TEMPLATE REELS` | [1:203](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-203) / [1:394](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-394) | — |
+  | `Instagram story - 1` (1080 × 1920) | [1:376](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-376) | **aucun** : pas de gabarit story |
+  | Étiquettes de catégorie : actu, événement, sortie musicale, storytime, nouveauté musicale | [1:154](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=1-154) et voisines | **aucun** : jamais rendues sur une cover |
+
+  Elles fixent le logo Kinda en haut à droite, l'accroche en bas (post) ou
+  au centre (reel), le surlignage rose de la partie mise en avant, et des
+  marges de 77 px (calques « Guideline » masqués). Les deux PNG de
+  `exemples/` sont des **exports** des deux PREVIEW, gardés comme aperçu dans
+  le dépôt ; en cas d'écart, Figma l'emporte.
+
+  | Aperçu post (export) | Aperçu reel (export) |
   |---|---|
   | ![Maquette cover de post](../exemples/%5BPREVIEW%5D%20-%20Post%20information.png) | ![Maquette cover de reel](../exemples/%5BPREVIEW%5D%20-%20Cover%20Reels.png) |
 
-  Toute évolution de la charte (C6-3) part d'une nouvelle maquette de la DA,
-  ajoutée dans `exemples/`, jamais d'un réglage de gabarit fait à l'œil
-  (I13).
+  Toute évolution de la charte (C6-3) part d'une maquette de la DA dans
+  Figma, jamais d'un réglage de gabarit fait à l'œil (I13). Les étiquettes
+  de catégorie et le format story sont à intégrer à la grille éditoriale
+  (C6-2) s'ils sont retenus.
 - **C6-5 Angle France** : règles écrites pour « franciser » une actu
   internationale (date française, artiste FR au line-up).
 - **C6-6 BREAKING : décision D4.** Soit un vrai circuit rapide (créneau hors
@@ -344,6 +359,26 @@ La console existe et vient d'être retravaillée. On la fait évoluer par
 parcours, sans changer de technologie : sortir le JS de `dashboard.html` en
 modules ES sans étape de build, écran par écran, en portant les tests Chromium
 existants.
+
+**Maquettes : Figma fait foi.** Le fichier
+[🎀 Kinda](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-2)
+porte l'exploration de la console : audit et architecture, design system, et
+trois concepts — **A « Le Desk »** (minimal), **B « La Tour »** (la
+programmation en tête de navigation) et **C « Le Fil »** — avec une page
+« Comparaison & reco » qui propose **B + greffes de C**, en précisant
+qu'« aucune direction n'a été choisie » (décision D8). Les trois concepts
+appliquent déjà le mode d'usage (« Programmer » au lieu de « Composer »,
+« Ne pas publier » au lieu de « Sauter », gestes manuels retirés). Les
+parcours ci-dessous se construisent dans la direction retenue.
+
+| Page Figma | Nœud |
+|---|---|
+| Console · Comparaison & reco | [80:2](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-2) |
+| Console · Audit & architecture | [80:3](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-3) |
+| Console · Design system | [80:4](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-4) |
+| Console · A Le Desk | [80:5](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-5) |
+| Console · B La Tour | [80:6](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-6) |
+| Console · C Le Fil | [80:7](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/?node-id=80-7) |
 
 - **Parcours A — Coup d'œil** (le plus fréquent, 30 s, souvent sur
   téléphone) : à l'ouverture, une phrase-verdict (« tout part », « N posts
@@ -469,6 +504,7 @@ une suite verte et la référence de domaine mise à jour.
 | D5 | Le compte promeut-il les plugins (C6-7) ? | Oui, un créneau réservé, dès que le premier plugin existe |
 | D6 | Console accessible depuis le téléphone (C7) ? | Oui, si un accès authentifié simple est possible ; sinon l'écrire |
 | D7 | Part de pop visée (~10-15 %) dans la grille (C6-2) ? | Oui, dans la programmation, jamais dans `relevance` |
+| D8 | Quelle direction pour la console (Figma : A Le Desk, B La Tour, C Le Fil) ? | La reco du fichier, B + greffes de C, à confronter aux trois parcours de C7 avant de trancher |
 
 ---
 
