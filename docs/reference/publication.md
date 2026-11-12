@@ -26,16 +26,29 @@ testeurs, ce qui suffit. Jeton `IG…` de 60 jours, rafraîchi chaque semaine da
 **Deux jetons Meta, jamais interchangeables.**
 - `META_ACCESS_TOKEN` (`IGAA…`, connexion Instagram, `graph.instagram.com`) :
   **publication**. Rafraîchi automatiquement (ci-dessus).
-- `META_FB_ACCESS_TOKEN` (`EAA…`, jeton utilisateur de connexion **Facebook**,
-  `graph.facebook.com`) : **source Instagram** (`business_discovery`, que le jeton
-  de connexion Instagram ne sait pas appeler). Portées : `instagram_basic`,
+- `META_FB_ACCESS_TOKEN` (`EAA…`, `graph.facebook.com`) : **source Instagram**
+  (`business_discovery`, que le jeton de connexion Instagram ne sait pas
+  appeler). **Depuis le 2026-11-12, c'est un jeton d'UTILISATEUR SYSTÈME, sans
+  expiration** (`debug_token` : `type` SYSTEM_USER, `expires_at` 0,
+  `data_access_expires_at` 0). Avant, c'était le jeton utilisateur Facebook
+  PERSONNEL de l'utilisateur, 60 jours, sans rafraîchissement possible, et
+  soumis à une seconde échéance (accès aux données, 90 jours) qui imposait de
+  se reconnecter à la main : le robot lisait Instagram EN SON NOM.
+  Montage : app `Kinda Radar` (1939961553647109) rattachée au portefeuille
+  business 1045067402507429 ; utilisateur système `KindaRadar` (rôle
+  Employee), à qui sont affectés la Page Kinda News France (Statistiques), le
+  compte Instagram kindanewsfrance (Statistiques) et l'app (Développer + Tester
+  — **« Développer l'app » est NÉCESSAIRE** : sans rôle de développeur,
+  `debug_token` répond `#100` et l'alerte d'échéance ci-dessous ne peut plus
+  lire l'échéance). Portées du jeton : `instagram_basic`,
   `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`,
-  `business_management`. **60 jours une fois étendu, AUCUN rafraîchissement
-  automatique** (il faudrait le secret de l'app) : le renouveler à la main —
-  developers.facebook.com/tools/explorer → Generate Access Token → ⓘ → outil de
-  débogage → « Étendre le jeton d'accès » → remplacer `META_FB_ACCESS_TOKEN` dans
-  `.env`. Étendu le 2026-09-17 : `expires_at` 2026-11-16,
-  `data_access_expires_at` 2026-12-16.
+  `business_management`. Vérifié le jour du passage : `business_discovery`
+  sur un compte tiers rend ses médias, et `expiration_jeton_sourcing()` rend
+  `None` (pas d'échéance). Le jeton personnel est gardé en commentaire dans
+  `.env` pour un retour arrière ; il expire le 2026-11-16 et ne servira plus.
+  À REGÉNÉRER seulement s'il est révoqué : Business Suite → Paramètres →
+  Utilisateur(ice)s système → KindaRadar → Générer un token (app Kinda Radar,
+  expiration « Jamais », les cinq portées ci-dessus).
   **Alerte d'échéance** (`app/sources/instagram_jeton.py`) : à chaque run horaire,
   `run_pipeline` interroge `debug_token` et notifie (macOS) à **J-7** ou dès
   l'expiration, **au plus une fois par jour** (date dans
