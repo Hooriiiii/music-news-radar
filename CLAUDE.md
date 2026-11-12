@@ -66,6 +66,17 @@ presque toujours.
 - **`docs/reference/scheduler.md`** — avant de toucher à une cadence d'agent, à
   un nom de log, ou de proposer de planifier quoi que ce soit. Section :
   « Scheduler ».
+- **`docs/cahier-des-charges.md`** — la feuille de route (v2, 2026-11-12) :
+  avant de démarrer un chantier, de proposer une refonte ou de choisir quoi
+  faire ensuite. Cap : **remettre en route sous budget et assainir au fil de
+  l'eau, PAS réécrire** (la v1 « refonte » a été écartée après dix relectures
+  critiques ; ses erreurs sont listées en annexe A). Chantiers C1-C9,
+  invariants I1-I18, décisions D0-D8.
+- **Maquettes : Figma fait foi** — fichier
+  [🎀 Kinda](https://www.figma.com/design/FWfcG6QYizPW46L8gaDTGJ/) : page
+  « 📰 Média · Templates » avant de toucher à un gabarit de cover, pages
+  « 🖥️ Console » avant de toucher à la console. Les PNG de `exemples/` n'en
+  sont que des exports ; en cas d'écart, Figma l'emporte.
 
 ## Règles qui ne se négocient jamais
 
@@ -122,6 +133,19 @@ coûté quelque chose. Le détail et la mesure sont dans la référence citée.
 - Corollaire : si tu ajoutes une règle, mesure-la sur les données réelles avant
   de la câbler, et écris la mesure à côté.
 
+**Le budget IA est plafonné.**
+- **40 $ par mois au grand maximum pour ce dépôt, cible 30 $** (décision de
+  l'utilisateur du 2026-11-12 : 100 $ d'API par mois via Claude Max, partagés
+  avec d'autres projets). Tout appel Anthropic compte, mesures et diagnostics
+  `--apply` compris : chiffre le coût AVANT de lancer quoi que ce soit de
+  payant. Au plafond, la chaîne notation → publication se met en PAUSE
+  (différer) ; elle ne dépasse jamais et n'exclut jamais rien.
+  (`cahier-des-charges.md`, C1 et D2)
+- **Le jeton Meta de collecte est celui de l'utilisateur système
+  `KindaRadar`, sans expiration**, depuis le 2026-11-12. Ne jamais revenir au
+  jeton Facebook PERSONNEL de l'utilisateur : il veut Kinda dissocié de ses
+  comptes perso. (`publication.md`, « Deux jetons Meta »)
+
 **Base de données et état sur disque.**
 - **`SessionLocal` tourne en `autoflush=False` en production** (`app/db.py`) : un
   `db.flush()` explicite est nécessaire pour qu'une requête voie une écriture
@@ -159,6 +183,13 @@ fois** — un média, un label, des plugins. Ce n'est pas une progression en tro
 étapes : un artiste qui démarre bute en même temps sur les outils, sur la
 visibilité et sur l'accès au marché, et chacun de ces murs rend les autres plus
 hauts.
+
+**Repositionnement du 2026-09-30** (page Notion « Vision & stratégie de
+lancement ») : Kinda est un **écosystème créatif** consacré aux artistes
+émergents, en cinq branches (plugins, média, label, événementiel, communauté
+& réseau), et **les plugins sont la priorité commerciale n°1**. Le média
+continue en parallèle : il ne porte plus l'effort principal, d'où un temps de
+développement à plafonner (décision D0 du cahier des charges).
 
 Ce dépôt ne contient que la brique MÉDIA : le compte d'actu `@kindanewsfrance`.
 Les plugins et le label existent dans le projet, pas dans le code.
@@ -290,10 +321,15 @@ est commentée dans `.env`, et le pipeline saute l'étape quand elle est absente
   (lecture seule ; croise la base et les logs pour séparer une PANNE d'une
   ABSENCE de la machine — voir « Publication automatique »)
 - **Scheduler : UN SEUL ordonnanceur, launchd, TOUT EN LOCAL sur le Mac**
-  (2026-08-15). Plus rien n'est planifié dans le cloud. Quatre agents, gérés par
+  (2026-08-15). Plus rien n'est planifié dans le cloud. Cinq agents, gérés par
   `uv run python -m scripts.install_agents` (sans option : affiche le plan ;
   `--apply`, `--status`, `--uninstall`) : `pipeline` (horaire), `dashboard`
-  (uvicorn permanent sur le 8000), `publication` (10 min), `veille` (5 min). Le
+  (uvicorn permanent sur le 8000), `publication` (10 min), `veille` (5 min),
+  `prefiltre` (30 min, modèle local). **Désinstallés le 2026-11-12 à la
+  demande de l'utilisateur, jusqu'à la mise à jour du robot** : rien ne
+  tourne, console comprise. Ne les réinstaller (`--apply`) que sur sa
+  demande, et repasser d'abord le mode de publication en `apercu` (il est
+  resté en `reel`). Le
   Mac dort : un créneau manqué est rattrapé au réveil, donc rien n'est perdu,
   mais l'actu peut arriver avec des heures de retard. Détail, pièges (le
   renommage d'un label launchd qui DOUBLE l'ingestion, la rotation `newsyslog`,
